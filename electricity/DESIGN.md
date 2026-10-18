@@ -2884,7 +2884,7 @@ half-run.
 | **L2a** (#521, merged in #524) | `validate_yaml`, the synced planner document, decomposition's pure helpers. | A, I |
 | **L2b** (#522, merged in #530) | Decomposition in the `prompt` effect. | G, K1, K2, L2a |
 | **R** (#495, merged in #497) | Run wiring v2: preflight, adapter resolution, `--profile`, lifting the refusals. | F1, J1 |
-| **M** (part A #537, merged in #544; part B #538, merged in #543; part C #539, merged in #541) | The acceptance run, osp's electricity end-to-end suite, docs and the "what electricity can't run yet" list. | all |
+| **M** (part A #537, merged in #544; part B #538, merged in #543; part C #539, merged in #541) | The acceptance run, osi's electricity end-to-end suite, docs and the "what electricity can't run yet" list. | all |
 
 Parity follow-ups outside the lane table: **#515** (`cyberdiner` and provider-adapter follow-ups,
 merged in #523), **#519** (background processes of a shell step, merged in #532), **#520** (the

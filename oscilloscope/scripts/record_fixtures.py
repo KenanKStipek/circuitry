@@ -3,7 +3,7 @@
 
 Runs ``cof`` over small synthetic orchestrations with the ``scripted``
 adapter (no network, no credentials, electricity/docs/spec/scripted-replies.md),
-polling ``--live-state`` the same way osp itself does, and writes the
+polling ``--live-state`` the same way osi itself does, and writes the
 recorded run (every snapshot with its elapsed time, stdout/stderr, and the
 exit code) under ``oscilloscope/tests/fixtures/<case>/``.
 
@@ -84,7 +84,7 @@ effects:
     on_error: continue
     params:
       command: ls
-      args: ["/nonexistent-osp-fixture-path"]
+      args: ["/nonexistent-osi-fixture-path"]
   - name: cleanup
     type: tool
     provider: shell
@@ -205,7 +205,7 @@ effects:
     on_error: skip
     params:
       command: ls
-      args: ["/nonexistent-osp-fixture-path"]
+      args: ["/nonexistent-osi-fixture-path"]
   - name: cleanup
     type: tool
     provider: shell
@@ -336,7 +336,7 @@ prime.ask:
 # scope (`tool`/`json`, `dynamic`, a CEL `if`, `finally:` -- the Goal
 # section of #431), each recorded against *both* engines under the
 # same config, so `engine_parity.rs` can assert the two produce the
-# same osp `--log` lines (apart from timing). `shell`/`prompt`/`loop`
+# same osi `--log` lines (apart from timing). `shell`/`prompt`/`loop`
 # never appear here: electricity refuses every one of them.
 PARITY_CASES: list[Case] = [
     Case(
@@ -450,7 +450,7 @@ def record_one(
     other's fixture when a caller passes a distinct name per engine).
     """
     print(f"recording {case.name} ({engine}) ...", file=sys.stderr)
-    with tempfile.TemporaryDirectory(prefix="osp-record-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="osi-record-") as scratch:
         scratch_path = Path(scratch)
         home = scratch_path / "home"
         home.mkdir()
@@ -702,10 +702,10 @@ def write_fixture(
     (out_dir / "stderr.txt").write_text(stderr_text, encoding="utf-8")
 
     # Python's own `Popen.returncode` reports a signal-terminated
-    # process as a negative number (`-signum`); osp, reading the real
+    # process as a negative number (`-signum`); osi, reading the real
     # OS wait status directly, applies the POSIX `128 + signum`
     # convention instead (`supervise::exit_code`) -- normalize here so
-    # the fixture's own exit code is the one osp will actually report.
+    # the fixture's own exit code is the one osi will actually report.
     normalized_exit_code = 128 + (-exit_code) if exit_code < 0 else exit_code
     (out_dir / "exit_code.txt").write_text(f"{normalized_exit_code}\n", encoding="utf-8")
 

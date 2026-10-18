@@ -1125,7 +1125,7 @@ fn use_leaf_contribution(
 /// Every immediate child segment under `parent` that appears in
 /// `paths`, in the order children should render: a loop pass
 /// (`iter_N`) sorts by its own numeric index first (so passes always
-/// read in order regardless of when osp happened to observe them);
+/// read in order regardless of when osi happened to observe them);
 /// otherwise by the earliest `created_at` seen anywhere in that
 /// child's own subtree, falling back to the plan's own declaration
 /// order, and finally to the label itself — three independent tie
@@ -3049,7 +3049,7 @@ mod tests {
     }
 
     /// Issue #527's own redraw-cost acceptance: "measure a 2,000-node
-    /// state and keep it under the current redraw interval" (`osp`'s
+    /// state and keep it under the current redraw interval" (`osi`'s
     /// own `REDRAW_INTERVAL`, 100ms). The state pane and the treemap
     /// tree are both built here, inside `build`, from the one `flat`
     /// this test's own single `flatten_state` call already produced

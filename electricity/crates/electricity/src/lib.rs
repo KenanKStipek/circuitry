@@ -96,7 +96,7 @@ fn python_repr_str(s: &str) -> String {
 /// reimplementing this merge itself (PR #441 review finding 14: this
 /// function's own `config_runtime_block` and `run_orchestration`'s own
 /// step 1 now both go through `electricity_config::resolve_config`, so
-/// `--dump-ir`/osp's own plan can no longer drift from what a real run
+/// `--dump-ir`/osi's own plan can no longer drift from what a real run
 /// sees just because `CIRCUITRY_MODEL`-style env overlays, or a
 /// config-file key `SANE_DEFAULTS` itself supplies, were never once
 /// part of this function's own, narrower raw-file read).

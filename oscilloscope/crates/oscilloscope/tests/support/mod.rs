@@ -19,15 +19,15 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub fn e2e_enabled() -> bool {
-    if std::env::var_os("OSP_E2E_COF").is_none() {
+    if std::env::var_os("OSI_E2E_COF").is_none() {
         return false;
     }
-    // P2-3: `OSP_E2E_COF=1` with no `cof` on `PATH` is a broken CI
+    // P2-3: `OSI_E2E_COF=1` with no `cof` on `PATH` is a broken CI
     // job, not a reason to run zero tests and report green — every
     // test below used to read this the same as the env var simply
     // being unset at all and quietly skip.
     if which("cof").is_none() {
-        panic!("OSP_E2E_COF=1 but `cof` is not on PATH");
+        panic!("OSI_E2E_COF=1 but `cof` is not on PATH");
     }
     true
 }
@@ -38,11 +38,11 @@ pub fn e2e_enabled() -> bool {
 /// `electricity/`) on `PATH`, since the `sleep`/`fail` providers below
 /// only exist in that build (never in a release one).
 pub fn e2e_electricity_enabled() -> bool {
-    if std::env::var_os("OSP_E2E_ELECTRICITY").is_none() {
+    if std::env::var_os("OSI_E2E_ELECTRICITY").is_none() {
         return false;
     }
     if which("electricity").is_none() {
-        panic!("OSP_E2E_ELECTRICITY=1 but `electricity` is not on PATH");
+        panic!("OSI_E2E_ELECTRICITY=1 but `electricity` is not on PATH");
     }
     true
 }
@@ -109,8 +109,8 @@ impl TestHome {
     }
 }
 
-pub fn osp_command(home: &TestHome) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osp"));
+pub fn osi_command(home: &TestHome) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
     cmd.env("HOME", home.path());
     for key in [
         "OPENAI_API_KEY",
@@ -126,12 +126,12 @@ pub fn osp_command(home: &TestHome) -> Command {
     cmd
 }
 
-/// [`osp_command`], with `--engine electricity` already appended
+/// [`osi_command`], with `--engine electricity` already appended
 /// (issue #431's lane E2) -- every one of this crate's electricity
 /// e2e tests opts into it the same way, so each one doesn't repeat
 /// the same two-argument tail.
-pub fn osp_electricity_command(home: &TestHome) -> Command {
-    let mut cmd = osp_command(home);
+pub fn osi_electricity_command(home: &TestHome) -> Command {
+    let mut cmd = osi_command(home);
     cmd.arg("--engine").arg("electricity");
     cmd
 }
@@ -147,7 +147,7 @@ pub fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::E
         if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("e2e test exceeded its {timeout:?} hard timeout; osp was killed");
+            panic!("e2e test exceeded its {timeout:?} hard timeout; osi was killed");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -170,7 +170,7 @@ pub fn wait_with_timeout_capturing_stdout(
         let _ = tx.send(buf);
     });
     // Issue #433's comments: every caller of this helper spawns an
-    // `osp` whose own stderr is piped too (`osp_command`), and this
+    // `osi` whose own stderr is piped too (`osi_command`), and this
     // helper otherwise never reads it -- a child that writes more
     // than a pipe buffer's worth to stderr would block on the write
     // end forever, with no timeout of its own. Drained on its own
@@ -264,7 +264,7 @@ pub fn wait_for_step_start(events_path: &Path, step_path: &str, timeout: Duratio
 /// The last non-empty line of *path* (an `events.jsonl`), parsed as
 /// JSON -- every electricity signal e2e test uses this to check the
 /// stream's own final `run_end` line carries the signal that actually
-/// ended the run, not just that osp's own summary line did.
+/// ended the run, not just that osi's own summary line did.
 pub fn last_event(path: &Path) -> serde_json::Value {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("couldn't read {}: {e}", path.display()));
@@ -286,18 +286,18 @@ pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
 /// No process whose own argv names `needle` (a test's unique work
 /// directory, or run directory, that the doc/config paths `cof` and
 /// anything it spawned in turn were invoked with) should still exist
-/// once osp has exited. A plain `HOME` path doesn't work as the
+/// once osi has exited. A plain `HOME` path doesn't work as the
 /// needle: it is only ever set as an environment variable, which
 /// never appears in a process's own argv, so a `pgrep -f` against it
 /// can never match anything regardless of whether a process actually
 /// survived (#424 review finding F10).
-/// Every `osp-<pid>-<nanos>` entry directly under the real temp
+/// Every `osi-<pid>-<nanos>` entry directly under the real temp
 /// directory right now (`unique_run_dir`'s own default-`--out-dir`
-/// naming) -- a before/after diff around one test's own osp spawn(s)
+/// naming) -- a before/after diff around one test's own osi spawn(s)
 /// (comment 1 on #433), rather than a bare "is it empty" check on the
 /// whole temp directory, since other processes on the same machine
-/// may have their own `osp-*` directories there at the same time.
-pub fn snapshot_osp_dirs() -> std::collections::HashSet<PathBuf> {
+/// may have their own `osi-*` directories there at the same time.
+pub fn snapshot_osi_dirs() -> std::collections::HashSet<PathBuf> {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return std::collections::HashSet::new();
     };
@@ -307,23 +307,23 @@ pub fn snapshot_osp_dirs() -> std::collections::HashSet<PathBuf> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("osp-"))
+                .is_some_and(|name| name.starts_with("osi-"))
         })
         .collect()
 }
 
-/// Asserts this test's own osp spawn(s) left no *new* `osp-*` run
+/// Asserts this test's own osi spawn(s) left no *new* `osi-*` run
 /// directory behind in the real temp directory, compared to a
-/// [`snapshot_osp_dirs`] taken before they ran -- every e2e test that
-/// spawns `osp run` passes its own `--out-dir` precisely so this never
+/// [`snapshot_osi_dirs`] taken before they ran -- every e2e test that
+/// spawns `osi run` passes its own `--out-dir` precisely so this never
 /// finds one; it exists to catch a future test that forgets to.
-pub fn assert_no_new_osp_dirs(before: &std::collections::HashSet<PathBuf>) {
-    let after = snapshot_osp_dirs();
+pub fn assert_no_new_osi_dirs(before: &std::collections::HashSet<PathBuf>) {
+    let after = snapshot_osi_dirs();
     let new: Vec<&PathBuf> = after.difference(before).collect();
     assert!(
         new.is_empty(),
-        "this test left new osp-* run director{} behind in {:?}: {new:?} \
-         -- every osp run in an e2e test must pass its own --out-dir",
+        "this test left new osi-* run director{} behind in {:?}: {new:?} \
+         -- every osi run in an e2e test must pass its own --out-dir",
         if new.len() == 1 { "y" } else { "ies" },
         std::env::temp_dir()
     );
@@ -338,7 +338,7 @@ pub fn assert_no_leftover_process(needle: &Path) {
         .expect("pgrep should be available");
     assert!(
         ps.stdout.is_empty(),
-        "a process matching {needle:?} survived osp's exit: {}",
+        "a process matching {needle:?} survived osi's exit: {}",
         String::from_utf8_lossy(&ps.stdout)
     );
 }

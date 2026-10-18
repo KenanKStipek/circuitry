@@ -4,8 +4,8 @@ expression: rendered
 ---
 --- observation 0 ---
 log:
-  ▶ prime.flaky  shell ls /nonexistent-osp-fixture-path
-  ✗ prime.flaky  /bin/ls failed (exit 1): ls: /nonexistent-osp-fixture-path: No such file or directory
+  ▶ prime.flaky  shell ls /nonexistent-osi-fixture-path
+  ✗ prime.flaky  /bin/ls failed (exit 1): ls: /nonexistent-osi-fixture-path: No such file or directory
   ▶ prime.cleanup  shell echo cleaned
   ✓ prime.cleanup  0.0s  cleaned
   ■ run ok  0.0s

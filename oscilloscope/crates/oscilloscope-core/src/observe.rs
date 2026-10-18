@@ -171,7 +171,7 @@ impl EventsTailer {
 }
 
 /// One parsed `--events` line (DESIGN.md §3). `v`/`seq` aren't carried
-/// through: osp only orders by `ts`, same as a state diff, and the
+/// through: osi only orders by `ts`, same as a state diff, and the
 /// tailer already delivers lines in file order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -179,7 +179,7 @@ pub enum Event {
         ts: String,
         run_id: String,
         /// The engine's own pid (DESIGN.md §3's format table): lets
-        /// `osp watch` tell a genuine abort (the process died with no
+        /// `osi watch` tell a genuine abort (the process died with no
         /// `run_end`) from a run that is simply still going, when it
         /// has no child handle of its own to `wait` on (#424 review
         /// F4).
@@ -282,7 +282,7 @@ pub fn duration_seconds(start: &str, end: &str) -> Option<f64> {
 
 /// The real wall clock's own current time, in the same RFC3339 shape
 /// as every `created_at`/`completed_at` an engine writes -- the one
-/// place `render::build`'s caller (osp-cli, which has no direct
+/// place `render::build`'s caller (osi-cli, which has no direct
 /// `chrono` dependency of its own) reads the real clock, so a running
 /// row's own live duration (review finding 5 on #458's comment 3) can
 /// still be computed with the same `duration_seconds` a *finished*
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn tailer_on_a_missing_file_returns_nothing() {
-        let mut tailer = EventsTailer::new("/nonexistent-osp-events/events.jsonl");
+        let mut tailer = EventsTailer::new("/nonexistent-osi-events/events.jsonl");
         assert!(tailer.poll().is_empty());
     }
 

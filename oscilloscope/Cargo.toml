@@ -9,7 +9,7 @@ rust-version = "1.86"
 license = "MIT"
 publish = false
 
-# Copied from ../electricity/Cargo.toml (#422 review): osp compiles
+# Copied from ../electricity/Cargo.toml (#422 review): osi compiles
 # documents through electricity-compiler in debug builds too, so the
 # same unoptimized-debug-build stack overflow electricity's own
 # `tests/nesting_limit.rs` measured applies here as well.

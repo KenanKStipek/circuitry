@@ -1,8 +1,8 @@
 //! End-to-end TUI test against a real `cof`, on a real pseudo-
-//! terminal (issue #434's Tests section): `osp`'s own stdout/stderr
+//! terminal (issue #434's Tests section): `osi`'s own stdout/stderr
 //! are a pty slave, not a pipe, so `effective_log_mode` picks the
 //! interactive TUI exactly as it would on a human's own terminal.
-//! Gated the same way `e2e_cof.rs` is: `OSP_E2E_COF=1` and `cof` on
+//! Gated the same way `e2e_cof.rs` is: `OSI_E2E_COF=1` and `cof` on
 //! `PATH`, a temporary `HOME`, the scripted adapter, stripped
 //! credentials, a hard per-test timeout.
 //!
@@ -41,14 +41,14 @@ fn open_pty() -> (File, PathBuf) {
     assert!(master_fd >= 0, "posix_openpt failed");
     assert_eq!(unsafe { libc::grantpt(master_fd) }, 0, "grantpt failed");
     assert_eq!(unsafe { libc::unlockpt(master_fd) }, 0, "unlockpt failed");
-    // Without `FD_CLOEXEC`, `spawn_osp_on_pty`'s own `Command::spawn`
-    // (fork, then exec) would hand osp itself a surviving duplicate
+    // Without `FD_CLOEXEC`, `spawn_osi_on_pty`'s own `Command::spawn`
+    // (fork, then exec) would hand osi itself a surviving duplicate
     // of this exact fd -- a real bug this file's own tests never hit
     // before, since none of them ever needed the master to actually,
-    // fully close while osp was still alive: osp would then still
+    // fully close while osi was still alive: osi would then still
     // hold the pty's master open all on its own even after this
     // test's own copy is dropped, so the slave side this test cares
-    // about (osp's own stdin/stdout/stderr) would never see the EOF/
+    // about (osi's own stdin/stdout/stderr) would never see the EOF/
     // write-error a closed master is supposed to cause at all -- the
     // bug `a_closed_pty_master_with_no_signal_still_exits_promptly_
     // with_no_leftovers` below exists to catch, found by that exact
@@ -94,25 +94,25 @@ fn open_pty() -> (File, PathBuf) {
         }
         // Not closed: on macOS, the slave side's open-file count
         // dropping to zero even briefly -- closing this one before
-        // `spawn_osp_on_pty` opens its own three, moments later --
+        // `spawn_osi_on_pty` opens its own three, moments later --
         // signals a hangup the master side sees as an immediate EOF,
         // which silently ended `drain_continuously`'s own read loop
-        // before osp ever wrote a single byte. Leaking this one fd
+        // before osi ever wrote a single byte. Leaking this one fd
         // for the rest of the test binary's own short life keeps the
         // slave's own open count never reaching zero in between.
         //
         // Review finding 5 on PR #496: the cost of that is paid by
         // every test in this file, not just this one -- this leaked
         // fd stays open for the whole binary's life, so the real
-        // slave fds `spawn_osp_on_pty` opens next are never the last
+        // slave fds `spawn_osi_on_pty` opens next are never the last
         // ones left, and `master` (this pty's own read side) can
-        // never see a real EOF once osp's own three close on exit.
+        // never see a real EOF once osi's own three close on exit.
         // `drain_continuously`'s loop below only ever stops reading
         // because its read errors (the master itself closing when
         // this function's own `File` drops at the end of a test),
         // never because the pipe quietly ran dry -- no test here can
         // be written the other way, waiting on `master` for EOF to
-        // know osp is done, while this leak stands.
+        // know osi is done, while this leak stands.
         std::mem::forget(slave);
     }
 
@@ -125,7 +125,7 @@ fn open_pty() -> (File, PathBuf) {
 /// after the pty is opened, *before* the child is even spawned,
 /// rather than only read from in bursts (a redrawing TUI can fill a
 /// pty's own small kernel buffer in well under a second; nothing
-/// draining it would make osp's own writes block, delaying its exit
+/// draining it would make osi's own writes block, delaying its exit
 /// for however long this test wasn't reading, and risking losing
 /// whatever it tried to write once it finally did get to exit).
 fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
@@ -205,11 +205,11 @@ fn wait_for_pattern_on_master(master: &mut File, pattern: &[u8], timeout: Durati
 }
 
 /// Writes `bytes` to the pty's master side, i.e. exactly what a key
-/// press on a real terminal would deliver to osp's own raw-mode
+/// press on a real terminal would deliver to osi's own raw-mode
 /// stdin — used to send `q` (review finding K1: the TUI now stays
 /// open on a run's own final state until asked to leave) and a raw
 /// Ctrl-C byte (finding K3: raw mode disables the kernel's own
-/// `ISIG`, so `\x03` reaches osp as a plain byte, not a real SIGINT,
+/// `ISIG`, so `\x03` reaches osi as a plain byte, not a real SIGINT,
 /// exactly as it would on a human's own terminal).
 fn send_bytes(master: &mut File, bytes: &[u8]) {
     master.write_all(bytes).expect("write to pty master");
@@ -221,13 +221,13 @@ fn open_slave(path: &std::path::Path) -> OwnedFd {
     // called `setsid()` (no controlling terminal of its own yet) and
     // then opens a tty device *by path* auto-acquires it as its
     // controlling terminal, same as a bare `open()` + no `O_NOCTTY`
-    // always has on historical SysV ttys -- `osp` itself never asks
+    // always has on historical SysV ttys -- `osi` itself never asks
     // for one (`TerminalGuard::enter` only `tcgetattr`/`tcsetattr`s an
     // already-open fd), so the three slave opens below, each handed
-    // to the spawned `osp` as a *fresh* stdio fd rather than a dup of
+    // to the spawned `osi` as a *fresh* stdio fd rather than a dup of
     // one already-open one, must say so explicitly: a real SIGHUP
     // test (`a_forwarded_sighup_in_the_tui_exits_129`) sends the
-    // signal directly to osp's own pid regardless, but the whole
+    // signal directly to osi's own pid regardless, but the whole
     // *point* of the lost-terminal tests below is a slave that was
     // never, ever a controlling terminal for anyone.
     let file = File::options()
@@ -244,31 +244,31 @@ fn stdio_from_slave(path: &std::path::Path) -> Stdio {
     Stdio::from(fd)
 }
 
-/// Spawns `osp` with every one of its standard streams attached to
+/// Spawns `osi` with every one of its standard streams attached to
 /// the pty's slave side, in its own process group (the same
-/// isolation `osp` itself gives `cof`, and the lane rule this
+/// isolation `osi` itself gives `cof`, and the lane rule this
 /// repository's tests all follow: "signals only to processes you
 /// started, in their own session").
-fn spawn_osp_on_pty(
+fn spawn_osi_on_pty(
     home: &TestHome,
     slave_path: &std::path::Path,
     args: &[&OsStr],
 ) -> std::process::Child {
-    spawn_osp_on_pty_with_env(home, slave_path, args, &[])
+    spawn_osi_on_pty_with_env(home, slave_path, args, &[])
 }
 
-/// [`spawn_osp_on_pty`], with extra environment variables set on the
-/// spawned `osp` before it starts -- the final-drain regression test
+/// [`spawn_osi_on_pty`], with extra environment variables set on the
+/// spawned `osi` before it starts -- the final-drain regression test
 /// below (#494) needs its own fake engine on `PATH` and a few
 /// variables that fake engine itself reads, neither of which any
 /// other caller here needs.
-fn spawn_osp_on_pty_with_env(
+fn spawn_osi_on_pty_with_env(
     home: &TestHome,
     slave_path: &std::path::Path,
     args: &[&OsStr],
     extra_env: &[(&str, &OsStr)],
 ) -> std::process::Child {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osp"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
     cmd.args(args);
     cmd.env("HOME", home.path());
     cmd.env("TERM", "xterm-256color");
@@ -279,7 +279,7 @@ fn spawn_osp_on_pty_with_env(
         "CYBERDINER_EXPO_URL",
         // `effective_log_mode` (DESIGN.md §6.2) forces the plain
         // stream whenever `CI` is set, which GitHub Actions sets for
-        // every job regardless of what osp's own stdout actually is
+        // every job regardless of what osi's own stdout actually is
         // -- without removing it here, this whole test file always
         // exercised the plain path on CI, pty and all, and never the
         // TUI it exists to test (caught by the real CI run, not by
@@ -298,20 +298,20 @@ fn spawn_osp_on_pty_with_env(
     // `setpgid(0, 0)` -- matching how a real terminal-launching
     // driver spawns its own child (Python's own `start_new_session=
     // True`), and the only
-    // way osp ends up with *no controlling terminal at all* rather
+    // way osi ends up with *no controlling terminal at all* rather
     // than merely its own process group within the test harness's
     // own session. A `setsid` call from a `pre_exec` closure was once
     // suspected of making the spawned child permanently unreapable by
     // this test's own `std::process::Child` on macOS; re-checked
     // directly (a minimal repro spawning `/bin/sleep` this same way,
     // `try_wait`-polled to completion) and found to reap normally --
-    // every pty test in this file below still reaps `osp` the same
+    // every pty test in this file below still reaps `osi` the same
     // way regardless. A plain tty slave fd (no explicit `TIOCSCTTY`,
     // and now `O_NOCTTY` on top, `open_slave`'s own doc comment) is
     // still enough for `crossterm::terminal::enable_raw_mode`'s own
     // `tcgetattr`/`tcsetattr`, which only need an open fd referring
     // to some tty device, not a controlling-terminal relationship --
-    // this isolation is here for the same reason `osp` itself gives
+    // this isolation is here for the same reason `osi` itself gives
     // `cof` its own (DESIGN.md §4.1), so a signal sent to just this
     // pid never reaches the test harness's own session either.
     unsafe {
@@ -322,13 +322,13 @@ fn spawn_osp_on_pty_with_env(
             Ok(())
         });
     }
-    cmd.spawn().expect("spawn osp on a pty")
+    cmd.spawn().expect("spawn osi on a pty")
 }
 
 #[test]
 fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -346,7 +346,7 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     // reasoning `wait_with_timeout_capturing_stdout` applies to a
     // plain pipe in `e2e_cof.rs`, but doubly so here: a TUI redrawing
     // at up to 10Hz can fill a pty's own small kernel buffer in well
-    // under a second, and nothing draining it would make osp's own
+    // under a second, and nothing draining it would make osi's own
     // writes block). Reading happens on a dup'd fd so `master` itself
     // stays free for this test to write a key press back.
     let mut master = master;
@@ -355,7 +355,7 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -369,10 +369,10 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     send_bytes(&mut master, b"q");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
-    assert!(status.success(), "osp should exit 0, got {status:?}");
+    assert!(status.success(), "osi should exit 0, got {status:?}");
 
     // Finding 17: the same grace period every other test here gives
-    // the draining thread to catch up on whatever osp wrote between
+    // the draining thread to catch up on whatever osi wrote between
     // its last read and actually exiting — the alternate-screen exit
     // sequence included — before this one reads the captured buffer.
     std::thread::sleep(Duration::from_millis(200));
@@ -390,9 +390,9 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
         "expected an alternate-screen exit sequence; got:\n{rendered:?}"
     );
 
-    // DESIGN.md §6.3 / this repository's own lane rules: nothing osp
+    // DESIGN.md §6.3 / this repository's own lane rules: nothing osi
     // or cof started is still running, and no part of this test
-    // created an `osp-*` directory under the real system temp dir in
+    // created an `osi-*` directory under the real system temp dir in
     // the first place (`--out-dir` above kept it inside `out_dir`,
     // this test's own, already-cleaned-up tempdir).
     assert_no_leftover_process(work.path());
@@ -405,7 +405,7 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
 #[test]
 fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -425,7 +425,7 @@ fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[
@@ -444,7 +444,7 @@ fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(
         status.success(),
-        "osp --no-animation should exit 0, got {status:?}"
+        "osi --no-animation should exit 0, got {status:?}"
     );
 
     std::thread::sleep(Duration::from_millis(200));
@@ -467,13 +467,13 @@ fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
 /// final state until the user leaves it) -- not only while the engine
 /// is still going, the only shape `a_forwarded_sigterm_in_the_tui_
 /// exits_143` exercises. The engine already exited with its own
-/// `code`, so there is nothing left to cancel; osp's own exit code is
+/// `code`, so there is nothing left to cancel; osi's own exit code is
 /// that same one, not 143 -- SIGTERM here means "stop showing me the
 /// finished screen", not "the run failed after all".
 #[test]
 fn a_forwarded_sigterm_on_the_finished_screen_still_exits_promptly() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -492,7 +492,7 @@ fn a_forwarded_sigterm_on_the_finished_screen_still_exits_promptly() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -536,7 +536,7 @@ fn a_forwarded_sigterm_on_the_finished_screen_still_exits_promptly() {
 #[test]
 fn a_forwarded_sigint_still_restores_the_terminal() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -555,7 +555,7 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -567,7 +567,7 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     // long enough to cover a `cof run --help` probe plus a plan
     // compile plus raw-mode/pty setup on a cold, loaded machine was
     // observed to still occasionally lose the race (flaking at both
-    // 1.5s and 3s) -- the *actual* signal osp's own render loop is
+    // 1.5s and 3s) -- the *actual* signal osi's own render loop is
     // ready matters, not a guess at how long getting there takes.
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
     // Waits for cof's own start event on the running step, rather
@@ -591,7 +591,7 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     assert_eq!(status.code(), Some(130), "got {status:?}");
 
     // A brief grace period for the draining thread to catch up on
-    // whatever osp wrote between its last read and actually exiting
+    // whatever osi wrote between its last read and actually exiting
     // (DESIGN.md §6.3: the alternate-screen exit sequence is part of
     // that).
     std::thread::sleep(Duration::from_millis(200));
@@ -611,13 +611,13 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
 
 /// Review finding K2: a forwarded `SIGTERM` must reach the engine as
 /// a real `SIGTERM`, not be silently turned into a `SIGINT` the way
-/// the TUI's own `cancel_once` used to — osp itself still exits with
+/// the TUI's own `cancel_once` used to — osi itself still exits with
 /// the POSIX `128+signum` code either way (143), but only because
 /// this asserts the *right* one.
 #[test]
 fn a_forwarded_sigterm_in_the_tui_exits_143() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -636,7 +636,7 @@ fn a_forwarded_sigterm_in_the_tui_exits_143() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -675,7 +675,7 @@ fn a_forwarded_sigterm_in_the_tui_exits_143() {
 #[test]
 fn a_forwarded_sighup_in_the_tui_exits_129() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -694,7 +694,7 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -726,9 +726,9 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
 }
 
 /// A driver that merely closes its
-/// end of the pty and exits, with no signal sent at all, leaves osp
+/// end of the pty and exits, with no signal sent at all, leaves osi
 /// without even a SIGHUP -- the slave was never its own *controlling*
-/// terminal (`spawn_osp_on_pty`'s own `setsid`, with no `TIOCSCTTY`
+/// terminal (`spawn_osi_on_pty`'s own `setsid`, with no `TIOCSCTTY`
 /// and, on top, `open_slave`'s own `O_NOCTTY`), so nothing tells the
 /// kernel to send one. Before the fix, `event::poll`/`read` never
 /// actually errored at all:
@@ -741,7 +741,7 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
 /// that never finishes on its own) kept running, and every signal
 /// sent at it, SIGTERM included, went unanswered -- not because the
 /// loop ever stopped reaching its own top, but because nothing in it
-/// ever noticed anything was wrong. osp must now notice the dead
+/// ever noticed anything was wrong. osi must now notice the dead
 /// terminal on its own (`stdin_hung_up`'s own raw, non-blocking
 /// `poll(2)`, checked before ever calling into crossterm at all):
 /// cancel the engine, and exit promptly -- in practice within a
@@ -749,7 +749,7 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
 #[test]
 fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_leftovers() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -767,7 +767,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -781,7 +781,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
     );
 
     // Close the master without
-    // ever sending osp a signal of any kind -- no clone of this fd
+    // ever sending osi a signal of any kind -- no clone of this fd
     // survives anywhere else (`wait_for_pattern_on_master` read
     // straight off this same `File`, never a `drain_continuously`
     // clone), so this is the whole pty master actually going away.
@@ -796,20 +796,20 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
     let elapsed = closed_at.elapsed();
     assert!(
         status.code().is_some(),
-        "osp should have exited on its own, got {status:?}"
+        "osi should have exited on its own, got {status:?}"
     );
     // 101 is a Rust panic: ratatui's own `Terminal::drop` reporting a
     // failed cursor restore with `eprintln!` on the dead terminal.
     assert_ne!(
         status.code(),
         Some(101),
-        "osp panicked on its way out of a lost terminal"
+        "osi panicked on its way out of a lost terminal"
     );
     // The acceptance bound ("within 3s"), with a
     // little slack for a loaded CI runner.
     assert!(
         elapsed < Duration::from_secs(4),
-        "osp took {elapsed:?} to notice its terminal was gone -- it should be a couple of \
+        "osi took {elapsed:?} to notice its terminal was gone -- it should be a couple of \
          redraw ticks, not spinning"
     );
 
@@ -827,7 +827,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
 #[test]
 fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptly() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -845,7 +845,7 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -863,15 +863,15 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
     let status = wait_with_timeout(child, Duration::from_secs(15));
     let elapsed = closed_at.elapsed();
     // The run itself finished fine before the terminal went away, so
-    // osp ends with the run's own exit code: 0, never a panic's 101.
+    // osi ends with the run's own exit code: 0, never a panic's 101.
     assert_eq!(
         status.code(),
         Some(0),
-        "osp should exit 0 after a successful run when its terminal is gone, got {status:?}"
+        "osi should exit 0 after a successful run when its terminal is gone, got {status:?}"
     );
     assert!(
         elapsed < Duration::from_secs(4),
-        "osp took {elapsed:?} to notice its terminal was gone on the finished screen -- it \
+        "osi took {elapsed:?} to notice its terminal was gone on the finished screen -- it \
          should be a couple of redraw ticks, not spinning"
     );
 
@@ -879,14 +879,14 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
 }
 
 /// real Ctrl-C keypress never generates a `SIGINT` at all once the
-/// TUI has entered raw mode — the byte `0x03` reaches osp as a plain
+/// TUI has entered raw mode — the byte `0x03` reaches osi as a plain
 /// key, and `keys::Action::CtrlC` is the only thing that can still
-/// cancel the run and make osp exit 130 the way a real forwarded
+/// cancel the run and make osi exit 130 the way a real forwarded
 /// SIGINT otherwise would.
 #[test]
 fn ctrl_c_byte_in_the_tui_cancels_and_exits_130() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -906,7 +906,7 @@ fn ctrl_c_byte_in_the_tui_cancels_and_exits_130() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
@@ -934,14 +934,14 @@ fn ctrl_c_byte_in_the_tui_cancels_and_exits_130() {
     assert_no_leftover_process(work.path());
 }
 
-/// `osp watch`'s own TUI (DESIGN.md §6.3): attaches to a run `osp`
+/// `osi watch`'s own TUI (DESIGN.md §6.3): attaches to a run `osi`
 /// did not start, renders it in the alternate screen the same as a
-/// live `osp <doc>` would, and exits cleanly once the run ends, with
+/// live `osi <doc>` would, and exits cleanly once the run ends, with
 /// no confirm needed (watch owns no engine to cancel).
 #[test]
-fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
+fn osi_watch_renders_in_the_tui_and_exits_cleanly() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -984,9 +984,9 @@ fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
     let mut master = master;
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let run_dir_arg = run_dir.path().as_os_str();
-    let child = spawn_osp_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
+    let child = spawn_osi_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
 
-    // Review finding K1: the run `cof` already finished before `osp
+    // Review finding K1: the run `cof` already finished before `osi
     // watch` ever attached, so the TUI shows the finished screen
     // immediately — `q` detaches it, same as the run test above.
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
@@ -994,7 +994,7 @@ fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
     send_bytes(&mut master, b"q");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
-    assert!(status.success(), "osp watch should exit 0, got {status:?}");
+    assert!(status.success(), "osi watch should exit 0, got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));
     let captured = captured_buf.lock().unwrap().clone();
@@ -1013,8 +1013,8 @@ fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
 
 /// A fake engine standing in for a real `cof`/`electricity`, used
 /// only by the two regression tests below (#494): parses out the one
-/// flag `osp` always passes regardless of engine or capability
-/// detection, `--out <path>`, sleeps long enough that `osp`'s own TUI
+/// flag `osi` always passes regardless of engine or capability
+/// detection, `--out <path>`, sleeps long enough that `osi`'s own TUI
 /// loop has certainly already polled this run's directory at least
 /// once while it was still empty, then writes `events.jsonl`/
 /// `state.live.json`/the `--out` file itself all at once and exits --
@@ -1022,8 +1022,8 @@ fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
 /// ("writes its last events and its final state and exits at once"),
 /// with no real `cof`/`electricity` build needed on `PATH` at all.
 /// Its own content comes entirely from three environment variables
-/// (`OSP_DOUBLE_EVENTS`/`OSP_DOUBLE_STATE`/`OSP_DOUBLE_EXIT`) a test
-/// sets before spawning `osp`, so one script serves both an ok and a
+/// (`OSI_DOUBLE_EVENTS`/`OSI_DOUBLE_STATE`/`OSI_DOUBLE_EXIT`) a test
+/// sets before spawning `osi`, so one script serves both an ok and a
 /// failed run.
 const ENGINE_DOUBLE_SCRIPT: &str = r#"#!/bin/sh
 set -eu
@@ -1043,11 +1043,11 @@ if [ -z "$out" ]; then
   exit 2
 fi
 run_dir=$(dirname "$out")
-sleep "${OSP_DOUBLE_DELAY_S:-0.3}"
-printf '%s' "$OSP_DOUBLE_EVENTS" > "$run_dir/events.jsonl"
-printf '%s' "$OSP_DOUBLE_STATE" > "$run_dir/state.live.json"
-printf '%s' "$OSP_DOUBLE_STATE" > "$out"
-exit "${OSP_DOUBLE_EXIT:-0}"
+sleep "${OSI_DOUBLE_DELAY_S:-0.3}"
+printf '%s' "$OSI_DOUBLE_EVENTS" > "$run_dir/events.jsonl"
+printf '%s' "$OSI_DOUBLE_STATE" > "$run_dir/state.live.json"
+printf '%s' "$OSI_DOUBLE_STATE" > "$out"
+exit "${OSI_DOUBLE_EXIT:-0}"
 "#;
 
 /// Writes [`ENGINE_DOUBLE_SCRIPT`] to `bin_dir/name`, executable.
@@ -1081,7 +1081,7 @@ fn path_with(bin_dir: &Path) -> OsString {
 /// `aborted`, with `effects 0/1`, forever (nothing left running to
 /// ever change it) -- reproduced here with a fake engine (no real
 /// `cof`/`electricity` needed) that writes a complete, successful
-/// final state only after `osp` has certainly already polled this
+/// final state only after `osi` has certainly already polled this
 /// run's own, still-empty directory at least once.
 #[test]
 fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
@@ -1119,7 +1119,7 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
     let path_env = path_with(bin_dir.path());
-    let child = spawn_osp_on_pty_with_env(
+    let child = spawn_osi_on_pty_with_env(
         &home,
         &slave_path,
         &[
@@ -1132,9 +1132,9 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
         ],
         &[
             ("PATH", path_env.as_os_str()),
-            ("OSP_DOUBLE_EVENTS", OsStr::new(events)),
-            ("OSP_DOUBLE_STATE", OsStr::new(state)),
-            ("OSP_DOUBLE_EXIT", OsStr::new("0")),
+            ("OSI_DOUBLE_EVENTS", OsStr::new(events)),
+            ("OSI_DOUBLE_STATE", OsStr::new(state)),
+            ("OSI_DOUBLE_EXIT", OsStr::new("0")),
         ],
     );
 
@@ -1148,7 +1148,7 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
     send_bytes(&mut master, b"q");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
-    assert!(status.success(), "osp should exit 0, got {status:?}");
+    assert!(status.success(), "osi should exit 0, got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));
     let captured = captured_buf.lock().unwrap().clone();
@@ -1179,7 +1179,7 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: boom\n    type: tool\n    provider: shell\n    params:\n      command: ls\n      args: [\"/nonexistent-osp-494-path\"]\n",
+        "effects:\n  - name: boom\n    type: tool\n    provider: shell\n    params:\n      command: ls\n      args: [\"/nonexistent-osi-494-path\"]\n",
     );
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
@@ -1204,7 +1204,7 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
     let path_env = path_with(bin_dir.path());
-    let child = spawn_osp_on_pty_with_env(
+    let child = spawn_osi_on_pty_with_env(
         &home,
         &slave_path,
         &[
@@ -1217,9 +1217,9 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         ],
         &[
             ("PATH", path_env.as_os_str()),
-            ("OSP_DOUBLE_EVENTS", OsStr::new(events)),
-            ("OSP_DOUBLE_STATE", OsStr::new(state)),
-            ("OSP_DOUBLE_EXIT", OsStr::new("1")),
+            ("OSI_DOUBLE_EVENTS", OsStr::new(events)),
+            ("OSI_DOUBLE_STATE", OsStr::new(state)),
+            ("OSI_DOUBLE_EXIT", OsStr::new("1")),
         ],
     );
 

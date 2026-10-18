@@ -1,14 +1,14 @@
 //! End-to-end tests against a real `electricity`, built with
 //! `--features test-tools` (issue #431's lane E2 acceptance
-//! criterion: "osp's ElectricityEngine ... end-to-end tests run
+//! criterion: "osi's ElectricityEngine ... end-to-end tests run
 //! against electricity behind a feature flag"). Mirrors
 //! `e2e_cof.rs`'s own shape: success, failure, an
 //! invalid document, a preview-marker refusal, all three signals,
-//! `osp watch` on a finished run directory, and `--log` output.
+//! `osi watch` on a finished run directory, and `--log` output.
 //! Issue #538's B1 adds four more documents: a scripted prompt, a
 //! tree loop, a `use` path child, and a decomposition run.
 //!
-//! Gated on `OSP_E2E_ELECTRICITY=1`, with `electricity` on `PATH`
+//! Gated on `OSI_E2E_ELECTRICITY=1`, with `electricity` on `PATH`
 //! (`cargo build -p electricity-cli --features test-tools` from
 //! `electricity/`, then that binary on `PATH` — `.github/workflows/
 //! oscilloscope.yml`'s own step does exactly this). Every test gets
@@ -27,14 +27,14 @@ use std::time::Duration;
 
 use support::{
     ELECTRICITY_CONFIG, TestHome, assert_no_leftover_process, e2e_electricity_enabled, last_event,
-    osp_electricity_command, wait_for_step_start, wait_with_timeout,
+    osi_electricity_command, wait_for_step_start, wait_with_timeout,
     wait_with_timeout_capturing_stdout, wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
 #[test]
 fn a_simple_run_succeeds_and_prints_the_log() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -50,7 +50,7 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -58,13 +58,13 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
-        "osp should exit 0, got {status:?}; stdout:\n{stdout}"
+        "osi should exit 0, got {status:?}; stdout:\n{stdout}"
     );
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
@@ -83,7 +83,7 @@ fn a_simple_run_succeeds_and_prints_the_log() {
 #[test]
 fn on_error_continue_still_exits_ok() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -104,7 +104,7 @@ fn on_error_continue_still_exits_ok() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("-e")
@@ -114,13 +114,13 @@ fn on_error_continue_still_exits_ok() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
-        "osp should exit 0 (on_error: continue), got {status:?}; stdout:\n{stdout}"
+        "osi should exit 0 (on_error: continue), got {status:?}; stdout:\n{stdout}"
     );
     assert!(stdout.contains("✗ prime.flaky"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
@@ -141,7 +141,7 @@ fn on_error_continue_still_exits_ok() {
 #[test]
 fn an_invalid_document_fails_and_still_writes_state() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -161,7 +161,7 @@ fn an_invalid_document_fails_and_still_writes_state() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -169,7 +169,7 @@ fn an_invalid_document_fails_and_still_writes_state() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
@@ -183,14 +183,14 @@ fn an_invalid_document_fails_and_still_writes_state() {
 #[test]
 fn unsupported_content_is_refused_as_a_pre_execution_failure() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     // A `prompt` effect is schema-valid but refused with the preview
     // marker (issue #431's Goal: "prompt/loop/use/reflector/yield ...
-    // refused before the run starts"): osp's own summary reads it the
+    // refused before the run starts"): osi's own summary reads it the
     // same way as the invalid document above (`■ run failed`, exit
     // 1), but the refusal itself is the case that writes *nothing* at
     // all under the run directory -- electricity never even reaches
@@ -209,7 +209,7 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -217,7 +217,7 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
@@ -236,14 +236,14 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
 /// The `finally: json` step is a duplicate-✗
 /// repro shape: electricity's final `end` event for `prime` and its
 /// final `state.live.json` write land within the same sub-millisecond
-/// window, which used to make osp's own polling loop observe both in
+/// window, which used to make osi's own polling loop observe both in
 /// the same tick and print `prime`'s own ✗ line twice.
 const LONG_SLEEP_DOC: &str = "effects:\n  - name: slow\n    type: tool\n    provider: sleep\n    params: {seconds: 30}\nfinally:\n  - name: cleanup\n    type: tool\n    provider: json\n    params:\n      mode: parse\n      input: \"\\\"done\\\"\"\n";
 
 #[test]
-fn a_single_sigint_forwards_and_osp_exits_130() {
+fn a_single_sigint_forwards_and_osi_exits_130() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -252,7 +252,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -260,7 +260,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -294,7 +294,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
 #[test]
 fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -311,7 +311,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -319,7 +319,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -345,9 +345,9 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
 }
 
 #[test]
-fn sigterm_forwards_and_osp_exits_143() {
+fn sigterm_forwards_and_osi_exits_143() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -356,7 +356,7 @@ fn sigterm_forwards_and_osp_exits_143() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -364,7 +364,7 @@ fn sigterm_forwards_and_osp_exits_143() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -393,9 +393,9 @@ fn sigterm_forwards_and_osp_exits_143() {
 }
 
 #[test]
-fn sighup_forwards_and_osp_exits_129() {
+fn sighup_forwards_and_osi_exits_129() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -404,7 +404,7 @@ fn sighup_forwards_and_osp_exits_129() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -412,7 +412,7 @@ fn sighup_forwards_and_osp_exits_129() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -441,9 +441,9 @@ fn sighup_forwards_and_osp_exits_129() {
 }
 
 #[test]
-fn watch_mirrors_a_run_osp_did_not_start() {
+fn watch_mirrors_a_run_osi_did_not_start() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -483,9 +483,9 @@ fn watch_mirrors_a_run_osp_did_not_start() {
     );
     assert!(status.success());
 
-    let mut watch = support::osp_command(&home);
+    let mut watch = support::osi_command(&home);
     watch.arg("watch").arg(run_dir.path());
-    let child = watch.spawn().expect("spawn osp watch");
+    let child = watch.spawn().expect("spawn osi watch");
     let (watch_status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(10));
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
@@ -498,15 +498,15 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 /// carries the `↑<sent> ↓<received>` suffix `oscilloscope-core::diff`'s
 /// own `result_summary` prints for a prompt whose meta has
 /// `tokens_sent`/`tokens_received` (never the plain `"ok"` fallback) --
-/// through both `osp watch` on a finished run (no race: it renders
-/// once, from the run's own complete final state) and a live `osp
+/// through both `osi watch` on a finished run (no race: it renders
+/// once, from the run's own complete final state) and a live `osi
 /// <doc> --log` (issue #545: a prompt this fast can complete before
-/// osp's own first state poll ever does, so the `--log`/TUI line for
+/// osi's own first state poll ever does, so the `--log`/TUI line for
 /// it must hold rather than guess until that poll catches up).
 #[test]
 fn a_scripted_prompt_prints_tokens_sent_and_received() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -555,9 +555,9 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     );
     assert!(status.success());
 
-    let mut watch = support::osp_command(&home);
+    let mut watch = support::osi_command(&home);
     watch.arg("watch").arg(run_dir.path());
-    let child = watch.spawn().expect("spawn osp watch");
+    let child = watch.spawn().expect("spawn osi watch");
     let (watch_status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(10));
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
@@ -565,10 +565,10 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
 
-    // The same scripted prompt, launched by `osp` itself rather than
+    // The same scripted prompt, launched by `osi` itself rather than
     // attached to after the fact (#545's own live race).
     let run_dir2 = work.path().join("run2");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -576,7 +576,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (log_status, log_stdout) =
         wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
@@ -602,7 +602,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 #[test]
 fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -624,7 +624,7 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
     );
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -632,7 +632,7 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
 
     let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
@@ -652,7 +652,7 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
 #[test]
 fn a_tree_loop_merges_every_pass() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -665,7 +665,7 @@ fn a_tree_loop_merges_every_pass() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -673,7 +673,7 @@ fn a_tree_loop_merges_every_pass() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
 
     let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
@@ -688,7 +688,7 @@ fn a_tree_loop_merges_every_pass() {
 }
 
 /// Issue #538's B1, item 3 ("a `use`"): a `use: {path: child.yml}`
-/// child, which osp grafts into its own compiled plan
+/// child, which osi grafts into its own compiled plan
 /// (`oscilloscope_core::plan::try_graft_use`). `prime.step.inner`
 /// printing at all doesn't by itself prove the graft happened: an
 /// observed-only child (one `try_graft_use` failed to resolve) prints
@@ -702,7 +702,7 @@ fn a_tree_loop_merges_every_pass() {
 #[test]
 fn a_use_path_child_grafts_into_the_plan() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -720,7 +720,7 @@ fn a_use_path_child_grafts_into_the_plan() {
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -728,7 +728,7 @@ fn a_use_path_child_grafts_into_the_plan() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert!(status.success(), "stdout:\n{stdout}");
@@ -736,7 +736,7 @@ fn a_use_path_child_grafts_into_the_plan() {
     assert!(
         stdout.contains("▶ prime.step.inner  tool"),
         "the plan's own `tool` label must appear on the child's start line, \
-         or it was never actually grafted into osp's compiled plan: stdout:\n{stdout}"
+         or it was never actually grafted into osi's compiled plan: stdout:\n{stdout}"
     );
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
 }
@@ -747,16 +747,16 @@ fn a_use_path_child_grafts_into_the_plan() {
 /// decomposition machinery's own planner-check steps (`prime.big.plan`,
 /// `.check`, `.result_path`, `.done`) and its chunk effects
 /// (`.a`, `.b`, `.merge`) are injected at runtime -- neither is
-/// declared anywhere in the document -- so none of them is in osp's
+/// declared anywhere in the document -- so none of them is in osi's
 /// own compiled plan; every one renders as an observed-only row.
 /// This asserts a subset of those observed-only rows
 /// (`prime.big.plan`, `.a`, `.b`, `.merge`), plus the two effects the
-/// document does declare and osp's plan does compile
+/// document does declare and osi's plan does compile
 /// (`prime.big`, `prime.downstream`).
 #[test]
 fn decomposition_renders_the_planner_and_chunk_rows() {
     if !e2e_electricity_enabled() {
-        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -829,7 +829,7 @@ effects:
     );
 
     let run_dir = work.path().join("run");
-    let child = osp_electricity_command(&home)
+    let child = osi_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -837,7 +837,7 @@ effects:
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert!(status.success(), "stdout:\n{stdout}");

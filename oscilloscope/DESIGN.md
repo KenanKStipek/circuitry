@@ -5,18 +5,18 @@ and the design that followed them), so it lives with the code it describes.
 
 ---
 
-# oscilloscope (`osp`): design
+# oscilloscope (`osi`): design
 
-`osp` launches an orchestration on either engine (`cof` or electricity) and shows it running. It reads two things: the plan, which is the compiled document, and the run's live output. From these it keeps a status for every effect and writes a readable log. The first front end is a TUI. A GUI can come later and reuse the same core.
+`osi` launches an orchestration on either engine (`cof` or electricity) and shows it running. It reads two things: the plan, which is the compiled document, and the run's live output. From these it keeps a status for every effect and writes a readable log. The first front end is a TUI. A GUI can come later and reuse the same core.
 
 ```
-CYBERDINER_TOKEN=... osp do-thing.yml config.json
+CYBERDINER_TOKEN=... osi do-thing.yml config.json
 ```
 
 **Decided by the owner:**
 
-- osp lives in its own top-level folder, `oscilloscope/`, in the Circuitry repository. It is its own Cargo workspace, uses electricity's crates by path, and has its own CI workflow and release jobs.
-- Configs are JSON only and are passed to the engine unchanged. The CLI is `osp <orchestration> [config.json]`, and the environment is inherited.
+- osi lives in its own top-level folder, `oscilloscope/`, in the Circuitry repository. It is its own Cargo workspace, uses electricity's crates by path, and has its own CI workflow and release jobs.
+- Configs are JSON only and are passed to the engine unchanged. The CLI is `osi <orchestration> [config.json]`, and the environment is inherited.
 
 **Sources.** Every statement in §1 was measured unless it is marked *(from code)*. The measurements used `cof` 0.1.0 with the `scripted` adapter: no network and no credentials, a temporary `HOME`, and a 60 s limit per run. Each probe used 1 to 2 s `sleep` steps, and the `--live-state` file was sampled every 0.1 s. Thirteen runs were made, covering:
 
@@ -144,7 +144,7 @@ These values were measured but were not what a reader would expect:
 
 ## 2. Inference rules
 
-Two inputs feed these rules: the plan (§5), and a sequence of observations. An observation is a snapshot, or an event once events exist (§3). **Event time comes from `meta.created_at` and `meta.completed_at`, never from when osp noticed a change.** Log lines are sorted by those times. A short effect that starts and ends between two snapshots still gets its line, in the right place.
+Two inputs feed these rules: the plan (§5), and a sequence of observations. An observation is a snapshot, or an event once events exist (§3). **Event time comes from `meta.created_at` and `meta.completed_at`, never from when osi noticed a change.** Log lines are sorted by those times. A short effect that starts and ends between two snapshots still gets its line, in the right place.
 
 ### 2.1 Status of a plan node at concrete path `p`
 
@@ -171,14 +171,14 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
    - In the final snapshot, or once the process has exited: **cancelled** if `prime.meta.error` starts with `Interrupted`, otherwise **aborted**.
 3. Node present with `completed_at` set: **done** if `error` is `null`. Otherwise **failed**, or **failed (handled)** when `on_error` is `skip` or `continue` (from the plan).
 4. A `tree` container that is running, with unfinished children (a dynamic branch or an `each` pass): those children are **running or queued** and cannot be told apart. The count is bounded: at most `max_concurrency` minus the branches already running.
-   - A tree `each` without `max_concurrency` defaults to `min(32, cpu + 4)` workers. osp cannot know `cpu`, so it must say "≤ N".
+   - A tree `each` without `max_concurrency` defaults to `min(32, cpu + 4)` workers. osi cannot know `cpu`, so it must say "≤ N".
    - The completed count comes from `meta.progress.done`.
    - **With events:** the container's own `dispatch` event gives an exact bound instead of this estimate — `branches` is the true total (so progress reads "`done` of `branches`" instead of the plan's own, possibly data-dependent, count), and `concurrency`, when the stream has it, is the exact running ceiling in place of the `max_concurrency`/`cpu`-guess above.
 5. A running `use`: its plan children (from compiling a `path` child) follow rule 1. An `inline` child has no static plan, so its children are discovered from the observations.
 6. A retry: a running tool node whose `created_at` moved forward is **retrying (attempt ≥ 2)** — kept for whichever engine/version still moves `created_at` between attempts, though neither cof nor electricity do since issue #421. The current rule: a tool node that was non-running with an error and is running again with the *same* `created_at`, or that completes again with the same `created_at` as an earlier failure, is **retrying** too (§2.4's table). A prompt retry cannot be detected from state either way.
-7. Run status (one function, shared by the TUI header, the plain `--log` summary and `osp watch`):
+7. Run status (one function, shared by the TUI header, the plain `--log` summary and `osi watch`):
    - `runtime.last_run.completed_at` set means the run **ended**: **ok** if `prime.meta.error` is `null`, **cancelled** if it starts with `"Interrupted"` (a confirmed `q`, a Ctrl-C cancel, or a forwarded SIGINT/SIGTERM/SIGHUP always reach this branch, §4.1), otherwise **failed**.
-   - The process exited with no ended state: **failed** only when the exit code is exactly 1 *and* there is a pre-execution failure reason (`cof`'s own stdout JSON, or a `run_end` event's error) -- the shape of a document invalid enough that nothing ever ran (§4.1). Otherwise **aborted** (a second signal, SIGKILL, a crash: no final write). `osp watch`, which owns no process of its own, reads `--events`' own `run_end.ok == false` in place of the exit code.
+   - The process exited with no ended state: **failed** only when the exit code is exactly 1 *and* there is a pre-execution failure reason (`cof`'s own stdout JSON, or a `run_end` event's error) -- the shape of a document invalid enough that nothing ever ran (§4.1). Otherwise **aborted** (a second signal, SIGKILL, a crash: no final write). `osi watch`, which owns no process of its own, reads `--events`' own `run_end.ok == false` in place of the exit code.
 
 ### 2.2 Why a node was skipped
 
@@ -229,7 +229,7 @@ The runtime already has exactly the right hooks (`on_effect_start`/`on_effect_co
 
 | Option | Why not |
 |---|---|
-| The `jsonl-file` runtime plugin | It needs a `plugins` entry in config, and osp passes configs unchanged. It has no start event. It reads `runtime_plugins.jsonl-file`, not `runtime.runtime_plugins` *(from code)*, and appends across runs by default. |
+| The `jsonl-file` runtime plugin | It needs a `plugins` entry in config, and osi passes configs unchanged. It has no start event. It reads `runtime_plugins.jsonl-file`, not `runtime.runtime_plugins` *(from code)*, and appends across runs by default. |
 | A start marker written into the live state | Tree branches live in isolated stores until they merge, so they would still be invisible. Adding one changes the state shape, which both engines must reproduce byte for byte. |
 | Flushing the mirror on start | Still misses tree branches and `use` children, and costs a full serialisation per start. |
 
@@ -251,13 +251,13 @@ The runtime already has exactly the right hooks (`on_effect_start`/`on_effect_co
 | `ts` | Wall-clock UTC time, in milliseconds. |
 | `id` | Unique per effect *instance* (one per pass or branch), so `start` and `end` pair up even when several instances share an unnamed path. |
 | `path` | The absolute path, as in state and in scripted-replies keys. |
-| `dispatch` | Sent once by a tree loop or tree dynamic before its branches start. This is the existing `concurrent_dispatch` callback. `branches` is the true branch count (an `each` loop's item total, or a `dynamic`'s effect count); `concurrency`, when present, is the ceiling — at most this many run at once. `concurrency` is optional: a stream from a `cof` built before it was added has `branches` alone, and osp still works, just with a less precise bound (DESIGN.md §2.1 rule 4). |
+| `dispatch` | Sent once by a tree loop or tree dynamic before its branches start. This is the existing `concurrent_dispatch` callback. `branches` is the true branch count (an `each` loop's item total, or a `dynamic`'s effect count); `concurrency`, when present, is the ceiling — at most this many run at once. `concurrency` is optional: a stream from a `cof` built before it was added has `branches` alone, and osi still works, just with a less precise bound (DESIGN.md §2.1 rule 4). |
 | `error` | Present only when `ok` is false. Its first 500 characters, already redacted. |
 
 What the format leaves out, and why:
 
-- **No values and no prompt text.** osp reads those from the live state.
-- **No effect kind.** osp takes it from the plan, or from the shape of `meta` for generated children.
+- **No values and no prompt text.** osi reads those from the live state.
+- **No effect kind.** osi takes it from the plan, or from the shape of `meta` for generated children.
 
 **Rules:**
 
@@ -265,10 +265,10 @@ What the format leaves out, and why:
   - A container's `start` comes before any child's `start`.
   - Every child's `end` comes before the container's `end` (measured: true for the hooks today).
   - Tree branches may interleave.
-  - `run_start` is the first line. When `run_end` is written, it is the last line, written after the final live-state write. So when osp sees `run_end`, the final snapshot is already on disk.
+  - `run_start` is the first line. When `run_end` is written, it is the last line, written after the final live-state write. So when osi sees `run_end`, the final snapshot is already on disk.
 - **Flushing.** The file is opened and truncated before the first effect. Each event is written with **one `write()` of one whole line, under one lock, and flushed at once**. There is no buffering across events, so a reader tailing the file never sees a torn line, except at EOF while a write is in progress. Readers keep any trailing partial line until its `\n` arrives.
 - **Failures.** A failure to write is logged once and then ignored. It never fails the run, the same as the live mirror.
-- **Abort.** No `run_end` is written after `os._exit` (second signal). osp treats EOF with no `run_end` plus a dead process as aborted.
+- **Abort.** No `run_end` is written after `os._exit` (second signal). osi treats EOF with no `run_end` plus a dead process as aborted.
 
 **What `cof` must change:**
 
@@ -302,14 +302,14 @@ What the format leaves out, and why:
 
 ## 4. Launching each engine
 
-osp makes a run directory and launches the engine with these files in it:
+osi makes a run directory and launches the engine with these files in it:
 
 - `state.live.json`
 - `state.json`
 - `events.jsonl`
 - `stdout.txt` and `stderr.txt`
 
-By default the directory is a new temporary one, printed when the run ends; `--out-dir <dir>` chooses it instead. These are the same file names a `cof run --live-state <dir>/state.live.json --out <dir>/state.json` user already has, so `osp watch <dir>` (§7) can attach to such a run.
+By default the directory is a new temporary one, printed when the run ends; `--out-dir <dir>` chooses it instead. These are the same file names a `cof run --live-state <dir>/state.live.json --out <dir>/state.json` user already has, so `osi watch <dir>` (§7) can attach to such a run.
 
 ### 4.1 `cof`
 
@@ -320,43 +320,43 @@ cof run <orchestration> [--config <config.json>] --quiet \
 ```
 
 - **Config.** With no config, `--config` is left off, and `cof` resolves its usual layers: the global config, a *trusted* project config in the working directory, and env vars. `--config` replaces the global and project layers and is always trusted.
-- **Inputs.** `-e` values are JSON-sniffed by `cof`, so osp passes them through untouched. osp accepts `-e`/`--state` after the positionals; this does not change the owner's CLI form.
+- **Inputs.** `-e` values are JSON-sniffed by `cof`, so osi passes them through untouched. osi accepts `-e`/`--state` after the positionals; this does not change the owner's CLI form.
 - **stdin is `/dev/null`.** Nothing interactive can then hang:
   - capability consent prompts only when stdin *and* stdout are TTYs and neither `--quiet` nor `--json` is set; otherwise it refuses with a message naming `cof trust <doc>` *(from code: `cli/app.py` `_capability_prompt`)*;
   - an untrusted project config is never a prompt, only a one-line stderr warning.
 - **stdout is a pipe** (measured with `--quiet --out`):
   - success: stdout is empty;
-  - failure, validation errors included: it holds one JSON object, `{"ok": false, "error": "…", "warnings": [], "state_out": "…"}`. osp parses it for the final error line.
+  - failure, validation errors included: it holds one JSON object, `{"ok": false, "error": "…", "warnings": [], "state_out": "…"}`. osi parses it for the final error line.
 - **stderr is a pipe.** It carries `WARNING: …` log lines and `Warning: …` notices. Each line becomes an `engine` line in the log pane.
-- **Process group.** osp spawns the engine with `CommandExt::process_group(0)`, so that terminal signals reach osp only and osp alone decides what to forward.
+- **Process group.** osi spawns the engine with `CommandExt::process_group(0)`, so that terminal signals reach osi only and osi alone decides what to forward.
 - **Side effect.** `cof run` updates the user's `--last` stash. This is accepted, and documented.
 
-**Signals.** In raw mode, Ctrl-C is a key, so osp forwards signals itself (measured, sent to the engine's process group):
+**Signals.** In raw mode, Ctrl-C is a key, so osi forwards signals itself (measured, sent to the engine's process group):
 
 | Action | Engine result |
 |---|---|
 | first Ctrl-C → SIGINT | exit **130**. The interrupted effect is left open, `finally` runs, and the final snapshot plus `--out` are written (`error: "Interrupted (Ctrl-C/SIGINT)"`). |
 | second Ctrl-C (0.24 s later) → SIGINT | exit **130** at once: no `finally`, no `--out`, no final snapshot, and no stdout. |
-| SIGTERM to osp → SIGTERM | exit **143**, same as the first SIGINT, with `"Interrupted (SIGTERM)"`. |
-| SIGHUP to osp (terminal closed) | forward SIGHUP: exit 129, handled like SIGTERM *(from code: `cli/interrupts.py`)*. |
+| SIGTERM to osi → SIGTERM | exit **143**, same as the first SIGINT, with `"Interrupted (SIGTERM)"`. |
+| SIGHUP to osi (terminal closed) | forward SIGHUP: exit 129, handled like SIGTERM *(from code: `cli/interrupts.py`)*. |
 
-osp behaviour:
+osi behaviour:
 
 - **First Ctrl-C:** send SIGINT and show "cancelling, finally running…".
 - **Second Ctrl-C:** send SIGINT again.
 - **Still running 10 s after the second:** send SIGKILL to the group.
 - **`q` while a run is going:** ask "cancel run?" first.
-- **Exit code:** osp exits with the engine's code.
+- **Exit code:** osi exits with the engine's code.
 
 ### 4.2 electricity
 
 **M0-H's run wiring (issue #441) landed electricity's own side of
-this; issue #431's lane E2 wires osp to it.** electricity is still a
+this; issue #431's lane E2 wires osi to it.** electricity is still a
 preview: `electricity/README.md`'s preview section is the single
 source of truth for what it runs, and it refuses everything else up
 front, before any state is written, with a message naming the preview
 marker (`is a preview and can't run this orchestration`,
-`electricity_bytecode::PREVIEW_MARKER`). osp shows that refusal the
+`electricity_bytecode::PREVIEW_MARKER`). osi shows that refusal the
 same way it shows an invalid document: a pre-execution failure,
 `■ run failed: ...`, exit 1 -- though only the refusal writes nothing
 at all under the run directory; an invalid document still gets its own
@@ -372,14 +372,14 @@ error).
   probes `cof run --help` for `--events` alone (`cof`'s own
   `--live-state` predates capability detection, so `CofEngine`'s own
   caps hardcode it `true`). An older electricity built before M0-H has
-  neither flag, and osp falls back to the no-events path with the same
+  neither flag, and osi falls back to the no-events path with the same
   notice `cof` gets ("this electricity has no --events: running from
   state only"), worded for whichever engine is actually missing it.
 - Exit codes are exactly `cof`'s own: 0, 1, 2, 130 (SIGINT), 143
   (SIGTERM), 129 (SIGHUP). A config error has nothing on stdout and
   `Error: <text>` on stderr; an invalid document or a refusal prints
   `cof`'s own `{"ok":false, "error":...,"warnings":[...],
-  "state_out":...}` shape on stdout instead, which osp's existing
+  "state_out":...}` shape on stdout instead, which osi's existing
   `read_stdout_json_error`/`failure_reason_fallback`/`run_status`
   (DESIGN.md §2.1 rule 7) already read engine-agnostically -- nothing
   engine-specific was needed there. (A missing orchestration file is
@@ -390,20 +390,20 @@ error).
   PR.)
 - `--events`/`--live-state` are electricity's own, in `cof`'s exact
   format (events format v1, a final live-state write equal to
-  `--out`), so osp's plan join, status inference and `--log` output
+  `--out`), so osi's plan join, status inference and `--log` output
   work unchanged.
 
-**Argument order.** The owner's form is `osp <orchestration> [config]`; osp maps it to `electricity <config> <orchestration>`. Neither file can be recognised by its extension (an orchestration may be `.json`). osp therefore keeps the order strict. It gives a hint only when the first argument has no `effects` key and the second has one.
+**Argument order.** The documented form is `osi <orchestration> [config]`; osi maps it to `electricity <config> <orchestration>`. Neither file can be recognised by its extension (an orchestration may be `.json`). osi therefore keeps the order strict. It gives a hint only when the first argument has no `effects` key and the second has one.
 
-**Missing config.** With no config, osp tells the user that electricity needs one. It does not invent a `{}` config, because that would silently drop the user's global settings, which `cof` would have applied.
+**Missing config.** With no config, osi tells the user that electricity needs one. It does not invent a `{}` config, because that would silently drop the user's global settings, which `cof` would have applied.
 
-**End-to-end tests** (`oscilloscope/crates/oscilloscope/tests/e2e_electricity.rs`, mirroring `e2e_cof.rs`) run behind `OSP_E2E_ELECTRICITY=1`, against an `electricity` built with `--features test-tools` (its `sleep`/`fail` providers keep the signal tests deterministic without a real child process) on `PATH`. `oscilloscope.yml`'s own `e2e-electricity` job builds that binary and runs them on Linux and macOS.
+**End-to-end tests** (`oscilloscope/crates/oscilloscope/tests/e2e_electricity.rs`, mirroring `e2e_cof.rs`) run behind `OSI_E2E_ELECTRICITY=1`, against an `electricity` built with `--features test-tools` (its `sleep`/`fail` providers keep the signal tests deterministic without a real child process) on `PATH`. `oscilloscope.yml`'s own `e2e-electricity` job builds that binary and runs them on Linux and macOS.
 
 ---
 
-## 5. The plan side: what osp needs from `Program`
+## 5. The plan side: what osi needs from `Program`
 
-osp compiles the document with `electricity_compiler::check_for_run(path, &CheckOptions{skip_preflight: true, trust_document: true})`, linked by path, so the same plan serves both engines. From the IR it needs:
+osi compiles the document with `electricity_compiler::check_for_run(path, &CheckOptions{skip_preflight: true, trust_document: true})`, linked by path, so the same plan serves both engines. From the IR it needs:
 
 | Need | IR source today |
 |---|---|
@@ -419,18 +419,18 @@ osp compiles the document with `electricity_compiler::check_for_run(path, &Check
 **Joining plan paths with state and event paths.**
 
 - Turn each plan path into a pattern. A `Pass(L)` segment matches `iter_<n>`, and `n` becomes the pass index for that loop.
-- Transparent ops add no segment, so their children match in the parent's scope. One concrete path can then match several plan ops: `then`/`else` reusing a name, or an unnamed `if`. osp keeps them as one merged row, with a list of candidate plan ops.
+- Transparent ops add no segment, so their children match in the parent's scope. One concrete path can then match several plan ops: `then`/`else` reusing a name, or an unnamed `if`. osi keeps them as one merged row, with a list of candidate plan ops.
 - `finally` ops share the container's scope.
-- **`use` with `path`:** osp compiles the child file (with a cycle guard) and grafts its root's children under the `use` node, stripping the child's `prime`.
+- **`use` with `path`:** osi compiles the child file (with a cycle guard) and grafts its root's children under the `use` node, stripping the child's `prime`.
 - **`use` with `inline`, and reflector `generated.iter_N`:** these have no static plan. Their rows are created as paths are first seen. The type is guessed from the shape of `meta`, the same rule the reference's SQL plugins use.
 
 **Asks for the M0-G lanes:**
 
-1. **A path display helper.** `impl Display for EffectPath`, rendering a pass as `iter_*`, plus a `matches(&str) -> Option<Vec<(LoopId, u32)>>`, so osp does not reimplement the join.
+1. **A path display helper.** `impl Display for EffectPath`, rendering a pass as `iter_*`, plus a `matches(&str) -> Option<Vec<(LoopId, u32)>>`, so osi does not reimplement the join.
 2. **Source positions.** An optional `span: Option<(line, col)>` on `Op`, so the details pane can show the YAML location. This is nice to have.
 3. **A visitor.** `Program::walk()` or a visitor that yields `(depth, &Op)`.
-4. **Stability.** The IR is documented as having "no stability promise". Since osp links by path in the same repository, a breaking IR change must update osp in the same PR, and the shared CI enforces that.
-5. **A fallback.** osp must still work when compilation fails or is unsupported: no plan, and a tree built from observations only. This matters until M0-G lands.
+4. **Stability.** The IR is documented as having "no stability promise". Since osi links by path in the same repository, a breaking IR change must update osi in the same PR, and the shared CI enforces that.
+5. **A fallback.** osi must still work when compilation fails or is unsupported: no plan, and a tree built from observations only. This matters until M0-G lands.
 
 ---
 
@@ -449,7 +449,7 @@ oscilloscope/
       diff.rs      # snapshot diff -> Vec<LogLine>, events -> Vec<LogLine>, time-sorted by meta timestamps
       engine.rs    # trait Engine { fn command(&RunSpec) -> Command; fn caps() }: CofEngine, ElectricityEngine
       supervise.rs # spawn (process_group 0, stdin null, pipes), signal forwarding, exit status
-    oscilloscope/                 # binary `osp`: ratatui + crossterm TUI and --log plain mode
+    oscilloscope/                 # binary `osi`: ratatui + crossterm TUI and --log plain mode
   tests/fixtures/                 # recorded runs (scrubbed): plan, snapshots, events, stdout/stderr, exit code
 ```
 
@@ -459,12 +459,12 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 
 ### 6.2 Plain-text mode
 
-`osp --log` is chosen automatically when stdout is not a TTY or `CI` is set. It prints the §2.4 lines with `mm:ss.s` timestamps, plus the engine's stderr lines (prefixed `engine:`), and ends with a summary line and the engine's exit code. Example (from p4):
+`osi --log` is chosen automatically when stdout is not a TTY or `CI` is set. It prints the §2.4 lines with `mm:ss.s` timestamps, plus the engine's stderr lines (prefixed `engine:`), and ends with a summary line and the engine's exit code. Example (from p4):
 
 ```
 00:00.0 ▶ flaky                 prompt scripted/scripted-model "flaky"
 00:02.0 ✓ flaky                 2.0s  retries 2  ↑3 ↓1
-00:02.0 ▶ always_fails          shell ls /nonexistent-osp-probe
+00:02.0 ▶ always_fails          shell ls /nonexistent-osi-probe
 00:02.9 ✗ always_fails          /bin/ls failed (exit 1): ls: … (on_error: continue)
 00:03.9 ✗ guarded.g_fail        /bin/ls failed (exit 1) …
 00:04.6 ✓ guarded.g_cleanup     0.7s  (finally)
@@ -479,7 +479,7 @@ highlights, the scope icon and colour themes, issue #535)
 only) and `crossterm` `0.29` (the version ratatui's own crossterm backend
 uses), both building on the workspace MSRV (1.86). `--log`, or any non-TTY
 stdout (a pipe, a file, `CI` set), keeps §6.2's plain stream unchanged; a
-TTY gets this instead, for both `osp <doc>` and `osp watch`.
+TTY gets this instead, for both `osi <doc>` and `osi watch`.
 
 The render model is `oscilloscope-core`'s own (`render.rs` and `treemap.rs`):
 a `Header`, the plan tree flattened to depth-first `Row`s, the state pane's
@@ -805,16 +805,16 @@ recorded shape from each engine.
 | `tab` | orchestration → details → state |
 | `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it |
 | `c` | cancel, with a confirm — the same as a *confirmed* `c`/`q` always has (`do_run`'s own signal-forwarding/kill-escalation path, not a separate one) |
-| `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`, and leaves the instant the engine exits — see "the finished screen" below); with nothing running, quits at once, no confirm; in `osp watch`, always just detaches, with no confirm — watch owns no engine to cancel |
-| Ctrl-C | checked before any dialog, and never merely dismisses one: forwards SIGINT at once with no confirm while something's running (a second Ctrl-C starts the same 10s kill deadline a real repeated SIGINT would), quits at once with nothing running, and in `osp watch` always just detaches |
+| `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`, and leaves the instant the engine exits — see "the finished screen" below); with nothing running, quits at once, no confirm; in `osi watch`, always just detaches, with no confirm — watch owns no engine to cancel |
+| Ctrl-C | checked before any dialog, and never merely dismisses one: forwards SIGINT at once with no confirm while something's running (a second Ctrl-C starts the same 10s kill deadline a real repeated SIGINT would), quits at once with nothing running, and in `osi watch` always just detaches |
 | `?` | help |
 
-**The finished screen.** The engine exiting (or, for `osp watch`, the
+**The finished screen.** The engine exiting (or, for `osi watch`, the
 watched run ending) does not, on its own, end this loop: the header, every
 row's final status, and the details pane (`v` included) stay live and
 navigable on whatever the run ended with — ok, failed, cancelled or
 aborted — until the user explicitly leaves. The instant this loop first
-observes the ending (the engine's exit, or `osp watch`'s own events-based
+observes the ending (the engine's exit, or `osi watch`'s own events-based
 or dead-pid stop condition), it drains once more before ever rebuilding
 this screen: events tailed until a pass turns up nothing new, then the
 same authoritative final read `finish_run`/`finish_watch` themselves take
@@ -824,11 +824,11 @@ are never missed, and this screen can't show a real `ok`/`failed` ending
 as `aborted` just because nothing is still running to eventually correct
 it. Only three things make this loop leave the instant the engine has
 exited, rather than staying on that final state: a confirmed `q`, a
-Ctrl-C cancel, or any external INT/TERM/HUP osp itself received (a SIGHUP
+Ctrl-C cancel, or any external INT/TERM/HUP osi itself received (a SIGHUP
 in particular never waits for
 a key — the terminal is gone by definition). Short of one of those three,
 a run that simply finishes on its own stays up for `q`/Ctrl-C to leave.
-`osp watch`'s own `q` while the watched run is *still going* prints a
+`osi watch`'s own `q` while the watched run is *still going* prints a
 distinct "■ detached (the run is still going)" ending and exits 0, rather
 than the generic "no final state" abort every other stop condition
 without one falls into; `q` once the run has already ended gets the
@@ -839,7 +839,7 @@ down, exactly as they already do for `--log`.
 **Terminal safety.** A `TerminalGuard` enters raw mode and the alternate
 screen once (undoing raw mode again if the alternate screen fails to
 open); `Drop` restores both on every normal return from the TUI loop
-(osp's own error, the engine exiting, a confirmed quit), and a panic hook
+(osi's own error, the engine exiting, a confirmed quit), and a panic hook
 installed alongside it restores the terminal before the default panic
 handler's own message would otherwise print into it. A forwarded
 SIGINT/SIGTERM/SIGHUP is forwarded to the engine as the *same* signal
@@ -847,9 +847,9 @@ SIGINT/SIGTERM/SIGHUP is forwarded to the engine as the *same* signal
 escalation `do_run`'s plain loop applies, and never leaves the TUI loop
 early on its own — the loop keeps rendering until the engine actually
 exits, so `Drop` still runs on the normal path out. If the TUI itself
-can't start (an exotic CI pty, a stdout swapped out from under osp), both
-`osp <doc>` and `osp watch` fall back to their own plain supervise/watch
-loop rather than a bare, signal-blind wait. `osp` itself being
+can't start (an exotic CI pty, a stdout swapped out from under osi), both
+`osi <doc>` and `osi watch` fall back to their own plain supervise/watch
+loop rather than a bare, signal-blind wait. `osi` itself being
 `SIGKILL`ed is the one exception (§4.1): nothing can run cleanup code
 after that at all. The render state (plan-tree rows, state rows, the
 treemap's own tree, header counts) is rebuilt at most once every
@@ -893,7 +893,7 @@ its own total grew (or it's new) and no direct child's did too, since a
 container's total is always the sum of its children and tinting every
 ancestor whose own total rose along with a leaf's would point at
 nothing. The first observation (`old:
-None`) never reports anything, so `osp watch` attaching to an already-
+None`) never reports anything, so `osi watch` attaching to an already-
 finished run opens on a calm screen; elapsed time, selection, scrolling,
 the filter, collapse sets and a resize are not part of `RenderState` at
 all, so none of them can ever appear as a change. Every redraw rebuild
@@ -917,7 +917,7 @@ the same lightness, `rgb(107, 107, 107)`, never toward black — mixing
 toward black was tried first and either clashed with light default
 text (near full strength, on a dark terminal) or buried dark default
 text (near the ramp's dark end, on a light one).
-`--no-animation` (both `osp <doc>` and `osp watch`) skips marking
+`--no-animation` (both `osi <doc>` and `osi watch`) skips marking
 entirely, so `Tracker::has_active` never reports anything after it.
 
 **The oscilloscope icon** (`oscilloscope_core::icon` for the trace's own
@@ -931,7 +931,7 @@ live, a sine-like wave scrolls
 one dot column per frame, a frame being the same `REDRAW_INTERVAL` tick
 the redraw rule above forces while live; once the run has ended (or
 with `--no-animation`, which freezes the frame at 0 while live), the
-trace is a single still, flat line — `osp watch` on an already-ended run
+trace is a single still, flat line — `osi watch` on an already-ended run
 shows the flat line from its own first frame. The trace's own colour
 follows run state through the active theme (`icon_trace_ok`/`_failed`/
 `_cancelled`); the bezel is always `icon_bezel` (dim). The icon is not
@@ -957,8 +957,8 @@ a handful of roles adjusted per theme wherever the published value
 didn't clear a 4.5:1 (3:1 for dim text) WCAG contrast ratio against that
 background — documented, per role, in `theme.rs` itself.
 
-`--theme <name>` (both `osp <doc>` and `osp watch`) chooses a theme;
-with neither flag, `OSP_THEME` applies; with neither, `terminal`. An
+`--theme <name>` (both `osi <doc>` and `osi watch`) chooses a theme;
+with neither flag, `OSI_THEME` applies; with neither, `terminal`. An
 unknown name from either is a usage error listing the valid ones. `t`
 cycles live through the eleven names in listed order, wrapping, without
 rebuilding the render state; the header shows the new name for about 2
@@ -980,22 +980,22 @@ still reads from glyphs and modifiers, never colour alone.
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osp watch` — at 100×24 (two-column: the right side is the state pane over the log pane, no treemap), since that is what most of these actually want to show (the orchestration review found the previous blanket 70×20 lost the details pane's own type/plan/provider lines and the state pane entirely). `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_treemap_and_the_state_pane` and `fallback_at_100x30_is_the_smallest_full_layout` cover the two further thresholds boundary-adjacent to those: 80×24 is two-column with both the treemap and the state pane dropped, and 100×30 is the smallest size at which nothing is dropped at all. `full_layout_with_state_treemap_and_token_bar`, at 120×40, is the most comfortable size, with every pane populated, including a nested treemap cell under the `prime` root cell. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position.
+- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osi watch` — at 100×24 (two-column: the right side is the state pane over the log pane, no treemap), since that is what most of these actually want to show (the orchestration review found the previous blanket 70×20 lost the details pane's own type/plan/provider lines and the state pane entirely). `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_treemap_and_the_state_pane` and `fallback_at_100x30_is_the_smallest_full_layout` cover the two further thresholds boundary-adjacent to those: 80×24 is two-column with both the treemap and the state pane dropped, and 100×30 is the smallest size at which nothing is dropped at all. `full_layout_with_state_treemap_and_token_bar`, at 120×40, is the most comfortable size, with every pane populated, including a nested treemap cell under the `prime` root cell. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position.
 - **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle (including skipping straight past the state pane when it isn't drawn at all, `state_viewport == 0`), the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal. `tui.rs`'s own `scroll_tests` module unit-tests `clamp_scroll`/`scroll_indicator` and the state pane's line-aware `clamp_state_scroll` directly, beyond what the rendered goldens already exercise indirectly.
 - **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
 - **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-token key gets no cell (including a zero-total root, which produces an empty tree, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, and the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout).
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
-- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSP_E2E_COF=1` (`cof` on `PATH` required once set):
+- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSI_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;
   - a temporary `HOME`;
   - credential variables removed (the four named in this repository's CLAUDE.md);
   - a hard timeout per test;
   - one test per probe shape, plus SIGINT once, SIGINT twice and SIGTERM, asserting exit codes and final statuses;
-  - the pty tests additionally assert the alternate-screen entry/exit escape sequences, and that nothing osp or cof started survives, with no `osp-*` directory left in the real system temp directory (every pty test uses its own `--out-dir`); since the TUI now stays open on its own final state, every pty test that lets a run finish on its own sends `q` to leave, and three further pty tests assert SIGTERM (143), SIGHUP (129) and a raw Ctrl-C byte, `0x03` (130, since raw mode disables the kernel's own `ISIG`) in the TUI specifically.
+  - the pty tests additionally assert the alternate-screen entry/exit escape sequences, and that nothing osi or cof started survives, with no `osi-*` directory left in the real system temp directory (every pty test uses its own `--out-dir`); since the TUI now stays open on its own final state, every pty test that lets a run finish on its own sends `q` to leave, and three further pty tests assert SIGTERM (143), SIGHUP (129) and a raw Ctrl-C byte, `0x03` (130, since raw mode disables the kernel's own `ISIG`) in the TUI specifically.
 
   Live tests are never run.
-- **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSP_E2E_ELECTRICITY=1`.
-- **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/treemap/log/token-bar/header change each, a treemap shrink staying silent, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSP_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
+- **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSI_E2E_ELECTRICITY=1`.
+- **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/treemap/log/token-bar/header change each, a treemap shrink staying silent, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSI_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
 - **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents using only `tool`/`json`, `dynamic`, a CEL `if` and `finally:`, recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
 
 ---
@@ -1013,7 +1013,7 @@ questions. None of them are waiting on a decision.
 | Q2 | Pull electricity's `--events` into M0-H? | **Yes.** `fire_effect_*` already exists there, and live state waits until M3-B. |
 | Q3 | Default engine? | **`cof`** until electricity passes M1, with `--engine electricity` to opt in. Later, auto-detect. |
 | Q4 | Show retries live (`effect_retry` event)? | **Later (v2).** It needs callbacks in the prompt and tool retry loops. v1 shows "retrying" for tools only, from `created_at` moving. |
-| Q5 | Attach mode, `osp watch <dir \| live.json> [--plan doc.yml]`, for runs osp did not start? | **Yes in v1.** It costs little, and it covers the existing `--live-state <dir>/state.live.json` habit. |
+| Q5 | Attach mode, `osi watch <dir \| live.json> [--plan doc.yml]`, for runs osi did not start? | **Yes in v1.** It costs little, and it covers the existing `--live-state <dir>/state.live.json` habit. |
 | Q6 | Where do run files go by default? | **A temp dir**, printed at the end. `--out-dir` keeps it. |
 | Q7 | How much prompt and reply text to show? | **None in the log** beyond a 60-character preview. Full text only in the details pane, on request. |
 | Q8 | Should `cof` make interrupted effects explicit in state (e.g. `meta.error: "cancelled"`) instead of leaving `completed_at: null`? | **Yes, upstream, both engines.** Today a reader cannot tell "cancelled" from "still running" without the run-level error. |

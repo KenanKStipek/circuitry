@@ -22,7 +22,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The stable substring every preview refusal carries (issue #476):
 /// matched in lockstep by the conformance harness's own
-/// `PREVIEW_MESSAGE_MARKER`, osp's e2e test, and this crate's,
+/// `PREVIEW_MESSAGE_MARKER`, osi's e2e test, and this crate's,
 /// `electricity` (lib)'s and `electricity-tools`' own tests. Every
 /// refusal message below, `electricity::format_config_refusal`, and
 /// `electricity_tools::fs::preview_marker_codec_error` build their
