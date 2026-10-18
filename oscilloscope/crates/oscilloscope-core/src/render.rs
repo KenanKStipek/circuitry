@@ -136,6 +136,28 @@ impl RowKind {
             RowKind::Tool | RowKind::Prompt | RowKind::Use | RowKind::Yield | RowKind::Reflector
         )
     }
+
+    /// Whether a path of this kind gets its own, separate `{value,
+    /// meta}` state node once it runs, and so its own `on_effect_
+    /// start`/`on_effect_complete` pair -- every leaf, the document
+    /// root, every *named* `if`/loop, every `dynamic`, and every
+    /// `TryFinally`-shaped op. `runtime.last_run.totals.effects_run`
+    /// (DESIGN.md §1.2: "every completed node, the root and the
+    /// containers included") counts exactly this set, not only
+    /// leaves -- `PlanTree::countable_paths`'s own doc comment has
+    /// the reasoning for excluding a transparent `if`/loop, the one
+    /// container kind with no node of its own.
+    fn counts_toward_effects_run(self) -> bool {
+        self.is_leaf()
+            || matches!(
+                self,
+                RowKind::Root
+                    | RowKind::If
+                    | RowKind::Loop
+                    | RowKind::Dynamic
+                    | RowKind::TryFinally
+            )
+    }
 }
 
 /// Whether `value` is a report's own state value (#605): `{message:
@@ -1263,42 +1285,43 @@ fn build_header(
     };
 
     let (effects_planned, effects_planned_is_lower_bound) = if plan.has_plan() {
-        let leaf_paths: std::collections::BTreeSet<&String> = plan.leaf_paths().iter().collect();
+        let countable_paths: std::collections::BTreeSet<&String> =
+            plan.countable_paths().iter().collect();
         let mut total = 0u64;
         let mut lower_bound = false;
-        for leaf in &leaf_paths {
+        for path in &countable_paths {
             // A `use` leaf's own
             // children are the real planned units, not the `use` node
             // itself -- counting both (already true for a `path:`
             // child whose own children are separately grafted into
-            // `leaf_paths`) or neither (an `inline:`/`ref:` child,
+            // `countable_paths`) or neither (an `inline:`/`ref:` child,
             // which has no static plan at all) is what let `done`
             // outrun `planned` once a `use` child's effects actually
             // landed in state.
-            if row_kind_for(leaf, plan, flat) == RowKind::Use {
-                let prefix = format!("{leaf}.");
-                let has_static_children = leaf_paths.iter().any(|p| p.starts_with(&prefix));
+            if row_kind_for(path, plan, flat) == RowKind::Use {
+                let prefix = format!("{path}.");
+                let has_static_children = countable_paths.iter().any(|p| p.starts_with(&prefix));
                 if has_static_children {
                     // Grafted `use: path:`: its own children are
-                    // already separate entries in `leaf_paths`, each
-                    // counted on their own below.
+                    // already separate entries in `countable_paths`,
+                    // each counted on their own below.
                     continue;
                 }
                 let (count, use_lower_bound) =
-                    use_leaf_contribution(leaf, plan, flat, statuses, all_paths);
+                    use_leaf_contribution(path, plan, flat, statuses, all_paths);
                 total = total.saturating_add(count);
                 lower_bound |= use_lower_bound;
                 continue;
             }
-            let (passes, leaf_lower_bound) = leaf_pass_count(leaf, plan, flat);
+            let (passes, path_lower_bound) = leaf_pass_count(path, plan, flat);
             total = total.saturating_add(passes);
-            lower_bound |= leaf_lower_bound;
+            lower_bound |= path_lower_bound;
         }
         (Some(total), lower_bound)
     } else {
         (None, false)
     };
-    let effects_done = statuses
+    let effects_done_raw = statuses
         .iter()
         .filter(|(path, status)| {
             if !matches!(
@@ -1321,18 +1344,75 @@ fn build_header(
                 // paths.
                 !crate::model::subtree_entries(path.as_str(), all_paths)
                     .any(|(p, ())| p.as_str() != path.as_str())
+            } else if kind == RowKind::Unknown {
+                // No plan entry at all (`osi watch`, or an
+                // `inline:`/`ref:` use child), and no distinguishing
+                // `meta` shape either (`from_meta_shape`'s own
+                // catch-all) -- but a node with real children in
+                // state is still some container that genuinely ran
+                // (only a container ever has them; `RowKind::Use`'s
+                // own shape signals, checked above, already cover a
+                // `use`), even nameless to `osi`: a bare `dynamic`
+                // carries no `meta` shape of its own to guess a
+                // kind from at all (DESIGN.md §5). Counting it here
+                // is what lets a finished run under no plan match a
+                // planned one's own count for a document with a
+                // plain `dynamic` in it.
+                crate::model::subtree_entries(path.as_str(), flat)
+                    .any(|(p, _)| p.as_str() != path.as_str())
             } else {
-                kind.is_leaf()
+                kind.counts_toward_effects_run()
             }
         })
         .count() as u64;
-    // Invariant: "done" never outruns
-    // "planned" -- true by construction once a `use` child's effects
-    // are counted the same way on both sides above, but kept as an
-    // explicit floor rather than trusting that invariant silently,
-    // since a document this walker has never seen could still surprise
-    // it.
-    let effects_done = effects_planned.map_or(effects_done, |planned| effects_done.min(planned));
+    // Once the engine has deterministically ended the run (issue
+    // #620) -- `Ok`, `Failed`, or a single-signal `Cancelled`, every
+    // outcome DESIGN.md §2.1 rule 7 reaches from `runtime.last_run.
+    // completed_at` landing in a real `--out` write of its own --
+    // nothing more will ever run, so "planned" can only mean "what
+    // actually ran": an untaken `if` branch, an empty loop pass, a
+    // chain stopped by an earlier failure, a disabled container's own
+    // un-run children, and the rest of DESIGN.md §6.3's "effects done
+    // out of planned" all leave the planned total the same way.
+    // `Aborted` is excluded, whether a second signal left no final
+    // write at all (DESIGN.md §1.1) or a pre-execution validation
+    // failure never wrote one in the first place (`run_status`'s own
+    // "no ended state" branch): there is no `effects_run` to match
+    // either way, and real work may still be left incomplete.
+    let run_has_ended = state.is_some_and(crate::model::run_ended)
+        && matches!(
+            status,
+            RunStatus::Ok | RunStatus::Failed | RunStatus::Cancelled
+        );
+    // The engine's own `runtime.last_run.totals.effects_run` is
+    // recorded live as each effect completes (DESIGN.md §6.3,
+    // `_TotalsAccumulator.observe`/`Totals::observe_complete`), not by
+    // walking the final state -- so once it's present it's the exact
+    // count on both sides, including the two shapes `effects_done_raw`
+    // can't see: a declared-outputs `use` child, whose own effects
+    // never land in the final state tree at all even though they ran,
+    // and an *unnamed* loop with more than one pass, whose every pass
+    // overwrites the very same state path so only the last survives
+    // for a walk to find. Walking the state tree stays the fallback
+    // only for an ended run with no totals to read at all (a
+    // synthetic state, as in this module's own unit tests).
+    let effects_run_from_totals = state
+        .and_then(run_totals)
+        .and_then(|totals| totals.get("effects_run").and_then(Value::as_u64));
+    let (effects_planned, effects_planned_is_lower_bound, effects_done) = if run_has_ended {
+        let count = effects_run_from_totals.unwrap_or(effects_done_raw);
+        (Some(count), false, count)
+    } else {
+        // Invariant: "done" never outruns
+        // "planned" -- true by construction once a `use` child's effects
+        // are counted the same way on both sides above, but kept as an
+        // explicit floor rather than trusting that invariant silently,
+        // since a document this walker has never seen could still surprise
+        // it.
+        let done =
+            effects_planned.map_or(effects_done_raw, |planned| effects_done_raw.min(planned));
+        (effects_planned, effects_planned_is_lower_bound, done)
+    };
 
     let (tokens_sent, tokens_received) = state
         .and_then(run_totals)
@@ -2074,7 +2154,9 @@ mod tests {
             &[],
         );
         assert_eq!(state.header.status, RunStatus::Running);
-        assert_eq!(state.header.effects_planned, Some(1));
+        // The document root counts toward "planned" too (issue #620),
+        // alongside `step1` itself.
+        assert_eq!(state.header.effects_planned, Some(2));
         assert_eq!(state.header.effects_done, 0);
         let step1 = state
             .rows
@@ -2314,8 +2396,8 @@ mod tests {
             rendered.rows
         );
 
-        // Only `step1` counts.
-        assert_eq!(rendered.header.effects_planned, Some(1));
+        // `step1` and the (still-running) root count; the report does not.
+        assert_eq!(rendered.header.effects_planned, Some(2));
         assert_eq!(rendered.header.effects_done, 1);
     }
 
@@ -3071,7 +3153,9 @@ mod tests {
             rendered_with.header.effects_done,
             rendered_without.header.effects_done
         );
-        assert_eq!(rendered_without.header.effects_planned, Some(4));
+        // The root and `fan`'s own container both count too (issue
+        // #620), alongside the body leaf multiplied by its known total.
+        assert_eq!(rendered_without.header.effects_planned, Some(6));
         assert_eq!(rendered_without.header.effects_done, 2);
     }
 
@@ -3207,7 +3291,9 @@ mod tests {
             "t2",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(4));
+        // The root and `fan`'s own container both count too (issue
+        // #620): 2 (root, fan) + 4 (the body leaf, known total) = 6.
+        assert_eq!(rendered.header.effects_planned, Some(6));
         assert!(!rendered.header.effects_planned_is_lower_bound);
         assert_eq!(rendered.header.effects_done, 2);
     }
@@ -3227,7 +3313,9 @@ mod tests {
             "t0",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(1));
+        // The root and `fan`'s own container both count (issue
+        // #620) alongside the body leaf's own lower bound: 2 + 1.
+        assert_eq!(rendered.header.effects_planned, Some(3));
         assert!(rendered.header.effects_planned_is_lower_bound);
     }
 
@@ -3255,7 +3343,10 @@ mod tests {
             "t1",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(1));
+        // The root counts too (issue #620); the unnamed loop itself
+        // never gets a node of its own, so only the root and the
+        // body leaf's own lower bound contribute: 1 + 1.
+        assert_eq!(rendered.header.effects_planned, Some(2));
         assert!(
             rendered.header.effects_planned_is_lower_bound,
             "a leaf under an unnamed loop is never an exact count"
@@ -3558,7 +3649,9 @@ mod tests {
             "t1",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(1));
+        // The root counts too (issue #620), alongside `my_use`'s own
+        // fallback count (no child discovered yet): 1 + 1.
+        assert_eq!(rendered.header.effects_planned, Some(2));
         assert!(rendered.header.effects_planned_is_lower_bound);
         assert_eq!(rendered.header.effects_done, 0);
     }
@@ -3600,10 +3693,12 @@ mod tests {
             "t1",
             &[],
         );
+        // The root counts too (issue #620), alongside the one
+        // discovered child: 1 + 1.
         assert_eq!(
             rendered.header.effects_planned,
-            Some(1),
-            "one discovered child so far, not the use node too"
+            Some(2),
+            "one discovered child so far, plus the root, not the use node too"
         );
         assert!(
             rendered.header.effects_planned_is_lower_bound,
@@ -3612,8 +3707,11 @@ mod tests {
         assert_eq!(rendered.header.effects_done, 1);
         assert!(rendered.header.effects_done <= rendered.header.effects_planned.unwrap());
 
-        // Now both children are done and `my_use` itself has finished
-        // -- planned becomes exact (2, no `+`), matching done exactly.
+        // Now both children are done, `my_use` itself has finished,
+        // and the run has ended -- planned becomes exact, matching
+        // done exactly: the root, `child1` and `child2` (issue #620;
+        // `my_use`'s own node still doesn't double-count once its
+        // children have been discovered).
         let state = json!({
             "runtime": {"last_run": {"completed_at": "t2"}},
             "prime": {"value": true, "meta": {"completed_at": "t2", "error": null},
@@ -3634,9 +3732,9 @@ mod tests {
             "t2",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(2));
+        assert_eq!(rendered.header.effects_planned, Some(3));
         assert!(!rendered.header.effects_planned_is_lower_bound);
-        assert_eq!(rendered.header.effects_done, 2);
+        assert_eq!(rendered.header.effects_done, 3);
     }
 
     /// A `use` whose children never appear even once it finishes (a
@@ -3675,9 +3773,57 @@ mod tests {
             "t1",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(1));
+        // The root counts too (issue #620), alongside `my_use`'s own
+        // fallback node: 1 + 1.
+        assert_eq!(rendered.header.effects_planned, Some(2));
         assert!(!rendered.header.effects_planned_is_lower_bound);
-        assert_eq!(rendered.header.effects_done, 1);
+        assert_eq!(rendered.header.effects_done, 2);
+    }
+
+    /// A declared-outputs `use`: its children ran (the engine's own
+    /// `effects_run` counts them) but never land in the final state
+    /// at all, so a walk over state alone can only ever see the root
+    /// and the `use` node's own fallback entry -- 2, not the engine's
+    /// real 4 (root, `my_use`, `child1`, `child2`). Once the run has
+    /// ended, the header must read the engine's own total instead of
+    /// that undercount.
+    #[test]
+    fn effects_planned_and_done_read_the_engines_own_total_for_a_declared_outputs_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: my_use\n    type: use\n    inline: |\n      effects:\n        - name: child1\n          type: tool\n          provider: shell\n          params:\n            command: echo\n            args: [\"c1\"]\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .expect("a real document should compile");
+        let plan = PlanTree::from_program(&program);
+
+        let mut model = RunModel::new();
+        // No `child1`/`child2` under `my_use` at all -- a declared-
+        // outputs `use` drops its children from the final state even
+        // once it succeeds (DESIGN.md §1.2) -- but the engine's own
+        // `effects_run` still counted all four.
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1", "totals": {"effects_run": 4}}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+            "my_use": {"value": {"ans": "ok"}, "meta": {"created_at": "t0", "completed_at": "t1", "inline": true}}
+        }});
+        let rendered = build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.header.effects_planned, Some(4));
+        assert!(!rendered.header.effects_planned_is_lower_bound);
+        assert_eq!(rendered.header.effects_done, 4);
     }
 
     /// A real `use: path:` document: its children are statically known
@@ -3719,7 +3865,9 @@ mod tests {
             "t0",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(2));
+        // The root counts too (issue #620), alongside the two
+        // grafted children.
+        assert_eq!(rendered.header.effects_planned, Some(3));
         assert!(!rendered.header.effects_planned_is_lower_bound);
         assert_eq!(rendered.header.effects_done, 0);
 
@@ -3746,8 +3894,8 @@ mod tests {
             "t2",
             &[],
         );
-        assert_eq!(rendered.header.effects_planned, Some(2));
-        assert_eq!(rendered.header.effects_done, 2);
+        assert_eq!(rendered.header.effects_planned, Some(3));
+        assert_eq!(rendered.header.effects_done, 3);
         assert!(rendered.header.effects_done <= rendered.header.effects_planned.unwrap());
     }
 
@@ -4984,5 +5132,546 @@ mod tests {
             build_folded_elapsed < std::time::Duration::from_millis(500),
             "build_folded on a 2000-row tree took {build_folded_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
+    }
+
+    // Issue #620: once a run has deterministically ended, "effects
+    // done out of planned" must read N/N, matching `runtime.last_run.
+    // totals.effects_run` -- every shape below hand-builds the IR for
+    // one document and the *final* state a real engine would have
+    // written for it, then checks that `effects_planned` equals
+    // `effects_done` (and both equal the node count a real run would
+    // report) with `ProcessState::exited(false)`, never interrupted.
+
+    fn tool_leaf(path: electricity_bytecode::EffectPath, name: &str) -> electricity_bytecode::Op {
+        use electricity_bytecode::{LeafKind, NodeKind, OnError, Op, ParamNode, ToolOp};
+        Op {
+            path,
+            name: Some(name.to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+                prompt_file: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn disabled_tool_leaf(
+        path: electricity_bytecode::EffectPath,
+        name: &str,
+    ) -> electricity_bytecode::Op {
+        electricity_bytecode::Op {
+            enabled: false,
+            ..tool_leaf(path, name)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn if_op(
+        path: electricity_bytecode::EffectPath,
+        name: Option<&str>,
+        on_error: electricity_bytecode::OnError,
+        enabled: bool,
+        then_ops: Vec<electricity_bytecode::Op>,
+        else_ops: Option<Vec<electricity_bytecode::Op>>,
+    ) -> electricity_bytecode::Op {
+        use electricity_bytecode::{Condition, NodeKind, Op, Region};
+        Op {
+            path,
+            name: name.map(str::to_string),
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Cel {
+                    expr: "true".to_string(),
+                    strict: false,
+                },
+                then_: Box::new(Region::Block {
+                    ops: then_ops,
+                    overlay: true,
+                }),
+                else_: else_ops.map(|ops| Box::new(Region::Block { ops, overlay: true })),
+                threshold: 0.5,
+            }),
+            on_error,
+            labels: None,
+            enabled,
+        }
+    }
+
+    fn dynamic_chain_op(
+        path: electricity_bytecode::EffectPath,
+        name: Option<&str>,
+        on_error: electricity_bytecode::OnError,
+        ops: Vec<electricity_bytecode::Op>,
+    ) -> electricity_bytecode::Op {
+        use electricity_bytecode::{NodeKind, Op, Region};
+        Op {
+            path,
+            name: name.map(str::to_string),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn each_loop_op(
+        path: electricity_bytecode::EffectPath,
+        name: Option<&str>,
+        flow: electricity_bytecode::LoopFlow,
+        in_path: &str,
+        body_ops: Vec<electricity_bytecode::Op>,
+    ) -> electricity_bytecode::Op {
+        use electricity_bytecode::{LoopSpec, NodeKind, OnError, Op, Region};
+        Op {
+            path,
+            name: name.map(str::to_string),
+            kind: NodeKind::Control(Region::Loop {
+                name: name.map(str::to_string),
+                spec: LoopSpec::Each {
+                    in_path: in_path.to_string(),
+                    as_name: "item".to_string(),
+                    truncate: false,
+                },
+                body: Box::new(Region::Block {
+                    ops: body_ops,
+                    overlay: true,
+                }),
+                flow,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn while_loop_op(
+        path: electricity_bytecode::EffectPath,
+        name: Option<&str>,
+        max_iterations: Option<u32>,
+        body_ops: Vec<electricity_bytecode::Op>,
+    ) -> electricity_bytecode::Op {
+        use electricity_bytecode::{Condition, LoopFlow, LoopSpec, NodeKind, OnError, Op, Region};
+        Op {
+            path,
+            name: name.map(str::to_string),
+            kind: NodeKind::Control(Region::Loop {
+                name: name.map(str::to_string),
+                spec: LoopSpec::While(Condition::Cel {
+                    expr: "true".to_string(),
+                    strict: false,
+                }),
+                body: Box::new(Region::Block {
+                    ops: body_ops,
+                    overlay: true,
+                }),
+                flow: LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn wrap_root(ops: Vec<electricity_bytecode::Op>) -> electricity_bytecode::Program {
+        use electricity_bytecode::{EffectPath, NodeKind, OnError, Op, Program, Region};
+        Program {
+            root: Op {
+                path: EffectPath::root(),
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops,
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
+    /// A finished run's header must read `effects_planned ==
+    /// effects_done`, and both must equal `expected` -- the node
+    /// count a real engine run would report in `effects_run` for this
+    /// shape (DESIGN.md §1.2: every completed node, root and named
+    /// containers included).
+    fn assert_finished_n_of_n(plan: &PlanTree, state: &Value, expected: u64) {
+        let mut model = RunModel::new();
+        let rendered = build(
+            "do.yml",
+            "cof",
+            plan,
+            &mut model,
+            Some(state),
+            ProcessState::exited(false),
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(
+            rendered.header.effects_planned,
+            Some(expected),
+            "effects_planned"
+        );
+        assert_eq!(rendered.header.effects_done, expected, "effects_done");
+        assert!(!rendered.header.effects_planned_is_lower_bound);
+    }
+
+    #[test]
+    fn if_untaken_branch_with_no_else_leaves_the_planned_total_once_finished() {
+        use electricity_bytecode::EffectPath;
+        let untaken_path = EffectPath::root().push_name("untaken");
+        let after_path = EffectPath::root().push_name("after");
+        let program = wrap_root(vec![
+            if_op(
+                EffectPath::root(),
+                None,
+                electricity_bytecode::OnError::Fail,
+                true,
+                vec![tool_leaf(untaken_path, "untaken")],
+                None,
+            ),
+            tool_leaf(after_path, "after"),
+        ]);
+        let plan = PlanTree::from_program(&program);
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "after": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        // The root and `after` -- `untaken`'s own branch never ran and
+        // never will.
+        assert_finished_n_of_n(&plan, &state, 2);
+    }
+
+    #[test]
+    fn if_branches_with_differing_names_leave_the_untaken_one_out_once_finished() {
+        use electricity_bytecode::EffectPath;
+        let then_path = EffectPath::root().push_name("then_child");
+        let else_path = EffectPath::root().push_name("else_child");
+        let program = wrap_root(vec![if_op(
+            EffectPath::root(),
+            None,
+            electricity_bytecode::OnError::Fail,
+            true,
+            vec![tool_leaf(then_path, "then_child")],
+            Some(vec![tool_leaf(else_path, "else_child")]),
+        )]);
+        let plan = PlanTree::from_program(&program);
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "else_child": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        // The root and `else_child` -- `then_child` has a path of its
+        // own (the two branches don't share a name, DESIGN.md's own
+        // recommendation notwithstanding) and never ran.
+        assert_finished_n_of_n(&plan, &state, 2);
+    }
+
+    #[test]
+    fn if_branches_sharing_a_name_count_once_either_way_once_finished() {
+        use electricity_bytecode::EffectPath;
+        let then_path = EffectPath::root().push_name("chosen");
+        let else_path = EffectPath::root().push_name("chosen");
+        let program = wrap_root(vec![if_op(
+            EffectPath::root(),
+            None,
+            electricity_bytecode::OnError::Fail,
+            true,
+            vec![tool_leaf(then_path, "chosen")],
+            Some(vec![tool_leaf(else_path, "chosen")]),
+        )]);
+        let plan = PlanTree::from_program(&program);
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "chosen": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        assert_finished_n_of_n(&plan, &state, 2);
+    }
+
+    /// A named `if` nested inside a named loop's own body, taking a
+    /// different branch on different passes -- the issue's own
+    /// "different branches taken in different passes" shape, chain
+    /// flow.
+    #[test]
+    fn an_if_inside_a_chain_loop_pass_with_different_branches_each_pass_matches_once_finished() {
+        run_if_inside_a_loop_pass_test(electricity_bytecode::LoopFlow::Chain);
+    }
+
+    /// [`an_if_inside_a_chain_loop_pass_with_different_branches_each_pass_matches_once_finished`],
+    /// tree flow -- the final state shape (and so the count) is
+    /// identical; only the loop's own `flow` differs.
+    #[test]
+    fn an_if_inside_a_tree_loop_pass_with_different_branches_each_pass_matches_once_finished() {
+        run_if_inside_a_loop_pass_test(electricity_bytecode::LoopFlow::Tree);
+    }
+
+    fn run_if_inside_a_loop_pass_test(flow: electricity_bytecode::LoopFlow) {
+        use electricity_bytecode::{EffectPath, LoopId, OnError};
+        let loop_path = EffectPath::root().push_name("lp");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let gate_path = pass_path.push_name("gate");
+        let then_path = gate_path.clone().push_name("chosen");
+        let else_path = gate_path.clone().push_name("chosen");
+        let gate = if_op(
+            gate_path,
+            Some("gate"),
+            OnError::Fail,
+            true,
+            vec![tool_leaf(then_path, "chosen")],
+            Some(vec![tool_leaf(else_path, "chosen")]),
+        );
+        let program = wrap_root(vec![each_loop_op(
+            loop_path,
+            Some("lp"),
+            flow,
+            "prime.items.value",
+            vec![gate],
+        )]);
+        let plan = PlanTree::from_program(&program);
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "lp": {"value": null, "meta": {"completed_at": "t1", "mode": "each", "progress": {"done": 3, "total": 3}},
+                    "iter_0": {"gate": {"value": {"result": true, "branch": "then", "effects": []},
+                        "meta": {"completed_at": "t1", "mode": "cel", "branch": "then"},
+                        "chosen": {"value": "a", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}}},
+                    "iter_1": {"gate": {"value": {"result": false, "branch": "else", "effects": []},
+                        "meta": {"completed_at": "t1", "mode": "cel", "branch": "else"},
+                        "chosen": {"value": "b", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}}},
+                    "iter_2": {"gate": {"value": {"result": true, "branch": "then", "effects": []},
+                        "meta": {"completed_at": "t1", "mode": "cel", "branch": "then"},
+                        "chosen": {"value": "a", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}}}
+                }
+            }
+        });
+        // The root, `lp` itself, and each of the 3 passes' own `gate`
+        // plus its taken `chosen` leaf: 1 + 1 + 3 * 2.
+        assert_finished_n_of_n(&plan, &state, 8);
+    }
+
+    #[test]
+    fn each_over_an_empty_list_leaves_the_body_out_of_the_planned_total_once_finished() {
+        use electricity_bytecode::{EffectPath, LoopFlow, LoopId};
+        let loop_path = EffectPath::root().push_name("lp");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let body_path = pass_path.push_name("never_runs");
+        let program = wrap_root(vec![each_loop_op(
+            loop_path,
+            Some("lp"),
+            LoopFlow::Chain,
+            "prime.items.value",
+            vec![tool_leaf(body_path, "never_runs")],
+        )]);
+        let plan = PlanTree::from_program(&program);
+        // A zero-pass loop's own node never even gets a `progress`
+        // key at all (measured against a real `cof` run): no
+        // `iter_*` children either way.
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "lp": {"value": null, "meta": {"completed_at": "t1", "mode": "each"}}
+            }
+        });
+        // The root and `lp` itself -- its body never ran at all.
+        assert_finished_n_of_n(&plan, &state, 2);
+    }
+
+    #[test]
+    fn a_while_loop_that_stops_before_max_iterations_matches_once_finished() {
+        use electricity_bytecode::{EffectPath, LoopId};
+        let loop_path = EffectPath::root().push_name("wl");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let body_path = pass_path.push_name("tick");
+        let program = wrap_root(vec![while_loop_op(
+            loop_path,
+            Some("wl"),
+            Some(10),
+            vec![tool_leaf(body_path, "tick")],
+        )]);
+        let plan = PlanTree::from_program(&program);
+        // `progress.total` for a `while` loop is its own
+        // `max_iterations` (10), never the number of passes it
+        // actually ran (3) -- DESIGN.md's own "loop" reference entry.
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "wl": {"value": null, "meta": {"completed_at": "t1", "mode": "cel", "progress": {"done": 3, "total": 10}},
+                    "iter_0": {"tick": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}},
+                    "iter_1": {"tick": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}},
+                    "iter_2": {"tick": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}}
+                }
+            }
+        });
+        // The root, `wl` itself, and its 3 actual passes -- never the
+        // stale `max_iterations` upper bound.
+        assert_finished_n_of_n(&plan, &state, 5);
+    }
+
+    #[test]
+    fn an_if_decided_null_by_on_error_skip_leaves_both_branches_out_once_finished() {
+        use electricity_bytecode::{EffectPath, OnError};
+        let gate_path = EffectPath::root().push_name("gate");
+        let then_path = gate_path.clone().push_name("chosen_then");
+        let else_path = gate_path.clone().push_name("chosen_else");
+        let after_path = EffectPath::root().push_name("after");
+        let program = wrap_root(vec![
+            if_op(
+                gate_path,
+                Some("gate"),
+                OnError::Skip,
+                true,
+                vec![tool_leaf(then_path, "chosen_then")],
+                Some(vec![tool_leaf(else_path, "chosen_else")]),
+            ),
+            tool_leaf(after_path, "after"),
+        ]);
+        let plan = PlanTree::from_program(&program);
+        // The condition itself raised; `on_error: skip` swallows it
+        // and runs *neither* branch (DESIGN.md's own guidebook entry
+        // on `if`'s own `skip`/`continue` split) -- `gate`'s own node
+        // still gets written, with `branch: null` and no `chosen_*`
+        // child ever appearing.
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "gate": {"value": {"result": null, "branch": null, "effects": {}},
+                    "meta": {"completed_at": "t1", "mode": "cel", "error": "CEL evaluation failed"}},
+                "after": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        // The root, `gate` itself (failed, handled), and `after` --
+        // neither `chosen_then` nor `chosen_else` ever ran.
+        assert_finished_n_of_n(&plan, &state, 3);
+    }
+
+    #[test]
+    fn a_chain_dynamics_on_error_skip_leaves_its_stopped_siblings_out_once_finished() {
+        use electricity_bytecode::{EffectPath, OnError};
+        let task_path = EffectPath::root().push_name("task");
+        let step_a_path = task_path.clone().push_name("step_a");
+        let step_b_path = task_path.clone().push_name("step_b");
+        let after_path = EffectPath::root().push_name("after");
+        let program = wrap_root(vec![
+            dynamic_chain_op(
+                task_path,
+                Some("task"),
+                OnError::Skip,
+                vec![
+                    tool_leaf(step_a_path, "step_a"),
+                    tool_leaf(step_b_path, "step_b"),
+                ],
+            ),
+            tool_leaf(after_path, "after"),
+        ]);
+        let plan = PlanTree::from_program(&program);
+        // `step_a` fails under its own default `on_error: fail`,
+        // which stops the chain before `step_b` ever starts; `task`'s
+        // own `on_error: skip` then swallows that failure onto its
+        // own `meta.error`, letting `after` run (DESIGN.md's dynamic
+        // reference entry on `on_error`).
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "task": {"value": null, "meta": {"completed_at": "t1", "error": "step_a failed"},
+                    "step_a": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+                },
+                "after": {"value": "", "meta": {"created_at": "t1", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        // The root, `task` itself, `task.step_a`, and `after` -- never
+        // `task.step_b`.
+        assert_finished_n_of_n(&plan, &state, 4);
+    }
+
+    #[test]
+    fn a_disabled_leaf_still_counts_once_finished() {
+        use electricity_bytecode::EffectPath;
+        let a_path = EffectPath::root().push_name("leaf_a");
+        let b_path = EffectPath::root().push_name("leaf_b");
+        let program = wrap_root(vec![
+            tool_leaf(a_path, "leaf_a"),
+            disabled_tool_leaf(b_path, "leaf_b"),
+        ]);
+        let plan = PlanTree::from_program(&program);
+        // A disabled leaf still fires its own start/end hooks and
+        // writes a skip node (DESIGN.md's own "Disabling Effects"
+        // reference entry) -- it still counts.
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "leaf_a": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
+                "leaf_b": {"value": null, "meta": {"created_at": "t1", "completed_at": "t1", "disabled": true}}
+            }
+        });
+        assert_finished_n_of_n(&plan, &state, 3);
+    }
+
+    #[test]
+    fn a_disabled_containers_children_never_count_once_finished() {
+        use electricity_bytecode::{EffectPath, OnError};
+        let step1_path = EffectPath::root().push_name("step1");
+        let gate_path = EffectPath::root().push_name("gate");
+        let chosen_path = gate_path.clone().push_name("chosen");
+        let step2_path = EffectPath::root().push_name("step2");
+        let program = wrap_root(vec![
+            tool_leaf(step1_path, "step1"),
+            if_op(
+                gate_path,
+                Some("gate"),
+                OnError::Fail,
+                false,
+                vec![disabled_tool_leaf(chosen_path, "chosen")],
+                None,
+            ),
+            tool_leaf(step2_path, "step2"),
+        ]);
+        let plan = PlanTree::from_program(&program);
+        // A disabled container's own node is written, but nothing
+        // inside it ever runs at all -- no `chosen` node, ever
+        // (DESIGN.md's own "Disabling Effects" reference entry).
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "step1": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
+                "gate": {"value": {"result": null, "branch": null, "effects": {}},
+                    "meta": {"created_at": "t1", "completed_at": "t1", "disabled": true}},
+                "step2": {"value": "", "meta": {"created_at": "t1", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        // The root, `step1`, `gate` itself, and `step2` -- never `gate.chosen`.
+        assert_finished_n_of_n(&plan, &state, 4);
     }
 }
