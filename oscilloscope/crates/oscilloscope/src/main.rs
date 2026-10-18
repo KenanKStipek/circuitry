@@ -1232,7 +1232,7 @@ fn run_tui(
     // leave the instant the engine exits, rather than staying open on
     // its final state until the user explicitly asks to leave.
     let mut leave_once_exited = false;
-    let mut render_state = oscilloscope_core::render::build(
+    let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         &engine_name,
         &plan,
@@ -1242,6 +1242,8 @@ fn run_tui(
         start.elapsed().as_secs_f64(),
         &now_rfc3339(),
         &[],
+        app.fold_enabled,
+        &app.expanded_quick_steps,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
@@ -1356,7 +1358,7 @@ fn run_tui(
                     has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
                 },
             };
-            render_state = oscilloscope_core::render::build(
+            render_state = oscilloscope_core::render::build_folded(
                 &document,
                 &engine_name,
                 &plan,
@@ -1366,6 +1368,8 @@ fn run_tui(
                 start.elapsed().as_secs_f64(),
                 &now_rfc3339(),
                 &[],
+                app.fold_enabled,
+                &app.expanded_quick_steps,
             );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
@@ -2235,7 +2239,7 @@ fn run_tui_watch(
     // own; only `ended` stops `observe_tick` from polling a run
     // directory that has nothing left to say.
     let mut ended = false;
-    let mut render_state = oscilloscope_core::render::build(
+    let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         "watch",
         &plan,
@@ -2245,6 +2249,8 @@ fn run_tui_watch(
         start.elapsed().as_secs_f64(),
         &now_rfc3339(),
         &[],
+        app.fold_enabled,
+        &app.expanded_quick_steps,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
@@ -2377,7 +2383,7 @@ fn run_tui_watch(
             } else {
                 ProcessState::Running
             };
-            render_state = oscilloscope_core::render::build(
+            render_state = oscilloscope_core::render::build_folded(
                 &document,
                 "watch",
                 &plan,
@@ -2387,6 +2393,8 @@ fn run_tui_watch(
                 start.elapsed().as_secs_f64(),
                 &now_rfc3339(),
                 &[],
+                app.fold_enabled,
+                &app.expanded_quick_steps,
             );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
@@ -3666,7 +3674,9 @@ mod tests {
         assert!(final_state.is_some());
         assert!(!differ.has_pending_ends());
         assert!(
-            lines.iter().any(|l| l.text == "✓ prime.ask  0.1s  ↑3 t ↓5 t"),
+            lines
+                .iter()
+                .any(|l| l.text == "✓ prime.ask  0.1s  ↑3 t ↓5 t"),
             "held line must resolve with its real tokens, not ok or nothing: {lines:?}"
         );
     }

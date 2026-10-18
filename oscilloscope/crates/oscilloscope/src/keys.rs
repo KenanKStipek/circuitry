@@ -109,6 +109,14 @@ pub struct App {
     pub tree_viewport: usize,
     pub state_viewport: usize,
     pub details_viewport: usize,
+    /// Folding on/off (DESIGN.md, issue #613): on by default. `z`
+    /// toggles it to show the full, unfolded tree.
+    pub fold_enabled: bool,
+    /// Quick-steps groups (keyed by their own representative path,
+    /// `oscilloscope_core::fold`'s first-step convention) the user
+    /// asked ⏎ to expand in place -- the existing collapse key (`←`)
+    /// removes a path from here, folding that group again.
+    pub expanded_quick_steps: std::collections::BTreeSet<String>,
 }
 
 impl App {
@@ -132,6 +140,8 @@ impl App {
             tree_viewport: 0,
             state_viewport: 0,
             details_viewport: 0,
+            fold_enabled: true,
+            expanded_quick_steps: std::collections::BTreeSet::new(),
         }
     }
 
@@ -272,11 +282,26 @@ impl App {
             KeyCode::Left if self.pane == Pane::Tree => {
                 if let Some(path) = &self.selected_path {
                     self.collapsed.insert(path.clone());
+                    // Issue #613: the same key re-folds a quick-steps
+                    // group ⏎ had expanded in place.
+                    self.expanded_quick_steps.remove(path);
                 }
             }
             KeyCode::Right if self.pane == Pane::Tree => {
                 if let Some(path) = &self.selected_path {
                     self.collapsed.remove(path);
+                }
+            }
+            // Issue #613: ⏎ on a quick-steps summary row expands it
+            // in place -- recognised from the row's own label, since
+            // `App` otherwise never looks at row content at all.
+            KeyCode::Enter if self.pane == Pane::Tree => {
+                if let Some(path) = &self.selected_path {
+                    if rows.iter().any(|r| {
+                        r.path == *path && oscilloscope_core::fold::is_quick_steps_label(&r.label)
+                    }) {
+                        self.expanded_quick_steps.insert(path.clone());
+                    }
                 }
             }
             // Issue #535: the state pane collapses/expands with the
@@ -304,6 +329,9 @@ impl App {
             }
             KeyCode::Char('t') => return Action::CycleTheme,
             KeyCode::Char('f') => self.follow = !self.follow,
+            // Issue #613: `z` turns folding off to show the full,
+            // unfolded tree, and back on again.
+            KeyCode::Char('z') => self.fold_enabled = !self.fold_enabled,
             KeyCode::Char('e') => self.errors_only = !self.errors_only,
             KeyCode::Char('/') => {
                 self.dialog = Dialog::FilterInput(self.filter.clone().unwrap_or_default());
@@ -672,6 +700,42 @@ mod tests {
         assert!(!app.follow);
         app.handle_key(key(KeyCode::Char('f')), &visible, &[], true, false);
         assert!(app.follow);
+    }
+
+    #[test]
+    fn fold_is_on_by_default_and_z_toggles_it() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        assert!(app.fold_enabled, "issue #613: fold is on by default");
+        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false);
+        assert!(!app.fold_enabled);
+        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false);
+        assert!(app.fold_enabled);
+    }
+
+    #[test]
+    fn enter_expands_a_quick_steps_row_and_left_folds_it_again() {
+        let mut quick_steps_row = row("prime.a", 1, StatusKind::Done);
+        quick_steps_row.label = "3 quick steps".to_string();
+        let rows = [quick_steps_row];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        assert!(app.expanded_quick_steps.contains("prime.a"));
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        assert!(!app.expanded_quick_steps.contains("prime.a"));
+    }
+
+    #[test]
+    fn enter_on_an_ordinary_row_does_not_expand_anything() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        assert!(app.expanded_quick_steps.is_empty());
     }
 
     #[test]

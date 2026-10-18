@@ -362,6 +362,35 @@ pub fn build(
     }
 }
 
+/// [`build`], with the orchestration pane's own rows additionally
+/// folded (DESIGN.md, issue #613: breadcrumbs and quick-steps
+/// summaries) -- kept as its own entry point, rather than a flag on
+/// `build` itself, so every existing caller of `build` (every test
+/// in this crate and `oscilloscope`'s own golden tests) keeps seeing
+/// the full, unfolded tree unless it explicitly asks for this one
+/// instead. The TUI calls this; `--log` and `osi watch`'s own plain
+/// stream read `diff`/`model` directly and never see `rows` at all.
+#[allow(clippy::too_many_arguments)]
+pub fn build_folded(
+    document: &str,
+    engine: &str,
+    plan: &PlanTree,
+    model: &mut RunModel,
+    state: Option<&Value>,
+    process: ProcessState,
+    elapsed_s: f64,
+    now: &str,
+    log: &[LogLine],
+    fold_enabled: bool,
+    expanded_quick_steps: &std::collections::BTreeSet<String>,
+) -> RenderState {
+    let mut built = build(
+        document, engine, plan, model, state, process, elapsed_s, now, log,
+    );
+    built.rows = crate::fold::fold_rows(built.rows, fold_enabled, expanded_quick_steps);
+    built
+}
+
 /// One node of the state pane's own tree, built once per `path` seen
 /// in `flat` (issue #535) -- `own` is `Some` for a path with a real
 /// `{value, meta}` node, `None` for a bare container (a loop's
@@ -913,7 +942,6 @@ fn display_value(v: &Value) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn build_header(
     document: &str,
@@ -1747,7 +1775,10 @@ mod tests {
             .filter(|r| r.depth == 2)
             .map(|r| r.path.as_str())
             .collect();
-        assert_eq!(order, vec!["prime.each_tree.iter_0", "prime.each_tree.iter_1"]);
+        assert_eq!(
+            order,
+            vec!["prime.each_tree.iter_0", "prime.each_tree.iter_1"]
+        );
         // Issue #613: the orchestration pane labels a pass `pass N`
         // (1-based), not the state pane's own `iter_N` key.
         let labels: Vec<&str> = rendered

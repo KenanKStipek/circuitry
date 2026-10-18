@@ -103,7 +103,10 @@ left column of the details pane (the selected row's own meta, and, for a
 prompt, a `sent`/`received` block with a snippet and token count each)
 over the orchestration pane (the plan tree, a status glyph, duration, loop
 `n/total` and the provider/model in a dim colour), the column split and
-the left column's own row split both at the golden section; a right column
+the left column's own row split both at the golden section — the larger
+share always going to whichever side grows with the run (the left column
+over the right, the orchestration pane over the details pane, the state
+pane over the treemap and the log pane); a right column
 of a nested `tokens by key` treemap (cell area proportional to tokens,
 coloured by status, squarified and laid out as pure integer geometry in
 `oscilloscope-core`), the state pane as a tree (every effect node nested
@@ -149,6 +152,8 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | `PgUp`/`PgDn` | move a page |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
 | `←` / `→` | collapse / expand (orchestration or state pane) |
+| `⏎` | expand a quick-steps row in place |
+| `z` | fold on/off (breadcrumbs, quick steps); on by default |
 | `tab` | orchestration → details → state |
 | `f` | follow the running row (on by default) |
 | `e` | errors only |
@@ -161,12 +166,28 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | `?` | help |
 
 The token rule is the same everywhere a count shows up (the header, the
-token bar, the state pane, the treemap): a node's own `tokens_sent_total`/
-`tokens_received_total` when present, falling back to `tokens_sent`/
-`tokens_received` otherwise — the same pair both `cof`'s and electricity's
-own `runtime.last_run.totals` are built from, so a retried prompt can never
-make one surface disagree with another. There is no live *output* count:
-both engines report a prompt's tokens only once it finishes.
+token bar, the state pane, details and the treemap): a node's own
+`tokens_sent_total`/`tokens_received_total` when present, falling back to
+`tokens_sent`/`tokens_received` otherwise — the same pair both `cof`'s and
+electricity's own `runtime.last_run.totals` are built from, so a retried
+prompt can never make one surface disagree with another. There is no live
+*output* count: both engines report a prompt's tokens only once it
+finishes. Every token count is formatted the same one way too (`369 t`,
+`18.0 kt`, `142 kt`, `2.1 Mt`), and so is every duration, everywhere one
+shows up (`0.4s`, `6m12s`, `2h05m`, `3d04h`) — `oscilloscope_core::format`'s
+one formatter each. Clock times (`HH:MM:SS` in the log, the header's own
+`since 11:04:58` while a run is going and `11:04:58–11:31:10` once it has
+ended, and the innermost loop's ETA as `ETA ~11:42`) go through the
+binary's own real local zone, resolved per timestamp.
+
+The orchestration pane folds a single-child container into one breadcrumb
+row (`review › fix › agent`) and two or more consecutive, finished,
+sub-second tool steps into one `N quick steps` row — `z` turns folding off
+to see the full tree, and `⏎` expands a quick-steps row in place. A loop
+pass is labelled `pass N of M` there (the state pane keeps the real
+`iter_N` key). A running `agent` tool step counts in the token bar's
+in-flight line next to running prompts (`2 prompts · 1 agent in flight`),
+with no token estimate of its own.
 
 The engine exiting does not, on its own, end the TUI: the header, every
 row's final status and the details pane stay live on whatever the run
@@ -176,7 +197,9 @@ key — the terminal is gone by definition). Short of one of those three, a
 run that finishes on its own stays up for `q`/Ctrl-C to leave.
 
 A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
-golden tests) at 120×40, every pane populated:
+golden tests) at 120×40, every pane populated (predates the token/
+duration formatting this issue added — the raw `170`/`410` below would
+read `170 t`/`410 t` today):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐

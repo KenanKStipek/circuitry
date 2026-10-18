@@ -530,7 +530,10 @@ impl RunModel {
                 );
             }
             Event::RunEnd {
-                ts, ok, error, signal,
+                ts,
+                ok,
+                error,
+                signal,
             } => {
                 self.run_end = Some((*ok, error.clone(), signal.clone()));
                 self.run_end_ts = Some(ts.clone());

@@ -1099,11 +1099,19 @@ fn draw_token_bar(
         // in flight"), with no token estimate of its own.
         let mut parts = Vec::new();
         if token_bar.prompts_running > 0 {
-            let plural = if token_bar.prompts_running == 1 { "" } else { "s" };
+            let plural = if token_bar.prompts_running == 1 {
+                ""
+            } else {
+                "s"
+            };
             parts.push(format!("{} prompt{plural}", token_bar.prompts_running));
         }
         if token_bar.agents_running > 0 {
-            let plural = if token_bar.agents_running == 1 { "" } else { "s" };
+            let plural = if token_bar.agents_running == 1 {
+                ""
+            } else {
+                "s"
+            };
             parts.push(format!("{} agent{plural}", token_bar.agents_running));
         }
         let in_flight = format!("{} in flight", parts.join(" · "));
@@ -1197,6 +1205,8 @@ const HELP_TEXT: &[&str] = &[
     "Home End     jump to the first / last row",
     "g G          same as Home / End",
     "← →          collapse / expand (orchestration or state)",
+    "⏎            expand a quick-steps row in place",
+    "z            fold on/off (breadcrumbs, quick steps)",
     "tab          orchestration → details → state",
     "f            follow the running row (on by default)",
     "e            errors only",
@@ -1298,12 +1308,21 @@ pub fn draw(
 
     if !two_column {
         app.state_viewport = 0;
+        // Issue #613: golden-ratio nested the same way the two-column
+        // layout's own left column is -- the details-plus-tree block
+        // gets the golden section's larger share of the height first
+        // (log, which only ever grows by appending, takes the rest),
+        // then that block splits again into details (minor) over the
+        // tree (major, the pane that grows with the run).
+        let log_rows = oscilloscope_core::layout::golden_section(body.height);
+        let top_rows = body.height - log_rows;
+        let details_rows = oscilloscope_core::layout::golden_section(top_rows);
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(45),
-                Constraint::Min(5),
+                Constraint::Length(details_rows),
+                Constraint::Length(top_rows - details_rows),
+                Constraint::Min(log_rows),
             ])
             .split(body);
         draw_details(frame, parts[0], details, selected_kind, app, ctx);
@@ -1336,12 +1355,23 @@ pub fn draw(
             && area.height >= thresholds::STATE_PANE_MIN_HEIGHT;
 
         if show_state && show_treemap {
+            // Issue #613: golden-ratio nested, top to bottom. The
+            // treemap is a snapshot of right-now, not something that
+            // grows with the run, so it takes the smaller share
+            // first; what's left splits again between the state
+            // pane (grows with the run, same reasoning as the
+            // orchestration tree) and the log pane (grows only by
+            // appending), the state pane keeping the larger share of
+            // that remainder.
+            let treemap_rows = oscilloscope_core::layout::golden_section(columns[1].height);
+            let rest_rows = columns[1].height - treemap_rows;
+            let log_rows = oscilloscope_core::layout::golden_section(rest_rows);
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(35),
-                    Constraint::Percentage(30),
-                    Constraint::Min(5),
+                    Constraint::Length(treemap_rows),
+                    Constraint::Length(rest_rows - log_rows),
+                    Constraint::Min(log_rows),
                 ])
                 .split(columns[1]);
             draw_treemap(
@@ -1354,9 +1384,15 @@ pub fn draw(
             draw_state(frame, right[1], &state_visible, app, ctx);
             draw_log(frame, right[2], log_lines, log_total, ctx);
         } else if show_state {
+            // The state pane (grows with the run) keeps the golden
+            // section's larger share; the log pane the rest.
+            let log_rows = oscilloscope_core::layout::golden_section(columns[1].height);
             let right = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(40), Constraint::Min(5)])
+                .constraints([
+                    Constraint::Length(columns[1].height - log_rows),
+                    Constraint::Min(log_rows),
+                ])
                 .split(columns[1]);
             draw_state(frame, right[0], &state_visible, app, ctx);
             draw_log(frame, right[1], log_lines, log_total, ctx);
@@ -1834,6 +1870,74 @@ mod golden_tests {
             "cof",
             "prime.a",
         );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #613's folding, drawn end to end through `render::
+    /// build_folded`: `review` and `fix` each have exactly one child
+    /// and fold into one breadcrumb row with the running `agent`'s
+    /// own path (so its `6.8s` elapsed and `Running` status are the
+    /// breadcrumb's own); three sub-second finished tool steps fold
+    /// into one `3 quick steps` row.
+    #[test]
+    fn folding_breadcrumbs_and_quick_steps() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "review": {"value": null, "meta": {"created_at": "2026-01-01T11:39:26Z", "completed_at": "2026-01-01T11:46:39Z", "error": null},
+                "fix": {"value": null, "meta": {"created_at": "2026-01-01T11:46:40Z", "completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent"}}
+                }
+            },
+            "q1": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.000Z", "completed_at": "2026-01-01T11:46:49.300Z", "error": null, "provider": "shell"}},
+            "q2": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.300Z", "completed_at": "2026-01-01T11:46:49.800Z", "error": null, "provider": "shell"}},
+            "q3": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.800Z", "completed_at": "2026-01-01T11:46:50.000Z", "error": null, "provider": "shell"}}
+        }});
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            390.0,
+            "2026-01-01T11:46:49.800Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        let details = render::details_for("prime.review.fix.agent", &plan, Some(&state));
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.review.fix.agent".to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+        };
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
     }
 
