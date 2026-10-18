@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "A report at the top level, in an if branch, a chain loop, a tree loop, a use child and a finally; named and unnamed, including level: warning. An unnamed report's event path is the container it runs in; a named one writes its own state node and never counts toward totals.effects_run (#605).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "topic=widgets", "-e", "items=[\"a\",\"b\"]", "-e", "one=[\"x\"]"]
+}

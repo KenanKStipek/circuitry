@@ -1,0 +1,19 @@
+{"v":1,"seq":0,"ts":"2026-10-18T00:39:26.205Z","ev":"run_start","run_id":"df344497-1ea4-46b6-b4a2-d171a5b246de","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":60928}
+{"v":1,"seq":1,"ts":"2026-10-18T00:39:26.210Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-18T00:39:26.211Z","ev":"report","path":"prime","level":"info","message":"starting widgets"}
+{"v":1,"seq":3,"ts":"2026-10-18T00:39:26.211Z","ev":"report","path":"prime.started","level":"warning","message":"note on widgets","data":{"topic":"widgets","literal":7}}
+{"v":1,"seq":4,"ts":"2026-10-18T00:39:26.211Z","ev":"report","path":"prime","level":"info","message":"in then branch"}
+{"v":1,"seq":5,"ts":"2026-10-18T00:39:26.211Z","ev":"start","id":1,"path":"prime.chain_loop"}
+{"v":1,"seq":6,"ts":"2026-10-18T00:39:26.211Z","ev":"report","path":"prime.chain_loop.iter_0","level":"info","message":"chain a"}
+{"v":1,"seq":7,"ts":"2026-10-18T00:39:26.211Z","ev":"report","path":"prime.chain_loop.iter_1","level":"info","message":"chain b"}
+{"v":1,"seq":8,"ts":"2026-10-18T00:39:26.211Z","ev":"end","id":1,"path":"prime.chain_loop","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-18T00:39:26.211Z","ev":"start","id":2,"path":"prime.tree_loop"}
+{"v":1,"seq":10,"ts":"2026-10-18T00:39:26.211Z","ev":"dispatch","path":"prime.tree_loop","branches":1,"concurrency":1}
+{"v":1,"seq":11,"ts":"2026-10-18T00:39:26.211Z","ev":"report","path":"prime.tree_loop.iter_0","level":"info","message":"tree x"}
+{"v":1,"seq":12,"ts":"2026-10-18T00:39:26.211Z","ev":"end","id":2,"path":"prime.tree_loop","ok":true,"ms":0}
+{"v":1,"seq":13,"ts":"2026-10-18T00:39:26.211Z","ev":"start","id":3,"path":"prime.child"}
+{"v":1,"seq":14,"ts":"2026-10-18T00:39:26.213Z","ev":"report","path":"prime.child","level":"info","message":"in use child"}
+{"v":1,"seq":15,"ts":"2026-10-18T00:39:26.213Z","ev":"end","id":3,"path":"prime.child","ok":true,"ms":1}
+{"v":1,"seq":16,"ts":"2026-10-18T00:39:26.213Z","ev":"report","path":"prime","level":"info","message":"cleanup done"}
+{"v":1,"seq":17,"ts":"2026-10-18T00:39:26.213Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":18,"ts":"2026-10-18T00:39:26.213Z","ev":"run_end","ok":true}

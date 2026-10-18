@@ -35,19 +35,21 @@ fn set_leaf(store: &Store, node: &NodeRef, key: &str, value: Value) {
 
 /// Resolves a report's own `data:` tree against *ctx* -- never fails:
 /// a `{from: <path>}` leaf that doesn't resolve (missing or an explicit
-/// `null`) logs one warning (naming *effect_label*/*field*) and becomes
-/// `Value::None`; a string leaf renders like the report's own `message`
-/// (unescaped, partials allowed), propagating a genuine render failure
-/// up to the caller, which folds it into the same "never fails the
-/// run" fallback the message's own render failure gets; anything else
-/// is kept as written.
+/// `null`) logs one warning naming *effect_path*/*field* -- always
+/// `"report at '<path>'"`, regardless of whether this report is named
+/// (`core/report.py::ReportRuntime._resolve_data`'s own wording) -- and
+/// becomes `Value::None`; a string leaf renders like the report's own
+/// `message` (unescaped, partials allowed), propagating a genuine
+/// render failure up to the caller, which folds it into the same
+/// "never fails the run" fallback the message's own render failure
+/// gets; anything else is kept as written.
 #[allow(clippy::too_many_arguments)]
 fn resolve_data<R: ParamsCtx>(
     node: &ParamNode,
     ctx: &R,
     declared_prompts: &indexmap::IndexMap<String, String>,
     effect_names: &std::collections::BTreeSet<String>,
-    effect_label: &str,
+    effect_path: &str,
     field: &str,
 ) -> Result<Value, String> {
     match node {
@@ -55,8 +57,8 @@ fn resolve_data<R: ParamsCtx>(
             Some(value) if !matches!(value, Value::None) => Ok(value),
             _ => {
                 log::warn!(
-                    "{effect_label} data '{field}': '{{from: {path}}}' did not resolve \
-                     to a value; using null."
+                    "report at '{effect_path}' data '{field}': '{{from: {path}}}' did not \
+                     resolve to a value; using null."
                 );
                 Ok(Value::None)
             }
@@ -86,7 +88,7 @@ fn resolve_data<R: ParamsCtx>(
                     ctx,
                     declared_prompts,
                     effect_names,
-                    effect_label,
+                    effect_path,
                     &format!("{field}.{key_str}"),
                 )?;
                 map.insert(key.clone(), child);
@@ -101,7 +103,7 @@ fn resolve_data<R: ParamsCtx>(
                     ctx,
                     declared_prompts,
                     effect_names,
-                    effect_label,
+                    effect_path,
                     &format!("{field}[{index}]"),
                 )?);
             }
@@ -128,9 +130,13 @@ pub(crate) async fn execute_report(
 ) {
     let live_root = LiveRoot::new(ctx_chain, store);
     let effect_path = frame.effect_path(&op.path);
-    let effect_label = match &op.name {
-        Some(name) => format!("report '{name}'"),
-        None => format!("report at '{effect_path}'"),
+    let effect_path_str = effect_path.to_string();
+    // The message-render label is name-conditional (`core/report.py::
+    // ReportRuntime.execute`'s own `label=`); every other warning this
+    // effect can log always says `"report at '<path>'"`, named or not.
+    let message_label = match &op.name {
+        Some(name) => format!("report '{name}' message"),
+        None => format!("report at '{effect_path_str}' message"),
     };
 
     let render_result: Result<(String, Option<Value>), String> = (|| {
@@ -139,7 +145,7 @@ pub(crate) async fn execute_report(
             &live_root,
             run_ctx.declared_prompts,
             run_ctx.effect_names,
-            &format!("{effect_label} message"),
+            &message_label,
             &PlainCtx,
             false,
         )?;
@@ -149,7 +155,7 @@ pub(crate) async fn execute_report(
                 &live_root,
                 run_ctx.declared_prompts,
                 run_ctx.effect_names,
-                &effect_label,
+                &effect_path_str,
                 "data",
             )?),
             None => None,
@@ -161,8 +167,8 @@ pub(crate) async fn execute_report(
         Ok(pair) => pair,
         Err(err) => {
             log::warn!(
-                "{effect_label} failed to render; publishing it with no message or \
-                 data: {err}"
+                "report at '{effect_path_str}' failed to render; publishing it with no \
+                 message or data: {err}"
             );
             (String::new(), None)
         }
@@ -201,6 +207,7 @@ pub(crate) async fn execute_report(
         let now = now_iso();
         set_leaf(store, &meta_node, "created_at", now.clone());
         set_leaf(store, &meta_node, "completed_at", now);
+        set_leaf(store, &meta_node, "dry_run", Value::Bool(run_ctx.dry_run));
     }
 
     observer.report(&effect_path, report_op.level, &message, data.as_ref());
