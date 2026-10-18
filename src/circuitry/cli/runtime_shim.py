@@ -31,6 +31,7 @@ from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
 from ..core.parsed_stdout import parsed_stdout_errors
 from ..core.prompt_record import prompt_sent_errors
+from ..core.report import build_report_payload
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -1025,8 +1026,22 @@ def run(req: RunRequest) -> RunResult:
                     effect_result=effect_result,
                 )
 
+            def _notify_plugins_report(
+                path: str, level: str, message: str, data: Any
+            ) -> None:
+                invoke_plugins(
+                    plugins=plugins,
+                    hook_name="on_report",
+                    state=state,
+                    context=_plugin_ctx,
+                    report=build_report_payload(
+                        path=path, level=level, message=message, data=data
+                    ),
+                )
+
             start_observers.append(_notify_plugins_start)
             effect_observers.append(_notify_plugins)
+            report_observers.append(_notify_plugins_report)
         if req.effect_start_observer is not None:
             start_observers.append(req.effect_start_observer)
         if req.effect_observer is not None:

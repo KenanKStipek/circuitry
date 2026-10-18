@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from circuitry.cli.events import _REPORT_DATA_MAX_BYTES, EventLog
+from circuitry.cli.events import EventLog
+from circuitry.core.report import REPORT_DATA_MAX_BYTES as _REPORT_DATA_MAX_BYTES
 
 
 def _lines(path: Path) -> list[dict[str, Any]]:

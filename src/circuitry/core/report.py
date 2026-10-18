@@ -12,6 +12,7 @@ start/end event and never counts toward ``runtime.last_run.totals.effects_run``.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from .prompt_compose import (
     known_effect_names,
     render_with_composition,
 )
+from .saved_state import json_safe_default
 from .store import Store
 from .use import _resolve_reference
 
@@ -30,6 +32,64 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def now_iso_ms() -> str:
+    """Wall-clock UTC, millisecond precision, ``Z`` suffix -- e.g.
+    ``"2026-10-08T19:56:22.433Z"``, the format ``--events`` writes every
+    ``ts`` in (#419) and a report's ``on_report`` plugin payload matches
+    (#615)."""
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+#: A report's compact ``data`` JSON, in bytes, above which both ``--events``
+#: and the ``on_report`` plugin hook replace it with ``data_truncated`` (that
+#: byte count) instead of the value itself (#605, #615).
+REPORT_DATA_MAX_BYTES = 16 * 1024
+
+
+def encode_report_data(data: Any) -> tuple[Any, int | None]:
+    """The truncation rule ``--events`` and the ``on_report`` plugin hook
+    both apply to a report's ``data`` (#605, #615), computed once here:
+    ``(value, None)`` when ``data``'s compact JSON (``default=json_safe_default``,
+    the same as ``--out``) fits within :data:`REPORT_DATA_MAX_BYTES`, or
+    ``(None, byte_count)`` when it doesn't. ``data=None`` (no data at all)
+    is ``(None, None)`` -- "nothing to report", not a truncated empty value.
+    """
+    if data is None:
+        return None, None
+    encoded = json.dumps(
+        data, separators=(",", ":"), default=json_safe_default
+    ).encode("utf-8")
+    if len(encoded) > REPORT_DATA_MAX_BYTES:
+        return None, len(encoded)
+    return data, None
+
+
+def build_report_payload(
+    *, path: str, level: str, message: str, data: Any
+) -> dict[str, Any]:
+    """A report's fields minus the ``--events`` envelope (``v``/``seq``/``ev``)
+    (#615): ``ts``, ``path``, ``level``, ``message``, then ``data`` or
+    ``data_truncated``. This is exactly the ``report`` dict a runtime plugin's
+    ``on_report`` hook receives.
+    """
+    payload: dict[str, Any] = {
+        "ts": now_iso_ms(),
+        "path": path,
+        "level": level,
+        "message": message,
+    }
+    value, truncated = encode_report_data(data)
+    if truncated is not None:
+        payload["data_truncated"] = truncated
+    elif value is not None:
+        payload["data"] = value
+    return payload
 
 
 #: A report ``data`` leaf's by-reference form: exactly ``{from: <path>}`` —

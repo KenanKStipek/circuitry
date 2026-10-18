@@ -32,10 +32,11 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..core.report import encode_report_data
+from ..core.report import now_iso_ms as _now_iso_ms
 from ..core.saved_state import json_safe_default
 from .version import resolve_version
 
@@ -44,22 +45,6 @@ logger = logging.getLogger(__name__)
 #: An effect's (or the run's) error text is cut to this many characters
 #: before it reaches the stream — the same limit the format documents.
 _ERROR_MAX_CHARS = 500
-
-#: A ``report`` event's compact ``data`` JSON, in bytes, above which it is
-#: replaced by ``"data_truncated": <that byte count>`` instead (#605). A
-#: named report still keeps the full value in the shadow state — only the
-#: event line is capped.
-_REPORT_DATA_MAX_BYTES = 16 * 1024
-
-
-def _now_iso_ms() -> str:
-    """Wall-clock UTC, millisecond precision, ``Z`` suffix — e.g.
-    ``"2026-10-08T19:56:22.433Z"``, matching the format's own example."""
-    return (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="milliseconds")
-        .replace("+00:00", "Z")
-    )
 
 
 def _truncate_error(error: str) -> str:
@@ -274,14 +259,11 @@ class EventLog:
                     "level": level,
                     "message": message,
                 }
-                if data is not None:
-                    encoded = json.dumps(
-                        data, separators=(",", ":"), default=json_safe_default
-                    ).encode("utf-8")
-                    if len(encoded) > _REPORT_DATA_MAX_BYTES:
-                        payload["data_truncated"] = len(encoded)
-                    else:
-                        payload["data"] = data
+                value, truncated = encode_report_data(data)
+                if truncated is not None:
+                    payload["data_truncated"] = truncated
+                elif value is not None:
+                    payload["data"] = value
                 self._write_line(payload)
         except Exception as exc:
             self._disable("report", exc)
