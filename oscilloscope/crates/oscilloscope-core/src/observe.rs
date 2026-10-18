@@ -301,8 +301,11 @@ pub fn parse_event(value: &Value) -> Option<Event> {
             data: value.get("data").cloned(),
             // Both engines write the compact JSON's byte count here
             // (`"data_truncated": <size in bytes>`), not a boolean --
-            // only presence (and non-null) marks a report as truncated.
-            data_truncated: value.get("data_truncated").is_some_and(|v| !v.is_null()),
+            // any value other than `null` or `false` marks a report as
+            // truncated.
+            data_truncated: value
+                .get("data_truncated")
+                .is_some_and(|v| !v.is_null() && v.as_bool() != Some(false)),
         }),
         _ => None,
     }
@@ -616,6 +619,22 @@ mod tests {
                 data_truncated: true,
             })
         );
+    }
+
+    #[test]
+    fn parse_event_treats_a_null_or_false_data_truncated_as_not_truncated() {
+        for raw in [r#"null"#, r#"false"#] {
+            let value: Value = serde_json::from_str(&format!(
+                r#"{{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime","level":"info","message":"m","data_truncated":{raw}}}"#
+            ))
+            .unwrap();
+            match parse_event(&value) {
+                Some(Event::Report { data_truncated, .. }) => {
+                    assert!(!data_truncated, "data_truncated: {raw}")
+                }
+                other => panic!("expected a report event, got {other:?}"),
+            }
+        }
     }
 
     #[test]

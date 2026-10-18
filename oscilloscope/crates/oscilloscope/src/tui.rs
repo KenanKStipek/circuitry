@@ -431,10 +431,9 @@ fn draw_header(
                 // `2 +`), so only `doc_budget` itself -- the
                 // document's own character count -- comes out here;
                 // the report text's own leading "  " separator is
-                // subtracted next, on its own (#610, a budget-off-by-
-                // two review finding: this used to subtract that
-                // separator twice, leaving two unused columns before
-                // the border on every truncated report line).
+                // subtracted next, on its own, exactly once (#610):
+                // subtracting it twice would leave two unused columns
+                // before the border on every truncated report line.
                 let remaining = leftover.saturating_sub(doc_budget);
                 let report_budget = remaining.saturating_sub(2);
                 let text = if report_budget < 8 {
