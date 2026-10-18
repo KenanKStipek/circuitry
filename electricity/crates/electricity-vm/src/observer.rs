@@ -156,20 +156,6 @@ pub trait RunObserver {
     /// every other hook's own tolerant default here.
     fn clear_tree_branches(&self, _node_path: &EffectPath, _branches: &[NodeRef]) {}
 
-    /// Hands a completing effect's own `meta` snapshot to the run's
-    /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
-    /// _TotalsAccumulator.observe`'s own `tokens_sent`/`tokens_received`/
-    /// `cost_usd` accumulation, driven by the same stream
-    /// [`RunObserver::effect_complete`] already carries (`effects_run`
-    /// stays that hook's own job -- this one is additive, for the two
-    /// fields no M0/M1 effect type before `prompt` ever set).
-    /// `exec::prompt::execute_prompt` calls this immediately before
-    /// `effect_complete`, on every pass (success or failure) that
-    /// reaches a `meta` write at all; `exec::conditional`/`exec::loop_`
-    /// call it the same way for a named model `if`/loop's own
-    /// completing pass (lane G2, #513). Default no-op, like every
-    /// other hook here -- only `electricity` (lib)'s own `Observer`
-    /// implements it for real.
     /// A `report` effect published *message* (#605) at *path* -- the
     /// report's own state path when named, otherwise the path of the
     /// container it runs in (`Frame::effect_path`'s own fallback for an
@@ -190,6 +176,20 @@ pub trait RunObserver {
     ) {
     }
 
+    /// Hands a completing effect's own `meta` snapshot to the run's
+    /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
+    /// _TotalsAccumulator.observe`'s own `tokens_sent`/`tokens_received`/
+    /// `cost_usd` accumulation, driven by the same stream
+    /// [`RunObserver::effect_complete`] already carries (`effects_run`
+    /// stays that hook's own job -- this one is additive, for the two
+    /// fields no M0/M1 effect type before `prompt` ever set).
+    /// `exec::prompt::execute_prompt` calls this immediately before
+    /// `effect_complete`, on every pass (success or failure) that
+    /// reaches a `meta` write at all; `exec::conditional`/`exec::loop_`
+    /// call it the same way for a named model `if`/loop's own
+    /// completing pass (lane G2, #513). Default no-op, like every
+    /// other hook here -- only `electricity` (lib)'s own `Observer`
+    /// implements it for real.
     fn record_totals(&self, _meta: &Value) {}
 }
 
