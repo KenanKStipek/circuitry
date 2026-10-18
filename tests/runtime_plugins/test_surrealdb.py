@@ -186,6 +186,35 @@ def test_lifecycle_round_trip_writes_run_and_effect(
     assert client.closed is True
 
 
+def test_report_writes_an_effects_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``on_report`` (#615): a row in the same ``effects`` table,
+    ``effect_type: "report"``."""
+    holder = _install_fake_surrealdb(monkeypatch)
+    plugin = surrealdb_mod.plugin()
+    ctx = _make_context(tmp_path)
+
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime.status", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+
+    client = holder["c"]
+    report_inserts = [
+        q for q in client.queries if q[0].startswith("CREATE effects CONTENT")
+    ]
+    assert len(report_inserts) == 1
+    data = report_inserts[0][1]["data"]
+    assert data["state_path"] == "prime.status"
+    assert data["effect_type"] == "report"
+    assert data["status"] == "success"
+    assert data["value"]["level"] == "warning"
+    assert data["value"]["message"] == "note"
+    assert data["value"]["data"] == {"x": 1}
+
+
 def test_failure_marks_runs_row(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -331,6 +331,71 @@ def test_effect_complete_without_a_prior_start_still_gets_a_span(
     assert "effect:prime.greet" in spans
 
 
+def test_on_report_adds_a_span_event_on_the_run_span(
+    plugin_with_exporter: tuple[otel_mod.OpentelemetryPlugin, InMemorySpanExporter],
+    tmp_path: Path,
+) -> None:
+    """A report has no effect span of its own -- it never fires
+    on_effect_start/on_effect_complete -- so it lands as a ``report`` span
+    event on the run's own span (#615)."""
+    plugin, exporter = plugin_with_exporter
+    ctx = _make_context(tmp_path)
+
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={},
+        context=ctx,
+        report={
+            "ts": "2024-01-01T00:00:00.000Z",
+            "path": "prime",
+            "level": "warning",
+            "message": "note on widgets",
+            "data": {"x": 1},
+        },
+    )
+    plugin.on_run_success(state={}, context=ctx)
+
+    run_span = next(
+        s for s in exporter.get_finished_spans() if s.name == "circuitry.run"
+    )
+    events = [e for e in run_span.events if e.name == "report"]
+    assert len(events) == 1
+    attrs = events[0].attributes
+    assert attrs["circuitry.path"] == "prime"
+    assert attrs["circuitry.level"] == "warning"
+    assert attrs["circuitry.message"] == "note on widgets"
+    assert attrs["circuitry.data"] == '{"x": 1}'
+
+
+def test_on_report_truncated_uses_the_byte_count_attribute(
+    plugin_with_exporter: tuple[otel_mod.OpentelemetryPlugin, InMemorySpanExporter],
+    tmp_path: Path,
+) -> None:
+    plugin, exporter = plugin_with_exporter
+    ctx = _make_context(tmp_path)
+
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={},
+        context=ctx,
+        report={
+            "ts": "2024-01-01T00:00:00.000Z",
+            "path": "prime",
+            "level": "info",
+            "message": "big",
+            "data_truncated": 20011,
+        },
+    )
+    plugin.on_run_success(state={}, context=ctx)
+
+    run_span = next(
+        s for s in exporter.get_finished_spans() if s.name == "circuitry.run"
+    )
+    event = next(e for e in run_span.events if e.name == "report")
+    assert event.attributes["circuitry.data_truncated"] == 20011
+    assert "circuitry.data" not in event.attributes
+
+
 def test_check_reports_missing_dep(monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib.util
 

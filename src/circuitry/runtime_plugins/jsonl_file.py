@@ -9,6 +9,7 @@ suited for after-the-fact analysis (grep, jq) and CI logs.
 Per-event lines look like:
     {"event": "run_start",   "run_id": "...", "started_at": ..., ...}
     {"event": "effect_complete", "run_id": "...", "effect_path": ..., ...}
+    {"event": "report", "run_id": "...", "path": ..., "level": ..., "message": ..., ...}
     {"event": "run_success", "run_id": "...", "ended_at": ...}
     {"event": "run_failure", "run_id": "...", "ended_at": ..., "error": ...}
 
@@ -108,6 +109,22 @@ class JsonlFilePlugin:
                 "tokens_received": meta.get("tokens_received"),
                 "error": meta.get("error"),
                 "completed_at": meta.get("completed_at") or _now_iso(),
+            })
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state
+        with self._lock:
+            self._append({
+                "event": "report",
+                "run_id": context.run_id,
+                "path": report.get("path"),
+                "level": report.get("level"),
+                "message": report.get("message"),
+                "data": report.get("data"),
+                "data_truncated": report.get("data_truncated"),
+                "timestamp": _now_iso(),
             })
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:

@@ -24,6 +24,7 @@ Configuration is honored via the standard OTEL_* env vars
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
 import threading
@@ -262,6 +263,30 @@ class OpentelemetryPlugin:
                 span.set_status(Status(StatusCode.ERROR, error))
                 span.set_attribute("circuitry.error", error)
             span.end(end_time=end_ns)
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        """A span event named ``report`` on the run's own span (#615):
+        ``path``/``level``/``message`` attributes, plus ``data`` as a JSON
+        string attribute (or ``data_truncated``) -- a report has no effect
+        span of its own to attach to, since it never fires
+        on_effect_start/on_effect_complete.
+        """
+        del state, context
+        with self._lock:
+            if self._run_span is None:
+                return
+            attrs: dict[str, Any] = {
+                "circuitry.path": report.get("path", ""),
+                "circuitry.level": report.get("level", ""),
+                "circuitry.message": report.get("message", ""),
+            }
+            if "data_truncated" in report:
+                attrs["circuitry.data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                attrs["circuitry.data"] = json.dumps(report["data"], default=str)
+            self._run_span.add_event("report", attributes=attrs)
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state, context

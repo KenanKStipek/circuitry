@@ -15,6 +15,7 @@ ClickHouse uses a different driver model and gets its own coverage.
 from __future__ import annotations
 
 import importlib.util
+import json as _json
 import sys
 import types
 from dataclasses import dataclass
@@ -578,6 +579,35 @@ def test_clickhouse_lifecycle_uses_insert_and_alter(
     assert params["status"] == "success"
     assert params["run_id"] == "ch-run-1"
     assert client.closed is True
+
+
+def test_clickhouse_report_writes_an_effect_results_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``on_report`` (#615): a row in the same ``effect_results`` table,
+    ``effect_type: "report"``."""
+    client = _FakeClickhouseClient()
+    _install_fake_clickhouse(monkeypatch, client)
+
+    plugin = clickhouse_mod.plugin()
+    ctx = _make_clickhouse_context(tmp_path)
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime.status", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+
+    reports = [i for i in client.inserts if i[0] == "effect_results"]
+    assert len(reports) == 1
+    _, rows, columns = reports[0]
+    row = dict(zip(columns, rows[0], strict=True))
+    assert row["state_path"] == "prime.status"
+    assert row["effect_type"] == "report"
+    assert row["status"] == "success"
+    value = _json.loads(row["value"])
+    assert value["level"] == "warning"
+    assert value["message"] == "note"
+    assert value["data"] == {"x": 1}
 
 
 def test_clickhouse_url_parsed_to_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:

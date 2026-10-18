@@ -117,6 +117,23 @@ class CloudwatchPlugin:
             "timestamp": _now_iso(),
         })
 
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state
+        if self._client is None:
+            return
+        self._put_event({
+            "event": "report",
+            "run_id": context.run_id,
+            "path": report.get("path"),
+            "level": report.get("level"),
+            "message": report.get("message"),
+            "data": report.get("data"),
+            "data_truncated": report.get("data_truncated"),
+            "timestamp": _now_iso(),
+        })
+
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state
         if self._client is None:

@@ -231,6 +231,67 @@ class ClickhousePlugin:
                 )
                 raise
 
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        """A row in ``effect_results`` (``effect_type: "report"``) (#615):
+        the same per-effect table ``on_effect_complete`` writes to, since
+        there is no separate report table -- ``value`` carries ``level``,
+        ``message`` and ``data``/``data_truncated``; ``status`` is always
+        ``"success"``, since a report never fails.
+        """
+        del state
+        with self._lock:
+            if self._client is None or self._run_id is None:
+                return
+            path = str(report.get("path", ""))
+            effect_name, parent_path, iter_index, _ = parse_effect_path(path)
+            value: dict[str, Any] = {
+                "level": report.get("level"),
+                "message": report.get("message"),
+            }
+            if "data_truncated" in report:
+                value["data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                value["data"] = report["data"]
+            now = _now()
+            self._effect_id_counter += 1
+            try:
+                self._client.insert(
+                    "effect_results",
+                    [
+                        [
+                            self._effect_id_counter,
+                            context.run_id,
+                            path,
+                            effect_name,
+                            "report",
+                            parent_path,
+                            iter_index,
+                            json.dumps(value, default=str),
+                            None,
+                            None,
+                            None,
+                            now,
+                            now,
+                            "success",
+                            None,
+                        ]
+                    ],
+                    column_names=[
+                        "id", "run_id", "state_path", "effect_name", "effect_type",
+                        "parent_path", "iteration_index", "value", "raw",
+                        "tokens_sent", "tokens_received", "started_at", "ended_at",
+                        "status", "error",
+                    ],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "clickhouse plugin failed to record report %r: %s",
+                    path, exc, exc_info=True,
+                )
+                raise
+
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state
         self._finalize_run(run_id=context.run_id, status="success", error=None)

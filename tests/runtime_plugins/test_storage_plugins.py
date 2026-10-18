@@ -834,6 +834,35 @@ def test_jsonl_writes_run_lifecycle_events(tmp_path: Path) -> None:
     assert events[2]["event"] == "run_success"
 
 
+def test_jsonl_writes_a_report_event(tmp_path: Path) -> None:
+    """``on_report`` (#615): its own ``report`` event, not gated by
+    ``include_effects`` -- a report is never counted as an effect."""
+    log_path = tmp_path / "events.jsonl"
+    plugin = jsonl_mod.plugin()
+    ctx = PluginContext(
+        run_id="run-1", orchestration_path=tmp_path / "x.yml",
+        dry_run=False, validate_only=False,
+        runtime_config={
+            "runtime_plugins": {
+                "jsonl-file": {"path": str(log_path), "include_effects": False},
+            },
+        },
+    )
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime.status", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+    plugin.on_run_success(state={}, context=ctx)
+
+    events = _read_jsonl(log_path)
+    assert [e["event"] for e in events] == ["run_start", "report", "run_success"]
+    assert events[1]["path"] == "prime.status"
+    assert events[1]["level"] == "warning"
+    assert events[1]["message"] == "note"
+    assert events[1]["data"] == {"x": 1}
+
+
 def test_jsonl_skips_effect_events_when_disabled(tmp_path: Path) -> None:
     log_path = tmp_path / "events.jsonl"
     plugin = jsonl_mod.plugin()
@@ -872,6 +901,84 @@ def test_jsonl_failure_records_error(tmp_path: Path) -> None:
 
 def test_jsonl_check_always_ok() -> None:
     assert jsonl_mod.plugin().check().ok is True
+
+
+def test_an_end_to_end_run_interleaves_reports_with_effects(
+    tmp_path: Path,
+) -> None:
+    """Reports reach the jsonl-file plugin whether or not ``--events`` is
+    set (#615): a run with a loop and a ``use`` child, each containing a
+    report, writes ``report`` lines interleaved with ``effect_complete``
+    lines, in the order they actually happened, at the right paths.
+    """
+    from circuitry.cli.config import CircuitryConfig
+    from circuitry.cli.runtime_shim import RunRequest, run
+
+    orch = tmp_path / "orch.yml"
+    orch.write_text(
+        """
+effects:
+  - type: report
+    message: "starting"
+  - type: loop
+    name: items
+    each: {in: input.items, as: item}
+    body:
+      - type: report
+        message: "on {{item}}"
+      - type: tool
+        name: handle
+        provider: math
+        params: {expression: "1+1"}
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: report
+          message: "in child"
+        - type: tool
+          name: step
+          provider: math
+          params: {expression: "2+2"}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "events.jsonl"
+    cfg = CircuitryConfig(
+        default_adapter="openai",
+        default_model="gpt-4o-mini",
+        plugins=["circuitry.runtime_plugins.jsonl_file"],
+        runtime={"runtime_plugins": {"jsonl-file": {"path": str(log_path)}}},
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={"items": ["a", "b"]},
+            skip_preflight=True,
+            config=cfg,
+        )
+    )
+    assert result.ok is True, result.error
+
+    events = _read_jsonl(log_path)
+    kinds = [(e["event"], e.get("effect_path") or e.get("path")) for e in events]
+    # Each report is interleaved right where it ran, not batched at the end.
+    assert ("report", "prime") in kinds
+    assert ("report", "prime.items.iter_0") in kinds
+    assert ("report", "prime.items.iter_1") in kinds
+    assert ("report", "prime.child") in kinds
+    report_index = kinds.index(("report", "prime"))
+    first_iter_report = kinds.index(("report", "prime.items.iter_0"))
+    first_iter_effect = kinds.index(("effect_complete", "prime.items.iter_0.handle"))
+    assert report_index < first_iter_report < first_iter_effect
+    child_report = kinds.index(("report", "prime.child"))
+    child_effect = kinds.index(("effect_complete", "prime.child.step"))
+    assert child_report < child_effect
 
 
 # ---------------------------------------------------------------------------

@@ -93,6 +93,25 @@ class SentryPlugin:
             data={"effect_path": effect_path, "error": error},
         )
 
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state, context
+        if self._sentry_sdk is None:
+            return
+        level = report.get("level")
+        data: dict[str, Any] = {"path": report.get("path")}
+        if "data_truncated" in report:
+            data["data_truncated"] = report["data_truncated"]
+        elif "data" in report:
+            data["data"] = report["data"]
+        self._sentry_sdk.add_breadcrumb(
+            category="circuitry.report",
+            message=report.get("message", ""),
+            level="warning" if level == "warning" else "info",
+            data=data,
+        )
+
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state, context
         if self._sentry_sdk is None:
