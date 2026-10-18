@@ -1,7 +1,8 @@
 {
   "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #507's own item 5",
-  "description": "`False` as a `multipleOf` divisor reached through the same unrecognized-key `$ref`: `bool` is an `int` subtype in Python, so `5 % False` is ordinary arithmetic, raising `ZeroDivisionError` from a genuine zero divisor rather than `TypeError` -- the same text an ordinary `multipleOf: 0` schema would raise. A non-retryable, generic failure, never `schema_invalid`; `on_error: continue` lets the run finish.",
+  "description": "`False` as a `multipleOf` divisor reached through the same unrecognized-key `$ref`: `bool` is an `int` subtype in Python, so `5 % False` is ordinary arithmetic, raising `ZeroDivisionError` from a genuine zero divisor rather than `TypeError` -- the same text an ordinary `multipleOf: 0` schema would raise. A non-retryable, generic failure, never `schema_invalid`; `on_error: continue` lets the run finish. CPython 3.10 words the same `ZeroDivisionError` as 'integer division or modulo by zero' (3.11 and later: 'integer modulo by zero'), so the expected output holds from 3.11 on.",
   "engines": ["python", "electricity"],
   "config": "config.json",
+  "python_runner_versions": ["3.11", "3.12", "3.13"],
   "expect": "success"
 }

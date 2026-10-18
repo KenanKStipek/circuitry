@@ -344,11 +344,11 @@ def main() -> int:
         if python_runner_versions is not None:
             running_version = harness.running_python_version()
             if running_version not in python_runner_versions:
-                # cof's own CEL nesting limits come from CPython's recursion
-                # handling, which differs between Python versions -- running this
-                # generator under any other interpreter would silently rewrite
-                # the case's committed expected output with that version's own
-                # boundary instead of the one it's pinned to.
+                # The case's expected output depends on the CPython version
+                # running cof (CEL nesting limits, version-specific exception
+                # wording) -- running this generator under any other
+                # interpreter would silently rewrite the committed expected
+                # output with that version's own behaviour.
                 print(
                     f"SKIP {case_dir.name}: expected output is pinned to Python "
                     f"{'/'.join(python_runner_versions)}, not {running_version}",
