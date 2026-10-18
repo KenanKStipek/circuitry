@@ -1564,6 +1564,8 @@ A `{from: <path>}` leaf in `data` that doesn't resolve — a missing path, or on
 
 **`--events`.** Each time a report runs, the stream gets one `report` line: `{"v":1,"seq":…,"ts":…,"ev":"report","path":…,"level":…,"message":…,"data":…}`. `path` is the report's own state path when it is named; otherwise it is the path of the container it runs in (`prime` at the top level, `prime.<loop>.iter_N` in a pass, a dynamic's own path inside it, and so on) — the same fallback `dispatch`'s own path uses for an unnamed container. `data` is omitted when the report has none; when its compact JSON exceeds 16 KiB, it is replaced by `"data_truncated": <size in bytes>` instead — a named report still keeps the full value in the shadow state regardless. See "Watching a Run" below and `electricity/docs/spec/runtime-semantics.md` §8.7 for the full line format.
 
+**Console.** `cof run` prints the report's own line only on an interactive terminal: never under `--quiet`/`--json`/`--tail`, and never when stdout is piped or redirected. `electricity` has no such flags, so it prints the line only when stdout is a TTY.
+
 **Resume and dry run.** On `--resume`, a named report that already completed is skipped like any completed effect; an unnamed one runs again when reached. `--dry-run` renders and publishes reports normally — unlike most effects, there is nothing a dry run would skip, since a report never does anything besides render and publish.
 
 **Example — narrating a loop's progress, with a value other effects never see:**
