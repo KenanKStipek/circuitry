@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-18T22:22:32.129Z","ev":"run_start","run_id":"90c47199-0869-42c7-ab6f-69debc9f8240","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":47045}
+{"v":1,"seq":1,"ts":"2026-10-18T22:22:32.132Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-18T22:22:32.133Z","ev":"start","id":1,"path":"prime.ask"}
+{"v":1,"seq":3,"ts":"2026-10-18T22:22:32.135Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":2,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"unsupported operand type(s) for %: 'int' and 'str'\", 'tokens_sent': None, 'tokens_received': None, 'raw_reply': '{\"a\": 5}'}]"}
+{"v":1,"seq":4,"ts":"2026-10-18T22:22:32.135Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3}
+{"v":1,"seq":5,"ts":"2026-10-18T22:22:32.135Z","ev":"run_end","ok":true}

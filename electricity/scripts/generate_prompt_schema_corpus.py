@@ -651,6 +651,71 @@ def cases() -> list[dict]:
             },
             {"a": "x"},
         ),
+        _case(
+            # Issue #507's own item 1: `not`'s own lazy `is_valid`
+            # pulls exactly one value from the whole nested generator
+            # tree -- `a`'s own `type` mismatch is the first and only
+            # error it ever sees, so `b`'s own dangling `$ref` is never
+            # reached, never raises, and the wrapped `properties`
+            # schema is invalid from `a` alone, making `not` itself
+            # valid.
+            "not_stops_at_the_first_property_mismatch_never_reaching_a_dangling_ref",
+            {
+                "not": {
+                    "properties": {
+                        "a": {"type": "string"},
+                        "b": {"$ref": "#/missing"},
+                    }
+                }
+            },
+            {"a": 1, "b": 2},
+        ),
+        _case(
+            # Issue #507's own item 3: `multipleOf`'s own metaschema
+            # entry (`{"type": "number", "exclusiveMinimum": 0}`) never
+            # rejects `NaN`/positive `Infinity` (neither compares `<=
+            # 0`), and `multipleOf` never applies to a string instance
+            # regardless.
+            "multiple_of_nan_against_a_string_is_well_formed_and_valid",
+            {"multipleOf": float("nan")},
+            "a string",
+        ),
+        _case(
+            "multiple_of_positive_infinity_against_a_string_is_well_formed_and_valid",
+            {"multipleOf": float("inf")},
+            "a string",
+        ),
+        _case(
+            # Issue #507's own item 4: `Fraction(1152921504606846978)`
+            # is exact past `f64`'s own 2**53 integer-precision ceiling
+            # -- `1152921504606846978`'s own exact value really is a
+            # multiple of this divisor, where the nearby, `f64`-exact
+            # `1152921504606846976` is not.
+            "multiple_of_exact_fraction_for_a_big_int_instance_past_2_pow_53",
+            {"multipleOf": 2.7997908555096566e-301},
+            1152921504606846978,
+        ),
+        _case(
+            "multiple_of_exact_fraction_rejects_the_nearby_f64_exact_value",
+            {"multipleOf": 2.7997908555096566e-301},
+            1152921504606846976,
+        ),
+        _case(
+            # Issue #507's own item 5: a `multipleOf` divisor reached
+            # only through a `$ref` into a key no schema-structure walk
+            # recognizes as housing a subschema -- `check_schema` never
+            # sees `myCustomDefs` as an applicator, so it never
+            # validates `multipleOf: true` against *its* own metaschema
+            # entry either; at validation time, `bool` is an `int`
+            # subtype, so `5 % True` is ordinary Python arithmetic
+            # (`0`), never a `TypeError`.
+            "multiple_of_bool_divisor_reached_through_an_unknown_key_is_valid",
+            {
+                "myCustomDefs": {"weird": {"multipleOf": True}},
+                "properties": {"a": {"$ref": "#/myCustomDefs/weird"}},
+            },
+            {"a": 5},
+        ),
     ]
 
 

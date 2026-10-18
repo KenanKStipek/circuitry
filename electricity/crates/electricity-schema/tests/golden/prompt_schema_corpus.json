@@ -3156,5 +3156,76 @@
       "a": "x"
     },
     "message": "'then-branch' was expected"
+  },
+  {
+    "name": "not_stops_at_the_first_property_mismatch_never_reaching_a_dangling_ref",
+    "schema": {
+      "not": {
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "b": {
+            "$ref": "#/missing"
+          }
+        }
+      }
+    },
+    "instance": {
+      "a": 1,
+      "b": 2
+    },
+    "message": null
+  },
+  {
+    "name": "multiple_of_nan_against_a_string_is_well_formed_and_valid",
+    "schema": {
+      "multipleOf": NaN
+    },
+    "instance": "a string",
+    "message": null
+  },
+  {
+    "name": "multiple_of_positive_infinity_against_a_string_is_well_formed_and_valid",
+    "schema": {
+      "multipleOf": Infinity
+    },
+    "instance": "a string",
+    "message": null
+  },
+  {
+    "name": "multiple_of_exact_fraction_for_a_big_int_instance_past_2_pow_53",
+    "schema": {
+      "multipleOf": 2.7997908555096566e-301
+    },
+    "instance": 1152921504606846978,
+    "message": null
+  },
+  {
+    "name": "multiple_of_exact_fraction_rejects_the_nearby_f64_exact_value",
+    "schema": {
+      "multipleOf": 2.7997908555096566e-301
+    },
+    "instance": 1152921504606846976,
+    "message": "1152921504606846976 is not a multiple of 2.7997908555096566e-301"
+  },
+  {
+    "name": "multiple_of_bool_divisor_reached_through_an_unknown_key_is_valid",
+    "schema": {
+      "myCustomDefs": {
+        "weird": {
+          "multipleOf": true
+        }
+      },
+      "properties": {
+        "a": {
+          "$ref": "#/myCustomDefs/weird"
+        }
+      }
+    },
+    "instance": {
+      "a": 5
+    },
+    "message": null
   }
 ]

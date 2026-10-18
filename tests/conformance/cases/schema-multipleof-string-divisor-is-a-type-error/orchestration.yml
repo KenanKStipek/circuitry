@@ -1,0 +1,14 @@
+name: schema-multipleof-string-divisor-is-a-type-error
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    on_error: continue
+    schema:
+      myCustomDefs:
+        weird: {multipleOf: "nope"}
+      properties:
+        a: {$ref: "#/myCustomDefs/weird"}
+    template: "give json"

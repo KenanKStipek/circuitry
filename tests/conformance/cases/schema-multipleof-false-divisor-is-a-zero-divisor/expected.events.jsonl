@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-18T22:22:30.382Z","ev":"run_start","run_id":"7579a911-26e7-4a49-add5-f422982c344b","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":46978}
+{"v":1,"seq":1,"ts":"2026-10-18T22:22:30.386Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-18T22:22:30.387Z","ev":"start","id":1,"path":"prime.ask"}
+{"v":1,"seq":3,"ts":"2026-10-18T22:22:30.388Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":1,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': 'integer modulo by zero', 'tokens_sent': None, 'tokens_received': None, 'raw_reply': '{\"a\": 5}'}]"}
+{"v":1,"seq":4,"ts":"2026-10-18T22:22:30.388Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-10-18T22:22:30.388Z","ev":"run_end","ok":true}

@@ -1273,14 +1273,16 @@ fn value_to_json(value: &electricity_value::Value) -> Value {
 /// negative `multipleOf` (`-Infinity` included) fails that check in
 /// Python too.
 ///
-/// Every `"$ref"` key is also dropped (never a `null`/absent sibling
-/// set -- just that one key) rather than handed to the probe as-is
-/// (issue #507's own item 5): the probe only ever runs once
+/// A `"$ref"` key whose own value is a string is also dropped (never a
+/// `null`/absent sibling set, and never a `"$ref"` key whose value isn't
+/// a string -- that shape is a property or `$defs` entry *named* `$ref`,
+/// not the keyword, and must still reach the probe) rather than handed to
+/// it as-is: the probe only ever runs once
 /// [`engine::schema_is_fully_supported`] has already confirmed every
-/// `"$ref"` in *schema* is this engine's own supported same-document-
-/// pointer shape, lazily resolved exactly as Python resolves it --
-/// the crate's own build step resolves a `$ref` *eagerly* instead
-/// (finding F5, `DESIGN.md` §13), so a reference into a subschema this
+/// string-valued `"$ref"` in *schema* is this engine's own supported
+/// same-document-pointer shape, lazily resolved exactly as Python
+/// resolves it -- the crate's own build step resolves a `$ref` *eagerly*
+/// instead (`DESIGN.md` §13), so a reference into a subschema this
 /// engine will only ever reach, lazily, through [`engine::evaluate`]'s
 /// own instance-driven walk (a key no schema-structure walk, Python's
 /// own `check_schema` included, recognizes as housing a subschema at
@@ -1359,7 +1361,7 @@ fn value_to_json_inner(
                     map.insert(key, value_to_json_inner(v, non_finite_as_zero, strip_ref));
                     continue;
                 };
-                if strip_ref && key_str == "$ref" {
+                if strip_ref && key_str == "$ref" && matches!(v, EValue::Str(_)) {
                     continue;
                 }
                 map.insert(

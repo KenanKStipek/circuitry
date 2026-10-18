@@ -666,11 +666,11 @@ fn merge_sort_rec(order: &mut [usize], scratch: &mut [usize], items: &[&Value]) 
 /// this at all). Dispatches to [`merge_sort_order`] once `n` reaches
 /// that same 64 threshold instead -- `O(n log n)` moves, never
 /// `O(n^2)`, while staying a correct, stable, `Option`-aware sort over
-/// the identical [`uniq_sort_cmp`] comparator (`uniq_items_stays_fast_
-/// at_scale`'s own 50,000-list-element case is exactly this threshold
-/// crossed by three orders of magnitude). Below it, this keeps
-/// replicating real CPython comparison for comparison, since there's
-/// nothing to gain performance-wise at that size either way.
+/// the identical [`uniq_sort_cmp`] comparator (`uniq_items_of_lists_
+/// stays_fast_at_scale`'s own 600,000-list-element case is exactly
+/// this threshold crossed by four orders of magnitude). Below it, this
+/// keeps replicating real CPython comparison for comparison, since
+/// there's nothing to gain performance-wise at that size either way.
 fn cpython_list_sort(order: &mut [usize], items: &[&Value]) -> bool {
     let n = order.len();
     if n >= CPYTHON_MINRUN_WIDTH {
@@ -2296,12 +2296,11 @@ pub(crate) fn evaluate<'a>(
         // `Validator.is_valid`) only ever pulls *one* value total from
         // the entire nested `iter_errors` generator tree -- every
         // validator function it hasn't reached yet (including this
-        // schema's own remaining top-level keywords) simply never runs
-        // at all. [`LAZY_MODE`] mirrors that at this one granularity
-        // (between top-level keywords of one schema node; a keyword's
-        // own internal loop over several properties/elements/
-        // subschemas is a documented, narrower approximation,
-        // `DESIGN.md` §13) -- stopping here, not just at the end of
+        // schema's own remaining top-level keywords, and every
+        // property/element/subschema a keyword's own internal loop
+        // hasn't reached yet either, via the same [`lazy_should_stop`]
+        // check each of those loops makes on its own) simply never
+        // runs at all. Stopping here, not just at the end of
         // [`is_valid`] itself, is what keeps a keyword `not`/`if`/
         // `contains` never actually reaches (e.g. a `$ref` cycle sitting
         // behind a sibling `type` that already failed) from ever
@@ -3371,12 +3370,20 @@ fn schema_is_fully_supported_inner(
 /// this engine's own bounded walk ever had to (the same chain that's
 /// fine at 10,000 hops aborts the process past roughly 30,000). This
 /// walk never short-circuits on keyword support at all -- every dict
-/// value and list element is a plain structural edge (never counted
-/// toward the hop total, the same convention
-/// [`schema_is_fully_supported_inner`]'s own `depth` parameter already
-/// uses: `properties`'s own per-key recursion passes `depth`
-/// unchanged) -- so a chain hidden under any keyword, supported or
-/// not, is still found.
+/// value and list element but [`NON_SCHEMA_STRUCTURAL_KEYS`]'s own
+/// (`$defs`/`definitions`, reached only through an actual `$ref`,
+/// never structurally; `const`/`enum`/`examples`/`default`, literal
+/// instance data a `"$ref"` key inside can never be this engine's own
+/// keyword) is a plain structural edge, counted toward
+/// [`STRUCTURAL_DEPTH_CAP`] but never toward the hop total itself (an
+/// explicit `ref_hops` count, threaded through every call, the same
+/// convention [`schema_is_fully_supported_inner`]'s own `depth`
+/// parameter already uses for structural edges: `properties`'s own
+/// per-key recursion passes `depth` unchanged) -- so a chain hidden
+/// under any keyword, supported or not, is still found, at whatever
+/// structural depth it sits, without a hop sitting a few structural
+/// levels down (`properties.x.$ref`, say) ever being undercounted
+/// against a chain whose every hop sits at the top level instead.
 ///
 /// Longest-path, not first-path: memoized by node identity once a
 /// node's own subtree has been fully explored, with cycle-cutting via
@@ -3396,14 +3403,50 @@ fn schema_is_fully_supported_inner(
 pub(crate) fn ref_chain_depth_exceeds_cap(schema: &Value, root: &Value) -> bool {
     let mut memo = std::collections::HashMap::new();
     let mut active = std::collections::HashSet::new();
-    longest_ref_chain(schema, root, &mut memo, &mut active) >= MAX_RECURSION_DEPTH
+    longest_ref_chain(schema, root, &mut memo, &mut active, 0) >= MAX_RECURSION_DEPTH
 }
+
+/// Structural nesting (an ordinary `properties`/`items`/`allOf`/...
+/// edge, never a `$ref` hop) gets its own, far larger budget than
+/// [`MAX_RECURSION_DEPTH`]: a `$ref` chain whose every hop sits a few
+/// structural levels deep (`properties.x.$ref`, say) must still reach
+/// the *hop* cap, not an earlier, incidental structural one. Sized for
+/// the worst case this walk could ever see -- every one of
+/// [`MAX_RECURSION_DEPTH`]'s own hops preceded by a structurally-decoded
+/// schema nested as deep as [`electricity_value::MAX_DEPTH`] itself
+/// allows (past which no JSON/YAML reader would even hand this walk a
+/// `Value` to begin with) -- so only [`stack_budget_exceeded`] (a real
+/// native-stack-usage probe, not a frame count) ever needs to stop a
+/// walk actually this deep; hitting this cap at all, rather than that
+/// one, means something is genuinely unbounded, not just long.
+const STRUCTURAL_DEPTH_CAP: usize = MAX_RECURSION_DEPTH * electricity_value::MAX_DEPTH;
+
+/// Keys this walk never descends into structurally, because nothing
+/// ever evaluates a schema found there without going through an actual
+/// `$ref` into it first (so a chain hiding inside one, unreached by any
+/// `$ref` anywhere in the document, is dead weight no real validator --
+/// Python's, the crate's, or this engine's own -- ever resolves): the
+/// two definition-only containers ([`SUPPORTED_LEAF_KEYWORDS`] already
+/// treats both the same way), plus the data-only keywords whose own
+/// value is literal instance data, never a schema -- a `"$ref"` key
+/// *inside* one of those (`{"examples": [{"$ref": "#/$defs/a"}]}`) is
+/// someone's own example payload, not this engine's `$ref` keyword, and
+/// must never be followed as a hop.
+const NON_SCHEMA_STRUCTURAL_KEYS: &[&str] = &[
+    "$defs",
+    "definitions",
+    "const",
+    "enum",
+    "examples",
+    "default",
+];
 
 fn longest_ref_chain(
     node: &Value,
     root: &Value,
     memo: &mut std::collections::HashMap<*const Value, usize>,
     active: &mut std::collections::HashSet<*const Value>,
+    ref_hops: usize,
 ) -> usize {
     let ptr: *const Value = node;
     if let Some(&cached) = memo.get(&ptr) {
@@ -3416,12 +3459,20 @@ fn longest_ref_chain(
     if active.contains(&ptr) {
         return 0;
     }
-    // Already as deep as this engine's own cap can tell apart from
-    // genuinely unbounded -- stop descending rather than growing this
-    // walk's own Rust call stack any further (this function recurses
-    // once per structural edge, exactly like
-    // [`schema_is_fully_supported_inner`] already does).
-    if active.len() >= MAX_RECURSION_DEPTH || stack_budget_exceeded() {
+    // Already as deep in `$ref` hops as this engine's own cap can tell
+    // apart from genuinely unbounded -- stop descending (never
+    // overcounting past the cap, since the precise hop count no longer
+    // matters once it's known to be at least this large).
+    if ref_hops >= MAX_RECURSION_DEPTH {
+        return 0;
+    }
+    // Structural nesting alone, independent of hop count, already past
+    // its own far larger budget, or this walk's real native stack usage
+    // already past its own guard: either way the true value from here
+    // is unknown, not necessarily small, so assume the worst (at the
+    // cap) rather than silently undercounting a schema that is, in
+    // fact, unbounded.
+    if active.len() >= STRUCTURAL_DEPTH_CAP || stack_budget_exceeded() {
         return MAX_RECURSION_DEPTH;
     }
     active.insert(ptr);
@@ -3429,23 +3480,35 @@ fn longest_ref_chain(
     match node {
         Value::Dict(dict) => {
             for (k, v) in dict.iter() {
-                if k.as_str() == Some("$ref") {
+                let Some(key_str) = k.as_str() else {
+                    continue;
+                };
+                if key_str == "$ref" {
                     if let Some(pointer) = v.as_str() {
                         if is_same_document_pointer_syntax(pointer) {
                             if let Some(resolved) = resolve_ref(root, pointer) {
-                                let hop = 1 + longest_ref_chain(resolved, root, memo, active);
+                                let hop = 1 + longest_ref_chain(
+                                    resolved,
+                                    root,
+                                    memo,
+                                    active,
+                                    ref_hops + 1,
+                                );
                                 longest = longest.max(hop);
                             }
                         }
                     }
                     continue;
                 }
-                longest = longest.max(longest_ref_chain(v, root, memo, active));
+                if NON_SCHEMA_STRUCTURAL_KEYS.contains(&key_str) {
+                    continue;
+                }
+                longest = longest.max(longest_ref_chain(v, root, memo, active, ref_hops));
             }
         }
         Value::List(items) => {
             for v in items {
-                longest = longest.max(longest_ref_chain(v, root, memo, active));
+                longest = longest.max(longest_ref_chain(v, root, memo, active, ref_hops));
             }
         }
         _ => {}
@@ -3802,11 +3865,15 @@ mod tests {
     /// `binarysort` port moved `O(n)` elements per insertion
     /// (`rotate_right` over the whole sorted prefix so far), `O(n^2)`
     /// summed over `n` insertions -- confirmed directly against the
-    /// pre-fix code: 150,000 shuffled elements (below) took over 2
-    /// seconds in a debug build, the same unusable shape finding
-    /// N11 (the test above) already fixed for hashable
-    /// scalars. [`merge_sort_order`]'s own `O(n log n)` moves finish
-    /// this same case in a fraction of a second.
+    /// pre-fix code: at the 600,000-element size below, that already
+    /// took well past a minute in a debug build, the same unusable
+    /// shape the test above already fixed for hashable scalars.
+    /// [`merge_sort_order`]'s own `O(n log n)` moves finish this same
+    /// case in a few seconds instead -- a wide enough margin (`O(n^2)`
+    /// vs. `O(n log n)` at this `n`) that CI machine-speed variance
+    /// alone could never close it, unlike a margin sized against the
+    /// fixed algorithm's own wall-clock time at a size chosen only to
+    /// just clear it.
     #[test]
     fn uniq_items_of_lists_stays_fast_at_scale() {
         // Shuffled (a simple LCG), not ascending/descending -- an
@@ -3814,7 +3881,7 @@ mod tests {
         // in one pass, with no `binarysort` insertion (so no
         // `rotate_right`) at all either way, which would never
         // distinguish this fix from the quadratic code it replaces.
-        let items: Vec<Value> = (0..150_000u64)
+        let items: Vec<Value> = (0..600_000u64)
             .map(|i| {
                 let shuffled = i.wrapping_mul(2_654_435_761) % 1_000_000;
                 Value::List(vec![Value::from(shuffled as i64), Value::from(i as i64)])
@@ -3823,8 +3890,8 @@ mod tests {
         let start = std::time::Instant::now();
         assert!(py_uniq(&items));
         assert!(
-            start.elapsed().as_secs() < 2,
-            "py_uniq(150_000 unique shuffled list items) took {:?}",
+            start.elapsed().as_secs() < 10,
+            "py_uniq(600_000 unique shuffled list items) took {:?}",
             start.elapsed()
         );
 
