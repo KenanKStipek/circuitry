@@ -2696,6 +2696,12 @@ pub(crate) fn clear_pattern_cache() {
     COMPILED_PATTERN_CACHE.with(|c| c.borrow_mut().clear());
 }
 
+/// [`COMPILED_PATTERN_CACHE`]'s own value type -- named so the
+/// `thread_local!`'s own declaration stays under `clippy::type_
+/// complexity`, not because any caller needs to spell it out.
+type CompiledPatternCache =
+    std::collections::HashMap<(String, usize), Result<std::rc::Rc<fancy_regex::Regex>, String>>;
+
 thread_local! {
     /// [`pattern_is_match`]'s own compiled-`fancy_regex::Regex` cache,
     /// keyed by the *original* pattern text and the exact backtrack
@@ -2715,9 +2721,8 @@ thread_local! {
     /// plain `String` instead (`fancy_regex::Error` has no `Clone`),
     /// reused verbatim by [`pattern_is_match`]'s own wrapped message on
     /// every subsequent hit.
-    static COMPILED_PATTERN_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(String, usize), Result<std::rc::Rc<fancy_regex::Regex>, String>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    static COMPILED_PATTERN_CACHE: std::cell::RefCell<CompiledPatternCache> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// [`pattern_is_match`]'s own cached compile -- *pattern* is the

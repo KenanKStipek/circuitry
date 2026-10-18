@@ -19,7 +19,10 @@ fn check(schema_json: &str, instance_json: &str) -> PromptSchemaCheck {
 #[test]
 fn top_level_multiple_of_nan_is_a_well_formed_schema() {
     let schema = r#"{"multipleOf": NaN}"#;
-    assert_eq!(check(schema, r#""a string reply""#), PromptSchemaCheck::Valid);
+    assert_eq!(
+        check(schema, r#""a string reply""#),
+        PromptSchemaCheck::Valid
+    );
 }
 
 /// The same schema against a numeric instance: Python's own
@@ -66,7 +69,10 @@ fn top_level_multiple_of_negative_infinity_is_a_schema_error() {
 #[test]
 fn multiple_of_fraction_fallback_is_exact_for_an_int_instance_past_2_pow_53() {
     let schema = r#"{"multipleOf": 2.7997908555096566e-301}"#;
-    assert_eq!(check(schema, "1152921504606846978"), PromptSchemaCheck::Valid);
+    assert_eq!(
+        check(schema, "1152921504606846978"),
+        PromptSchemaCheck::Valid
+    );
 }
 
 /// The same divisor against the *rounded* value (`2^60`, what the old,
