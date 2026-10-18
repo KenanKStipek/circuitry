@@ -44,6 +44,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.message import Message
 from textual.widgets import Button, Input, Label, Select, Static
 
@@ -59,6 +60,7 @@ from .execution import (
     plan_from_orchestration,
     render_lines,
     render_text,
+    report_line_text,
     totals_for,
 )
 from .inspector import StateStore
@@ -80,7 +82,7 @@ from .launch import (
     placeholder_for,
 )
 from .screens import ViewScreen, ViewSpec
-from .theme import status_style
+from .theme import status_style, theme_colour
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from textual.events import Mount
@@ -99,6 +101,11 @@ CANCELLED = "Cancelled"
 
 #: Placeholder for the tree pane before an orchestration is picked.
 NO_TREE = "No orchestration picked — the effect tree appears here."
+
+#: The run log trims from the front past this many reports (#615), the
+#: same cap osi's run log uses, so a chatty run cannot grow the pane --
+#: or the full ``Text`` rebuilt from it -- without bound.
+MAX_LOG_LINES = 10_000
 
 #: Shown in place of the picker when discovery came back with nothing. An
 #: empty dropdown is a dead end; this says whose turn it is.
@@ -182,6 +189,11 @@ class RunScreen(ViewScreen):
         margin-top: 1;
     }
 
+    RunScreen #run-log {
+        height: auto;
+        margin-top: 1;
+    }
+
     RunScreen #run-footer {
         height: auto;
         margin-top: 1;
@@ -232,6 +244,16 @@ class RunScreen(ViewScreen):
             super().__init__()
             self.path = path
             self.node = node
+
+    class RunReport(Message):
+        """A ``report`` effect published (already a private copy) (#615)."""
+
+        def __init__(self, path: str, level: str, message: str, data: Any) -> None:
+            super().__init__()
+            self.path = path
+            self.level = level
+            self.message = message
+            self.data = data
 
     class RunFinished(Message):
         """The worker thread is done, successfully or not."""
@@ -323,6 +345,19 @@ class RunScreen(ViewScreen):
         #: The app's state store, captured on mount so a run can keep
         #: publishing into it after this screen is replaced.
         self._store: StateStore | None = None
+        #: Every report seen this run, in order, as ``(level, line)`` --
+        #: the run log (#615). ``line`` is already capped to
+        #: ``execution.REPORT_LINE_MAX_CHARS``.
+        self._report_log: list[tuple[str, str]] = []
+        #: The latest report's own log line, appended to whatever the
+        #: status line already says (#615) -- "" means none yet.
+        self._latest_report: str = ""
+        #: What :meth:`_set_status` was actually asked to say, kept apart
+        #: from :attr:`_status_text` (which also carries the latest report)
+        #: so a later report can be folded in without the caller re-stating
+        #: the run's own headline.
+        self._status_base = IDLE
+        self._status_class = ""
 
     # -- composition ---------------------------------------------------------
 
@@ -389,6 +424,7 @@ class RunScreen(ViewScreen):
     def _execution_pane(self) -> list[Any]:
         return [
             Static(NO_TREE, id="run-tree"),
+            Static("", id="run-log", classes="hidden"),
             Static(format_totals(Totals()), id="run-footer", classes="hidden"),
         ]
 
@@ -688,6 +724,7 @@ class RunScreen(ViewScreen):
             on_state=self._observe_state,
             on_effect=self._observe_effect,
             on_effect_start=self._observe_effect_start,
+            on_report=self._observe_report,
             on_finish=self._observe_finish,
             runner=self._runner,
         )
@@ -729,6 +766,9 @@ class RunScreen(ViewScreen):
     def _observe_effect(self, path: str, node: dict[str, Any]) -> None:
         self.post_message(self.RunEffectComplete(path, node))
 
+    def _observe_report(self, path: str, level: str, message: str, data: Any) -> None:
+        self.post_message(self.RunReport(path, level, message, data))
+
     def _observe_finish(self, result: RunResult) -> None:
         cancelled = self._session is not None and self._session.cancelled
         if self._store is not None:
@@ -760,6 +800,16 @@ class RunScreen(ViewScreen):
         # lands; this is what lets the tree mark them off as they finish.
         self._completed.add(message.path)
 
+    def on_run_screen_run_report(self, message: RunReport) -> None:
+        message.stop()
+        line = report_line_text(message.message)
+        self._report_log.append((message.level, line))
+        if len(self._report_log) > MAX_LOG_LINES:
+            del self._report_log[: len(self._report_log) - MAX_LOG_LINES]
+        self._latest_report = line
+        self._render_log()
+        self._render_status()
+
     def on_run_screen_run_finished(self, message: RunFinished) -> None:
         message.stop()
         self.last_result = message.result
@@ -787,7 +837,10 @@ class RunScreen(ViewScreen):
         self._started_at = None
         self._final_elapsed = None
         self._in_flight = False
+        self._report_log = []
+        self._latest_report = ""
         self._paint()
+        self._render_log()
 
     def _begin_execution(self) -> None:
         """Start the clock and the repaint tick for a launch."""
@@ -797,9 +850,12 @@ class RunScreen(ViewScreen):
         self._started_at = self._clock()
         self._final_elapsed = None
         self._in_flight = True
+        self._report_log = []
+        self._latest_report = ""
         if self._store is not None:
             self._store.begin(label=self._form.choice.label if self._form else "")
         self._paint()
+        self._render_log()
         self.reveal_execution()
         if self._repaint is None:
             self._repaint = self.set_interval(REFRESH_SECONDS, self._paint)
@@ -845,6 +901,21 @@ class RunScreen(ViewScreen):
         footer.update(format_totals(self._totals))
         footer.set_class(not lines, "hidden")
 
+    def _render_log(self) -> None:
+        """Redraw the run log from :attr:`_report_log` (#615).
+
+        Kept apart from :meth:`_paint`: a report arrives through its own
+        message, not a state snapshot, so it must not wait on the repaint
+        timer -- and an empty log stays hidden the same way the footer does
+        before there is anything to show.
+        """
+        if not self.is_mounted:
+            return
+        log = self.query_one("#run-log", Static)
+        variables = getattr(self.app, "theme_variables", None)
+        log.update(_log_text(self._report_log, variables) if self._report_log else Text(""))
+        log.set_class(not self._report_log, "hidden")
+
     def _elapsed(self) -> float | None:
         if self._final_elapsed is not None:
             return self._final_elapsed
@@ -873,6 +944,12 @@ class RunScreen(ViewScreen):
         if not self._exec_nodes:
             return NO_TREE
         return render_text(self._exec_nodes, width=self._tree_width)
+
+    @property
+    def log_text(self) -> str:
+        """The run log as plain text, one ``▸ <message>`` line per report
+        (#615), outliving the widget."""
+        return "\n".join(f"▸ {line}" for _level, line in self._report_log)
 
     @property
     def footer_text(self) -> str:
@@ -915,11 +992,34 @@ class RunScreen(ViewScreen):
         self.query_one("#run-cancel", Button).disabled = not running
 
     def _set_status(self, text: str, state_class: str = "") -> None:
+        self._status_base = text
+        self._status_class = state_class
+        self._render_status()
+
+    def _render_status(self) -> None:
+        """Redraw the status line: whatever :meth:`_set_status` last said,
+        plus the latest report's own line when there is one (#615) -- a
+        report updates this independently of the next status change, so
+        the line it adds is not lost until a later state update, launch or
+        finish overwrites the base text it rides on.
+        """
+        text = self._status_base
+        if self._latest_report:
+            text = f"{text}\n\u25b8 {self._latest_report}"
+        if not self.is_mounted:
+            self._status_text = text
+            return
         status = self.query_one("#run-status", Static)
         status.remove_class("-failed", "-done")
-        if state_class:
-            status.add_class(state_class)
-        status.update(text)
+        if self._status_class:
+            status.add_class(self._status_class)
+        # A report's message is free text (#615): escaping only that part
+        # keeps a literal bracket in it from being parsed as markup and
+        # crashing the app, without touching the status line's own markup.
+        markup = self._status_base
+        if self._latest_report:
+            markup = f"{markup}\n\u25b8 {escape(self._latest_report)}"
+        status.update(markup)
         self._status_text = text
 
     @property
@@ -956,6 +1056,22 @@ def _tree_text(lines: list[RenderLine], variables: Mapping[str, str] | None) -> 
         if line.gutter:
             text.append(line.gutter, style="dim")
         text.append(line.text, style=status_style(line.status, variables))
+    return text
+
+
+def _log_text(
+    entries: list[tuple[str, str]], variables: Mapping[str, str] | None
+) -> Text:
+    """The run log: one ``▸ <message>`` line per report, a ``warning``
+    one styled in the theme's own warning colour (#615) -- the same lookup
+    :func:`_tree_text` uses for ``RUNNING`` rows, rather than an ANSI name.
+    """
+    text = Text()
+    for index, (level, line) in enumerate(entries):
+        if index:
+            text.append("\n")
+        style = theme_colour("warning", variables) if level == "warning" else ""
+        text.append(f"▸ {line}", style=style)
     return text
 
 

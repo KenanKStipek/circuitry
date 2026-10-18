@@ -9,6 +9,7 @@ suited for after-the-fact analysis (grep, jq) and CI logs.
 Per-event lines look like:
     {"event": "run_start",   "run_id": "...", "started_at": ..., ...}
     {"event": "effect_complete", "run_id": "...", "effect_path": ..., ...}
+    {"event": "report", "run_id": "...", "path": ..., "level": ..., "message": ..., ...}
     {"event": "run_success", "run_id": "...", "ended_at": ...}
     {"event": "run_failure", "run_id": "...", "ended_at": ..., "error": ...}
 
@@ -17,8 +18,8 @@ Configuration:
      ``runtime_plugins.jsonl-file.path`` (default ``./circuitry-runs.jsonl``).
   2. Env var ``CIRCUITRY_JSONL_INCLUDE_EFFECTS`` /
      ``runtime_plugins.jsonl-file.include_effects`` (bool, default True):
-     when False, ``effect_complete`` events are omitted (only run-level
-     events are recorded).
+     when False, ``effect_complete`` events are omitted; ``report`` events
+     are written regardless, since a report is never counted as an effect.
 """
 
 from __future__ import annotations
@@ -109,6 +110,25 @@ class JsonlFilePlugin:
                 "error": meta.get("error"),
                 "completed_at": meta.get("completed_at") or _now_iso(),
             })
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state
+        with self._lock:
+            line = {
+                "event": "report",
+                "run_id": context.run_id,
+                "path": report.get("path"),
+                "level": report.get("level"),
+                "message": report.get("message"),
+                "timestamp": report.get("ts") or _now_iso(),
+            }
+            if "data_truncated" in report:
+                line["data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                line["data"] = report["data"]
+            self._append(line)
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state

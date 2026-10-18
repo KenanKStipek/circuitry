@@ -19,6 +19,7 @@ from circuitry.tui.execution import (
     format_totals,
     plan_from_orchestration,
     render_text,
+    report_line_text,
     sum_tokens,
     totals_for,
 )
@@ -509,3 +510,21 @@ def test_a_failed_child_effect_surfaces_its_error() -> None:
     assert use_node.status == FAILED
     (child,) = use_node.children
     assert (child.status, child.error) == (FAILED, "division by zero")
+
+
+# -- report log lines ---------------------------------------------------------
+
+
+def test_report_line_text_keeps_only_the_first_line() -> None:
+    assert report_line_text("first\nsecond") == "first"
+
+
+def test_report_line_text_caps_at_120_chars() -> None:
+    message = "x" * 150
+    line = report_line_text(message)
+    assert len(line) == 120
+    assert line == "x" * 120
+
+
+def test_report_line_text_of_an_empty_message_is_empty() -> None:
+    assert report_line_text("") == ""

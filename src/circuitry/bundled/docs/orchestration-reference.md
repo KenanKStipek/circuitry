@@ -1566,6 +1566,10 @@ A `{from: <path>}` leaf in `data` that doesn't resolve — a missing path, or on
 
 **Console.** `cof run` prints the report's own line only on an interactive terminal: never under `--quiet`/`--json`/`--tail`, and never when stdout is piped or redirected. `electricity` has no such flags, so it prints the line only when stdout is a TTY.
 
+**Runtime plugins.** Every loaded plugin that implements the optional `on_report` hook receives one call per report: `report`, a dict with the same fields as the `--events` line minus the envelope (`v`/`seq`/`ev`) — `ts`, `path`, `level`, `message`, then `data` or `data_truncated`. A plugin missing the hook is skipped, the same optionality guard as `on_effect_start`/`on_effect_complete`; a plugin that raises is logged and never fails the run. Reports reach plugins whether or not `--events` is set. See [Runtime Plugin Catalog](runtime-plugins.md) for which built-ins forward a report and how.
+
+**`cof tui`.** The Run view's log shows each report as `▸ <message>`, a `level: warning` one in the theme's warning colour — the message's first line only, capped at 120 characters. Its status line tracks the latest report alongside whatever it already shows.
+
 **Resume and dry run.** On `--resume`, a named report that already completed is skipped like any completed effect; an unnamed one runs again when reached. `--dry-run` renders and publishes reports normally — unlike most effects, there is nothing a dry run would skip, since a report never does anything besides render and publish.
 
 **Example — narrating a loop's progress, with a value other effects never see:**

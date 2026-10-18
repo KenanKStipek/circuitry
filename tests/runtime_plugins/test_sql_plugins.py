@@ -580,6 +580,14 @@ def test_clickhouse_lifecycle_uses_insert_and_alter(
     assert client.closed is True
 
 
+def test_clickhouse_does_not_implement_on_report(tmp_path: Path) -> None:
+    """ClickHouse's ``effect_results`` table holds effects, not reports
+    (#615): a report is never an effect, and the hook is absent here the
+    same way it is on every other storage plugin."""
+    plugin = clickhouse_mod.plugin()
+    assert not hasattr(plugin, "on_report")
+
+
 def test_clickhouse_url_parsed_to_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "CLICKHOUSE_URL", "https://alice:secret@ch.example:8443/analytics"

@@ -25,6 +25,7 @@ Optional:
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
 import threading
@@ -152,6 +153,27 @@ class HoneycombPlugin:
                 f"effect:{effect_path}", attributes=attrs
             ):
                 pass
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        """A span event named ``report`` on the run's own span (#615) --
+        the same schema :mod:`.opentelemetry`'s own ``on_report`` emits.
+        """
+        del state, context
+        with self._lock:
+            if self._run_span is None:
+                return
+            attrs: dict[str, Any] = {
+                "circuitry.path": report.get("path", ""),
+                "circuitry.level": report.get("level", ""),
+                "circuitry.message": report.get("message", ""),
+            }
+            if "data_truncated" in report:
+                attrs["circuitry.data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                attrs["circuitry.data"] = json.dumps(report["data"], default=str)
+            self._run_span.add_event("report", attributes=attrs)
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state, context

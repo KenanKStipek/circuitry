@@ -86,6 +86,49 @@ Embedded callers get the same two events without writing a plugin, via
 `(effect_path, effect_node)` callables, composed with (not in place of) any
 configured plugins.
 
+## Report hook (optional)
+
+A `report` effect (see `orchestration-reference.md`'s own `report` section)
+fires a third, optional hook — never `on_effect_start`/`on_effect_complete`,
+so a report never counts as work:
+
+```python
+    def on_report(self, *, state, context, report):
+        ...
+```
+
+Same optionality guard as `on_effect_start`/`on_effect_complete`: a plugin
+missing this method is skipped silently, and a plugin written before this
+hook existed keeps working untouched. `report` is a dict with the same
+fields as the `--events` report line minus its envelope (`v`/`seq`/`ev`):
+`ts` (ISO 8601 UTC, millisecond precision), `path`, `level`, `message`, then
+either `data` or `data_truncated` (the compact JSON's byte count, past
+16 KiB — see [Runtime Plugin Catalog](runtime-plugins.md)'s own note on the
+built-ins that forward it). A failure here is logged and isolated exactly
+like every other hook; a report must never fail a run.
+
+```python
+class MyPlugin:
+    name = "my-plugin"
+
+    def on_run_start(self, *, state, context):
+        ...
+
+    def on_run_success(self, *, state, context):
+        ...
+
+    def on_run_failure(self, *, state, context, error):
+        ...
+
+    def on_report(self, *, state, context, report):
+        print(f"[{report['level']}] {report['path']}: {report['message']}")
+```
+
+Embedded callers get the same event without writing a plugin, via
+`RunRequest.report_observer` — the same `(path, level, message, data)`
+callable `Store.fire_report` takes, composed with (not in place of) any
+configured plugins and with `--events`' own report line.
+
 ## Registration
 
 Configure plugin identifiers in `config.json`. An orchestration's own `plugins:` list only loads identifiers that config already lists in `plugins` or `enabled_plugins` (others are skipped with a warning), unless the document is trusted — a file you run by path, or any document once the host sets `trust_orchestration_runtime`:

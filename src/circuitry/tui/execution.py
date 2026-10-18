@@ -65,6 +65,7 @@ __all__ = [
     "plan_from_orchestration",
     "render_lines",
     "render_text",
+    "report_line_text",
     "score_column",
     "score_column_width",
     "sum_tokens",
@@ -88,6 +89,19 @@ GLYPHS: dict[str, str] = {
     FAILED: "✗",
     SKIPPED: "⊘",
 }
+
+#: A report's log line keeps only the message's first line, capped at this
+#: many characters -- the same rule osi's own run log applies (#617, #615).
+REPORT_LINE_MAX_CHARS = 120
+
+
+def report_line_text(message: str) -> str:
+    """What the run view's log shows for a report: its first line, capped
+    at :data:`REPORT_LINE_MAX_CHARS` (#615) -- the caller prepends the
+    glyph (see ``tui.run_view``'s own rendering)."""
+    first_line = message.splitlines()[0] if message else ""
+    return first_line[:REPORT_LINE_MAX_CHARS]
+
 
 #: Effect kinds that hold other effects.
 CONTAINER_KINDS = frozenset({"dynamic", "loop", "conditional", "reflector"})

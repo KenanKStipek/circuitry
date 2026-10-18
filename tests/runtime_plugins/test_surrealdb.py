@@ -186,6 +186,14 @@ def test_lifecycle_round_trip_writes_run_and_effect(
     assert client.closed is True
 
 
+def test_does_not_implement_on_report() -> None:
+    """SurrealDB's ``effects`` table holds effects, not reports (#615):
+    a report is never an effect, and the hook is absent here the same
+    way it is on every other storage plugin."""
+    plugin = surrealdb_mod.plugin()
+    assert not hasattr(plugin, "on_report")
+
+
 def test_failure_marks_runs_row(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

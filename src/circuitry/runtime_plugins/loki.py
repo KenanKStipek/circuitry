@@ -115,6 +115,32 @@ class LokiPlugin:
             },
         )
 
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state
+        if not self._url:
+            return
+        level = report.get("level") or "info"
+        payload = {
+            "event": "report",
+            "run_id": context.run_id,
+            "path": report.get("path"),
+            "level": level,
+            "message": report.get("message"),
+            "timestamp": report.get("ts") or _now_iso(),
+        }
+        if "data_truncated" in report:
+            payload["data_truncated"] = report["data_truncated"]
+        elif "data" in report:
+            payload["data"] = report["data"]
+        self._post(
+            event="report",
+            run_id=context.run_id,
+            level=level,
+            payload=payload,
+        )
+
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state
         if not self._url:
@@ -151,7 +177,12 @@ class LokiPlugin:
         return CheckResult(ok=ok, missing=missing)
 
     def _post(
-        self, *, event: str, run_id: str, payload: dict[str, Any]
+        self,
+        *,
+        event: str,
+        run_id: str,
+        payload: dict[str, Any],
+        level: str | None = None,
     ) -> None:
         with self._lock:
             try:
@@ -161,6 +192,11 @@ class LokiPlugin:
             labels = dict(self._static_labels)
             labels["event"] = event
             labels["run_id"] = run_id
+            if level is not None:
+                # Loki has no native severity concept of its own -- a
+                # ``level`` label is how a query filters a report's
+                # warnings from its info lines (#615).
+                labels["level"] = level
             stream = {
                 "stream": labels,
                 "values": [[_now_ns(), json.dumps(payload, default=str)]],
