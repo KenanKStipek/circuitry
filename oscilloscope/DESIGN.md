@@ -804,19 +804,22 @@ the full bottom width, two content lines:
     `provider` is `agent` (cof's own rule at `core/compiler.py`,
     trimmed and case-insensitive) is counted alongside running
     prompts (`2 prompts · 1 agent in flight`), with no token estimate
-    of its own — live agent token usage needs #612's own later lane.
-    Only `cof` can ever produce a running agent: electricity compiles
-    an `agent` effect's prompt file for parity with `cof check`, but
-    refuses to run the step itself (`electricity-bytecode`'s own
-    refusal set has no `agent` provider, and `electricity-tools`'
-    registry has no builder for one). With neither a prompt nor an
-    agent running, the line says so ("nothing in flight").
+    of its own — live agent token usage (#612) is a later lane. Only
+    `cof` can ever produce a running agent: electricity compiles an
+    `agent` effect's prompt file for parity with `cof check`, but
+    refuses to run the step itself -- `agent` is a known cof plugin
+    name (`electricity-bytecode`'s own `PLUGIN_NAMES`), and
+    `electricity-tools`' registry has no builder for it, so its
+    refusal walker refuses it with the preview marker, the same way
+    it refuses any other orchestration outside electricity's own
+    preview scope. With neither a prompt nor an agent running, the
+    line says so ("nothing in flight").
 
     This count also reads a running leaf's own `provider` from the
-    compiled plan, not state alone (review finding 4 on #613): a
-    tree-loop pass's tool child, like its prompt counterpart above,
-    never gets a state node of its own while `cof` runs it, so an
-    agent there would otherwise never be counted.
+    compiled plan, not state alone: a tree-loop pass's tool child,
+    like its prompt counterpart above, never gets a state node of its
+    own while `cof` runs it, so an agent there would otherwise never
+    be counted.
 
 **The token rule** (`model::node_tokens`): one node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to
