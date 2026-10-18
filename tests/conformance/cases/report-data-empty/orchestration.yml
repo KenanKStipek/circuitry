@@ -1,0 +1,5 @@
+effects:
+  - type: report
+    name: status
+    message: "hello"
+    data: {}

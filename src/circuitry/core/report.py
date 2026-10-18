@@ -96,7 +96,7 @@ class ReportRuntime:
                 else f"report at '{path}' message",
                 escape=False,
             )
-            if self.defn.data:
+            if self.defn.data is not None:
                 data = self._resolve_data(self.defn.data, ctx, path=path, field="data")
         except Exception as exc:
             logger.warning(
