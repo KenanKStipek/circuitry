@@ -396,13 +396,14 @@ pub(crate) fn execute_op<'a>(
                 // A report never fires `effect_start`/`effect_complete`,
                 // disabled or not (`core/disabled.py::write_disabled_node`'s
                 // own `fire_hooks=False` for a report) -- a disabled named
-                // report still writes its skip node above, just as silently.
+                // report still writes its skip node above, just as silently,
+                // and still reaches `on_write` like any other disabled effect.
                 let is_report = matches!(&op.kind, NodeKind::Leaf(leaf) if matches!(leaf.as_ref(), LeafKind::Report(_)));
                 if !is_report {
                     let instance = observer.effect_start(&effect_path);
                     observer.effect_complete(&effect_path, instance, None, true);
-                    observer.write();
                 }
+                observer.write();
             }
             return Ok(());
         }
