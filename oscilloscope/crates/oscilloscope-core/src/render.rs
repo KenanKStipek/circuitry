@@ -38,6 +38,11 @@ pub enum RowKind {
     Pass,
     Root,
     Unknown,
+    /// A [`crate::fold::fold_rows`] summary row standing in for two
+    /// or more merged quick steps -- never produced anywhere else, so
+    /// a caller can always tell a summary row apart from a real one
+    /// without parsing its label.
+    QuickSteps,
 }
 
 impl RowKind {
@@ -59,6 +64,7 @@ impl RowKind {
             RowKind::Pass => "pass",
             RowKind::Root => "root",
             RowKind::Unknown => "effect",
+            RowKind::QuickSteps => "quick steps",
         }
     }
 
@@ -180,6 +186,12 @@ pub struct Header {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Details {
     pub path: String,
+    /// The details pane's own title (issue #613's pass labels, review
+    /// finding 8: `pass 3 of 8 (iter_2)` belongs here, in the pane's
+    /// title, not in `plan_summary`'s `plan` line) -- `None` for
+    /// every path that isn't a loop pass, so the front end falls
+    /// back to its own plain " details ".
+    pub title: Option<String>,
     pub plan_summary: String,
     pub meta_summary: Vec<(String, String)>,
     pub error: Option<String>,
@@ -280,6 +292,14 @@ pub struct TokenBar {
 pub struct RenderState {
     pub header: Header,
     pub rows: Vec<Row>,
+    /// The same rows as `rows`, before `build_folded` ever folds them
+    /// (review finding 10 on #613) -- `build` alone sets this equal
+    /// to `rows` itself, since there is nothing to fold yet.
+    /// `changes::diff` reads this, not `rows`, so toggling folding or
+    /// expanding a quick-steps group -- which can make a row appear
+    /// or disappear from `rows` with nothing underneath it actually
+    /// having changed -- never highlights anything by itself.
+    pub unfolded_rows: Vec<Row>,
     pub state_rows: Vec<StateRow>,
     pub treemap: Vec<TreemapNode>,
     pub token_bar: TokenBar,
@@ -341,7 +361,7 @@ pub fn build(
         &statuses,
         &all_paths,
     );
-    let rows = build_rows(plan, &flat, &statuses, &all_paths, now);
+    let rows = build_rows(plan, &flat, &statuses, &all_paths, now, model);
     let state_rows = build_state_rows(&flat, &statuses, now);
     let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
     // A tree-loop pass's prompt, and
@@ -350,10 +370,11 @@ pub fn build(
     // which events confirm `Running` for a path `flat` has never even
     // heard of) can see them at all, so the running-prompt count reads
     // `rows`, not `flat` alone.
-    let token_bar = build_token_bar(&rows, &flat);
+    let token_bar = build_token_bar(&rows, &flat, plan);
 
     RenderState {
         header,
+        unfolded_rows: rows.clone(),
         rows,
         state_rows,
         treemap,
@@ -661,7 +682,14 @@ fn flatten_state_tree(
 /// by path and events alone — an inherent gap in what `--events`
 /// carries (DESIGN.md §3: "No effect kind"), not something this count
 /// can close.
-fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>) -> TokenBar {
+///
+/// Review finding 4 on #613: a tree-loop pass and a `use` child have
+/// no node in `flat` at all while they run on `cof` -- an `agent` tool
+/// there used to never be counted, since `meta.provider` only ever
+/// exists on a state node. `plan` is consulted as a fallback for
+/// exactly those rows: a leaf's own `provider` string, recorded by
+/// `PlanTree` from the compiled `ToolOp` itself.
+fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> TokenBar {
     let mut estimated_input = 0u64;
     let mut estimated_input_is_lower_bound = false;
     let mut prompts_running = 0u64;
@@ -684,11 +712,16 @@ fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>) -> TokenBar 
             // Leaf` carries no provider string of its own). Agents
             // get no token estimate (DESIGN.md/§613: "Agents get no
             // token estimate yet").
-            if node
+            let provider = node
                 .and_then(|n| n.meta.get("provider"))
                 .and_then(Value::as_str)
-                .is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"))
-            {
+                .map(str::to_string)
+                .or_else(|| {
+                    plan.match_path(&row.path)
+                        .and_then(|m| m.entries.first())
+                        .and_then(|e| e.provider.clone())
+                });
+            if provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("agent")) {
                 agents_running += 1;
             }
             continue;
@@ -728,32 +761,32 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
             }
         })
         .unwrap_or_default();
-    // Issue #613's pass labels: the details title shows both the
-    // orchestration pane's own `pass N of M` and the state pane's own
-    // real key (`iter_N`) together, for any path shaped like a loop
-    // pass -- regardless of whether the plan matched it to the
-    // enclosing loop's own entry (which knows nothing about "pass"
-    // at all) or not.
-    let plan_summary = {
+    // Issue #613's pass labels, review finding 8: the details
+    // *title* shows both the orchestration pane's own `pass N of M`
+    // and the state pane's own real key (`iter_N`) together, for any
+    // path shaped like a loop pass -- regardless of whether the plan
+    // matched it to the enclosing loop's own entry (which knows
+    // nothing about "pass" at all) or not. `plan_summary`'s own
+    // `plan` line is untouched by this -- it still shows the plan
+    // entry's own kind/name, same as for every other row.
+    let title = {
         let last = path.rsplit('.').next().unwrap_or(path);
-        match pass_index(last) {
-            Some(n) => {
-                let loop_path = path.rsplit_once('.').map(|(p, _)| p);
-                let total = loop_path
-                    .and_then(|p| flat.get(p))
-                    .and_then(|loop_node| loop_node.progress_total);
-                match total {
-                    Some(total) => format!("pass {} of {total} ({last})", n + 1),
-                    None => format!("pass {} ({last})", n + 1),
-                }
+        pass_index(last).map(|n| {
+            let loop_path = path.rsplit_once('.').map(|(p, _)| p);
+            let total = loop_path
+                .and_then(|p| flat.get(p))
+                .and_then(|loop_node| loop_node.progress_total);
+            match total {
+                Some(total) => format!("pass {} of {total} ({last})", n + 1),
+                None => format!("pass {} ({last})", n + 1),
             }
-            None => plan_summary,
-        }
+        })
     };
 
     let Some(node) = flat.get(path) else {
         return Details {
             path: path.to_string(),
+            title,
             plan_summary,
             ..Default::default()
         };
@@ -782,7 +815,14 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
         }
         if let Some(v) = meta.get(key) {
             if !v.is_null() {
-                meta_summary.push((key.to_string(), display_value(v)));
+                let text = if key == "tokens_sent" || key == "tokens_received" {
+                    v.as_u64()
+                        .map(crate::format::format_tokens)
+                        .unwrap_or_else(|| display_value(v))
+                } else {
+                    display_value(v)
+                };
+                meta_summary.push((key.to_string(), text));
             }
         }
     }
@@ -828,6 +868,7 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
 
     Details {
         path: path.to_string(),
+        title,
         plan_summary,
         meta_summary,
         error: node.error.clone(),
@@ -970,12 +1011,18 @@ fn build_header(
         .map(str::to_string)
         .or_else(|| earliest_created_at("prime", all_paths, flat));
     // Once the run has ended: `run_end`'s own `ts`, else the final
-    // state's own completion time (`prime.meta.completed_at`).
+    // state's own completion time (`prime.meta.completed_at`), else
+    // (review finding 7 on #613: an aborted run, with no `run_end` and
+    // no `prime` node ever completed, must not keep ticking `elapsed`
+    // up to `now` forever) the latest `completed_at` anywhere in
+    // state.
     let run_end_ts = run_end_ts_from_events.map(str::to_string).or_else(|| {
         if status == RunStatus::Running {
             None
         } else {
-            flat.get("prime").and_then(|n| n.completed_at.clone())
+            flat.get("prime")
+                .and_then(|n| n.completed_at.clone())
+                .or_else(|| latest_completed_at(all_paths, flat))
         }
     });
     // Every time in this frame comes from the same `now` (issue
@@ -1340,15 +1387,51 @@ fn pass_row_label(path: &str, flat: &BTreeMap<String, NodeMeta>) -> String {
     }
 }
 
+/// Review finding 7 on #613: a run that ended with no `run_end` event
+/// and no `prime.meta.completed_at` of its own (an abort -- the engine
+/// was killed) still has *some* node's own `completed_at` to fall back
+/// to, rather than leaving `elapsed` ticking up to `now` forever.
+fn latest_completed_at(
+    paths: &BTreeMap<String, ()>,
+    flat: &BTreeMap<String, NodeMeta>,
+) -> Option<String> {
+    crate::model::subtree_entries("prime", paths)
+        .filter_map(|(p, ())| flat.get(p.as_str()))
+        .filter_map(|node| node.completed_at.clone())
+        .filter_map(|ts| {
+            let parsed = chrono::DateTime::parse_from_rfc3339(&ts).ok()?;
+            Some((parsed, ts))
+        })
+        .max_by_key(|(parsed, _)| *parsed)
+        .map(|(_, ts)| ts)
+}
+
 fn earliest_created_at(
     prefix_path: &str,
     paths: &BTreeMap<String, ()>,
     flat: &BTreeMap<String, NodeMeta>,
 ) -> Option<String> {
+    // Compared as real instants when both sides parse as RFC-3339
+    // (review finding 11 on #613), not a blind raw-string compare --
+    // real `created_at`s all share one consistent format within a
+    // single engine's own state, so that promise is never actually
+    // load-bearing there, but this is the one place it's made
+    // explicit rather than assumed. Falls back to the raw strings'
+    // own order when either side doesn't parse, which keeps every
+    // existing fixture's own placeholder timestamps (`"t0"`, `"t1"`,
+    // ...) ordered exactly as before.
     crate::model::subtree_entries(prefix_path, paths)
         .filter_map(|(p, ())| flat.get(p.as_str()))
         .filter_map(|node| node.created_at.clone())
-        .min()
+        .min_by(|a, b| {
+            match (
+                chrono::DateTime::parse_from_rfc3339(a),
+                chrono::DateTime::parse_from_rfc3339(b),
+            ) {
+                (Ok(pa), Ok(pb)) => pa.cmp(&pb),
+                _ => a.cmp(b),
+            }
+        })
 }
 
 /// Every path `flat` or `statuses` has an entry for, plus `prime`
@@ -1374,6 +1457,7 @@ fn build_rows(
     statuses: &BTreeMap<String, RowStatus>,
     all_paths: &BTreeMap<String, ()>,
     now: &str,
+    model: &RunModel,
 ) -> Vec<Row> {
     let mut plan_order = BTreeMap::new();
     if plan.has_plan() {
@@ -1398,6 +1482,7 @@ fn build_rows(
         plan,
         &default_status,
         now,
+        model,
         &mut rows,
     );
     rows
@@ -1470,6 +1555,7 @@ fn walk_rows(
     plan: &PlanTree,
     default_status: &RowStatus,
     now: &str,
+    model: &RunModel,
     out: &mut Vec<Row>,
 ) {
     let node = flat.get(path);
@@ -1496,11 +1582,26 @@ fn walk_rows(
         }
         default_status.clone()
     });
-    let duration_s = node.and_then(|n| match (&n.created_at, &n.completed_at) {
-        (Some(start), Some(end)) => duration_seconds(start, end),
-        (Some(start), None) => duration_seconds(start, now),
-        _ => None,
-    });
+    // Review finding 6 on #613: a row no state node exists for yet
+    // (a tree-loop pass, or a `use` child) still has a start `ts`
+    // and, once finished, an end `ms` from `--events` alone -- used
+    // only when there is no node at all, so a node's own
+    // `created_at`/`completed_at` always wins once one exists.
+    let duration_s = node
+        .and_then(|n| match (&n.created_at, &n.completed_at) {
+            (Some(start), Some(end)) => duration_seconds(start, end),
+            (Some(start), None) => duration_seconds(start, now),
+            _ => None,
+        })
+        .or_else(|| match status.kind {
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => model
+                .event_started_at(path)
+                .and_then(|start| duration_seconds(start, now)),
+            StatusKind::Done | StatusKind::Failed | StatusKind::FailedHandled => {
+                model.event_duration_s(path)
+            }
+            _ => None,
+        });
     let loop_progress = node.and_then(|n| {
         n.progress_done.map(|done| LoopProgress {
             done,
@@ -1540,6 +1641,7 @@ fn walk_rows(
             plan,
             default_status,
             now,
+            model,
             out,
         );
     }
@@ -1745,6 +1847,48 @@ mod tests {
         assert_eq!(rendered.header.elapsed_s, 1572.0);
     }
 
+    /// Review finding 7 on #613: an aborted run (the engine was
+    /// killed, so no `run_end` event and `prime` never got its own
+    /// `completed_at`) must stop ticking `elapsed` at the latest real
+    /// completion anywhere in state, not keep counting up to `now`.
+    #[test]
+    fn header_elapsed_stops_at_the_latest_completion_when_a_run_aborts_with_no_run_end() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+        });
+        let state_json = json!({
+            "prime": {"value": null, "meta": {"created_at": "2026-01-01T11:04:58Z", "completed_at": null},
+                "a": {"value": "x", "meta": {"created_at": "2026-01-01T11:04:58Z", "completed_at": "2026-01-01T11:06:00Z"}}
+            }
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: true,
+                has_failure_reason: false,
+            },
+            0.0,
+            // `now` well after the abort -- elapsed must stop at the
+            // latest real completion (11:06:00), not keep ticking.
+            "2026-01-01T12:00:00Z",
+            &[],
+        );
+        assert_eq!(
+            rendered.header.run_end_ts.as_deref(),
+            Some("2026-01-01T11:06:00Z")
+        );
+        assert_eq!(rendered.header.elapsed_s, 62.0);
+    }
+
     #[test]
     fn a_tree_loops_passes_render_in_numeric_order_not_observation_order() {
         let plan = PlanTree::empty();
@@ -1818,8 +1962,11 @@ mod tests {
             .find(|r| r.path == "prime.each_tree.iter_2")
             .expect("pass row");
         assert_eq!(pass_row.label, "pass 3 of 8");
+        // Review finding 8: the pass label is the details pane's own
+        // *title*, not its `plan` line.
         let details = details_for("prime.each_tree.iter_2", &plan, Some(&state_json));
-        assert_eq!(details.plan_summary, "pass 3 of 8 (iter_2)");
+        assert_eq!(details.title.as_deref(), Some("pass 3 of 8 (iter_2)"));
+        assert_eq!(details.plan_summary, "");
     }
 
     fn named_loop_with_one_leaf_program() -> electricity_bytecode::Program {
@@ -3133,8 +3280,11 @@ mod tests {
     /// `provider` is `agent` (cof's own rule, trimmed and
     /// case-insensitive) counts in the token bar's in-flight line
     /// alongside running prompts, but gets no token estimate of its
-    /// own. Both engines write `meta.provider` on a running tool node
-    /// the same way (DESIGN.md §1.2), so one state shape covers both.
+    /// own. Only `cof` can ever produce a running agent -- electricity
+    /// refuses the `agent` provider outright (DESIGN.md) -- but the
+    /// state shape a running tool node writes is otherwise identical
+    /// on both engines, so this one fixture covers the shape either
+    /// would write.
     #[test]
     fn running_agent_tool_steps_are_counted_as_agents_in_flight_with_no_token_estimate() {
         let plan = PlanTree::empty();
@@ -3240,6 +3390,235 @@ mod tests {
             adapter: None,
             model: None,
         }
+    }
+
+    /// Review finding 4 on #613: a tree-loop pass's tool child, same
+    /// as its prompt counterpart above, has no node in `flat` at all
+    /// while `cof` runs it -- the token bar's "agents in flight" count
+    /// must still find an `agent` leaf's own `provider` from the plan.
+    fn named_loop_with_one_tool_program(provider: &str) -> electricity_bytecode::Program {
+        named_loop_with_tool_children_program(&[("work", provider)])
+    }
+
+    /// `named_loop_with_one_tool_program`, generalised to any number
+    /// of tool children in the loop's own body -- review finding 6 on
+    /// #613 needs two or more, to check quick-steps folding for rows
+    /// known only from `--events`.
+    fn named_loop_with_tool_children_program(
+        children: &[(&str, &str)],
+    ) -> electricity_bytecode::Program {
+        use electricity_bytecode::EffectPath;
+        use electricity_bytecode::{
+            LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode, Program,
+            Region, ToolOp,
+        };
+
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let ops = children
+            .iter()
+            .map(|(name, provider)| Op {
+                path: pass_path.clone().push_name(*name),
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                    provider: provider.to_string(),
+                    params: ParamNode::Literal(electricity_value::Value::None),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: Default::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            })
+            .collect();
+        Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: loop_path,
+                        name: Some("fan".to_string()),
+                        kind: NodeKind::Control(Region::Loop {
+                            name: Some("fan".to_string()),
+                            spec: LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block { ops, overlay: true }),
+                            flow: LoopFlow::Tree,
+                            max_concurrency: None,
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
+    /// Review finding 4: a running agent known only from `--events`
+    /// (no state node at all, as `cof` writes a tree-loop pass) is
+    /// still counted in flight, from the plan's own `ToolOp.provider`.
+    #[test]
+    fn a_running_agent_known_only_from_events_is_still_counted_in_flight() {
+        let plan = PlanTree::from_program(&named_loop_with_one_tool_program("agent"));
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "t0".to_string(),
+            id: Some(1),
+            path: "prime.fan.iter_0.work".to_string(),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.agents_running, 1);
+        assert_eq!(rendered.token_bar.prompts_running, 0);
+        assert_eq!(rendered.token_bar.estimated_input, 0);
+    }
+
+    /// A running tool known only from events, whose plan `provider`
+    /// isn't `agent`, is counted as neither a prompt nor an agent.
+    #[test]
+    fn a_running_non_agent_tool_known_only_from_events_is_not_counted_in_flight() {
+        let plan = PlanTree::from_program(&named_loop_with_one_tool_program("shell"));
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "t0".to_string(),
+            id: Some(1),
+            path: "prime.fan.iter_0.work".to_string(),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.agents_running, 0);
+        assert_eq!(rendered.token_bar.prompts_running, 0);
+    }
+
+    /// Review finding 6 on #613: a row with no state node at all (a
+    /// tree-loop pass's tool child) still shows its own elapsed time,
+    /// from `RunModel`'s own record of the matching `start` event's
+    /// `ts` -- `now`, not `node.created_at`, since there is no node.
+    #[test]
+    fn a_running_row_known_only_from_events_shows_its_own_elapsed_time() {
+        let plan = PlanTree::from_program(&named_loop_with_one_tool_program("shell"));
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T11:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.fan.iter_0.work".to_string(),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T11:00:05Z",
+            &[],
+        );
+        let row = rendered
+            .rows
+            .iter()
+            .find(|r| r.path == "prime.fan.iter_0.work")
+            .expect("row should exist");
+        assert_eq!(row.duration_s, Some(5.0));
+    }
+
+    /// Review finding 6: two or more finished tool steps known only
+    /// from `--events` -- no state node for either -- still carry a
+    /// real duration (from `RunModel`'s own record of each one's
+    /// matching `end` event `ms`), so they fold into one quick-steps
+    /// row by the same rule as any other row.
+    #[test]
+    fn finished_rows_known_only_from_events_fold_into_quick_steps() {
+        let plan = PlanTree::from_program(&named_loop_with_tool_children_program(&[
+            ("q1", "shell"),
+            ("q2", "shell"),
+        ]));
+        let mut model = RunModel::new();
+        for (name, ms) in [("q1", 300u64), ("q2", 200u64)] {
+            let path = format!("prime.fan.iter_0.{name}");
+            model.observe_event(&Event::Start {
+                ts: "2026-01-01T11:00:00Z".to_string(),
+                id: Some(1),
+                path: path.clone(),
+            });
+            model.observe_event(&Event::End {
+                ts: "2026-01-01T11:00:01Z".to_string(),
+                id: Some(1),
+                path,
+                ok: true,
+                ms: Some(ms),
+                error: None,
+            });
+        }
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rendered = build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T11:00:05Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        let summary = rendered
+            .rows
+            .iter()
+            .find(|r| r.kind == RowKind::QuickSteps)
+            .expect("the two finished event-only steps should fold into one summary row");
+        assert_eq!(summary.label, "2 quick steps");
+        assert!((summary.duration_s.unwrap() - 0.5).abs() < 1e-9);
     }
 
     /// A tree-loop pass's prompt is
@@ -3435,6 +3814,30 @@ mod tests {
         assert!(
             fold_elapsed < std::time::Duration::from_millis(500),
             "folding a 2000-row tree took {fold_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
+
+        // Review finding 10 on #613: `build_folded` itself -- `build`
+        // plus folding, the path the TUI actually calls every redraw
+        // -- must stay linear too, not just `fold_rows` in isolation.
+        let build_folded_start = std::time::Instant::now();
+        let built_and_folded = build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            10.0,
+            "t2001",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        let build_folded_elapsed = build_folded_start.elapsed();
+        assert_eq!(built_and_folded.rows.len(), rendered.rows.len());
+        assert!(
+            build_folded_elapsed < std::time::Duration::from_millis(500),
+            "build_folded on a 2000-row tree took {build_folded_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
     }
 }

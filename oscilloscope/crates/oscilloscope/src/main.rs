@@ -1080,7 +1080,7 @@ fn format_log_line(clock: &mut Clock, ts: Option<&str>, text: &str) -> String {
 /// loop while nothing was happening at all. The header's own elapsed
 /// time is the one field that's always moving regardless, so a
 /// rebuild is still forced at least this often even with nothing
-/// else dirty, same as `--log`'s own `mm:ss.s` prefix.
+/// else dirty, same as `--log`'s own clock-time prefix.
 const RENDER_REBUILD_INTERVAL: Duration = Duration::from_secs(1);
 
 /// `osi <doc>`'s own TUI loop (DESIGN.md §6.3): supervises the engine

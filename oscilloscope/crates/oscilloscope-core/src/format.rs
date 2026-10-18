@@ -27,19 +27,36 @@ pub fn format_duration(secs: f64) -> String {
     if tenths < 600 {
         return format!("{}.{}s", tenths / 10, tenths % 10);
     }
-    let total_seconds = (tenths + 5) / 10;
+    // Rounded directly from `secs`, not from `tenths`: rounding the
+    // already-rounded tenths again would round twice (61.46s would
+    // show `1m02s` instead of the correct `1m01s`).
+    let total_seconds = secs.round() as u64;
     if total_seconds < 3600 {
         let minutes = total_seconds / 60;
         let seconds = total_seconds % 60;
         return format!("{minutes}m{seconds:02}s");
     }
     if total_seconds < 86_400 {
-        let hours = total_seconds / 3600;
-        let minutes = (total_seconds % 3600) / 60;
-        return format!("{hours}h{minutes:02}m");
+        let mut hours = total_seconds / 3600;
+        // Rounded to the nearest minute, not truncated: a leftover
+        // 30s (7170s -> 1h59m30s) would otherwise just vanish,
+        // breaking this unit's own carry rule.
+        let mut minutes = ((total_seconds % 3600) as f64 / 60.0).round() as u64;
+        if minutes == 60 {
+            hours += 1;
+            minutes = 0;
+        }
+        if hours < 24 {
+            return format!("{hours}h{minutes:02}m");
+        }
+        return format!("1d{minutes:02}h", minutes = hours - 24);
     }
-    let days = total_seconds / 86_400;
-    let hours = (total_seconds % 86_400) / 3600;
+    let mut days = total_seconds / 86_400;
+    let mut hours = ((total_seconds % 86_400) as f64 / 3600.0).round() as u64;
+    if hours == 24 {
+        days += 1;
+        hours = 0;
+    }
     format!("{days}d{hours:02}h")
 }
 
@@ -157,6 +174,33 @@ mod tests {
     }
 
     #[test]
+    fn duration_rounds_leftover_seconds_into_the_next_minute() {
+        // 7170s is 1h59m30s; truncating the leftover 30s would show
+        // `1h59m` instead of carrying it into `2h00m`.
+        assert_eq!(format_duration(7170.0), "2h00m");
+    }
+
+    #[test]
+    fn duration_rounds_leftover_minutes_into_a_day() {
+        // 86370s is 23h59m30s; rounding the leftover minutes up to a
+        // full 24h carries into the next day rather than showing
+        // `24h00m`.
+        assert_eq!(format_duration(86_370.0), "1d00h");
+    }
+
+    #[test]
+    fn duration_rounds_only_once() {
+        // 61.46 rounds to 61s directly; rounding the tenths (615)
+        // again would give 62s and show `1m02s` instead of `1m01s`.
+        assert_eq!(format_duration(61.46), "1m01s");
+    }
+
+    #[test]
+    fn duration_just_under_a_minute() {
+        assert_eq!(format_duration(59.94), "59.9s");
+    }
+
+    #[test]
     fn duration_carries_hours_into_days() {
         assert_eq!(format_duration(86_399.6), "1d00h");
     }
@@ -184,6 +228,11 @@ mod tests {
     fn tokens_carry_into_the_next_unit() {
         assert_eq!(format_tokens(999_960), "1.0 Mt");
         assert_eq!(format_tokens(999_960_000), "1.0 Gt");
+    }
+
+    #[test]
+    fn tokens_round_up_to_a_whole_unit() {
+        assert_eq!(format_tokens(99_950), "100 kt");
     }
 
     #[test]

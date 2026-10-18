@@ -12,7 +12,11 @@
 //! `osi watch` attaching to a finished run"). Nothing here ever looks
 //! at `elapsed_s`, selection, scrolling, the filter or collapsed
 //! sets, or a resize — none of those are part of `RenderState` at
-//! all, so they can never appear as a change by construction.
+//! all, so they can never appear as a change by construction. Folding
+//! (issue #613's `z`/⏎) *is* part of `RenderState` -- it is what
+//! `rows` itself shows -- but the row diff below reads `unfolded_rows`
+//! instead, so toggling it, same as every other view-only state, can
+//! never appear as a change either.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -29,9 +33,17 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
 
     let mut changed = Vec::new();
 
-    let old_rows: HashMap<&str, &crate::render::Row> =
-        old.rows.iter().map(|r| (r.path.as_str(), r)).collect();
-    for row in &new.rows {
+    // Review finding 10 on #613: diffed from `unfolded_rows`, not
+    // `rows` -- folding or expanding a quick-steps group can make a
+    // row appear in `rows` (or vanish from it) with nothing
+    // underneath it actually having changed, which `z`/⏎ must never
+    // highlight.
+    let old_rows: HashMap<&str, &crate::render::Row> = old
+        .unfolded_rows
+        .iter()
+        .map(|r| (r.path.as_str(), r))
+        .collect();
+    for row in &new.unfolded_rows {
         match old_rows.get(row.path.as_str()) {
             None => changed.push(format!("row:{}", row.path)),
             Some(prev) => {
@@ -229,6 +241,64 @@ mod tests {
             "the fixture should actually exercise a changing elapsed/ETA"
         );
         assert_eq!(diff(Some(&old), &new), Vec::<String>::new());
+    }
+
+    /// Review finding 10 on #613: toggling folding, or expanding a
+    /// quick-steps group, can make a row appear in `rows` (or vanish
+    /// from it) with nothing underneath it actually having changed --
+    /// a breadcrumb or quick-steps summary merging real rows away, or
+    /// un-merging them again. None of that is ever a reported change,
+    /// even though `rows` itself genuinely differs between the two
+    /// observations.
+    #[test]
+    fn folding_and_expanding_a_quick_steps_group_never_counts_as_a_change() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "review": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z"},
+                "q1": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.3Z", "provider": "shell"}},
+                "q2": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00.3Z", "completed_at": "2026-01-01T00:00:00.5Z", "provider": "shell"}}
+            }
+        }});
+        let plan = PlanTree::empty();
+        let now = "2026-01-01T00:00:01Z";
+        let folded = {
+            let mut model = RunModel::new();
+            crate::render::build_folded(
+                "do-thing.yml",
+                "cof",
+                &plan,
+                &mut model,
+                Some(&state),
+                ProcessState::Running,
+                1.0,
+                now,
+                &[],
+                true,
+                &std::collections::BTreeSet::new(),
+            )
+        };
+        let unfolded = {
+            let mut model = RunModel::new();
+            crate::render::build_folded(
+                "do-thing.yml",
+                "cof",
+                &plan,
+                &mut model,
+                Some(&state),
+                ProcessState::Running,
+                1.0,
+                now,
+                &[],
+                false,
+                &std::collections::BTreeSet::new(),
+            )
+        };
+        assert_ne!(
+            folded.rows.len(),
+            unfolded.rows.len(),
+            "the fixture should actually exercise folding changing `rows`"
+        );
+        assert_eq!(diff(Some(&folded), &unfolded), Vec::<String>::new());
+        assert_eq!(diff(Some(&unfolded), &folded), Vec::<String>::new());
     }
 
     #[test]

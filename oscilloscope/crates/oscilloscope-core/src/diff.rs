@@ -60,7 +60,7 @@ pub fn sort_log_lines(lines: &mut [LogLine]) {
 /// §2.4: "Values are never logged in full: one line, with a character
 /// cap") — a multi-line error message or a tool's multi-line stdout
 /// used to flow straight into the log otherwise, breaking the
-/// mm:ss.s-per-line shape every other entry keeps (F13).
+/// one-line-per-entry shape every other entry keeps (F13).
 fn truncate_chars(s: &str, max: usize) -> String {
     let first_line = s.split_once('\n').map_or(s, |(line, _)| line);
     if first_line.chars().count() <= max {
@@ -605,7 +605,7 @@ impl Differ {
                 }
                 if *ok {
                     let duration = ms
-                        .map(|m| format!("{:.1}s", m as f64 / 1000.0))
+                        .map(|m| crate::format::format_duration(m as f64 / 1000.0))
                         .unwrap_or_else(|| "?".to_string());
                     if let Some(node) = self.known_node(path) {
                         return vec![LogLine {
@@ -687,7 +687,7 @@ impl Differ {
             .as_ref()
             .and_then(|t| t.get("wall_time_s"))
             .and_then(Value::as_f64)
-            .map(|w| format!("  {w:.1}s"))
+            .map(|w| format!("  {}", crate::format::format_duration(w)))
             .unwrap_or_default();
         let status_text = match ended_outcome(state) {
             EndedOutcome::Ok => "ok".to_string(),
@@ -748,7 +748,7 @@ impl Differ {
                         {
                             let eta = node
                                 .progress_eta_s
-                                .map(|e| format!("{e:.1}s"))
+                                .map(crate::format::format_duration)
                                 .unwrap_or_else(|| "?".to_string());
                             lines.push(LogLine {
                                 ts: node
@@ -862,7 +862,7 @@ impl Differ {
                         {
                             let eta = node
                                 .progress_eta_s
-                                .map(|e| format!("{e:.1}s"))
+                                .map(crate::format::format_duration)
                                 .unwrap_or_else(|| "?".to_string());
                             lines.push(LogLine {
                                 ts: node
@@ -957,7 +957,8 @@ mod tests {
     #[test]
     fn truncate_chars_cuts_at_the_first_newline_too() {
         // F13: a multi-line error or tool stdout must not flow into
-        // the log as several lines, each breaking the mm:ss.s shape.
+        // the log as several lines, each breaking the one-line-per-
+        // entry shape.
         assert_eq!(truncate_chars("line one\nline two", 120), "line one");
         assert_eq!(truncate_chars("short", 120), "short");
     }
@@ -2494,6 +2495,46 @@ mod tests {
         assert_eq!(end.len(), 1, "{end:?}");
         assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
         assert!(!differ.has_pending_ends());
+    }
+
+    /// #613's own review: an `end` event's `ms` over a minute must go
+    /// through `format_duration` like every other duration, not the
+    /// log's own `{:.1}s` -- a 47-minute, 57.3s step used to print
+    /// the un-carried `2877.3s` here.
+    #[test]
+    fn end_event_duration_over_a_minute_carries_into_minutes() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.slow".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let completed = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "slow": {"value": "done", "meta": {"created_at": "t0", "completed_at": "t1"}}
+        }});
+        assert!(differ.diff(&completed, &plan).is_empty());
+
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.slow".to_string(),
+                ok: true,
+                ms: Some(2_877_300),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        assert_eq!(end.len(), 1, "{end:?}");
+        assert_eq!(end[0].text, "✓ prime.slow  47m57s  ok");
     }
 
     /// #545, review finding 7: the `preview` fallback in `known_node`

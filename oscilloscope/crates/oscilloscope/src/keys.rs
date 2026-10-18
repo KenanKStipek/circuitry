@@ -280,11 +280,26 @@ impl App {
             KeyCode::Home | KeyCode::Char('g') => self.jump(rows, state_rows, true),
             KeyCode::End | KeyCode::Char('G') => self.jump(rows, state_rows, false),
             KeyCode::Left if self.pane == Pane::Tree => {
-                if let Some(path) = &self.selected_path {
+                if let Some(path) = self.selected_path.clone() {
                     self.collapsed.insert(path.clone());
                     // Issue #613: the same key re-folds a quick-steps
-                    // group ⏎ had expanded in place.
-                    self.expanded_quick_steps.remove(path);
+                    // group ⏎ had expanded in place -- from any of its
+                    // steps (review finding 10), not only its own
+                    // representative (`expanded_quick_steps`' only key):
+                    // scan backward over same-depth rows from the
+                    // selected one until the representative's own row
+                    // is found.
+                    if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
+                        let depth = rows[selected_idx].depth;
+                        for row in rows[..=selected_idx].iter().rev() {
+                            if row.depth != depth {
+                                break;
+                            }
+                            if self.expanded_quick_steps.remove(&row.path) {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             KeyCode::Right if self.pane == Pane::Tree => {
@@ -293,12 +308,12 @@ impl App {
                 }
             }
             // Issue #613: ⏎ on a quick-steps summary row expands it
-            // in place -- recognised from the row's own label, since
-            // `App` otherwise never looks at row content at all.
+            // in place -- recognised from the row's own `RowKind`,
+            // not by parsing its label.
             KeyCode::Enter if self.pane == Pane::Tree => {
                 if let Some(path) = &self.selected_path {
                     if rows.iter().any(|r| {
-                        r.path == *path && oscilloscope_core::fold::is_quick_steps_label(&r.label)
+                        r.path == *path && r.kind == oscilloscope_core::render::RowKind::QuickSteps
                     }) {
                         self.expanded_quick_steps.insert(path.clone());
                     }
@@ -718,12 +733,33 @@ mod tests {
     fn enter_expands_a_quick_steps_row_and_left_folds_it_again() {
         let mut quick_steps_row = row("prime.a", 1, StatusKind::Done);
         quick_steps_row.label = "3 quick steps".to_string();
+        quick_steps_row.kind = RowKind::QuickSteps;
         let rows = [quick_steps_row];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.selected_path = Some("prime.a".to_string());
         app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
         assert!(app.expanded_quick_steps.contains("prime.a"));
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        assert!(!app.expanded_quick_steps.contains("prime.a"));
+    }
+
+    /// Review finding 10 on #613: ← re-folds an expanded group from
+    /// any of its steps, not only from its own representative (the
+    /// first one, and the only path `expanded_quick_steps` ever
+    /// stores) -- selecting the *second* exploded step and pressing
+    /// ← must still re-fold the whole group.
+    #[test]
+    fn left_re_folds_an_expanded_quick_steps_group_from_any_of_its_steps() {
+        let rows = [
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Done),
+            row("prime.c", 1, StatusKind::Done),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.expanded_quick_steps.insert("prime.a".to_string());
+        app.selected_path = Some("prime.b".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
         assert!(!app.expanded_quick_steps.contains("prime.a"));
     }

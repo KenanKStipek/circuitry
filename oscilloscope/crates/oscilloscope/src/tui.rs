@@ -687,10 +687,17 @@ fn draw_details(
     if app.details_scroll > max_scroll {
         app.details_scroll = max_scroll;
     }
+    // Review finding 8 on #613: a loop pass's own `pass N of M
+    // (iter_N)` belongs in this title, not the `plan` line
+    // `details_lines` draws inside the pane.
+    let title = match details.and_then(|d| d.title.as_deref()) {
+        Some(title) => format!(" {title} "),
+        None => " details ".to_string(),
+    };
     let paragraph = paragraph.scroll((app.details_scroll as u16, 0)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" details ")
+            .title(title)
             .border_style(border_style),
     );
     frame.render_widget(paragraph, area);
@@ -1801,7 +1808,7 @@ mod golden_tests {
     /// [`snapshot`], with the log pane given real lines (review
     /// finding 3 on #458's comment 3: every golden here left it
     /// empty) -- `snapshot` itself is just this with none. `log_lines`
-    /// is the plain, already-formatted `mm:ss.s text` strings `draw`
+    /// is the plain, already-formatted `HH:MM:SS text` strings `draw`
     /// itself takes (`do_run`'s own `log_lines: Vec<String>`), not
     /// `render::build`'s own `log: &[LogLine]` -- the TUI's log pane
     /// never reads the latter.
@@ -1874,11 +1881,14 @@ mod golden_tests {
     }
 
     /// Issue #613's folding, drawn end to end through `render::
-    /// build_folded`: `review` and `fix` each have exactly one child
-    /// and fold into one breadcrumb row with the running `agent`'s
-    /// own path (so its `6.8s` elapsed and `Running` status are the
-    /// breadcrumb's own); three sub-second finished tool steps fold
-    /// into one `3 quick steps` row.
+    /// build_folded`: `fix` and its one child `agent` are both still
+    /// `Running`, so they fold into one breadcrumb row with the
+    /// running `agent`'s own path (so its `6.8s` elapsed and
+    /// `Running` status are the breadcrumb's own); `review`, already
+    /// `Done`, does not fold with its still-running child `fix` --
+    /// review finding 2 on #613 -- so both rows stay. Three
+    /// sub-second finished tool steps fold into one `3 quick steps`
+    /// row.
     #[test]
     fn folding_breadcrumbs_and_quick_steps() {
         let plan = PlanTree::empty();
@@ -2039,8 +2049,8 @@ mod golden_tests {
             "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
         }});
         let log_lines = vec![
-            "00:00.0 ▶ prime.a  tool".to_string(),
-            "00:00.5 ✓ prime.a  0.5s  ok".to_string(),
+            "11:04:58 ▶ prime.a  tool".to_string(),
+            "11:04:58 ✓ prime.a  0.5s  ok".to_string(),
         ];
         let text = snapshot_with_log(
             &plan,
@@ -2743,6 +2753,7 @@ mod highlight_tests {
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
             },
+            unfolded_rows: Vec::new(),
             rows: vec![Row {
                 path: "prime.a".to_string(),
                 depth: 1,

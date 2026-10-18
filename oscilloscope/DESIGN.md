@@ -805,9 +805,18 @@ the full bottom width, two content lines:
     trimmed and case-insensitive) is counted alongside running
     prompts (`2 prompts · 1 agent in flight`), with no token estimate
     of its own — live agent token usage needs #612's own later lane.
-    Both `cof` and electricity (`compile/leaves.rs`) recognise
-    `provider: agent`. With neither a prompt nor an agent running, the
-    line says so ("nothing in flight").
+    Only `cof` can ever produce a running agent: electricity compiles
+    an `agent` effect's prompt file for parity with `cof check`, but
+    refuses to run the step itself (`electricity-bytecode`'s own
+    refusal set has no `agent` provider, and `electricity-tools`'
+    registry has no builder for one). With neither a prompt nor an
+    agent running, the line says so ("nothing in flight").
+
+    This count also reads a running leaf's own `provider` from the
+    compiled plan, not state alone (review finding 4 on #613): a
+    tree-loop pass's tool child, like its prompt counterpart above,
+    never gets a state node of its own while `cof` runs it, so an
+    agent there would otherwise never be counted.
 
 **The token rule** (`model::node_tokens`): one node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to
