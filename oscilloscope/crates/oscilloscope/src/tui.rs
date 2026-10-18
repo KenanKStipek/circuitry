@@ -8,7 +8,7 @@
 use std::time::Instant;
 
 use oscilloscope_core::model::{RunStatus, StatusKind};
-use oscilloscope_core::render::{Details, Header, Row, RowKind, StateRow, TokenBar};
+use oscilloscope_core::render::{Details, Header, Row, StateRow, TokenBar};
 use oscilloscope_core::treemap::TreemapNode;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -348,7 +348,16 @@ fn draw_header(
     // wrapping it. The fixed-width part of the line is measured
     // first, so the document path truncates itself (keeping its own
     // tail, where the filename is) instead.
-    let mut suffix_len = 2
+    // The icon widening by one column (issue #535) left a long
+    // document path able to push `effects`/the token counts past the
+    // header's own right edge with nothing left to draw them at all
+    // -- `Paragraph` clips a line that doesn't fit rather than
+    // wrapping it. The fixed part of the line (everything but the
+    // document path and the trailing run-id/report slot, #610's R3:
+    // "status, elapsed, effects and tokens are kept") is measured
+    // first, so the document path truncates itself (keeping its own
+    // tail, where the filename is) before anything else does.
+    let fixed_len = 2
         + header.engine.chars().count()
         + 2
         + status_text.chars().count()
@@ -369,17 +378,67 @@ fn draw_header(
         .as_deref()
         .and_then(|ts| oscilloscope_core::format::format_clock_time(ts, ctx.zone))
         .map(|hhmmss| hhmmss[..5].to_string());
+    let mut fixed_len = fixed_len;
     if let Some(eta) = &eta_clock {
-        suffix_len += 2 + "ETA ~".len() + eta.chars().count();
-    }
-    if let Some(run_id) = &header.run_id {
-        suffix_len += 2 + run_id.chars().count();
+        fixed_len += 2 + "ETA ~".len() + eta.chars().count();
     }
     if let Some(name) = ctx.theme_banner {
-        suffix_len += 2 + "theme: ".len() + name.chars().count();
+        fixed_len += 2 + "theme: ".len() + name.chars().count();
     }
     let available = area.width.saturating_sub(2) as usize;
-    let doc_budget = available.saturating_sub(suffix_len).max(1);
+    let leftover = available.saturating_sub(fixed_len);
+
+    // #610's R3: once a report has arrived, it takes the run id's own
+    // slot at the end of the line (`report_text`, `None` means "show
+    // `run_id` there instead, exactly as before any report"). The
+    // document path always truncates before the report message does
+    // -- `doc_budget` is computed assuming the report's full text
+    // fits, and only drops to its own floor of 1 when even that
+    // doesn't leave room, at which point the leftover is given to the
+    // report text instead, truncated with `…`, or collapsed to a
+    // bare `▸` once fewer than 8 columns remain for it at all.
+    let (doc_budget, run_id_text, report_text, report_style) = match &header.latest_report {
+        None => {
+            let run_id_len = header
+                .run_id
+                .as_ref()
+                .map(|r| 2 + r.chars().count())
+                .unwrap_or(0);
+            (
+                leftover.saturating_sub(run_id_len).max(1),
+                header.run_id.clone(),
+                None,
+                Style::default(),
+            )
+        }
+        Some(report) => {
+            let style = match report.level {
+                oscilloscope_core::observe::ReportLevel::Warning => {
+                    Style::default().fg(ctx.theme.warning)
+                }
+                oscilloscope_core::observe::ReportLevel::Info => Style::default(),
+            };
+            let prefix = match report.level {
+                oscilloscope_core::observe::ReportLevel::Warning => "warning: ",
+                oscilloscope_core::observe::ReportLevel::Info => "",
+            };
+            let full_text = format!("▸ {prefix}{}", report.message);
+            let full_len = 2 + full_text.chars().count();
+            if leftover > full_len {
+                (leftover - full_len, None, Some(full_text), style)
+            } else {
+                let doc_budget = 1;
+                let remaining = leftover.saturating_sub(2 + doc_budget);
+                let report_budget = remaining.saturating_sub(2);
+                let text = if report_budget < 8 {
+                    "▸".to_string()
+                } else {
+                    truncate_label(&full_text, report_budget)
+                };
+                (doc_budget, None, Some(text), style)
+            }
+        }
+    };
     let document = truncate_label_from_left(&header.document, doc_budget);
     let mut line = vec![
         Span::raw(format!("{document}  ")),
@@ -405,10 +464,16 @@ fn draw_header(
     if let Some(eta) = &eta_clock {
         line.push(Span::raw(format!("  ETA ~{eta}")));
     }
-    if let Some(run_id) = &header.run_id {
+    if let Some(run_id) = &run_id_text {
         line.push(Span::styled(
             format!("  {run_id}"),
             Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    if let Some(report_text) = &report_text {
+        line.push(Span::styled(
+            format!("  {report_text}"),
+            with_highlight(report_style, ctx.highlight("header:report")),
         ));
     }
     if let Some(name) = ctx.theme_banner {
@@ -479,15 +544,10 @@ fn draw_tree(
 /// opens the untruncated text either way.
 const SNIPPET_MAX_LINES: usize = 3;
 
-fn details_lines(
-    details: &Details,
-    kind: RowKind,
-    ctx: &DrawCtx,
-    inner_width: u16,
-) -> Vec<Line<'static>> {
+fn details_lines(details: &Details, ctx: &DrawCtx, inner_width: u16) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("path   {}", details.path)),
-        Line::from(format!("type   {}", kind.label())),
+        Line::from(format!("type   {}", details.kind.label())),
     ];
     // Issue #535/finding 6: these two blocks come right after path/
     // type, before plan/meta/error -- at the pane's own golden-
@@ -662,7 +722,6 @@ fn draw_details(
     frame: &mut Frame,
     area: Rect,
     details: Option<&Details>,
-    kind: RowKind,
     app: &mut App,
     ctx: &DrawCtx,
 ) {
@@ -673,7 +732,7 @@ fn draw_details(
     };
     let inner_width = area.width.saturating_sub(2);
     let text = details
-        .map(|d| details_lines(d, kind, ctx, inner_width))
+        .map(|d| details_lines(d, ctx, inner_width))
         .unwrap_or_else(|| vec![Line::from("(nothing selected)")]);
     let viewport = area.height.saturating_sub(2) as usize;
     app.details_viewport = viewport;
@@ -709,17 +768,59 @@ fn draw_details(
 /// (`log_total - log_lines.len() + its own index`), which survives
 /// `MAX_LOG_LINES`' own trim from the front; a plain buffer index
 /// would shift under an already-marked key the moment the trim ran.
+/// `print_line`/`format_log_line`'s own clock prefix, `HH:MM:SS `
+/// (`main.rs::Clock::format` plus the one space that always follows
+/// it) -- always this many bytes, since the clock is always exactly
+/// two ASCII digits per field.
+const LOG_CLOCK_PREFIX_LEN: usize = 9;
+
+/// Whether `line` (already clock-prefixed) is a report's own line
+/// (#610, R2): the leading `▸` right after the clock prefix, written
+/// only by `diff::report_line` -- no other line this crate ever
+/// builds starts with it, so a front end can tell the two apart from
+/// the line's own text alone, with no separate field needed.
+fn is_report_log_line(line: &str) -> bool {
+    line.get(LOG_CLOCK_PREFIX_LEN..)
+        .is_some_and(|rest| rest.starts_with('▸'))
+}
+
+fn is_warning_report_log_line(line: &str) -> bool {
+    line.get(LOG_CLOCK_PREFIX_LEN..)
+        .is_some_and(|rest| rest.starts_with("▸ warning: "))
+}
+
 fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], log_total: u64, ctx: &DrawCtx) {
     let height = area.height.saturating_sub(2) as usize;
     let start = log_lines.len().saturating_sub(height);
     let seq_start = log_total.saturating_sub(log_lines.len() as u64);
+    // A report's own `data` preview is capped to 200 characters when
+    // the line is built (`diff::report_line`, the same cap `--log`
+    // uses, since there is no pane to fit there) -- narrower still
+    // once an actual TUI pane is this width, which `truncate_label`
+    // clips further here, with its own `…`, same as every other
+    // pane-width cut this crate makes. Only a report's own line gets
+    // this: every other kind already keeps well under a usable pane's
+    // width on its own (a fixed, short cap of its own, DESIGN.md
+    // §2.4), so clipping them too would just risk changing their
+    // look for no reason.
+    let pane_width = area.width.saturating_sub(2) as usize;
     let text: Vec<Line> = log_lines[start..]
         .iter()
         .enumerate()
         .map(|(i, l)| {
             let seq = seq_start + (start + i) as u64;
-            let style = with_highlight(Style::default(), ctx.highlight(&format!("log:{seq}")));
-            Line::from(l.clone()).style(style)
+            let base = if is_warning_report_log_line(l) {
+                Style::default().fg(ctx.theme.warning)
+            } else {
+                Style::default()
+            };
+            let style = with_highlight(base, ctx.highlight(&format!("log:{seq}")));
+            let shown = if is_report_log_line(l) {
+                truncate_label(l, pane_width)
+            } else {
+                l.clone()
+            };
+            Line::from(shown).style(style)
         })
         .collect();
     let paragraph =
@@ -1303,13 +1404,6 @@ pub fn draw(
     let body = sections[1];
     let visible = visible_rows(&state.rows, app);
     let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
-    let selected_kind = app
-        .selected_path
-        .as_deref()
-        .and_then(|p| state.rows.iter().find(|r| r.path == p))
-        .map(|r| r.kind)
-        .unwrap_or(RowKind::Unknown);
-
     let two_column = area.width >= thresholds::TWO_COLUMN_MIN_WIDTH
         && area.height >= thresholds::TWO_COLUMN_MIN_HEIGHT;
 
@@ -1332,7 +1426,7 @@ pub fn draw(
                 Constraint::Min(log_rows),
             ])
             .split(body);
-        draw_details(frame, parts[0], details, selected_kind, app, ctx);
+        draw_details(frame, parts[0], details, app, ctx);
         draw_tree(frame, parts[1], &visible, app, &state.header.document, ctx);
         draw_log(frame, parts[2], log_lines, log_total, ctx);
     } else {
@@ -1353,7 +1447,7 @@ pub fn draw(
                 Constraint::Length(columns[0].height - details_rows),
             ])
             .split(columns[0]);
-        draw_details(frame, left[0], details, selected_kind, app, ctx);
+        draw_details(frame, left[0], details, app, ctx);
         draw_tree(frame, left[1], &visible, app, &state.header.document, ctx);
 
         let show_treemap = area.width >= thresholds::TREEMAP_MIN_WIDTH
@@ -1725,7 +1819,7 @@ mod golden_tests {
             "2026-01-01T00:00:05Z",
             &[],
         );
-        let details = render::details_for(selected, plan, state);
+        let details = render::details_for(selected, plan, model, state);
         let mut app = App::new(engine == "watch");
         app.selected_path = Some(selected.to_string());
         // A regression: setting `selected_path`
@@ -1916,7 +2010,12 @@ mod golden_tests {
             true,
             &std::collections::BTreeSet::new(),
         );
-        let details = render::details_for("prime.review.fix.agent", &plan, Some(&state));
+        let details = render::details_for(
+            "prime.review.fix.agent",
+            &plan,
+            &RunModel::new(),
+            Some(&state),
+        );
         let mut app = App::new(false);
         app.selected_path = Some("prime.review.fix.agent".to_string());
         app.follow = false;
@@ -2060,6 +2159,93 @@ mod golden_tests {
             "cof",
             "prime.a",
             &log_lines,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// #610, R2/R3: once a report has arrived, the header shows it
+    /// (warning-styled) in place of the run id, and the log pane
+    /// carries the report's own `▸`/`▸ warning:` line, data preview
+    /// included.
+    #[test]
+    fn header_and_log_show_a_report() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:00Z".to_string(),
+            run_id: "run-abc123".to_string(),
+            pid: Some(1),
+        });
+        model.observe_event(&Event::Report {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            path: "prime".to_string(),
+            level: oscilloscope_core::observe::ReportLevel::Warning,
+            message: "running behind schedule".to_string(),
+            data: Some(json!({"behind_s": 42})),
+            data_truncated: false,
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let log_lines =
+            vec!["11:04:58 ▸ warning: running behind schedule  {\"behind_s\":42}".to_string()];
+        let text = snapshot_with_log(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &log_lines,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// #610, R4: a named report writes a state node (#605), but it
+    /// must never be a row in the orchestration tree, even once
+    /// selected elsewhere brings up its own details.
+    #[test]
+    fn tree_has_no_row_for_a_named_report() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        // `sample_plan` has no report of its own to mark
+        // `prime.status` through `PlanTree::is_report_path` -- the
+        // same `--events` `report` line a real engine would also
+        // emit for it is what `RunModel::observe` falls back to
+        // instead (R4's "no plan" rule), exactly as `osi watch` or a
+        // `use: inline:`/`ref:` child would have to rely on it too.
+        model.observe_event(&Event::Report {
+            ts: "t0".to_string(),
+            path: "prime.status".to_string(),
+            level: oscilloscope_core::observe::ReportLevel::Info,
+            message: "on track".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+            "status": {"value": {"message": "on track", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t0"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+        );
+        // The report's own state node still appears in the *state*
+        // pane (R5's own details apply there) -- only the
+        // orchestration pane itself must never show a `status` row.
+        let orchestration_pane = text
+            .split_once("orchestration do-thing")
+            .map(|(_, after)| after)
+            .and_then(|after| after.split_once("tokens").map(|(before, _)| before))
+            .expect("orchestration pane should be in the snapshot");
+        assert!(
+            !orchestration_pane.contains("status"),
+            "a named report must never show as a row in the orchestration tree: {orchestration_pane}"
         );
         insta::assert_snapshot!(text);
     }
@@ -2370,8 +2556,12 @@ mod golden_tests {
             Some("prime.fan.iter_0"),
             "follow must choose the actually-running leaf, not the done one"
         );
-        let details =
-            render::details_for(app.selected_path.as_deref().unwrap(), &plan, Some(&state));
+        let details = render::details_for(
+            app.selected_path.as_deref().unwrap(),
+            &plan,
+            &RunModel::new(),
+            Some(&state),
+        );
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
@@ -2504,8 +2694,12 @@ mod golden_tests {
         }
         assert_eq!(app.selected_path.as_deref(), Some("prime.step_44"));
 
-        let details =
-            render::details_for(app.selected_path.as_deref().unwrap(), &plan, Some(&state));
+        let details = render::details_for(
+            app.selected_path.as_deref().unwrap(),
+            &plan,
+            &RunModel::new(),
+            Some(&state),
+        );
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
@@ -2594,7 +2788,7 @@ mod golden_tests {
             "t2001",
             &[],
         );
-        let details = render::details_for("n0", &plan, Some(&state));
+        let details = render::details_for("n0", &plan, &RunModel::new(), Some(&state));
         let mut app = App::new(false);
         app.selected_path = Some("n0".to_string());
 
@@ -2670,7 +2864,12 @@ mod golden_tests {
         assert_eq!(rendered.token_bar.prompts_running, 1);
         assert!(rendered.token_bar.estimated_input_is_lower_bound);
 
-        let details = render::details_for("prime.fan.iter_0.ask", &plan, Some(&state));
+        let details = render::details_for(
+            "prime.fan.iter_0.ask",
+            &plan,
+            &RunModel::new(),
+            Some(&state),
+        );
         let mut app = App::new(false);
         app.selected_path = Some("prime.fan.iter_0.ask".to_string());
         app.follow = false;
@@ -2753,6 +2952,7 @@ mod highlight_tests {
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
+                latest_report: None,
             },
             unfolded_rows: Vec::new(),
             rows: vec![Row {

@@ -116,6 +116,16 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
     {
         changed.push("header:tokens".to_string());
     }
+    // #610, R3: a new report counts as its own header change, never
+    // folded into `header:status` -- the run's own status and the
+    // latest report's message are shown in the same slot but change
+    // for different reasons, and elapsed time (ticking every
+    // rebuild) must never highlight at all, which comparing the
+    // whole `Header` by equality here would risk if a report's
+    // arrival didn't have a key of its own to blame instead.
+    if old.header.latest_report != new.header.latest_report {
+        changed.push("header:report".to_string());
+    }
 
     changed
 }
@@ -575,6 +585,49 @@ mod tests {
         let changed = diff(Some(&old), &new);
         assert!(changed.contains(&"header:status".to_string()));
         assert!(changed.contains(&"header:effects".to_string()));
+    }
+
+    /// #610, R3: a new report counts as its own header change, with
+    /// its own key -- never folded into `header:status`, and elapsed
+    /// time (ticking every rebuild regardless) must never highlight.
+    #[test]
+    fn a_new_report_is_its_own_header_change() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let old = crate::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        model.observe_event(&crate::observe::Event::Report {
+            ts: "t1".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "halfway".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let new = crate::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        let changed = diff(Some(&old), &new);
+        assert!(changed.contains(&"header:report".to_string()));
+        assert!(!changed.contains(&"header:status".to_string()));
     }
 
     #[test]

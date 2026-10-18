@@ -81,6 +81,59 @@ fn a_simple_run_succeeds_and_prints_the_log() {
 }
 
 #[test]
+fn a_documents_reports_show_up_in_the_log_and_the_run_still_ends_ok() {
+    // #610: mirrors e2e_cof.rs's own test of the same name -- an
+    // unnamed report, a named warning report with data, and a report
+    // inside both a chain loop pass and a tree loop pass, none of
+    // which ever fires a start/end event, so the run's own final
+    // summary reads exactly as it would with no reports at all.
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: report\n    message: \"starting up\"\n  - type: report\n    name: summary\n    level: warning\n    message: \"found an issue\"\n    data: {count: 2}\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    name: chain_items\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: report\n        message: \"chain pass\"\n      - type: tool\n        name: nap\n        provider: json\n        params: {mode: parse, input: \"\\\"ok\\\"\"}\n  - type: loop\n    name: tree_items\n    flow: tree\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: report\n        message: \"tree pass\"\n      - type: tool\n        name: nap\n        provider: json\n        params: {mode: parse, input: \"\\\"ok\\\"\"}\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osi_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert!(stdout.contains("▸ starting up"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("▸ warning: found an issue  {\"count\":2}"),
+        "stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("▸ chain pass").count(),
+        2,
+        "one per chain pass; stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("▸ tree pass").count(),
+        2,
+        "one per tree pass; stdout:\n{stdout}"
+    );
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+}
+
+#[test]
 fn on_error_continue_still_exits_ok() {
     if !e2e_electricity_enabled() {
         eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");

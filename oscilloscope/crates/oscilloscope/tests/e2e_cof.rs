@@ -66,6 +66,59 @@ fn a_simple_run_succeeds_and_prints_the_log() {
 }
 
 #[test]
+fn a_documents_reports_show_up_in_the_log_and_the_run_still_ends_ok() {
+    // #610: an unnamed report, a named warning report with data, and
+    // a report inside both a chain loop pass and a tree loop pass --
+    // none of them ever fires a start/end event, so the run's own
+    // final summary must read exactly as it would with no reports at
+    // all (#605's own "never counted as work").
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: report\n    message: \"starting up\"\n  - type: report\n    name: summary\n    level: warning\n    message: \"found an issue\"\n    data: {count: 2}\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    name: chain_items\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: report\n        message: \"chain pass\"\n      - type: tool\n        name: nap\n        provider: shell\n        params: {command: echo, args: [\"chain\"]}\n  - type: loop\n    name: tree_items\n    flow: tree\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: report\n        message: \"tree pass\"\n      - type: tool\n        name: nap\n        provider: shell\n        params: {command: echo, args: [\"tree\"]}\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osi_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert!(stdout.contains("▸ starting up"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("▸ warning: found an issue  {\"count\":2}"),
+        "stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("▸ chain pass").count(),
+        2,
+        "one per chain pass; stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("▸ tree pass").count(),
+        2,
+        "one per tree pass; stdout:\n{stdout}"
+    );
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+}
+
+#[test]
 fn events_are_detected_even_with_rich_styled_help_output() {
     // Typer forces Rich's terminal styling whenever `GITHUB_ACTIONS`
     // (set on every CI runner), `FORCE_COLOR` or `PY_COLORS` is set,

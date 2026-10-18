@@ -12,7 +12,7 @@ use crate::model::{
     EndedOutcome, NodeMeta, RunModel, ended_outcome, flatten_state, run_ended, run_error,
     run_totals,
 };
-use crate::observe::Event;
+use crate::observe::{Event, ReportLevel};
 use crate::plan::PlanTree;
 
 /// One line of the `--log` stream (DESIGN.md §2.4, §6.2). `ts` is the
@@ -83,6 +83,43 @@ fn truncate_reason(s: &str, max: usize) -> String {
         let truncated: String = s.chars().take(max).collect();
         format!("{truncated}…")
     }
+}
+
+/// A report's own `data`'s cap in `--log` (#610, R2): the TUI applies
+/// a further, tighter clip of its own at draw time, to the pane's
+/// real width -- this is the one true cap for plain `--log`, where
+/// there is no pane to fit at all.
+const REPORT_DATA_LOG_CHARS: usize = 200;
+
+/// A report's own log line (#610): `▸ <message>`, `▸ warning:
+/// <message>` for a warning -- the leading `▸` is never used for any
+/// other kind of line this crate ever builds, so a front end can
+/// still tell a report line apart from every other one by its text
+/// alone, with no extra field on [`LogLine`] needed. `data`, when the
+/// report has any and it wasn't itself truncated by the engine, is a
+/// compact one-line JSON preview appended after two spaces, capped to
+/// [`REPORT_DATA_LOG_CHARS`] here; `data_truncated` (set by the
+/// engine once `data` itself exceeds 16 KiB) shows `(data truncated)`
+/// instead, since there is nothing left of `data` to preview at all.
+fn report_line(
+    level: ReportLevel,
+    message: &str,
+    data: Option<&Value>,
+    data_truncated: bool,
+) -> String {
+    let prefix = match level {
+        ReportLevel::Info => String::new(),
+        ReportLevel::Warning => "warning: ".to_string(),
+    };
+    let mut text = format!("▸ {prefix}{message}");
+    if data_truncated {
+        text.push_str("  (data truncated)");
+    } else if let Some(data) = data {
+        let json = serde_json::to_string(data).unwrap_or_default();
+        text.push_str("  ");
+        text.push_str(&truncate_reason(&json, REPORT_DATA_LOG_CHARS));
+    }
+    text
 }
 
 /// The run summary's own failure reason (M2, DESIGN.md §2.4's `■ run
@@ -639,6 +676,21 @@ impl Differ {
                     ),
                 }]
             }
+            Event::Report {
+                ts,
+                level,
+                message,
+                data,
+                data_truncated,
+                ..
+            } => vec![LogLine {
+                ts: Some(ts.clone()),
+                text: report_line(*level, message, data.as_ref(), *data_truncated),
+            }],
+            Event::RunStart { ts, run_id, .. } => vec![LogLine {
+                ts: Some(ts.clone()),
+                text: format!("■ run started  {run_id}"),
+            }],
             Event::RunEnd { .. } => Vec::new(),
             _ => Vec::new(),
         }
@@ -961,6 +1013,83 @@ mod tests {
         // entry shape.
         assert_eq!(truncate_chars("line one\nline two", 120), "line one");
         assert_eq!(truncate_chars("short", 120), "short");
+    }
+
+    #[test]
+    fn report_line_formats_an_info_report_with_no_data() {
+        assert_eq!(
+            report_line(ReportLevel::Info, "halfway", None, false),
+            "▸ halfway"
+        );
+    }
+
+    #[test]
+    fn report_line_formats_a_warning_with_a_data_preview() {
+        let data = json!({"n": 3});
+        assert_eq!(
+            report_line(ReportLevel::Warning, "slow", Some(&data), false),
+            "▸ warning: slow  {\"n\":3}"
+        );
+    }
+
+    #[test]
+    fn report_line_shows_data_truncated_instead_of_a_preview() {
+        let data = json!({"n": 3});
+        assert_eq!(
+            report_line(ReportLevel::Info, "big", Some(&data), true),
+            "▸ big  (data truncated)"
+        );
+    }
+
+    #[test]
+    fn report_line_caps_the_data_preview_at_200_chars_with_an_ellipsis() {
+        let long_value = "x".repeat(250);
+        let data = json!({ "v": long_value });
+        let line = report_line(ReportLevel::Info, "m", Some(&data), false);
+        let preview = line.strip_prefix("▸ m  ").expect("message prefix");
+        assert_eq!(
+            preview.chars().count(),
+            REPORT_DATA_LOG_CHARS + 1,
+            "{preview}"
+        );
+        assert!(preview.ends_with('…'), "{preview}");
+    }
+
+    #[test]
+    fn diff_event_turns_a_report_event_into_its_own_log_line() {
+        let mut differ = Differ::new();
+        let event = Event::Report {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            path: "prime".to_string(),
+            level: ReportLevel::Warning,
+            message: "slow progress".to_string(),
+            data: None,
+            data_truncated: false,
+        };
+        let model = RunModel::new();
+        let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "▸ warning: slow progress");
+        assert_eq!(lines[0].ts.as_deref(), Some("2026-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn diff_event_turns_a_run_start_event_into_its_own_log_line_naming_the_run_id() {
+        let mut differ = Differ::new();
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+        };
+        let model = RunModel::new();
+        let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
+        assert_eq!(
+            lines,
+            vec![LogLine {
+                ts: Some("t".to_string()),
+                text: "■ run started  abc123".to_string()
+            }]
+        );
     }
 
     #[test]

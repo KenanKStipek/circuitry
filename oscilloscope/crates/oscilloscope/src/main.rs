@@ -882,6 +882,7 @@ fn mark_details_highlights(
     )>,
     selected_path: Option<&str>,
     plan: &PlanTree,
+    model: &oscilloscope_core::model::RunModel,
     state: Option<&serde_json::Value>,
     no_animation: bool,
 ) {
@@ -889,7 +890,7 @@ fn mark_details_highlights(
         *prev = None;
         return;
     };
-    let details = oscilloscope_core::render::details_for(path, plan, state);
+    let details = oscilloscope_core::render::details_for(path, plan, model, state);
     if !no_animation {
         if let Some((prev_path, prev_sent, prev_received)) = prev.as_ref() {
             if prev_path == path {
@@ -1059,6 +1060,25 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
         }
     });
     rx
+}
+
+/// Which row's own details the details pane shows next redraw (#610,
+/// R5): the state pane's own selection, when it is the focused pane
+/// and has one (joined back onto `prime.`, since `StateRow::path` is
+/// relative to it) -- the orchestration tree's otherwise, exactly as
+/// before #610. The two selections are deliberately independent
+/// (`keys::tests::the_state_panes_own_selection_never_moves_the_
+/// orchestration_selection`); this is what lets the details pane
+/// follow whichever one the user is actually looking at, including a
+/// named report's own row, which never has an orchestration-tree row
+/// of its own at all to select instead.
+fn details_selection_path(app: &App) -> Option<String> {
+    if app.pane == keys::Pane::State {
+        if let Some(p) = &app.state_selected_path {
+            return Some(format!("prime.{p}"));
+        }
+    }
+    app.selected_path.clone()
 }
 
 /// `print_line`'s own formatting, into the TUI's own log buffer
@@ -1396,6 +1416,7 @@ fn run_tui(
                 &mut prev_details_highlight,
                 app.selected_path.as_deref(),
                 &plan,
+                &model,
                 current_state.as_ref(),
                 no_animation,
             );
@@ -1567,10 +1588,9 @@ fn run_tui(
         }
 
         if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
-            let details = app
-                .selected_path
-                .as_deref()
-                .map(|p| oscilloscope_core::render::details_for(p, &plan, current_state.as_ref()));
+            let details = details_selection_path(&app).map(|p| {
+                oscilloscope_core::render::details_for(&p, &plan, &model, current_state.as_ref())
+            });
             let icon_frame = icon_frame_for(no_animation, start.elapsed());
             let banner = theme_banner_until
                 .filter(|&until| highlight_now < until)
@@ -2425,6 +2445,7 @@ fn run_tui_watch(
                 &mut prev_details_highlight,
                 app.selected_path.as_deref(),
                 &plan,
+                &model,
                 last_state.as_ref(),
                 no_animation,
             );
@@ -2551,10 +2572,9 @@ fn run_tui_watch(
         }
 
         if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
-            let details = app
-                .selected_path
-                .as_deref()
-                .map(|p| oscilloscope_core::render::details_for(p, &plan, last_state.as_ref()));
+            let details = details_selection_path(&app).map(|p| {
+                oscilloscope_core::render::details_for(&p, &plan, &model, last_state.as_ref())
+            });
             let icon_frame = icon_frame_for(no_animation, start.elapsed());
             let banner = theme_banner_until
                 .filter(|&until| highlight_now < until)
@@ -3112,6 +3132,7 @@ mod tests {
             &mut prev,
             Some("prime.ask"),
             &plan,
+            &RunModel::new(),
             Some(&ask_running),
             false,
         );
@@ -3127,6 +3148,7 @@ mod tests {
             &mut prev,
             Some("prime.other"),
             &plan,
+            &RunModel::new(),
             Some(&ask_done),
             false,
         );
@@ -3142,6 +3164,7 @@ mod tests {
             &mut prev,
             Some("prime.ask"),
             &plan,
+            &RunModel::new(),
             Some(&ask_running),
             false,
         );
@@ -3150,6 +3173,7 @@ mod tests {
             &mut prev,
             Some("prime.ask"),
             &plan,
+            &RunModel::new(),
             Some(&ask_done),
             false,
         );
@@ -3629,7 +3653,8 @@ mod tests {
         assert_eq!(render_state.header.status, RunStatus::Failed);
         assert_eq!(render_state.header.effects_done, 1);
 
-        let details = oscilloscope_core::render::details_for("prime.boom", &plan, Some(&state));
+        let details =
+            oscilloscope_core::render::details_for("prime.boom", &plan, &model, Some(&state));
         assert_eq!(details.error.as_deref(), Some("boom failed"));
     }
 

@@ -467,6 +467,36 @@ pub struct RunModel {
     /// moved again, so elapsed stops right there instead of ticking
     /// on to `now` on every later rebuild.
     frozen_end_ts: Option<String>,
+    /// The latest report seen on any path at all (#610's header
+    /// status line): once this is set, the header shows it in place
+    /// of the run id, for the rest of the run.
+    latest_report: Option<ReportSighting>,
+    /// The latest report seen for each path (#610's details pane: "a
+    /// named report's data comes from the latest report event for
+    /// that path"). Keyed by the report's own path, which an unnamed
+    /// report shares with its enclosing container -- the latest
+    /// sighting at that path is still the right one to show if a
+    /// caller ever looks it up by it.
+    reports_by_path: BTreeMap<String, ReportSighting>,
+    /// Every path a report event has ever named (#610's "no plan"
+    /// fallback, R4): `osi watch` and a `use: inline:`/`ref:` child
+    /// have no compiled plan to resolve a report's own path from, so
+    /// filtering a report's state node out of the tree falls back to
+    /// this set instead of `PlanTree::is_report_path`.
+    report_event_paths: BTreeSet<String>,
+}
+
+/// One `report` event, as last seen (#610). `ts`/`level`/`message`
+/// are the header status line and the details pane's own fields;
+/// `data`/`data_truncated` are the details pane's only (a header
+/// status line never shows a report's data).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReportSighting {
+    pub ts: String,
+    pub level: crate::observe::ReportLevel,
+    pub message: String,
+    pub data: Option<Value>,
+    pub data_truncated: bool,
 }
 
 impl RunModel {
@@ -487,6 +517,9 @@ impl RunModel {
             run_end_ts: None,
             latest_event_ts: None,
             frozen_end_ts: None,
+            latest_report: None,
+            reports_by_path: BTreeMap::new(),
+            report_event_paths: BTreeSet::new(),
         }
     }
 
@@ -602,7 +635,48 @@ impl RunModel {
                 self.open_by_id.clear();
                 self.open_unid.clear();
             }
+            Event::Report {
+                ts,
+                path,
+                level,
+                message,
+                data,
+                data_truncated,
+            } => {
+                let sighting = ReportSighting {
+                    ts: ts.clone(),
+                    level: *level,
+                    message: message.clone(),
+                    data: data.clone(),
+                    data_truncated: *data_truncated,
+                };
+                self.latest_report = Some(sighting.clone());
+                self.reports_by_path.insert(path.clone(), sighting);
+                self.report_event_paths.insert(path.clone());
+            }
         }
+    }
+
+    /// The latest report seen on any path (#610's header status
+    /// line) -- `None` until the first one arrives, and never cleared
+    /// again afterwards.
+    pub fn latest_report(&self) -> Option<&ReportSighting> {
+        self.latest_report.as_ref()
+    }
+
+    /// The latest report seen for `path` specifically (#610's details
+    /// pane), when `--events` has carried one.
+    pub fn report_at(&self, path: &str) -> Option<&ReportSighting> {
+        self.reports_by_path.get(path)
+    }
+
+    /// Whether any report event has ever named `path` (#610's "no
+    /// plan" fallback, R4) -- `osi watch` and a `use: inline:`/`ref:`
+    /// child have no compiled plan, so a named report's state node is
+    /// filtered from the tree by this instead of `PlanTree::
+    /// is_report_path`.
+    pub fn is_report_event_path(&self, path: &str) -> bool {
+        self.report_event_paths.contains(path)
     }
 
     /// Whether a `run_end` line has arrived yet (DESIGN.md §3: when it
@@ -781,6 +855,30 @@ impl RunModel {
         let mut rows = BTreeMap::new();
 
         for (path, node) in &flat {
+            // #610/R4: a named report writes a state node (#605), but
+            // a report never fires start/end and so never becomes a
+            // plan row or counts toward effects_planned/effects_done
+            // (`plan::record_op_entry`) -- its state node must not
+            // become a tree row either, or it reads like a step and
+            // changes folding. With a plan, `PlanTree::is_report_path`
+            // resolves this exactly, `iter_*`/grafted `use` children
+            // included; with none (`osi watch`, a `use: inline:`/
+            // `ref:` child), `--events`' own report paths are the
+            // only source of truth there is.
+            // The no-plan fallback (`report_event_paths`) can't
+            // tell a *named* report's own exclusive path from an
+            // *unnamed* one's, which reuses its container's -- the
+            // root included (DESIGN.md §8.7: "prime at the top
+            // level"). `prime` itself is excluded here so an unnamed
+            // top-level report never hides the root's own real row;
+            // the same ambiguity for an unnamed report directly
+            // inside some other *named* container with no plan at
+            // all is a narrower, accepted gap (#610).
+            if plan.is_report_path(path)
+                || (path != "prime" && self.report_event_paths.contains(path))
+            {
+                continue;
+            }
             let retrying = if node.is_running() {
                 let moved = match (self.last_created_at.get(path), &node.created_at) {
                     (Some(prev), Some(now)) => prev != now,
