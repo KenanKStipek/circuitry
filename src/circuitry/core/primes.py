@@ -287,6 +287,18 @@ model:     OPTIONAL. Omit — it comes from the user's config.json.
        name: brief
        template: "Topic: {{input.topic}}"
 
+9) report — tells watchers what the run is doing. No model call, never fails.
+   Required: type, message. Optional: name, data, level (info|warning,
+   default info), description. message is a Mustache template, rendered like
+   a prompt. A data leaf may be {from: <path>} (no default/as), a Mustache
+   string, or a literal. name is optional: a named report is also recorded
+   at prime.<name>.value; an unnamed one is not.
+     - type: report
+       level: warning
+       message: "Found {{prime.review.value.serious}} serious issue(s)"
+       data:
+         findings: {from: prime.review.value.findings}
+
 === COMPOSING PROMPTS ===
 A top-level `prompts:` map declares named text. `{{> name}}` splices in a
 declared prompt, or the text of a `yield`/text `prompt` effect, into a prompt

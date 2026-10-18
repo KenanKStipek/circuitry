@@ -625,7 +625,7 @@ def test_prime_documents_every_effect_type() -> None:
     defs = _schema()["$defs"]
     types = defs["EffectDef"]["else"]["else"]["else"]["else"]["else"]["else"]["else"][
         "else"
-    ]["properties"]["type"]["enum"]
+    ]["else"]["properties"]["type"]["enum"]
     for effect_type in types:
         if effect_type in DEPRECATED_EFFECT_TYPE_ALIASES:
             continue
