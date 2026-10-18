@@ -1358,14 +1358,20 @@ def _check_report_data_leaves(
             loop_names=loop_names,
         )
         return
-    if isinstance(value, dict) and "from" in value and set(value) != {"from"}:
+    if isinstance(value, dict) and "from" in value:
+        from_value = value["from"]
+        if not isinstance(from_value, str):
+            raise ValueError(
+                f"{effect_path}.{field}: a report's 'data' leaf's 'from' key "
+                "must be a string path."
+            )
         # A tool param's richer `{from:, default:, as:}` form, not a
         # report's narrower one (#605) -- `default:`/`as:` are silently
         # ignored by report_data_reference's exact-match check above, so
         # without this a leaf like this one would fall through to the
         # dict branch below and publish `{"from": ..., "default": ...}`
-        # as a literal object, with no warning (review finding 9 on #607).
-        extra = ", ".join(sorted(set(value) - {"from"}))
+        # as a literal object, with no warning (#605).
+        extra = ", ".join(sorted(str(k) for k in set(value) - {"from"}))
         raise ValueError(
             f"{effect_path}.{field}: a report's 'data' leaf with a 'from' key "
             f"takes no other key ({extra}) -- {{from: <path>}} is the whole "

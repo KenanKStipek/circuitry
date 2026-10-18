@@ -348,28 +348,35 @@ pub(crate) fn build_report_data(
     // narrower one (#605): `report_data_reference`'s exact `{from}` match
     // above lets a key like `default`/`as` fall straight through to the
     // `Value::Dict` branch below, which would otherwise silently publish
-    // `{"from": ..., "default": ...}` as a literal object with no warning
-    // (review finding 9 on #607). Ports `core/compiler.py::
-    // _check_report_data_leaves`'s own check.
+    // `{"from": ..., "default": ...}` as a literal object with no warning.
+    // Ports `core/compiler.py::_check_report_data_leaves`'s own check.
     if let Value::Dict(dict) = value {
         let from_key = Value::Str("from".to_string());
-        if dict.contains_key(&from_key) && dict.len() != 1 {
-            let mut extra: Vec<String> = dict
-                .keys()
-                .filter(|k| *k != &from_key)
-                .map(|k| match k {
-                    Value::Str(s) => s.clone(),
-                    other => other.py_str(),
-                })
-                .collect();
-            extra.sort();
-            return Err(CompileError(format!(
-                "{effect_path}.{field}: a report's 'data' leaf with a 'from' key \
-                 takes no other key ({}) -- {{from: <path>}} is the whole form; a \
-                 report never fails on an unresolved path, so there is nothing for \
-                 'default'/'as' to do.",
-                extra.join(", ")
-            )));
+        if let Some(from_value) = dict.get(&from_key) {
+            if !matches!(from_value, Value::Str(_)) {
+                return Err(CompileError(format!(
+                    "{effect_path}.{field}: a report's 'data' leaf's 'from' key \
+                     must be a string path."
+                )));
+            }
+            if dict.len() != 1 {
+                let mut extra: Vec<String> = dict
+                    .keys()
+                    .filter(|k| *k != &from_key)
+                    .map(|k| match k {
+                        Value::Str(s) => s.clone(),
+                        other => other.py_str(),
+                    })
+                    .collect();
+                extra.sort();
+                return Err(CompileError(format!(
+                    "{effect_path}.{field}: a report's 'data' leaf with a 'from' key \
+                     takes no other key ({}) -- {{from: <path>}} is the whole form; a \
+                     report never fails on an unresolved path, so there is nothing for \
+                     'default'/'as' to do.",
+                    extra.join(", ")
+                )));
+            }
         }
     }
     match value {
@@ -726,5 +733,48 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.0.contains("takes no other key (default)"), "{}", err.0);
+    }
+
+    #[test]
+    fn report_data_rejects_a_non_string_from_path() {
+        for bad_from in [
+            Value::Int(5.into()),
+            Value::None,
+            Value::List(vec![
+                Value::Str("a".to_string()),
+                Value::Str("b".to_string()),
+            ]),
+        ] {
+            let mut from_dict = Dict::new();
+            from_dict.insert(Value::Str("from".to_string()), bad_from);
+            let err = build_report_data(
+                &Value::Dict(from_dict),
+                None,
+                "prime",
+                "data.bad",
+                &BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(err.0.contains("must be a string path"), "{}", err.0);
+        }
+    }
+
+    #[test]
+    fn report_data_rejects_a_from_plus_default_with_a_non_string_extra_key() {
+        let mut from_dict = Dict::new();
+        from_dict.insert(
+            Value::Str("from".to_string()),
+            Value::Str("input.x".to_string()),
+        );
+        from_dict.insert(Value::Int(1.into()), Value::Str("y".to_string()));
+        let err = build_report_data(
+            &Value::Dict(from_dict),
+            None,
+            "prime",
+            "data.bad",
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("takes no other key (1)"), "{}", err.0);
     }
 }

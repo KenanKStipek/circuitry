@@ -141,6 +141,40 @@ def test_compile_report_data_from_rejects_as_too() -> None:
         compile_orchestration(orch=orch, root_name="prime")
 
 
+@pytest.mark.parametrize("bad_from", [5, None, ["a", "b"]])
+def test_compile_report_data_from_rejects_a_non_string_path(bad_from: object) -> None:
+    """{from: <non-string>} must be a check error, not a silent literal
+    object (#605)."""
+    orch = {
+        "effects": [
+            {
+                "type": "report",
+                "message": "hi",
+                "data": {"x": {"from": bad_from}},
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="must be a string path"):
+        compile_orchestration(orch=orch, root_name="prime")
+
+
+def test_compile_report_data_from_rejects_a_non_string_extra_key() -> None:
+    """A from-plus-other-key leaf with a non-string extra key must still
+    raise ValueError, not a bare TypeError from sorting/joining the extra
+    keys (#605)."""
+    orch = {
+        "effects": [
+            {
+                "type": "report",
+                "message": "hi",
+                "data": {"x": {"from": "input.n", 1: "y"}},
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="takes no other key"):
+        compile_orchestration(orch=orch, root_name="prime")
+
+
 @pytest.mark.parametrize("key, value", [
     ("on_error", "skip"),
     ("retries", {"max_attempts": 3}),
