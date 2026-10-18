@@ -396,7 +396,10 @@ secret, `"follow"` otherwise; any other value raises `ValueError` before the req
 `Authorization` and each header that came from a secret to any other; a redirect to `http` is
 not followed and fails like a 4xx, its `stderr` noting why (`... redirect not followed
 (redirects: strip_auth follows https only)`). electricity resolves no secret, so its default is
-always `follow`.
+always `follow`. `save_to` (issue #602; with `within`, `overwrite` and `max_bytes`) writes a 2xx
+body to a file as bytes, and `value` is then `{path, bytes, sha256, content_type, status}`;
+electricity does not implement it: a literal `save_to` refuses the run up front, and one
+`params_json` adds fails the effect with the preview message before any request.
 
 Transport: stdlib `urllib.request.urlopen`, not `requests` ("the standard library is sufficient
 ...and keeps the dependency footprint narrow", `:7-11`). A 4xx/5xx is caught as

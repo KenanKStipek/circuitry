@@ -1,0 +1,26 @@
+name: c-http-save-to-writes-nothing
+interface:
+  inputs:
+    base_url: {type: string, required: true}
+effects:
+  - type: tool
+    name: not_found
+    provider: http
+    params:
+      url: "{{input.base_url}}/missing.png"
+      save_to: missing.png
+      fail_on_error: false
+  - type: tool
+    name: outside
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/never-requested.png"
+      save_to: ../outside.png
+  - type: tool
+    name: exists
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/never-requested.png"
+      save_to: orchestration.yml

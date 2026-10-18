@@ -941,6 +941,21 @@ fn coerce_headers_param(value: Option<&Value>) -> Result<Vec<(Value, Value)>, To
 }
 
 fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
+    // Issue #602: `cof run` saves the body to `save_to`; this build does
+    // not (the run is refused up front for a literal `save_to`; this
+    // catches one `params_json` adds), and never sends the request.
+    if get(params, "save_to").is_some() {
+        return Err(ToolError {
+            py_class: PyExc::RuntimeError,
+            message: format!(
+                "electricity {} {}: an http effect with save_to is not supported until a \
+                 later milestone; use `cof run` instead",
+                env!("CARGO_PKG_VERSION"),
+                electricity_bytecode::PREVIEW_MARKER,
+            ),
+            cause: ErrorCause::None,
+        });
+    }
     let url_value = get(params, "url");
     let url = match url_value {
         Some(Value::Str(s)) if !py_strip(s).is_empty() => py_strip(s).to_string(),

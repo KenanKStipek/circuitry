@@ -2,29 +2,25 @@
 ``http``'s ``redirects`` (#598).
 
 Nothing here reads the real Keychain: a fake ``security`` binary first on
-``PATH`` stands in for it. Redirects are checked against a local server pair:
-an ``http`` server and an ``https`` one on another port, serving the same
-routes, both recording the headers each request arrived with.
+``PATH`` stands in for it. Redirects are checked against a local server pair
+(``http_server_support``): an ``http`` server and an ``https`` one on another
+port, serving the same routes, both recording the headers each request arrived
+with.
 """
 
 from __future__ import annotations
 
 import hashlib
-import http.server
 import json
 import os
-import shutil
-import ssl
 import subprocess
 import sys
-import threading
-import urllib.request
 from collections.abc import Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
+from http_server_support import PROXY_ENV_VARS, Route, ServerPair, serve_pair
 
 from circuitry.cli.runtime_shim import RunRequest, run, validate
 from circuitry.plugins._subprocess import plugin_env_override
@@ -35,7 +31,6 @@ TOKEN = "s3cr3t-token-598-abcdef"
 TOKEN_SHA256 = hashlib.sha256(TOKEN.encode()).hexdigest()
 
 _CREDENTIAL_ENV_VARS = ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
-_PROXY_ENV_VARS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
 
 
 # ---------------------------------------------------------------------------
@@ -74,151 +69,9 @@ sys.exit(44)
     return bin_dir
 
 
-@dataclass
-class Route:
-    status: int = 200
-    headers: dict[str, str] = field(default_factory=dict)
-    body: str = "ok"
-
-
-@dataclass
-class Received:
-    server: str
-    method: str
-    path: str
-    headers: dict[str, str]
-
-
-class _Handler(http.server.BaseHTTPRequestHandler):
-    def _serve(self) -> None:
-        server: Any = self.server
-        server.received.append(
-            Received(
-                server=server.label,
-                method=self.command,
-                path=self.path,
-                headers={k.lower(): v for k, v in self.headers.items()},
-            )
-        )
-        route = server.routes.get(self.path, Route(status=404, body="no route"))
-        body = route.body.encode()
-        self.send_response(route.status)
-        for name, value in route.headers.items():
-            self.send_header(name, value)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    do_GET = _serve
-    do_POST = _serve
-
-    def log_message(self, format: str, *args: Any) -> None:
-        pass
-
-
-@dataclass
-class ServerPair:
-    """``http://127.0.0.1:<http_port>`` and ``https://127.0.0.1:<https_port>``
-    (``localhost`` is the same server under another host name), serving
-    :attr:`routes` and recording :attr:`received`."""
-
-    http_port: int
-    https_port: int
-    routes: dict[str, Route]
-    received: list[Received]
-
-    @property
-    def http(self) -> str:
-        return f"http://127.0.0.1:{self.http_port}"
-
-    @property
-    def https(self) -> str:
-        return f"https://127.0.0.1:{self.https_port}"
-
-    @property
-    def https_localhost(self) -> str:
-        return f"https://localhost:{self.https_port}"
-
-    def arrived(self, path: str) -> Received:
-        (match,) = [request for request in self.received if request.path == path]
-        return match
-
-
-_OPENSSL_CONFIG = """
-[req]
-distinguished_name = dn
-x509_extensions = v3
-prompt = no
-[dn]
-CN = 127.0.0.1
-[v3]
-basicConstraints = critical,CA:TRUE
-keyUsage = critical,digitalSignature,keyCertSign
-extendedKeyUsage = serverAuth
-subjectAltName = IP:127.0.0.1,DNS:localhost
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-"""
-
-
-def _self_signed_cert(directory: Path) -> tuple[Path, Path]:
-    openssl = shutil.which("openssl")
-    if openssl is None:
-        pytest.skip("openssl is needed to make the test server's certificate")
-    config = directory / "openssl.cnf"
-    config.write_text(_OPENSSL_CONFIG, encoding="utf-8")
-    cert, key = directory / "cert.pem", directory / "key.pem"
-    subprocess.run(
-        [openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-         "-keyout", str(key), "-out", str(cert), "-config", str(config)],
-        check=True,
-        capture_output=True,
-    )
-    return cert, key
-
-
 @pytest.fixture
 def servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ServerPair]:
-    for name in _PROXY_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
-    cert_dir = tmp_path / "tls"
-    cert_dir.mkdir()
-    cert, key = _self_signed_cert(cert_dir)
-    routes: dict[str, Route] = {}
-    received: list[Received] = []
-
-    plain = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    secure = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_context.load_cert_chain(cert, key)
-    secure.socket = server_context.wrap_socket(secure.socket, server_side=True)
-    for server, label in ((plain, "http"), (secure, "https")):
-        server.label = label  # type: ignore[attr-defined]
-        server.routes = routes  # type: ignore[attr-defined]
-        server.received = received  # type: ignore[attr-defined]
-    threads = [
-        threading.Thread(target=server.serve_forever, daemon=True) for server in (plain, secure)
-    ]
-    for thread in threads:
-        thread.start()
-
-    # The client trusts the test certificate, and only for this test. From
-    # Python 3.12 an HTTPS handler takes its context when it is built, and
-    # `urlopen` keeps the opener it built first, so that one is dropped too.
-    client_context = ssl.create_default_context(cafile=str(cert))
-    monkeypatch.setattr(ssl, "_create_default_https_context", lambda: client_context)
-    monkeypatch.setattr(urllib.request, "_opener", None)
-    try:
-        yield ServerPair(
-            http_port=plain.server_address[1],
-            https_port=secure.server_address[1],
-            routes=routes,
-            received=received,
-        )
-    finally:
-        for server in (plain, secure):
-            server.shutdown()
-            server.server_close()
+    yield from serve_pair(tmp_path, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +233,7 @@ def test_a_keychain_secret_reaches_the_header_and_no_record(
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in _CREDENTIAL_ENV_VARS and key not in _PROXY_ENV_VARS
+        if key not in _CREDENTIAL_ENV_VARS and key not in PROXY_ENV_VARS
     }
     env["HOME"] = str(home)
     proc = subprocess.run(
@@ -688,6 +541,11 @@ effects:
     report = validate(doc, trust_document=True)
     assert report["ok"], report["errors"]
     assert report["secrets"] == ["api", "other", "tok"]
+    assert report["secret_sources"] == {
+        "api": "not defined",
+        "other": "not defined",
+        "tok": "not defined",
+    }
 
     proc = subprocess.run(
         [sys.executable, "-m", "circuitry.cli.app", "check", str(doc), "--skip-preflight"],
@@ -702,7 +560,251 @@ effects:
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "Secrets: api, other, tok" in proc.stdout
+    assert "Secrets: api (not defined), other (not defined), tok (not defined)" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Secrets a trusted document defines (#601).
+# ---------------------------------------------------------------------------
+
+DOC_TOKEN = "d0c-t0ken-601-fedcba"
+
+
+def _cli_env(home: Path) -> dict[str, str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _CREDENTIAL_ENV_VARS and key not in PROXY_ENV_VARS
+    }
+    env["HOME"] = str(home)
+    env["COLUMNS"] = "200"
+    return env
+
+
+def _cof(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    return subprocess.run(
+        [sys.executable, "-m", "circuitry.cli.app", *args],
+        capture_output=True,
+        text=True,
+        env=_cli_env(home),
+        cwd=tmp_path,
+        timeout=120,
+        check=False,
+    )
+
+
+def _doc_token_command(tmp_path: Path) -> list[str]:
+    """A ``command`` secret printing DOC_TOKEN from a file, so the
+    definition itself (which state's settings snapshot records) holds no part
+    of the value."""
+    token_file = tmp_path / "doc-token.txt"
+    token_file.write_text(DOC_TOKEN, encoding="utf-8")
+    return [sys.executable, "-c", "import sys; print(open(sys.argv[1]).read())", str(token_file)]
+
+
+def _defining_doc(directory: Path, url: str, command: list[str], name: str = "doc.yml") -> Path:
+    """A document that defines ``doc_tok`` and names it, and names the host's
+    ``api`` in a second effect."""
+    return _write(
+        directory,
+        name,
+        f"""
+runtime:
+  secrets:
+    doc_tok: {{command: {json.dumps(command)}}}
+effects:
+  - type: tool
+    name: own
+    provider: http
+    params:
+      url: "{url}/own"
+      headers: {{Authorization: {{secret: doc_tok, prefix: "Bearer "}}}}
+  - type: tool
+    name: host
+    provider: http
+    params:
+      url: "{url}/host"
+      headers: {{X-Api-Key: {{secret: api}}}}
+""",
+    )
+
+
+def test_a_trusted_documents_own_secret_reaches_the_header_and_no_record(
+    tmp_path: Path, fake_bin: Path, servers: ServerPair
+) -> None:
+    """#601 acceptance 1, 2 and 4, through `cof run`: the document's own
+    secret and the host's both arrive; the notice names the secret's key
+    only; neither value reaches the output, the state or the events."""
+    servers.routes["/own"] = Route(body="own")
+    servers.routes["/host"] = Route(body="host")
+    doc = _defining_doc(tmp_path, servers.http, _doc_token_command(tmp_path))
+    config = _write(tmp_path, "config.json", json.dumps({"runtime": {"secrets": _KEYCHAIN}}))
+    out, events = tmp_path / "out.json", tmp_path / "events.jsonl"
+
+    proc = _cof(
+        tmp_path, "run", str(doc), "--config", str(config), "--out", str(out),
+        "--events", str(events), "--verbose",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert servers.arrived("/own").headers["authorization"] == f"Bearer {DOC_TOKEN}"
+    assert servers.arrived("/host").headers["x-api-key"] == TOKEN
+    assert "Warning: Applied host settings from doc.yml: runtime.secrets.doc_tok\n" in proc.stderr
+    state = json.loads(out.read_text())
+    assert state["prime"]["own"]["meta"]["params_rendered"]["headers"] == {
+        "Authorization": "Bearer [secret:doc_tok]"
+    }
+    for text in (out.read_text(), events.read_text(), proc.stdout, proc.stderr):
+        _assert_no_token(text)
+        assert DOC_TOKEN not in text
+
+
+def test_a_limited_documents_secrets_block_is_dropped_and_the_secret_refused(
+    tmp_path: Path, servers: ServerPair
+) -> None:
+    """#601 acceptance 3, through `cof run` by library name: the block is
+    ignored like any host key, and the run is refused before its first
+    effect, naming the secret."""
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    _defining_doc(folder, servers.http, _doc_token_command(tmp_path), name="shared_doc.yml")
+    config = _write(
+        tmp_path,
+        "config.json",
+        json.dumps(
+            {
+                "runtime": {
+                    "library": {
+                        "sources": [{"type": "folder", "name": "local", "path": str(folder)}]
+                    }
+                }
+            }
+        ),
+    )
+
+    proc = _cof(tmp_path, "run", "shared_doc", "--config", str(config), "--skip-preflight")
+
+    assert proc.returncode != 0
+    assert "Ignored runtime.secrets from the orchestration" in proc.stderr
+    assert "names secret 'doc_tok': only a document run by path may name a secret" in (
+        proc.stdout + proc.stderr
+    )
+    assert servers.received == []
+
+
+def test_a_documents_secrets_merge_with_the_hosts_by_name() -> None:
+    from circuitry.cli.effective_settings import resolve_effective_settings
+
+    host = {"api": {"env": "HOST_API"}, "shared": {"keychain": {"service": "host-svc"}}}
+    document = {"shared": {"command": ["doc-token"]}, "doc_tok": {"env": "DOC_TOK"}}
+    orch = {"runtime": {"secrets": document}}
+
+    trusted = resolve_effective_settings(
+        cfg=_config(host), orch=orch, trust_document=True, document_name="doc.yml"
+    )
+    assert trusted.runtime["secrets"] == {
+        "api": {"env": "HOST_API"},
+        "shared": {"command": ["doc-token"]},
+        "doc_tok": {"env": "DOC_TOK"},
+    }
+    assert trusted.warnings == (
+        "Applied host settings from doc.yml: runtime.secrets.shared, runtime.secrets.doc_tok",
+    )
+
+    limited = resolve_effective_settings(cfg=_config(host), orch=orch, document_name="doc.yml")
+    assert limited.runtime["secrets"] == host
+    (warning,) = limited.warnings
+    assert warning.startswith("Ignored runtime.secrets from the orchestration")
+
+
+def test_check_lists_each_secret_with_where_it_is_defined(tmp_path: Path) -> None:
+    """#601 acceptance 5."""
+    doc = _write(
+        tmp_path,
+        "doc.yml",
+        """
+runtime:
+  secrets:
+    doc_tok: {env: DOC_TOK}
+    api: {env: DOC_API}
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://api.example.com/"
+      headers:
+        A: {secret: api}
+        B: {secret: doc_tok}
+        C: {secret: host_only}
+        D: {secret: missing}
+""",
+    )
+    config = _write(
+        tmp_path,
+        "config.json",
+        json.dumps({"runtime": {"secrets": {"api": {"env": "HOST_API"}, "host_only": {"env": "H"}}}}),
+    )
+
+    report = _cof(tmp_path, "check", str(doc), "--config", str(config), "--skip-preflight", "--json")
+    assert report.returncode == 0, report.stdout + report.stderr
+    assert json.loads(report.stdout)["secret_sources"] == {
+        "api": "document",
+        "doc_tok": "document",
+        "host_only": "host",
+        "missing": "not defined",
+    }
+
+    text = _cof(tmp_path, "check", str(doc), "--config", str(config), "--skip-preflight")
+    assert text.returncode == 0, text.stdout + text.stderr
+    assert (
+        "Secrets: api (document), doc_tok (document), host_only (host), missing (not defined)"
+        in text.stdout
+    )
+
+
+def test_a_use_child_run_by_path_resolves_the_root_documents_secret(
+    tmp_path: Path, servers: ServerPair
+) -> None:
+    """#601 acceptance 6."""
+    servers.routes["/child"] = Route(body="child")
+    command = _doc_token_command(tmp_path)
+    _write(
+        tmp_path,
+        "child.yml",
+        f"""
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "{servers.http}/child"
+      headers: {{Authorization: {{secret: doc_tok}}}}
+""",
+    )
+    parent = _write(
+        tmp_path,
+        "parent.yml",
+        f"""
+adapter: scripted
+model: none
+runtime:
+  secrets:
+    doc_tok: {{command: {json.dumps(command)}}}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    result = _run(parent, secrets={})
+
+    assert result.ok, result.error
+    assert servers.arrived("/child").headers["authorization"] == DOC_TOKEN
+    assert DOC_TOKEN not in json.dumps(result.state)
 
 
 @pytest.mark.parametrize(

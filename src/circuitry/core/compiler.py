@@ -1524,7 +1524,21 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
-    limited = False
+    if provider.strip().lower() == "http":
+        from ..plugins.http import static_param_errors as http_param_errors
+
+        problems = http_param_errors(
+            params, params_json=params_json, trusted=_current_document_trusted()
+        )
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (http) at '{effect_path}': " + "; ".join(problems)
+            )
+
+    # The document's trust, whatever the provider: a profile may switch a
+    # tool to `http` after this, and a limited document's `http` effect
+    # never saves a file (#602).
+    limited = not _current_document_trusted()
     confine_to: str | None = None
     if provider.strip().lower() == "systemone":
         from ..plugins.systemone import static_param_errors
@@ -1532,7 +1546,6 @@ def _compile_tool(
         # Same rule as a prompt's `file: {from: ...}` (#578): a limited
         # document's `within` stays inside its project.
         # A limited document with no project is still limited: it reads no file.
-        limited = not _current_document_trusted()
         project = _current_confinement_root()
         if limited and project is not None:
             confine_to = str(project)
