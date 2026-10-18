@@ -731,8 +731,11 @@ fn watch_counts_the_same_effects_as_a_planned_run_with_no_prompts() {
         "2026-01-01T00:00:10Z",
         &[],
     );
-    assert_eq!(planned.header.effects_planned, Some(6));
-    assert_eq!(planned.header.effects_done, 6);
+    // The root and `wrap`'s own named-dynamic container both count
+    // too (issue #620): 2 + the 6 leaves (`step1`-`3`, `wrap.inner`,
+    // `step4`-`5`).
+    assert_eq!(planned.header.effects_planned, Some(8));
+    assert_eq!(planned.header.effects_done, 8);
 
     let mut watched_model = oscilloscope_core::model::RunModel::new();
     let watched = oscilloscope_core::render::build(
@@ -747,7 +750,7 @@ fn watch_counts_the_same_effects_as_a_planned_run_with_no_prompts() {
         &[],
     );
     assert_eq!(
-        watched.header.effects_done, 6,
+        watched.header.effects_done, 8,
         "osi watch must count the same effects as a planned run"
     );
 

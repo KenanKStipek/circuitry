@@ -617,7 +617,13 @@ Both counts count the document root and every *named* `if`/loop/
 start/end hooks and so never writes a node of its own (§1.3/§1.4)
 either. This matches `runtime.last_run.totals.effects_run`, the
 engine's own count: "every completed node, the root and the containers
-included" (§1.2).
+included" (§1.2). Under no plan at all (`osi watch`, §7, or an
+`inline:`/`ref:` `use` child's own un-plotted descendants), a node
+`from_meta_shape` can't name from its own `meta` keys but that still
+has real children in state is counted as a container too — only a
+container ever has them — so a bare `dynamic` with no distinguishing
+shape of its own still counts, and a finished run read with no plan
+matches the same run read with one.
 
 Once a run has ended with a real `--out` write of its own — `ok`,
 `failed`, or a first-signal `cancelled` (DESIGN.md §2.1 rule 7's

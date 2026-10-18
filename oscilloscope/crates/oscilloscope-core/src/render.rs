@@ -1344,6 +1344,22 @@ fn build_header(
                 // paths.
                 !crate::model::subtree_entries(path.as_str(), all_paths)
                     .any(|(p, ())| p.as_str() != path.as_str())
+            } else if kind == RowKind::Unknown {
+                // No plan entry at all (`osi watch`, or an
+                // `inline:`/`ref:` use child), and no distinguishing
+                // `meta` shape either (`from_meta_shape`'s own
+                // catch-all) -- but a node with real children in
+                // state is still some container that genuinely ran
+                // (only a container ever has them; `RowKind::Use`'s
+                // own shape signals, checked above, already cover a
+                // `use`), even nameless to `osi`: a bare `dynamic`
+                // carries no `meta` shape of its own to guess a
+                // kind from at all (DESIGN.md §5). Counting it here
+                // is what lets a finished run under no plan match a
+                // planned one's own count for a document with a
+                // plain `dynamic` in it.
+                crate::model::subtree_entries(path.as_str(), flat)
+                    .any(|(p, _)| p.as_str() != path.as_str())
             } else {
                 kind.counts_toward_effects_run()
             }
