@@ -2497,10 +2497,10 @@ mod tests {
         assert!(!differ.has_pending_ends());
     }
 
-    /// #613's own review: an `end` event's `ms` over a minute must go
-    /// through `format_duration` like every other duration, not the
-    /// log's own `{:.1}s` -- a 47-minute, 57.3s step used to print
-    /// the un-carried `2877.3s` here.
+    /// An `end` event's `ms` over a minute goes through
+    /// `format_duration` like every other duration, not the log's
+    /// own `{:.1}s` -- a 47-minute, 57.3s step prints `47m57s`, not
+    /// the un-carried `2877.3s`.
     #[test]
     fn end_event_duration_over_a_minute_carries_into_minutes() {
         let mut differ = Differ::new();

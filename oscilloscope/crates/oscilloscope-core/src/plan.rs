@@ -839,8 +839,8 @@ mod tests {
         let m = plan.match_path("prime.step1").expect("should match");
         assert_eq!(m.entries.len(), 1);
         assert_eq!(m.entries[0].name.as_deref(), Some("step1"));
-        // Review finding 4 on #613: a tool leaf's own `provider` must
-        // survive into its `PlanEntry`, not just its `LeafEffectKind`.
+        // A tool leaf's own `provider` survives into its `PlanEntry`,
+        // not just its `LeafEffectKind`.
         assert_eq!(m.entries[0].provider.as_deref(), Some("shell"));
         assert!(plan.match_path("prime.nonexistent").is_none());
     }
