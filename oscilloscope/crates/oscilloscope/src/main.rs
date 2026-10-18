@@ -1227,6 +1227,11 @@ fn run_tui(
     let mut needs_rebuild = true;
     let mut needs_draw = true;
     let mut exit_status: Option<std::process::ExitStatus> = None;
+    // The instant this loop itself saw the engine process exit --
+    // captured once, never resampled, so a run that ends with no
+    // other known instant (DESIGN.md's "one clock") freezes its own
+    // elapsed time here instead of ticking on to `now` forever.
+    let mut exit_status_ts: Option<String> = None;
     // K1: set once a confirmed `q`, a Ctrl-C cancel, or an external
     // signal has happened — the only three things that make this loop
     // leave the instant the engine exits, rather than staying open on
@@ -1356,6 +1361,7 @@ fn run_tui(
                     interrupted: signal_count > 0,
                     likely_failed: status.code() == Some(1),
                     has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+                    exited_at: exit_status_ts.clone(),
                 },
             };
             render_state = oscilloscope_core::render::build_folded(
@@ -1400,6 +1406,7 @@ fn run_tui(
                     app.select_tree_path(Some(target.to_string()));
                 }
             }
+            app.reconcile_folding(&render_state.rows);
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path(first);
@@ -1609,6 +1616,7 @@ fn run_tui(
         if exit_status.is_none() {
             if let Ok(Some(status)) = child.try_wait() {
                 exit_status = Some(status);
+                exit_status_ts = Some(now_rfc3339());
                 // #494: the engine already exited, but its last
                 // events and its final live-state write (DESIGN.md
                 // §1.1) can still land after the poll above that just
@@ -1769,6 +1777,7 @@ fn unended_run_summary_text(
         interrupted: false,
         likely_failed,
         has_failure_reason: reason.is_some(),
+        exited_at: None,
     };
     match run_status(state, process) {
         RunStatus::Failed => format!(
@@ -2379,6 +2388,7 @@ fn run_tui_watch(
                     interrupted: false,
                     likely_failed: model.run_end_ok() == Some(false),
                     has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+                    exited_at: None,
                 }
             } else {
                 ProcessState::Running
@@ -2425,6 +2435,7 @@ fn run_tui_watch(
                     app.select_tree_path(Some(target.to_string()));
                 }
             }
+            app.reconcile_folding(&render_state.rows);
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path(first);
@@ -2927,6 +2938,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: false,
                 has_failure_reason: false,
+                exited_at: None,
             },
             1.0,
             "t1",
@@ -3527,6 +3539,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: false,
                 has_failure_reason: false,
+                exited_at: None,
             },
             0.1,
             "2024-01-01T00:00:00Z",
@@ -3607,6 +3620,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: true,
                 has_failure_reason: true,
+                exited_at: None,
             },
             0.1,
             "2024-01-01T00:00:00Z",
@@ -3744,6 +3758,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: false,
                 has_failure_reason: false,
+                exited_at: None,
             },
             0.1,
             "2024-01-01T00:00:00Z",

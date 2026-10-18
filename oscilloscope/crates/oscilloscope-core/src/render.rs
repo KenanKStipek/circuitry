@@ -186,8 +186,8 @@ pub struct Header {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Details {
     pub path: String,
-    /// The details pane's own title (issue #613's pass labels, review
-    /// finding 8: `pass 3 of 8 (iter_2)` belongs here, in the pane's
+    /// The details pane's own title (issue #613's pass labels:
+    /// `pass 3 of 8 (iter_2)` belongs here, in the pane's
     /// title, not in `plan_summary`'s `plan` line) -- `None` for
     /// every path that isn't a loop pass, so the front end falls
     /// back to its own plain " details ".
@@ -275,7 +275,7 @@ pub struct TokenBar {
     pub prompts_running: u64,
     /// Running `agent` tool steps (issue #613's "agents in flight"):
     /// counted alongside running prompts, but with no token estimate
-    /// of their own (live agent token usage needs #612 lane 2).
+    /// of their own -- live agent token usage (#612) is a later lane.
     pub agents_running: u64,
 }
 
@@ -292,8 +292,8 @@ pub struct TokenBar {
 pub struct RenderState {
     pub header: Header,
     pub rows: Vec<Row>,
-    /// The same rows as `rows`, before `build_folded` ever folds them
-    /// (review finding 10 on #613) -- `build` alone sets this equal
+    /// The same rows as `rows`, before `build_folded` ever folds
+    /// them -- `build` alone sets this equal
     /// to `rows` itself, since there is nothing to fold yet.
     /// `changes::diff` reads this, not `rows`, so toggling folding or
     /// expanding a quick-steps group -- which can make a row appear
@@ -336,7 +336,7 @@ pub fn build(
     let empty = Value::Null;
     let state_ref = state.unwrap_or(&empty);
     let flat = flatten_state(state_ref);
-    let statuses = model.observe(state_ref, plan, process);
+    let statuses = model.observe(state_ref, plan, process.clone());
     // Every path either side of a run has ever heard of (hoisted here,
     // issue/finding on `use` accounting): the header's own
     // planned/done counts need the identical view `build_rows`/
@@ -347,22 +347,18 @@ pub fn build(
     let all_paths = all_observed_paths(&flat, &statuses);
 
     let header = build_header(
-        document,
-        engine,
-        model.run_start_id(),
-        model.run_start_ts(),
-        model.run_end_ts(),
-        state,
-        process,
-        elapsed_s,
-        now,
+        document, engine, model, state, process, elapsed_s, now, plan, &flat, &statuses, &all_paths,
+    );
+    let rows = build_rows(
         plan,
         &flat,
         &statuses,
         &all_paths,
+        now,
+        model,
+        header.run_end_ts.as_deref(),
     );
-    let rows = build_rows(plan, &flat, &statuses, &all_paths, now, model);
-    let state_rows = build_state_rows(&flat, &statuses, now);
+    let state_rows = build_state_rows(&flat, &statuses, model, header.run_end_ts.as_deref(), now);
     let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
     // A tree-loop pass's prompt, and
     // (on cof) a `use` child's, never appear in `flat` while they run
@@ -481,7 +477,13 @@ fn state_subtree_recency(
 /// model for a prompt, else the provider for a tool; the duration
 /// once finished; `retries N` when `retries_used > 0`; and `n/total`
 /// for a loop. `None` when there's nothing to show.
-fn state_row_dim(node: &NodeMeta, now: &str) -> Option<String> {
+fn state_row_dim(
+    node: &NodeMeta,
+    status_kind: StatusKind,
+    event_duration_s: Option<f64>,
+    run_end_ts: Option<&str>,
+    now: &str,
+) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(model) = node.meta.get("model").and_then(Value::as_str) {
         parts.push(model.to_string());
@@ -491,7 +493,13 @@ fn state_row_dim(node: &NodeMeta, now: &str) -> Option<String> {
     // Issue #613: a running row shows its own elapsed so far too, not
     // only a finished one's final duration. `changes::diff` never
     // compares a running row's `dim` at all (below), so this ticking
-    // every rebuild never counts as a change on its own.
+    // every rebuild never counts as a change on its own. A cancelled
+    // or aborted row -- no `completed_at` of its own, but not running
+    // either -- must not keep ticking up to `now` once the run has
+    // ended: it measures up to `now` only while still running
+    // (`Running`/`LikelyRunning`/`RunningOrQueued`), else it prefers
+    // an `--events` end duration, else the run's own end instant, else
+    // shows no duration at all.
     match (&node.created_at, &node.completed_at) {
         (Some(created), Some(completed)) => {
             if let Some(secs) = duration_seconds(created, completed) {
@@ -499,7 +507,17 @@ fn state_row_dim(node: &NodeMeta, now: &str) -> Option<String> {
             }
         }
         (Some(created), None) => {
-            if let Some(secs) = duration_seconds(created, now) {
+            let is_running = matches!(
+                status_kind,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            );
+            let secs = if is_running {
+                duration_seconds(created, now)
+            } else {
+                event_duration_s
+                    .or_else(|| run_end_ts.and_then(|end| duration_seconds(created, end)))
+            };
+            if let Some(secs) = secs {
                 parts.push(crate::format::format_duration(secs));
             }
         }
@@ -600,11 +618,15 @@ fn aggregate_container_status(node: &StateTreeNode) -> RowStatus {
 fn build_state_rows(
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
+    model: &RunModel,
+    run_end_ts: Option<&str>,
     now: &str,
 ) -> Vec<StateRow> {
     let tree = build_state_tree(flat);
     let mut out = Vec::new();
-    flatten_state_tree(&tree, "prime", 0, flat, statuses, now, &mut out);
+    flatten_state_tree(
+        &tree, "prime", 0, flat, statuses, model, run_end_ts, now, &mut out,
+    );
     out
 }
 
@@ -615,6 +637,8 @@ fn flatten_state_tree(
     depth: usize,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
+    model: &RunModel,
+    run_end_ts: Option<&str>,
     now: &str,
     out: &mut Vec<StateRow>,
 ) {
@@ -635,7 +659,15 @@ fn flatten_state_tree(
         let status = state_row_status(&full_path, node, statuses);
         let (sent, received) = subtree_tokens(&full_path, flat);
         let tokens = (sent > 0 || received > 0).then_some((sent, received));
-        let dim = node.own.and_then(|n| state_row_dim(n, now));
+        let dim = node.own.and_then(|n| {
+            state_row_dim(
+                n,
+                status.kind,
+                model.event_duration_s(&full_path),
+                run_end_ts,
+                now,
+            )
+        });
         out.push(StateRow {
             path: full_path
                 .strip_prefix("prime.")
@@ -654,6 +686,8 @@ fn flatten_state_tree(
             depth + 1,
             flat,
             statuses,
+            model,
+            run_end_ts,
             now,
             out,
         );
@@ -683,11 +717,9 @@ fn flatten_state_tree(
 /// carries (DESIGN.md §3: "No effect kind"), not something this count
 /// can close.
 ///
-/// Review finding 4 on #613: a tree-loop pass and a `use` child have
-/// no node in `flat` at all while they run on `cof` -- an `agent` tool
-/// there used to never be counted, since `meta.provider` only ever
-/// exists on a state node. `plan` is consulted as a fallback for
-/// exactly those rows: a leaf's own `provider` string, recorded by
+/// A tree-loop pass and a `use` child have no node in `flat` at all
+/// while they run on `cof`, so an `agent` tool there is counted from
+/// `plan` instead: a leaf's own `provider` string, recorded by
 /// `PlanTree` from the compiled `ToolOp` itself.
 fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> TokenBar {
     let mut estimated_input = 0u64;
@@ -707,11 +739,10 @@ fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanT
             // Issue #613's "agents in flight": a running tool row
             // whose `provider` is `agent` (cof's own rule, trimmed and
             // case-insensitive, `src/circuitry/core/compiler.py`) --
-            // read from state, the only place this crate can learn a
-            // leaf's own provider today (the plan's `PlanEntryKind::
-            // Leaf` carries no provider string of its own). Agents
-            // get no token estimate (DESIGN.md/§613: "Agents get no
-            // token estimate yet").
+            // read from state when a node exists, else from the plan's
+            // own `PlanEntry` (recorded from the compiled `ToolOp`,
+            // for a row with no state node yet). Agents get no token
+            // estimate.
             let provider = node
                 .and_then(|n| n.meta.get("provider"))
                 .and_then(Value::as_str)
@@ -761,7 +792,7 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
             }
         })
         .unwrap_or_default();
-    // Issue #613's pass labels, review finding 8: the details
+    // Issue #613's pass labels: the details
     // *title* shows both the orchestration pane's own `pass N of M`
     // and the state pane's own real key (`iter_N`) together, for any
     // path shaped like a loop pass -- regardless of whether the plan
@@ -987,9 +1018,7 @@ fn display_value(v: &Value) -> String {
 fn build_header(
     document: &str,
     engine: &str,
-    run_id: Option<&str>,
-    run_start_ts_from_events: Option<&str>,
-    run_end_ts_from_events: Option<&str>,
+    model: &mut RunModel,
     state: Option<&Value>,
     process: ProcessState,
     fallback_elapsed_s: f64,
@@ -999,7 +1028,8 @@ fn build_header(
     statuses: &BTreeMap<String, RowStatus>,
     all_paths: &BTreeMap<String, ()>,
 ) -> Header {
-    let status = run_status(state, process);
+    let status = run_status(state, process.clone());
+    let run_id = model.run_start_id().map(str::to_string);
 
     // Issue #613's "one clock": the run's own start, from the first
     // `--events` `run_start` when one arrived, else the earliest
@@ -1007,24 +1037,11 @@ fn build_header(
     // raw strings (DESIGN.md's own warning: an event's millisecond-
     // plus-`Z` timestamp and a state microsecond-plus-offset one
     // aren't lexicographically comparable).
-    let run_start_ts = run_start_ts_from_events
+    let run_start_ts = model
+        .run_start_ts()
         .map(str::to_string)
         .or_else(|| earliest_created_at("prime", all_paths, flat));
-    // Once the run has ended: `run_end`'s own `ts`, else the final
-    // state's own completion time (`prime.meta.completed_at`), else
-    // (review finding 7 on #613: an aborted run, with no `run_end` and
-    // no `prime` node ever completed, must not keep ticking `elapsed`
-    // up to `now` forever) the latest `completed_at` anywhere in
-    // state.
-    let run_end_ts = run_end_ts_from_events.map(str::to_string).or_else(|| {
-        if status == RunStatus::Running {
-            None
-        } else {
-            flat.get("prime")
-                .and_then(|n| n.completed_at.clone())
-                .or_else(|| latest_completed_at(all_paths, flat))
-        }
-    });
+    let run_end_ts = resolve_run_end_ts(model, flat, all_paths, process, status, now);
     // Every time in this frame comes from the same `now` (issue
     // #613's "one clock") -- the header's own elapsed, every running
     // row's elapsed, and the ETA all derive from this single instant,
@@ -1163,7 +1180,7 @@ fn build_header(
     Header {
         document: document.to_string(),
         engine: engine.to_string(),
-        run_id: run_id.map(str::to_string),
+        run_id,
         status,
         elapsed_s,
         run_start_ts,
@@ -1387,23 +1404,72 @@ fn pass_row_label(path: &str, flat: &BTreeMap<String, NodeMeta>) -> String {
     }
 }
 
-/// Review finding 7 on #613: a run that ended with no `run_end` event
-/// and no `prime.meta.completed_at` of its own (an abort -- the engine
-/// was killed) still has *some* node's own `completed_at` to fall back
-/// to, rather than leaving `elapsed` ticking up to `now` forever.
-fn latest_completed_at(
+/// A run that ended with no `run_end` event and no
+/// `prime.meta.completed_at` of its own (an abort -- the engine was
+/// killed) still has some real instant to end `elapsed` at, rather
+/// than leaving it ticking up to `now` forever: the latest of every
+/// node's own `completed_at`, every node's own `created_at` (so a
+/// step that was killed, with no `completed_at` of its own, still
+/// counts -- a step that finished earlier must not win over one still
+/// running when the process died), and the latest `start`/`end`
+/// event `ts` seen.
+fn latest_known_instant(
     paths: &BTreeMap<String, ()>,
     flat: &BTreeMap<String, NodeMeta>,
+    model: &RunModel,
 ) -> Option<String> {
-    crate::model::subtree_entries("prime", paths)
-        .filter_map(|(p, ())| flat.get(p.as_str()))
-        .filter_map(|node| node.completed_at.clone())
+    let mut candidates: Vec<&str> = Vec::new();
+    for (p, ()) in crate::model::subtree_entries("prime", paths) {
+        if let Some(node) = flat.get(p.as_str()) {
+            if let Some(ts) = node.completed_at.as_deref() {
+                candidates.push(ts);
+            }
+            if let Some(ts) = node.created_at.as_deref() {
+                candidates.push(ts);
+            }
+        }
+    }
+    if let Some(ts) = model.latest_event_ts() {
+        candidates.push(ts);
+    }
+    candidates
+        .into_iter()
         .filter_map(|ts| {
-            let parsed = chrono::DateTime::parse_from_rfc3339(&ts).ok()?;
-            Some((parsed, ts))
+            let parsed = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
+            Some((parsed, ts.to_string()))
         })
         .max_by_key(|(parsed, _)| *parsed)
         .map(|(_, ts)| ts)
+}
+
+/// The header's own `run_end_ts` (DESIGN.md's "one clock"): the first
+/// known of `run_end`'s own `ts`, `prime.meta.completed_at`, the time
+/// `osi run` itself saw the engine process exit
+/// ([`ProcessState::exited_at`] -- `None` for `osi watch`, which owns
+/// no process), and [`latest_known_instant`]. A run still running
+/// never has one (`elapsed` measures up to `now` instead, in the
+/// caller). A run that's ended with none of the above known at all --
+/// nothing ever started, completed or was reported by `--events`,
+/// and no process-exit instant either -- freezes `elapsed` at `now`
+/// the first time this is reached, rather than counting on forever.
+fn resolve_run_end_ts(
+    model: &mut RunModel,
+    flat: &BTreeMap<String, NodeMeta>,
+    all_paths: &BTreeMap<String, ()>,
+    process: ProcessState,
+    status: RunStatus,
+    now: &str,
+) -> Option<String> {
+    if status == RunStatus::Running {
+        return None;
+    }
+    let known = model
+        .run_end_ts()
+        .map(str::to_string)
+        .or_else(|| flat.get("prime").and_then(|n| n.completed_at.clone()))
+        .or_else(|| process.exited_at().map(str::to_string))
+        .or_else(|| latest_known_instant(all_paths, flat, model));
+    Some(known.unwrap_or_else(|| model.freeze_end_ts(now).to_string()))
 }
 
 fn earliest_created_at(
@@ -1411,8 +1477,8 @@ fn earliest_created_at(
     paths: &BTreeMap<String, ()>,
     flat: &BTreeMap<String, NodeMeta>,
 ) -> Option<String> {
-    // Compared as real instants when both sides parse as RFC-3339
-    // (review finding 11 on #613), not a blind raw-string compare --
+    // Compared as real instants when both sides parse as RFC-3339,
+    // not a blind raw-string compare --
     // real `created_at`s all share one consistent format within a
     // single engine's own state, so that promise is never actually
     // load-bearing there, but this is the one place it's made
@@ -1458,6 +1524,7 @@ fn build_rows(
     all_paths: &BTreeMap<String, ()>,
     now: &str,
     model: &RunModel,
+    run_end_ts: Option<&str>,
 ) -> Vec<Row> {
     let mut plan_order = BTreeMap::new();
     if plan.has_plan() {
@@ -1483,6 +1550,7 @@ fn build_rows(
         &default_status,
         now,
         model,
+        run_end_ts,
         &mut rows,
     );
     rows
@@ -1556,6 +1624,7 @@ fn walk_rows(
     default_status: &RowStatus,
     now: &str,
     model: &RunModel,
+    run_end_ts: Option<&str>,
     out: &mut Vec<Row>,
 ) {
     let node = flat.get(path);
@@ -1582,15 +1651,28 @@ fn walk_rows(
         }
         default_status.clone()
     });
-    // Review finding 6 on #613: a row no state node exists for yet
-    // (a tree-loop pass, or a `use` child) still has a start `ts`
-    // and, once finished, an end `ms` from `--events` alone -- used
-    // only when there is no node at all, so a node's own
-    // `created_at`/`completed_at` always wins once one exists.
+    // A row no state node exists for yet (a tree-loop pass, or a
+    // `use` child) still has a start `ts` and, once finished, an end
+    // `ms` from `--events` alone -- used only when there is no node
+    // at all, so a node's own `created_at`/`completed_at` always wins
+    // once one exists. A node with `created_at` but no `completed_at`
+    // measures up to `now` only while its own status is still a
+    // running-type one; a cancelled or aborted row (or a `Done` row
+    // `--events` has already confirmed, ahead of state) must not keep
+    // ticking once the run has ended, so it prefers an `--events` end
+    // duration, then the run's own end instant, then no duration at
+    // all.
+    let is_running_kind = matches!(
+        status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
     let duration_s = node
         .and_then(|n| match (&n.created_at, &n.completed_at) {
             (Some(start), Some(end)) => duration_seconds(start, end),
-            (Some(start), None) => duration_seconds(start, now),
+            (Some(start), None) if is_running_kind => duration_seconds(start, now),
+            (Some(start), None) => model
+                .event_duration_s(path)
+                .or_else(|| run_end_ts.and_then(|end| duration_seconds(start, end))),
             _ => None,
         })
         .or_else(|| match status.kind {
@@ -1642,6 +1724,7 @@ fn walk_rows(
             default_status,
             now,
             model,
+            run_end_ts,
             out,
         );
     }
@@ -1829,6 +1912,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: false,
                 has_failure_reason: false,
+                exited_at: None,
             },
             0.0,
             // `now` well after the run actually ended -- elapsed must
@@ -1847,10 +1931,10 @@ mod tests {
         assert_eq!(rendered.header.elapsed_s, 1572.0);
     }
 
-    /// Review finding 7 on #613: an aborted run (the engine was
-    /// killed, so no `run_end` event and `prime` never got its own
-    /// `completed_at`) must stop ticking `elapsed` at the latest real
-    /// completion anywhere in state, not keep counting up to `now`.
+    /// An aborted run (the engine was killed, so no `run_end` event
+    /// and `prime` never got its own `completed_at`) must stop
+    /// ticking `elapsed` at the latest real completion anywhere in
+    /// state, not keep counting up to `now`.
     #[test]
     fn header_elapsed_stops_at_the_latest_completion_when_a_run_aborts_with_no_run_end() {
         let plan = PlanTree::empty();
@@ -1875,6 +1959,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: true,
                 has_failure_reason: false,
+                exited_at: None,
             },
             0.0,
             // `now` well after the abort -- elapsed must stop at the
@@ -1887,6 +1972,94 @@ mod tests {
             Some("2026-01-01T11:06:00Z")
         );
         assert_eq!(rendered.header.elapsed_s, 62.0);
+    }
+
+    /// A step that was killed, with no `completed_at` of its own,
+    /// still counts toward the latest known instant -- a step that
+    /// finished earlier must not win over one still running when the
+    /// process died.
+    #[test]
+    fn header_elapsed_counts_a_killed_step_after_an_earlier_completed_one() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({
+            "prime": {"value": null, "meta": {"created_at": "2026-01-01T11:00:00Z", "completed_at": null},
+                "a": {"value": "x", "meta": {"created_at": "2026-01-01T11:00:00Z", "completed_at": "2026-01-01T11:06:00Z"}},
+                "b": {"value": null, "meta": {"created_at": "2026-01-01T11:06:30Z", "completed_at": null}}
+            }
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: true,
+                has_failure_reason: false,
+                exited_at: None,
+            },
+            0.0,
+            "2026-01-01T12:00:00Z",
+            &[],
+        );
+        assert_eq!(
+            rendered.header.run_end_ts.as_deref(),
+            Some("2026-01-01T11:06:30Z")
+        );
+        assert_eq!(rendered.header.elapsed_s, 390.0);
+    }
+
+    /// A run that's ended with nothing known at all to end `elapsed`
+    /// at -- no `run_end` event, no `prime.meta.completed_at`, no
+    /// step that ever started or completed, and no process-exit
+    /// instant -- freezes `elapsed` at the first `now` it's built
+    /// with, rather than counting on forever on every later rebuild.
+    #[test]
+    fn header_elapsed_freezes_when_a_run_has_no_completed_step_at_all() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({
+            "prime": {"value": null, "meta": {"completed_at": null}}
+        });
+        let process = ProcessState::Exited {
+            interrupted: false,
+            likely_failed: true,
+            has_failure_reason: true,
+            exited_at: None,
+        };
+        let first = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            process.clone(),
+            0.0,
+            "2026-01-01T11:30:00Z",
+            &[],
+        );
+        assert_eq!(
+            first.header.run_end_ts.as_deref(),
+            Some("2026-01-01T11:30:00Z")
+        );
+
+        let second = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            process,
+            0.0,
+            "2026-01-01T11:45:00Z",
+            &[],
+        );
+        assert_eq!(
+            second.header.run_end_ts.as_deref(),
+            Some("2026-01-01T11:30:00Z")
+        );
     }
 
     #[test]
@@ -1962,7 +2135,7 @@ mod tests {
             .find(|r| r.path == "prime.each_tree.iter_2")
             .expect("pass row");
         assert_eq!(pass_row.label, "pass 3 of 8");
-        // Review finding 8: the pass label is the details pane's own
+        // The pass label is the details pane's own
         // *title*, not its `plan` line.
         let details = details_for("prime.each_tree.iter_2", &plan, Some(&state_json));
         assert_eq!(details.title.as_deref(), Some("pass 3 of 8 (iter_2)"));
@@ -3392,18 +3565,17 @@ mod tests {
         }
     }
 
-    /// Review finding 4 on #613: a tree-loop pass's tool child, same
-    /// as its prompt counterpart above, has no node in `flat` at all
-    /// while `cof` runs it -- the token bar's "agents in flight" count
-    /// must still find an `agent` leaf's own `provider` from the plan.
+    /// A tree-loop pass's tool child, same as its prompt counterpart
+    /// above, has no node in `flat` at all while `cof` runs it -- the
+    /// token bar's "agents in flight" count must still find an
+    /// `agent` leaf's own `provider` from the plan.
     fn named_loop_with_one_tool_program(provider: &str) -> electricity_bytecode::Program {
         named_loop_with_tool_children_program(&[("work", provider)])
     }
 
     /// `named_loop_with_one_tool_program`, generalised to any number
-    /// of tool children in the loop's own body -- review finding 6 on
-    /// #613 needs two or more, to check quick-steps folding for rows
-    /// known only from `--events`.
+    /// of tool children in the loop's own body -- two or more, to
+    /// check quick-steps folding for rows known only from `--events`.
     fn named_loop_with_tool_children_program(
         children: &[(&str, &str)],
     ) -> electricity_bytecode::Program {
@@ -3481,9 +3653,9 @@ mod tests {
         }
     }
 
-    /// Review finding 4: a running agent known only from `--events`
-    /// (no state node at all, as `cof` writes a tree-loop pass) is
-    /// still counted in flight, from the plan's own `ToolOp.provider`.
+    /// A running agent known only from `--events` (no state node at
+    /// all, as `cof` writes a tree-loop pass) is still counted in
+    /// flight, from the plan's own `ToolOp.provider`.
     #[test]
     fn a_running_agent_known_only_from_events_is_still_counted_in_flight() {
         let plan = PlanTree::from_program(&named_loop_with_one_tool_program("agent"));
@@ -3537,10 +3709,10 @@ mod tests {
         assert_eq!(rendered.token_bar.prompts_running, 0);
     }
 
-    /// Review finding 6 on #613: a row with no state node at all (a
-    /// tree-loop pass's tool child) still shows its own elapsed time,
-    /// from `RunModel`'s own record of the matching `start` event's
-    /// `ts` -- `now`, not `node.created_at`, since there is no node.
+    /// A row with no state node at all (a tree-loop pass's tool
+    /// child) still shows its own elapsed time, from `RunModel`'s
+    /// own record of the matching `start` event's `ts` -- `now`, not
+    /// `node.created_at`, since there is no node.
     #[test]
     fn a_running_row_known_only_from_events_shows_its_own_elapsed_time() {
         let plan = PlanTree::from_program(&named_loop_with_one_tool_program("shell"));
@@ -3570,7 +3742,7 @@ mod tests {
         assert_eq!(row.duration_s, Some(5.0));
     }
 
-    /// Review finding 6: two or more finished tool steps known only
+    /// Two or more finished tool steps known only
     /// from `--events` -- no state node for either -- still carry a
     /// real duration (from `RunModel`'s own record of each one's
     /// matching `end` event `ms`), so they fold into one quick-steps
@@ -3816,7 +3988,7 @@ mod tests {
             "folding a 2000-row tree took {fold_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
 
-        // Review finding 10 on #613: `build_folded` itself -- `build`
+        // `build_folded` itself -- `build`
         // plus folding, the path the TUI actually calls every redraw
         // -- must stay linear too, not just `fold_rows` in isolation.
         let build_folded_start = std::time::Instant::now();

@@ -33,11 +33,10 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
 
     let mut changed = Vec::new();
 
-    // Review finding 10 on #613: diffed from `unfolded_rows`, not
-    // `rows` -- folding or expanding a quick-steps group can make a
-    // row appear in `rows` (or vanish from it) with nothing
-    // underneath it actually having changed, which `z`/⏎ must never
-    // highlight.
+    // Diffed from `unfolded_rows`, not `rows` -- folding or
+    // expanding a quick-steps group can make a row appear in `rows`
+    // (or vanish from it) with nothing underneath it actually having
+    // changed, which `z`/⏎ must never highlight.
     let old_rows: HashMap<&str, &crate::render::Row> = old
         .unfolded_rows
         .iter()
@@ -63,16 +62,26 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
         match old_state.get(row.path.as_str()) {
             None => changed.push(format!("state:{}", row.path)),
             Some(prev) => {
-                // Issue #613: a running row's own `dim` carries its
-                // live elapsed time, which ticks every rebuild on its
-                // own -- comparing it here would highlight a row for
-                // no reason other than time passing. A row that is
-                // running in *either* observation skips the `dim`
-                // compare entirely (status/tokens still catch every
-                // real change, including the one where it stops
-                // running).
-                let skip_dim = prev.status.kind == crate::model::StatusKind::Running
-                    || row.status.kind == crate::model::StatusKind::Running;
+                // Issue #613: a running-type row's own `dim` carries
+                // its live elapsed time, which ticks every rebuild on
+                // its own -- comparing it here would highlight a row
+                // for no reason other than time passing. A row that
+                // is running, likely running or running-or-queued in
+                // *either* observation skips the `dim` compare
+                // entirely (status/tokens still catch every real
+                // change, including the one where it stops running);
+                // elapsed text must never highlight, whatever the
+                // status.
+                fn is_running_kind(kind: crate::model::StatusKind) -> bool {
+                    matches!(
+                        kind,
+                        crate::model::StatusKind::Running
+                            | crate::model::StatusKind::LikelyRunning
+                            | crate::model::StatusKind::RunningOrQueued
+                    )
+                }
+                let skip_dim =
+                    is_running_kind(prev.status.kind) || is_running_kind(row.status.kind);
                 let dim_changed = !skip_dim && prev.dim != row.dim;
                 if prev.status != row.status || dim_changed || prev.tokens != row.tokens {
                     changed.push(format!("state:{}", row.path));
@@ -243,7 +252,48 @@ mod tests {
         assert_eq!(diff(Some(&old), &new), Vec::<String>::new());
     }
 
-    /// Review finding 10 on #613: toggling folding, or expanding a
+    /// A cancelled or aborted row -- no `completed_at` of its own,
+    /// and no longer running once the engine process has exited --
+    /// must never tick its own elapsed time with `now` either: the
+    /// same state, built twice with different `now`s under an exited
+    /// process, reports no change at all.
+    #[test]
+    fn a_cancelled_rows_elapsed_never_counts_as_a_change_across_two_nows() {
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "2026-01-01T00:00:05Z"}},
+            "prime": {"value": false, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z", "error": "Interrupted (Ctrl-C/SIGINT)"},
+                "long": {"value": null, "meta": {"created_at": "2026-01-01T00:00:02Z", "completed_at": null}}
+            }
+        });
+        let plan = PlanTree::empty();
+        let mut model_old = RunModel::new();
+        let old = crate::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model_old,
+            Some(&state),
+            ProcessState::exited(true),
+            2.3,
+            "2026-01-01T00:00:04.3Z",
+            &[],
+        );
+        let mut model_new = RunModel::new();
+        let new = crate::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model_new,
+            Some(&state),
+            ProcessState::exited(true),
+            9.4,
+            "2026-01-01T00:00:09.4Z",
+            &[],
+        );
+        assert_eq!(diff(Some(&old), &new), Vec::<String>::new());
+    }
+
+    /// Toggling folding, or expanding a
     /// quick-steps group, can make a row appear in `rows` (or vanish
     /// from it) with nothing underneath it actually having changed --
     /// a breadcrumb or quick-steps summary merging real rows away, or
@@ -516,6 +566,7 @@ mod tests {
                 interrupted: false,
                 likely_failed: false,
                 has_failure_reason: false,
+                exited_at: None,
             },
             1.0,
             "t1",

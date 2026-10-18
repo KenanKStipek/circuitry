@@ -321,7 +321,7 @@ pub enum RunStatus {
 /// Whether the engine process is still alive, and if not, how it ended
 /// — inputs `RunModel` needs that don't come from a snapshot (DESIGN.md
 /// §2.1 rules 2 and 7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessState {
     Running,
     /// The process exited.
@@ -346,6 +346,14 @@ pub enum ProcessState {
         /// stdout JSON. Required alongside `likely_failed` — a stray
         /// leftover stderr line is not a failure reason on its own.
         has_failure_reason: bool,
+        /// The time `osi run` itself saw the engine process exit --
+        /// `None` for `osi watch`, which owns no process to observe,
+        /// and for a caller with nothing useful to put here. The
+        /// header's own elapsed time falls back to this, ahead of
+        /// scanning state and events for a latest instant, once a
+        /// run has ended with neither a `run_end` timestamp nor
+        /// `prime.meta.completed_at` of its own.
+        exited_at: Option<String>,
     },
 }
 
@@ -358,6 +366,16 @@ impl ProcessState {
             interrupted,
             likely_failed: false,
             has_failure_reason: false,
+            exited_at: None,
+        }
+    }
+
+    /// [`ProcessState::Exited`]'s own `exited_at`, when this is that
+    /// variant and it has one.
+    pub fn exited_at(&self) -> Option<&str> {
+        match self {
+            ProcessState::Exited { exited_at, .. } => exited_at.as_deref(),
+            ProcessState::Running => None,
         }
     }
 }
@@ -417,16 +435,15 @@ pub struct RunModel {
     /// open instance.
     open_unid: BTreeMap<String, u32>,
     ended: BTreeMap<String, EventEnd>,
-    /// A path's own latest `start` `ts` (review finding 6 on #613):
-    /// a row events alone confirm `Running`, with no state node yet
-    /// to read `created_at` from, still needs a start instant to
-    /// measure its own elapsed time from.
+    /// A path's own latest `start` `ts`: a row events alone confirm
+    /// `Running`, with no state node yet to read `created_at` from,
+    /// still needs a start instant to measure its own elapsed time
+    /// from.
     started_at: BTreeMap<String, String>,
-    /// A path's own latest `end` `ms` (finding 6): lets a row events
-    /// alone confirm finished -- before state has caught up with a
-    /// node for it at all -- carry a real duration, so it can fold
-    /// into quick steps by the same under-a-second rule as any other
-    /// row.
+    /// A path's own latest `end` `ms`: lets a row events alone
+    /// confirm finished -- before state has caught up with a node
+    /// for it at all -- carry a real duration, so it can fold into
+    /// quick steps by the same under-a-second rule as any other row.
     ended_ms: BTreeMap<String, Option<u64>>,
     cancelled_by_run_end: BTreeSet<String>,
     run_start: Option<(String, Option<i32>)>,
@@ -439,6 +456,17 @@ pub struct RunModel {
     /// `run_end`'s own `ts` -- the run's own end, when `--events`
     /// carried one.
     run_end_ts: Option<String>,
+    /// The latest `ts` seen on any `start` or `end` event -- a run
+    /// with no `run_end` and no `prime.meta.completed_at` of its own
+    /// (an abort) still has this to end its elapsed time at, as long
+    /// as something ever started or finished.
+    latest_event_ts: Option<String>,
+    /// The instant elapsed time froze at, the first time a run was
+    /// seen as not running with no other known instant to end at
+    /// all -- set once, by [`RunModel::freeze_end_ts`], and never
+    /// moved again, so elapsed stops right there instead of ticking
+    /// on to `now` on every later rebuild.
+    frozen_end_ts: Option<String>,
 }
 
 impl RunModel {
@@ -457,6 +485,8 @@ impl RunModel {
             run_start_ts: None,
             run_end: None,
             run_end_ts: None,
+            latest_event_ts: None,
+            frozen_end_ts: None,
         }
     }
 
@@ -484,6 +514,7 @@ impl RunModel {
             }
             Event::Start { ts, id, path } => {
                 self.started_at.insert(path.clone(), ts.clone());
+                self.note_event_ts(ts);
                 self.ended_ms.remove(path);
                 // A fresh `start` at a path this instance already saw
                 // `end` for is a retry (or the next tree-flow instance
@@ -501,14 +532,15 @@ impl RunModel {
                 }
             }
             Event::End {
+                ts,
                 id,
                 path,
                 ok,
                 ms,
                 error,
-                ..
             } => {
                 self.ended_ms.insert(path.clone(), *ms);
+                self.note_event_ts(ts);
                 match id {
                     Some(id) => {
                         self.open_by_id.remove(id);
@@ -634,6 +666,36 @@ impl RunModel {
         self.run_end_ts.as_deref()
     }
 
+    /// The latest `ts` of any `start` or `end` event seen so far --
+    /// compared as real instants, never as raw strings, since an
+    /// event's own millisecond-plus-`Z` timestamp isn't
+    /// lexicographically comparable against another one truncated at
+    /// a different precision.
+    pub fn latest_event_ts(&self) -> Option<&str> {
+        self.latest_event_ts.as_deref()
+    }
+
+    /// Freezes the header's own elapsed time at `now`, the first
+    /// time a run is seen as not running with no run-end, completion,
+    /// process-exit or event instant to use instead -- every later
+    /// call, with any `now`, returns that same frozen instant.
+    pub fn freeze_end_ts(&mut self, now: &str) -> &str {
+        self.frozen_end_ts.get_or_insert_with(|| now.to_string())
+    }
+
+    fn note_event_ts(&mut self, ts: &str) {
+        let newer = match (&self.latest_event_ts, crate::diff::parse_instant(ts)) {
+            (Some(prev), Some(parsed)) => {
+                crate::diff::parse_instant(prev).is_none_or(|p| parsed > p)
+            }
+            (None, _) => true,
+            _ => false,
+        };
+        if newer {
+            self.latest_event_ts = Some(ts.to_string());
+        }
+    }
+
     /// Every path `--events` has said anything about at all — the set
     /// `observe` overlays its exact statuses onto, including a tree
     /// branch or `use` child never visible in state at all while it
@@ -684,19 +746,18 @@ impl RunModel {
         Some(info.concurrency.unwrap_or(info.branches))
     }
 
-    /// `path`'s own latest `start` event `ts` (review finding 6 on
-    /// #613) -- a renderer's own fallback for a row events alone
-    /// confirm running, before any state node exists for it to read
-    /// `created_at` from at all.
+    /// `path`'s own latest `start` event `ts` -- a renderer's own
+    /// fallback for a row events alone confirm running, before any
+    /// state node exists for it to read `created_at` from at all.
     pub fn event_started_at(&self, path: &str) -> Option<&str> {
         self.started_at.get(path).map(String::as_str)
     }
 
-    /// `path`'s own latest `end` event duration, in seconds (finding
-    /// 6): `None` either with no matching `end` event yet, or with
-    /// one that carried no `ms` of its own. A renderer's own fallback
-    /// for a row events alone confirm finished, before state has
-    /// caught up with a node for it at all.
+    /// `path`'s own latest `end` event duration, in seconds: `None`
+    /// either with no matching `end` event yet, or with one that
+    /// carried no `ms` of its own. A renderer's own fallback for a
+    /// row events alone confirm finished, before state has caught up
+    /// with a node for it at all.
     pub fn event_duration_s(&self, path: &str) -> Option<f64> {
         self.ended_ms
             .get(path)
@@ -750,7 +811,7 @@ impl RunModel {
             }
 
             let kind = if node.is_running() {
-                match process {
+                match &process {
                     ProcessState::Running => StatusKind::Running,
                     ProcessState::Exited {
                         interrupted: true, ..
@@ -805,7 +866,7 @@ impl RunModel {
         // never produce a row for in the first place.
         for path in self.event_paths() {
             let kind = match self.event_status(&path) {
-                Some(EventOutcome::Open) => match process {
+                Some(EventOutcome::Open) => match &process {
                     ProcessState::Running => StatusKind::Running,
                     // No `run_end` ever cancelled this open start
                     // (`event_status` would have said `Cancelled`
@@ -1159,6 +1220,7 @@ mod tests {
                     interrupted: false,
                     likely_failed: case.likely_failed,
                     has_failure_reason: case.has_failure_reason,
+                    exited_at: None,
                 }
             };
             assert_eq!(
@@ -1189,10 +1251,10 @@ mod tests {
         );
     }
 
-    /// Review finding 6 on #613: a path's own `start`/`end` events
-    /// are recorded and retrievable even though nothing ever reads
-    /// state for it -- the fallback `render::build` needs for a row
-    /// with no node of its own.
+    /// A path's own `start`/`end` events are recorded and
+    /// retrievable even though nothing ever reads state for it --
+    /// the fallback `render::build` needs for a row with no node of
+    /// its own.
     #[test]
     fn event_started_at_and_duration_are_recorded_and_retrievable() {
         let mut model = RunModel::new();

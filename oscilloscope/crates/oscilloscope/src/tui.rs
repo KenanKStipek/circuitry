@@ -687,7 +687,7 @@ fn draw_details(
     if app.details_scroll > max_scroll {
         app.details_scroll = max_scroll;
     }
-    // Review finding 8 on #613: a loop pass's own `pass N of M
+    // A loop pass's own `pass N of M
     // (iter_N)` belongs in this title, not the `plan` line
     // `details_lines` draws inside the pane.
     let title = match details.and_then(|d| d.title.as_deref()) {
@@ -1886,7 +1886,7 @@ mod golden_tests {
     /// running `agent`'s own path (so its `6.8s` elapsed and
     /// `Running` status are the breadcrumb's own); `review`, already
     /// `Done`, does not fold with its still-running child `fix` --
-    /// review finding 2 on #613 -- so both rows stay. Three
+    /// their statuses differ -- so both rows stay. Three
     /// sub-second finished tool steps fold into one `3 quick steps`
     /// row.
     #[test]
@@ -2192,6 +2192,7 @@ mod golden_tests {
                 interrupted: false,
                 likely_failed: true,
                 has_failure_reason: true,
+                exited_at: None,
             },
             "cof",
             "prime.a",
