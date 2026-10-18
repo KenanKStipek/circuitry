@@ -362,6 +362,11 @@ pub enum Event {
     RegisterTreeBranches(String, usize),
     /// [`RunObserver::clear_tree_branches`].
     ClearTreeBranches(String),
+    /// [`RunObserver::report`] -- path, level ("info"/"warning"),
+    /// message, and the data value's own `Debug` text (`None` rendered
+    /// as `"None"`, the same convention [`Event::Graft`]/[`Event::
+    /// Totals`] use for a `Value` payload).
+    Report(String, String, String, String),
 }
 
 pub struct RecordingObserver {
@@ -461,6 +466,25 @@ impl RunObserver for RecordingObserver {
         self.events
             .borrow_mut()
             .push(Event::Totals(format!("{meta:?}")));
+    }
+
+    fn report(
+        &self,
+        path: &EffectPath,
+        level: electricity_bytecode::ReportLevel,
+        message: &str,
+        data: Option<&Value>,
+    ) {
+        let level_str = match level {
+            electricity_bytecode::ReportLevel::Info => "info",
+            electricity_bytecode::ReportLevel::Warning => "warning",
+        };
+        self.events.borrow_mut().push(Event::Report(
+            path.to_string(),
+            level_str.to_string(),
+            message.to_string(),
+            format!("{data:?}"),
+        ));
     }
 
     fn wants_child_snapshots(&self) -> bool {

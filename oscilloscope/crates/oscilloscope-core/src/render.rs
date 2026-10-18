@@ -1469,6 +1469,112 @@ mod tests {
     }
 
     #[test]
+    fn a_named_reports_state_node_renders_as_a_finished_row_and_is_not_counted() {
+        use electricity_bytecode::{
+            EffectPath, Escape, LeafKind, NodeKind, OnError, Op, Region, ReportLevel, ReportOp,
+            TemplateText,
+        };
+
+        let root_path = EffectPath::root();
+        let tool_path = root_path.clone().push_name("step1");
+        let report_path = root_path.clone().push_name("status");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![
+                        Op {
+                            path: tool_path,
+                            name: Some("step1".to_string()),
+                            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(
+                                electricity_bytecode::ToolOp {
+                                    provider: "shell".to_string(),
+                                    params: electricity_bytecode::ParamNode::Literal(
+                                        electricity_value::Value::None,
+                                    ),
+                                    params_json: None,
+                                    prompt: None,
+                                    model: None,
+                                    timeout_ms: None,
+                                    retries: Default::default(),
+                                    expect: None,
+                                    description: None,
+                                    group: None,
+                                    prompt_file: None,
+                                },
+                            ))),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                        Op {
+                            path: report_path,
+                            name: Some("status".to_string()),
+                            kind: NodeKind::Leaf(Box::new(LeafKind::Report(ReportOp {
+                                message: TemplateText::new("hi", true, Escape::None),
+                                data: None,
+                                level: ReportLevel::Info,
+                                description: None,
+                            }))),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                    ],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        // A report fires no `effect_start`/`effect_complete`, so it never
+        // becomes a plan row (`plan.rs`'s own exclusion) -- but its state
+        // node is still a plain `{value, meta}` node, scanned by
+        // `RunModel::observe` the same as any other, so it still gets a
+        // `Done` entry in `statuses` (#605).
+        let plan = PlanTree::from_program(&program);
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "step1": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
+            "status": {"value": {"message": "hi", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t1", "dry_run": false}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+
+        let status_row = rendered
+            .rows
+            .iter()
+            .find(|r| r.path == "prime.status")
+            .expect("status row");
+        assert_eq!(status_row.kind, RowKind::Unknown);
+        assert_eq!(status_row.status.kind, crate::model::StatusKind::Done);
+
+        // Only `step1` counts -- `status` is a finished row, but not a
+        // leaf (`RowKind::is_leaf`), so `effects_done` skips it.
+        assert_eq!(rendered.header.effects_planned, Some(1));
+        assert_eq!(rendered.header.effects_done, 1);
+    }
+
+    #[test]
     fn a_running_chain_shows_the_running_leaf_and_its_summary() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();

@@ -1,0 +1,8 @@
+name: report-data-binary
+effects:
+  - type: report
+    name: status
+    message: "hello"
+    data:
+      blob: !!binary |
+        aGVsbG8=
