@@ -432,6 +432,16 @@ pub struct Differ {
     /// under `osi watch` or a `use: inline:`/`ref:` child with no
     /// compiled plan to resolve it from at all.
     report_paths: BTreeSet<String>,
+    /// Paths `diff` has already held for one poll (#616's comment):
+    /// a report-shaped node with no plan entry and no report event
+    /// yet, seen for the first time, is skipped rather than printed
+    /// as a step -- `diff` keeps it out of `last` for that one poll so
+    /// the next one re-enters the same "first sighting" choice. A
+    /// path already in this set when seen that way again gets printed
+    /// as an ordinary first sighting instead of held a second time,
+    /// whether or not the event has arrived by then (it hasn't, or
+    /// `report_paths` would already have made it `report_only` above).
+    held_once: BTreeSet<String>,
 }
 
 impl Differ {
@@ -446,6 +456,7 @@ impl Differ {
             preview: BTreeMap::new(),
             pending_ends: Vec::new(),
             report_paths: BTreeSet::new(),
+            held_once: BTreeSet::new(),
         }
     }
 
@@ -795,8 +806,9 @@ impl Differ {
     /// given, returning every new log line, sorted by the underlying
     /// event's own timestamp.
     pub fn diff(&mut self, state: &Value, plan: &PlanTree) -> Vec<LogLine> {
-        let flat = flatten_state(state);
+        let mut flat = flatten_state(state);
         let mut lines = Vec::new();
+        let mut held_this_poll: Vec<String> = Vec::new();
 
         for (path, node) in &flat {
             // #610: a named report writes a state node (#605), but a
@@ -817,6 +829,29 @@ impl Differ {
                     && self.report_paths.contains(path)
                     && crate::render::is_report_value(&node.value));
             if report_only {
+                self.held_once.remove(path);
+                continue;
+            }
+            // #616's own comment: cof writes a named report's state
+            // node just before it fires the report event, so a poll
+            // landing between the two sees a node already shaped like
+            // one with nothing in `report_paths` yet to tell it apart
+            // from a real step -- printing a step line for it then
+            // can't be taken back once the event does arrive. Held
+            // for exactly one poll: a path shaped this way, seen for
+            // the first time (`self.last` has nothing for it yet), is
+            // skipped this round, and `held_this_poll` keeps it out of
+            // `self.last` below so the next poll re-enters here with
+            // the same choice -- the event resolves it (`report_only`
+            // above now matches) or, `held_once.remove` now finding it
+            // already there, it falls through to the ordinary first-
+            // sighting lines below instead of holding a second time.
+            let unconfirmed_reportish = plan.match_path(path).is_none_or(|m| m.entries.is_empty())
+                && !self.last.contains_key(path)
+                && crate::render::is_report_value(&node.value);
+            if unconfirmed_reportish && !self.held_once.remove(path) {
+                self.held_once.insert(path.clone());
+                held_this_poll.push(path.clone());
                 continue;
             }
             let is_container = is_container(&node.meta);
@@ -1003,6 +1038,9 @@ impl Differ {
             }
         }
 
+        for path in &held_this_poll {
+            flat.remove(path);
+        }
         self.last = flat;
         sort_log_lines(&mut lines);
         lines
@@ -1257,6 +1295,84 @@ mod tests {
         assert!(
             lines.iter().all(|l| !l.text.contains("prime.status")),
             "a named report must never grow its own step line: {lines:?}"
+        );
+    }
+
+    /// #616's own comment: a live-state write can land between `cof`
+    /// writing a named report's own state node and firing its report
+    /// event -- a poll in that window must hold rather than print a
+    /// step line it can never take back. Held for exactly one poll:
+    /// the event arrives before the second `diff`, so the node is
+    /// recognized as a report (via `report_paths`, same as when the
+    /// event always arrives first) and still never gets one.
+    #[test]
+    fn an_unconfirmed_reportish_node_is_held_one_poll_then_recognized_once_its_event_arrives() {
+        let mut differ = Differ::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t0"},
+            "status": {"value": {"message": "on track", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t0"}}
+        }});
+
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines.iter().all(|l| !l.text.contains("prime.status")),
+            "an unconfirmed report-shaped node must be held, not printed: {lines:?}"
+        );
+
+        differ.diff_event(
+            &Event::Report {
+                ts: "t0".to_string(),
+                path: "prime.status".to_string(),
+                level: ReportLevel::Info,
+                message: "on track".to_string(),
+                data: None,
+                data_truncated: false,
+            },
+            &PlanTree::empty(),
+            &RunModel::new(),
+        );
+
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines.iter().all(|l| !l.text.contains("prime.status")),
+            "a report confirmed after being held must still never get a step line: {lines:?}"
+        );
+    }
+
+    /// The other half of the same hold (#616's comment): a tool whose
+    /// own output merely happens to match the report shape, with no
+    /// report event ever arriving for it, still gets its ordinary
+    /// `▶`/`✓` lines -- delayed by exactly one poll, never lost.
+    #[test]
+    fn an_unconfirmed_reportish_node_still_gets_its_step_lines_if_no_event_ever_arrives() {
+        let mut differ = Differ::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t0"},
+            "looks_like_a_report": {
+                "value": {"message": "tool output", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t0", "provider": "shell", "stdout": "whatever"}
+            }
+        }});
+
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.text.contains("prime.looks_like_a_report")),
+            "held on the first poll: {lines:?}"
+        );
+
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.text.starts_with("▶ prime.looks_like_a_report")),
+            "printed as an ordinary first sighting once the hold expires: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.text.starts_with("✓ prime.looks_like_a_report")),
+            "printed as an ordinary first sighting once the hold expires: {lines:?}"
         );
     }
 

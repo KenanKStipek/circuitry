@@ -619,3 +619,156 @@ fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
+
+/// Issue #616: a container (the root, a `dynamic`) gets the scope's
+/// effective `adapter`/`model` written into its own node by `cof`,
+/// same as any leaf's. With a plan, `row_kind_for` never reaches the
+/// shape guess for either (the plan already says `root`/`dynamic`),
+/// so this run's own effect count is exact: three `json` steps, the
+/// `dynamic`'s one `shell` child, and two more `shell` steps -- six
+/// leaves, none of them a prompt. `osi watch` compiles no plan at all
+/// (`PlanTree::empty()`, the same fallback this test builds by hand),
+/// so it leans entirely on `RowKind::from_meta_shape`'s shape guess --
+/// this is what used to miscount the `dynamic` as a prompt leaf (its
+/// own node has `meta.adapter`/`meta.model` but no `meta.provider`)
+/// and tag it with the configured model, on both panes.
+#[test]
+fn watch_counts_the_same_effects_as_a_planned_run_with_no_prompts() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"effects:
+  - name: step1
+    type: tool
+    provider: json
+    params: {mode: parse, input: "1"}
+  - name: step2
+    type: tool
+    provider: json
+    params: {mode: parse, input: "2"}
+  - name: step3
+    type: tool
+    provider: json
+    params: {mode: parse, input: "3"}
+  - name: wrap
+    type: dynamic
+    effects:
+      - name: inner
+        type: tool
+        provider: shell
+        params: {command: echo, args: ["hi"]}
+  - name: step4
+    type: tool
+    provider: shell
+    params: {command: echo, args: ["s4"]}
+  - name: step5
+    type: tool
+    provider: shell
+    params: {command: echo, args: ["s5"]}
+"#,
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let mut cof = Command::new("cof");
+    cof.arg("run")
+        .arg(&doc)
+        .arg("--config")
+        .arg(&config)
+        .arg("--quiet")
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        cof.env_remove(key);
+    }
+    let status = wait_with_timeout(cof.spawn().expect("spawn cof"), Duration::from_secs(30));
+    assert!(status.success());
+
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(run_dir.path().join("state.json")).expect("read state.json"),
+    )
+    .expect("parse state.json");
+
+    let inputs = oscilloscope_core::plan::parse_inputs(&[]).expect("no -e inputs");
+    let program = oscilloscope_core::plan::compile(&doc, Some(&config), &inputs)
+        .expect("the document compiles");
+    let plan = oscilloscope_core::plan::PlanTree::from_program(&program);
+    let no_plan = oscilloscope_core::plan::PlanTree::empty();
+    let process = oscilloscope_core::model::ProcessState::Exited {
+        interrupted: false,
+        likely_failed: false,
+        has_failure_reason: false,
+        exited_at: None,
+    };
+
+    let mut planned_model = oscilloscope_core::model::RunModel::new();
+    let planned = oscilloscope_core::render::build(
+        "do.yml",
+        "cof",
+        &plan,
+        &mut planned_model,
+        Some(&state),
+        process.clone(),
+        0.0,
+        "2026-01-01T00:00:10Z",
+        &[],
+    );
+    assert_eq!(planned.header.effects_planned, Some(6));
+    assert_eq!(planned.header.effects_done, 6);
+
+    let mut watched_model = oscilloscope_core::model::RunModel::new();
+    let watched = oscilloscope_core::render::build(
+        "do.yml",
+        "cof",
+        &no_plan,
+        &mut watched_model,
+        Some(&state),
+        process,
+        0.0,
+        "2026-01-01T00:00:10Z",
+        &[],
+    );
+    assert_eq!(
+        watched.header.effects_done, 6,
+        "osi watch must count the same effects as a planned run"
+    );
+
+    for rendered in [&planned, &watched] {
+        for row in rendered.rows.iter() {
+            assert_ne!(
+                row.dim.as_deref(),
+                Some("scripted-model"),
+                "orchestration row {} should show no model tag: {:?}",
+                row.path,
+                row.dim
+            );
+        }
+        for row in rendered.state_rows.iter() {
+            assert_ne!(
+                row.dim.as_deref(),
+                Some("scripted-model"),
+                "state row {} should show no model tag: {:?}",
+                row.path,
+                row.dim
+            );
+        }
+    }
+}
