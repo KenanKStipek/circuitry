@@ -68,6 +68,13 @@ fn one_past_the_limit_is_a_distinct_nesting_error_on_a_2mib_stack() {
         let ctx = nested_ctx(MAX_SECTION_DEPTH + 1);
         let err = render_template(&template, &ctx, &PlainCtx, "t").unwrap_err();
         assert!(err.is_too_deeply_nested(), "got: {err}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "t: template nesting too deep ({} levels, max {MAX_SECTION_DEPTH}).",
+                MAX_SECTION_DEPTH + 1,
+            )
+        );
     });
 }
 
@@ -80,6 +87,13 @@ fn inverted_sections_count_toward_the_same_limit_on_a_2mib_stack() {
         let template = format!("{open}x{close}");
         let err = render_template(&template, &Value::Bool(false), &PlainCtx, "t").unwrap_err();
         assert!(err.is_too_deeply_nested(), "got: {err}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "t: template nesting too deep ({} levels, max {MAX_SECTION_DEPTH}).",
+                MAX_SECTION_DEPTH + 1,
+            )
+        );
     });
 }
 

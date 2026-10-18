@@ -328,23 +328,20 @@ impl Value {
     /// equality, hashing, [`Value::py_partial_cmp`]) would be unsafe to
     /// run on it.
     ///
-    /// Counts nesting *to the deepest value*, not every container: an
-    /// empty `List`/`Dict` has no child to push a deeper `depth` for, so
-    /// it contributes the same `depth` as its own parent would see from
-    /// any other child, not one more the way `electricity-json`'s own
-    /// reader/writer count *every* `[`/`{` — 513 nested *empty* lists
-    /// (`depth() == 512`, since the innermost, empty one contributes
-    /// nothing beyond what its parent already counted) therefore passes
-    /// a `<= MAX_DEPTH` check despite being one bracket deeper than
-    /// `electricity-json` would accept.
-    /// Immaterial in practice (JSON/YAML can never produce a `Value` this
-    /// function needs to check in the first place — both readers enforce
-    /// `MAX_DEPTH` themselves while reading, long before a reader could
-    /// hand back a `Value` for this to measure; see this constant's own
-    /// docs) and off by at most one regardless of how deep the value
-    /// actually is, against a limit (512) already far under where the
-    /// recursive operations this guards (`py_str`/`py_repr`/equality/
-    /// hashing/`py_partial_cmp`) would actually become unsafe.
+    /// Counts every container level, including an empty one: a bare
+    /// `List`/`Dict` with no children still contributes its own level,
+    /// matching the bracket count `electricity-json`'s own reader/writer
+    /// enforce for the same shape -- 513 nested lists where the innermost
+    /// is empty is `depth() == 513`, one level per `[`, the innermost's
+    /// own included. An earlier version of this method counted only as
+    /// far as the deepest *non-empty* container (an empty one had no
+    /// child to push a deeper `depth` for, so it silently contributed
+    /// the same `depth` its parent already had), which made it one short
+    /// of `electricity-json`'s own count for that one shape -- immaterial
+    /// in practice (JSON/YAML can never produce a `Value` this function
+    /// needs to check to begin with: both readers enforce `MAX_DEPTH`
+    /// themselves while reading), but worth a single, shared definition
+    /// over two that quietly disagreed by one.
     pub fn depth(&self) -> usize {
         let mut max_depth = 0usize;
         let mut stack: Vec<(&Value, usize)> = vec![(self, 0)];
@@ -354,11 +351,17 @@ impl Value {
             }
             match value {
                 Value::List(items) => {
+                    if depth + 1 > max_depth {
+                        max_depth = depth + 1;
+                    }
                     for item in items {
                         stack.push((item, depth + 1));
                     }
                 }
                 Value::Dict(entries) => {
+                    if depth + 1 > max_depth {
+                        max_depth = depth + 1;
+                    }
                     for (key, val) in entries {
                         stack.push((key, depth + 1));
                         stack.push((val, depth + 1));

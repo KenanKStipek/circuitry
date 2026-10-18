@@ -224,7 +224,25 @@ A document names one as a value in an `http` header, `{secret: <name>}`, with an
       Authorization: {secret: github, prefix: "Bearer "}
 ```
 
-The value is read when the effect dispatches, and only then; it never reaches the document's data flow, saved state, events or logs. `meta.params_rendered` shows `Bearer [secret:github]`, and a response or an error that echoes the value is saved with `[secret:github]` in its place. A redirect is then followed only to `https`, and without the secret's header to any other origin (`http`'s `redirects`, which defaults to `strip_auth` here and to `follow` otherwise). Only a document you run by path may name a secret: a library entry, an MCP or REST run, a `use: ref:` child or a generated plan that names one fails before anything runs, and `cof check` lists the secrets a document names. [The reference](../orchestration-reference.md#secrets-in-http-headers-and-a-subprocess-tools-env) has the details.
+The value is read when the effect dispatches, and only then; it never reaches the document's data flow, saved state, events or logs. `meta.params_rendered` shows `Bearer [secret:github]`, and a response or an error that echoes the value is saved with `[secret:github]` in its place. A redirect is then followed only to `https`, and without the secret's header to any other origin (`http`'s `redirects`, which defaults to `strip_auth` here and to `follow` otherwise). Only a document you run by path may name a secret: a library entry, an MCP or REST run, a `use: ref:` child or a generated plan that names one fails before anything runs, and `cof check` lists the secrets a document names, each with where it is defined (`host`, `document` or `not defined`).
+
+A definition holds no secret, only where to read one, so a document you run by path may define its own in its `runtime:` block, and a project's orchestrations then run on a new checkout without anyone editing config.json:
+
+```yaml
+runtime:
+  secrets:
+    github: {command: [gh, auth, token]}
+effects:
+  - type: tool
+    name: issues
+    provider: http
+    params:
+      url: "https://api.github.com/repos/{{input.repo}}/issues"
+      headers:
+        Authorization: {secret: github, prefix: "Bearer "}
+```
+
+The document's entries are added to the host's by name, so the host's other secrets stay usable, and one with a host secret's name replaces that definition for the run. "Applied host settings" names each as `runtime.secrets.<name>`, never its definition, and a `use: path:` child resolves the root document's definitions. A limited document's `runtime.secrets` is ignored like its other host settings. [The reference](../orchestration-reference.md#secrets-in-http-headers-and-a-subprocess-tools-env) has the details.
 
 ## Profiles
 

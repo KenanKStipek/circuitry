@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-17T22:02:44.686Z","ev":"run_start","run_id":"c088fe4b-6806-4cbd-9efb-e1587e0d9405","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":81020}
+{"v":1,"seq":1,"ts":"2026-10-17T22:02:44.707Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-17T22:02:44.707Z","ev":"start","id":1,"path":"prime.not_found"}
+{"v":1,"seq":3,"ts":"2026-10-17T22:02:44.714Z","ev":"end","id":1,"path":"prime.not_found","ok":true,"ms":7}
+{"v":1,"seq":4,"ts":"2026-10-17T22:02:44.715Z","ev":"start","id":2,"path":"prime.outside"}
+{"v":1,"seq":5,"ts":"2026-10-17T22:02:44.715Z","ev":"end","id":2,"path":"prime.outside","ok":false,"ms":1,"error":"HttpPlugin: params['save_to'] '../outside.png' resolves outside the working directory (<CASE_DIR>)."}
+{"v":1,"seq":6,"ts":"2026-10-17T22:02:44.715Z","ev":"start","id":3,"path":"prime.exists"}
+{"v":1,"seq":7,"ts":"2026-10-17T22:02:44.717Z","ev":"end","id":3,"path":"prime.exists","ok":false,"ms":1,"error":"HttpPlugin: params['save_to'] 'orchestration.yml' already exists; set overwrite: true to replace it."}
+{"v":1,"seq":8,"ts":"2026-10-17T22:02:44.717Z","ev":"end","id":0,"path":"prime","ok":true,"ms":10}
+{"v":1,"seq":9,"ts":"2026-10-17T22:02:44.717Z","ev":"run_end","ok":true}

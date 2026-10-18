@@ -232,8 +232,24 @@ _CASE_JSON_KEYS = frozenset(
         "compare_run_warnings",
         "fake_credentials",
         "third_party_text",
+        "python_runner_versions",
     }
 )
+
+#: `case.json`'s own `python_runner_versions` key -- a case whose expected
+#: output depends on cof's own CEL nesting limits, which come from CPython's
+#: recursion handling and differ between Python versions (3.12 in particular
+#: changed it substantially), lists the exact `"major.minor"` version(s) its
+#: `expected.json`/`expected.warnings.txt` were generated on. The Python
+#: runner (`test_python_runner.py`) skips the case on any other interpreter;
+#: the electricity runner ignores this key entirely, since electricity's own
+#: caps are fixed constants, not derived from whatever interpreter is running
+#: the test.
+_PYTHON_VERSION_PATTERN = re.compile(r"[1-9][0-9]*\.[0-9]+")
+
+
+def running_python_version() -> str:
+    return f"{sys.version_info.major}.{sys.version_info.minor}"
 
 #: `case.json`'s own `profile` key -- a path relative to the case
 #: directory, of the form `profiles/<name>.yml` or `profiles/<name>.yaml`
@@ -285,6 +301,7 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("compare_run_warnings", False)
     metadata.setdefault("fake_credentials", {})
     metadata.setdefault("third_party_text", [])
+    metadata.setdefault("python_runner_versions", None)
 
     env = metadata["env"]
     if env is not None and (
@@ -373,6 +390,20 @@ def load_case(case_dir: Path) -> dict[str, Any]:
             f"{case_dir.name}: case.json 'third_party_text' must be a list of "
             "{'location': <non-empty str>, 'pattern': <non-empty str>} mappings"
         )
+    python_runner_versions = metadata["python_runner_versions"]
+    if python_runner_versions is not None and (
+        not isinstance(python_runner_versions, list)
+        or not python_runner_versions
+        or not all(
+            isinstance(v, str) and _PYTHON_VERSION_PATTERN.fullmatch(v)
+            for v in python_runner_versions
+        )
+    ):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'python_runner_versions' must be a non-empty list of "
+            "'major.minor' strings like '3.11'"
+        )
+
     profile_rel = metadata["profile"]
     if profile_rel is not None:
         if not isinstance(profile_rel, str):

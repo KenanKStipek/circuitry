@@ -171,6 +171,9 @@ pub enum RefusalReason {
     /// effect dispatches and keeps the value out of every record; this
     /// build resolves none.
     SecretReference,
+    /// An `http` effect's `params` name `save_to` (issue #602): `cof run`
+    /// writes the response body to that file as bytes; this build does not.
+    HttpSaveTo,
 }
 
 /// The first effect path (and why) [`first_unsupported`] found the
@@ -489,8 +492,22 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
             if names_a_secret(&tool.params, normalized_provider == "http") {
                 return refusal(path, RefusalReason::SecretReference);
             }
+            if normalized_provider == "http" && names_save_to(&tool.params) {
+                return refusal(path, RefusalReason::HttpSaveTo);
+            }
             None
         }
+    }
+}
+
+/// Whether an `http` effect's *params* have a `save_to` key (issue #602),
+/// whatever its value.
+fn names_save_to(params: &ParamNode) -> bool {
+    let key = Value::Str("save_to".to_string());
+    match params {
+        ParamNode::Map(map) => map.contains_key(&key),
+        ParamNode::Literal(Value::Dict(dict)) => dict.contains_key(&key),
+        _ => false,
     }
 }
 
@@ -954,6 +971,77 @@ mod tests {
         let text = crate::refusal_text::format_refusal(&refusal);
         assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
         assert!(text.contains("systemone"));
+    }
+
+    #[test]
+    fn an_http_effect_with_save_to_is_refused_with_the_preview_marker() {
+        // Issue #602: `cof run` writes the body to a file; this build does not.
+        let with_http = Supported::m0(&["json", "http"]);
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("url".to_string()),
+            ParamNode::Literal(Value::Str("https://example.com/a.png".to_string())),
+        );
+        params.insert(
+            Value::Str("save_to".to_string()),
+            ParamNode::From {
+                path: "input.name".to_string(),
+                default: None,
+                as_json: false,
+            },
+        );
+        let tool = leaf_op(
+            EffectPath::root().push_name("download"),
+            LeafKind::Tool(tool_op_with_provider("http", ParamNode::Map(params))),
+        );
+        let refusal = first_unsupported(
+            &program_with_root(root_block(vec![tool])),
+            false,
+            &with_http,
+        )
+        .unwrap();
+        assert_eq!(refusal.reason, RefusalReason::HttpSaveTo);
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("prime.download is an http effect with save_to"));
+
+        let mut literal = electricity_value::Dict::new();
+        literal.insert(
+            Value::Str("save_to".to_string()),
+            Value::Str("a.png".to_string()),
+        );
+        let tool = leaf_op(
+            EffectPath::root().push_name("download"),
+            LeafKind::Tool(tool_op_with_provider(
+                "http",
+                ParamNode::Literal(Value::Dict(literal.clone())),
+            )),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_http
+            )
+            .map(|r| r.reason),
+            Some(RefusalReason::HttpSaveTo)
+        );
+        // Another tool's `save_to` is its own business.
+        let tool = leaf_op(
+            EffectPath::root().push_name("other"),
+            LeafKind::Tool(tool_op_with_provider(
+                "json",
+                ParamNode::Literal(Value::Dict(literal)),
+            )),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_http
+            ),
+            None
+        );
     }
 
     #[test]

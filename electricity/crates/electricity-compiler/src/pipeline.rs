@@ -40,6 +40,10 @@ const DOCUMENT_RUNTIME_KEYS: [&str; 2] = ["complexity", "state"];
 /// `cli/effective_settings.py`'s `_NOTICE_KEY_DEPTH`.
 const NOTICE_KEY_DEPTH: usize = 2;
 
+/// `cli/effective_settings.py`'s `_NOTICE_KEY_DEPTHS`: a secret is named
+/// by its name alone, `runtime.secrets.<name>` (issue #601).
+const SECRETS_NOTICE_KEY_DEPTH: usize = 1;
+
 fn runtime_block(document: &Value) -> Option<&Value> {
     document.as_dict()?.get(&Value::Str("runtime".to_string()))
 }
@@ -198,10 +202,15 @@ fn host_setting_warnings(document: &Value, document_name: &str) -> Vec<String> {
             if DOCUMENT_RUNTIME_KEYS.contains(&key_str.as_str()) {
                 continue;
             }
+            let depth = if key_str == "secrets" {
+                SECRETS_NOTICE_KEY_DEPTH
+            } else {
+                NOTICE_KEY_DEPTH
+            };
             runtime_paths.extend(key_paths(
                 &format!("runtime.{}", key_label(key)),
                 value,
-                NOTICE_KEY_DEPTH,
+                depth,
             ));
         }
     }
@@ -1160,6 +1169,19 @@ mod tests {
         assert_eq!(
             warnings,
             vec!["Applied host settings from doc.yml: runtime.max_concurrency".to_string()]
+        );
+    }
+
+    #[test]
+    fn applied_host_settings_notice_names_a_secret_by_its_name_alone() {
+        let mut secrets = Dict::new();
+        let mut definition = Dict::new();
+        definition.insert(Value::Str("env".to_string()), Value::from("TOKEN"));
+        secrets.insert(Value::Str("doc_tok".to_string()), Value::Dict(definition));
+        let doc = runtime_doc(vec![("secrets", Value::Dict(secrets))]);
+        assert_eq!(
+            host_setting_warnings(&doc, "doc.yml"),
+            vec!["Applied host settings from doc.yml: runtime.secrets.doc_tok".to_string()]
         );
     }
 

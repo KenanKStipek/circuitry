@@ -59,6 +59,7 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
         RefusalReason::SecretReference => {
             "a tool effect whose params name a secret ({secret: ...})".to_string()
         }
+        RefusalReason::HttpSaveTo => "an http effect with save_to".to_string(),
     }
 }
 

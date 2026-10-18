@@ -9,6 +9,7 @@ fields are intentionally NOT redacted here. The runtime snapshot embedded in
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -67,6 +68,10 @@ ORCHESTRATION_RUNTIME_KEYS: frozenset[str] = frozenset({"complexity", "state"})
 #: names: `runtime.adapters.openai.base_url`, never deeper (an `env` map's
 #: variable names stay out of it). Keys only, never values.
 _NOTICE_KEY_DEPTH = 2
+
+#: `runtime` keys the notice names to a different depth: a secret by its name
+#: alone, `runtime.secrets.<name>`, never where its definition reads it from.
+_NOTICE_KEY_DEPTHS: dict[str, int] = {"secrets": 1}
 
 
 def _split_orchestration_runtime(
@@ -172,7 +177,9 @@ def _applied_host_settings_notice(
         f"{path} (intersected with host pin)" if path in ceiling_paths else path
         for key, value in orch_runtime.items()
         if key not in ORCHESTRATION_RUNTIME_KEYS
-        for path in _key_paths(f"runtime.{_key_label(key)}", value, _NOTICE_KEY_DEPTH)
+        for path in _key_paths(
+            f"runtime.{_key_label(key)}", value, _NOTICE_KEY_DEPTHS.get(key, _NOTICE_KEY_DEPTH)
+        )
     ]
     host_listed = {*cfg.plugins, *(cfg.enabled_plugins or [])}
     plugin_ids = [
@@ -225,6 +232,11 @@ def orchestration_host_setting_warnings(
 #: this one.
 _DEEP_MERGE_RUNTIME_KEYS: frozenset[str] = frozenset({"plugins", "adapters"})
 
+#: `runtime` keys merged by name (#601): a document's `secrets.<name>` adds to
+#: the host's secrets, and one with a host secret's name replaces that whole
+#: definition (a merge inside it would mix two sources).
+_NAME_MERGE_RUNTIME_KEYS: frozenset[str] = frozenset({"secrets"})
+
 #: Host ceiling that survives a merge as an intersection, never a plain
 #: overlay — a document (trusted or not) can only narrow it, never replace
 #: it outright (#316, the shell half of #264). `(top_key, name, leaf_key)`.
@@ -245,6 +257,31 @@ def _deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str
         else:
             merged[key] = value
     return merged
+
+
+def secret_definition_sources(
+    names: Iterable[str],
+    *,
+    config_runtime: dict[str, Any] | None,
+    orch_runtime: dict[str, Any],
+) -> dict[str, str]:
+    """Where each secret in *names* is defined for a run, by name:
+    ``"document"`` when the document's accepted `runtime:` block (see
+    `_split_orchestration_runtime`) defines it, which wins over the host's,
+    else ``"host"`` when config does, else ``"not defined"``. For `cof check`
+    (#601)."""
+    document = orch_runtime.get("secrets")
+    host = (config_runtime or {}).get("secrets")
+    return {
+        name: (
+            "document"
+            if isinstance(document, dict) and name in document
+            else "host"
+            if isinstance(host, dict) and name in host
+            else "not defined"
+        )
+        for name in names
+    }
 
 
 def _apply_ceiling_intersections(
@@ -296,6 +333,12 @@ def _merge_runtime(
             and isinstance(base_value, dict)
         ):
             merged[key] = _deep_merge_dicts(base_value, value)
+        elif (
+            key in _NAME_MERGE_RUNTIME_KEYS
+            and isinstance(value, dict)
+            and isinstance(base_value, dict)
+        ):
+            merged[key] = {**base_value, **value}
         else:
             merged[key] = value
     return _apply_ceiling_intersections(
@@ -436,7 +479,8 @@ def resolve_effective_settings(
         )
 
     # runtime: orch overrides config, deep-merged under `plugins`/`adapters`
-    # (see _DEEP_MERGE_RUNTIME_KEYS), shallow everywhere else — for the
+    # (see _DEEP_MERGE_RUNTIME_KEYS), merged by name under `secrets` (see
+    # _NAME_MERGE_RUNTIME_KEYS), shallow everywhere else — for the
     # author-level keys only, unless the document is trusted (see
     # ORCHESTRATION_RUNTIME_KEYS)
     orch_runtime, runtime_warnings = _split_orchestration_runtime(
