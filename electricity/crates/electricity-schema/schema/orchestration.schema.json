@@ -407,7 +407,7 @@
     "ReportEffect": {
       "type": "object",
       "required": ["type", "message"],
-      "description": "Tells watchers (--events, osp) what the run is doing: renders 'message' and publishes it, with optional 'data' from the shadow state. Never fails the run, is never retried and does not count toward runtime.last_run.totals.effects_run (#605).",
+      "description": "Tells watchers (--events, osi) what the run is doing: renders 'message' and publishes it, with optional 'data' from the shadow state. Never fails the run, is never retried and does not count toward runtime.last_run.totals.effects_run (#605).",
       "additionalProperties": false,
       "properties": {
         "type": { "const": "report" },

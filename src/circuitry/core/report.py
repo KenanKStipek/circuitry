@@ -1,4 +1,4 @@
-"""``type: report`` — tells watchers (``--events``, ``osp``) what a run is
+"""``type: report`` — tells watchers (``--events``, ``osi``) what a run is
 doing, with values picked from the shadow state (#605).
 
 Modelled on :mod:`circuitry.core.yield_effect`: no model call, no retries,
