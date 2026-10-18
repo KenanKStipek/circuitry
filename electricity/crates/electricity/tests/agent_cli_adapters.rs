@@ -12,8 +12,9 @@ use electricity::run::RunRequest;
 use electricity_vm::CancellationToken;
 use indexmap::IndexMap;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -32,10 +33,28 @@ fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
 }
 
 fn write_executable(dir: &Path, name: &str, script: &str) -> PathBuf {
-    let path = write(dir, name, script);
-    let mut perms = fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(&path, perms).unwrap();
+    let path = dir.join(name);
+    // Written by a short-lived child process rather than by this test
+    // process: if another test thread forked while this process held
+    // the file open for writing, the forked child would hold that
+    // handle until its own exec, and exec'ing the script in the
+    // meantime fails with ETXTBSY ("Text file busy") on Linux. A
+    // child's handle is never inherited by this process's forks.
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("cat > \"$1\" && chmod 700 \"$1\"")
+        .arg("sh")
+        .arg(&path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success(), "writing the fake failed");
     path
 }
 

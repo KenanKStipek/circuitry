@@ -43,7 +43,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -166,14 +166,27 @@ fn sleep_pattern(sleep_secs: u64) -> String {
 /// "still running"/"now gone" check below actually looks for.
 fn write_fake_claude(dir: &Path, sleep_secs: u64) -> PathBuf {
     let path = dir.join("claude");
-    fs::write(
-        &path,
-        format!("#!/bin/sh\ncat >/dev/null\nsleep {sleep_secs}\n"),
-    )
-    .unwrap();
-    let mut perms = fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(&path, perms).unwrap();
+    // Written by a short-lived child process rather than by this test
+    // process: if another test thread forked while this process held
+    // the file open for writing, the forked child would hold that
+    // handle until its own exec, and exec'ing the script in the
+    // meantime fails with ETXTBSY ("Text file busy") on Linux. A
+    // child's handle is never inherited by this process's forks.
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("cat > \"$1\" && chmod 700 \"$1\"")
+        .arg("sh")
+        .arg(&path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("#!/bin/sh\ncat >/dev/null\nsleep {sleep_secs}\n").as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success(), "writing the fake failed");
     path
 }
 

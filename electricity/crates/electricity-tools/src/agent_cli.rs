@@ -1806,7 +1806,12 @@ mod tests {
             std::env::set_var("ANTHROPIC_API_KEY", "secret");
             std::env::set_var("NEUTRAL_VAR", "kept");
         }
-        let cmd = vec![script.to_string_lossy().into_owned()];
+        // Through `sh`, not the script directly: a parallel test's fork
+        // can hold this file open for writing for a moment after this
+        // test's own `std::fs::write` returns (issue #623), and only
+        // `exec`ing the script itself -- never reading it -- can fail
+        // with ETXTBSY during that window.
+        let cmd = vec!["sh".to_string(), script.to_string_lossy().into_owned()];
         let unset: Vec<String> = DEFAULT_UNSET_ENV.iter().map(|s| s.to_string()).collect();
         let result = run_agent_cli(&cmd, &unset, &[], 5.0, Vec::new(), None, &token())
             .await
@@ -1836,7 +1841,8 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let cmd = vec![script.to_string_lossy().into_owned()];
+        // Through `sh`, not the script directly: see issue #623.
+        let cmd = vec!["sh".to_string(), script.to_string_lossy().into_owned()];
         let unset: Vec<String> = DEFAULT_UNSET_ENV.iter().map(|s| s.to_string()).collect();
         let env = vec![
             ("CLAUDECODE".to_string(), "from-env".to_string()),
@@ -1885,7 +1891,8 @@ mod tests {
             );
             std::env::set_var("AGENT_CLI_TEST_TO_REMOVE", "secret");
         }
-        let cmd = vec![script.to_string_lossy().into_owned()];
+        // Through `sh`, not the script directly: see issue #623.
+        let cmd = vec!["sh".to_string(), script.to_string_lossy().into_owned()];
         let unset = vec!["AGENT_CLI_TEST_TO_REMOVE".to_string()];
         let result = run_agent_cli(&cmd, &unset, &[], 5.0, Vec::new(), None, &token())
             .await
