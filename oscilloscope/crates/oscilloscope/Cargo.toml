@@ -38,6 +38,10 @@ ratatui = { version = "=0.30.0", default-features = false, features = [
     "unstable-rendered-line-info",
 ] }
 crossterm = "0.29"
+# Already a dependency of oscilloscope-core; the binary needs it
+# directly too, for the real system zone (`LocalZone`, issue #613) and
+# `chrono::Local`'s own DST-aware offset resolution.
+chrono = "0.4"
 # A raw, non-blocking `libc::poll` on
 # the tty fd itself (`terminal_fd_hung_up`, main.rs) is the only thing
 # that catches a hung-up pty with no controlling terminal to raise a

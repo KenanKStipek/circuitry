@@ -35,6 +35,19 @@ pub struct DrawCtx<'a> {
     /// header for about 2 seconds after a switch. `None` the rest of
     /// the time.
     pub theme_banner: Option<&'a str>,
+    /// Resolves a clock time to this run's own local calendar time
+    /// (issue #613): the real system zone in production
+    /// (`main::LocalZone`), a fixed offset in tests.
+    pub zone: &'a dyn oscilloscope_core::format::ClockZone,
+}
+
+/// A fixed UTC offset for tests that need a [`oscilloscope_core::
+/// format::ClockZone`] (issue #613) -- the real system zone is
+/// `main::LocalZone`, never used in these tests, so every clock-time
+/// assertion here is independent of the machine's own `TZ`.
+#[cfg(test)]
+fn test_zone() -> chrono::FixedOffset {
+    chrono::FixedOffset::east_opt(0).unwrap()
 }
 
 impl DrawCtx<'_> {
@@ -194,21 +207,6 @@ fn orchestration_name(document: &str) -> &str {
         .unwrap_or(document)
 }
 
-/// Thousands separators for the token bar's exact counts (issue
-/// #527: "exact counts (thousands separators)") — `u64` only, so no
-/// sign or fractional part to worry about.
-fn with_thousands_separators(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// DESIGN.md §6.3's own glyph table. `Aborted` and `LikelyRunning`/
 /// `RunningOrQueued` have no glyph of their own in that table — `?`
 /// for an abort (nothing else in the set means "unknown"), and the
@@ -250,14 +248,6 @@ fn status_style(kind: StatusKind, theme: &Theme) -> Style {
     }
 }
 
-fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{secs:.1}s")
-    } else {
-        format!("{}m{:02.0}s", (secs / 60.0) as u64, secs % 60.0)
-    }
-}
-
 fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
     let indent = "  ".repeat(row.depth.saturating_sub(1));
     let glyph = status_glyph(row.status.kind);
@@ -280,7 +270,7 @@ fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
     }
     if let Some(duration) = row.duration_s {
         spans.push(Span::styled(
-            format!("  {}", format_duration(duration)),
+            format!("  {}", oscilloscope_core::format::format_duration(duration)),
             Style::default().fg(ctx.theme.dim),
         ));
     }
@@ -325,8 +315,32 @@ fn draw_header(
         Some(planned) => format!("{}/{planned}", header.effects_done),
         None => header.effects_done.to_string(),
     };
-    let elapsed = format_duration(header.elapsed_s);
-    let tokens = format!("↑{} ↓{}", header.tokens_sent, header.tokens_received);
+    // Issue #613: the header also shows the run's own start ("since
+    // HH:MM:SS") while it's going, and once it has ended, its start
+    // and end ("HH:MM:SS–HH:MM:SS") -- through `ctx.zone`, never the
+    // machine's own zone read directly.
+    let clock_suffix = match (&header.run_start_ts, &header.run_end_ts) {
+        (Some(start), Some(end)) => match (
+            oscilloscope_core::format::format_clock_time(start, ctx.zone),
+            oscilloscope_core::format::format_clock_time(end, ctx.zone),
+        ) {
+            (Some(s), Some(e)) => format!(" ({s}–{e})"),
+            _ => String::new(),
+        },
+        (Some(start), None) => oscilloscope_core::format::format_clock_time(start, ctx.zone)
+            .map(|s| format!(" (since {s})"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let elapsed = format!(
+        "{}{clock_suffix}",
+        oscilloscope_core::format::format_duration(header.elapsed_s)
+    );
+    let tokens = format!(
+        "↑{} ↓{}",
+        oscilloscope_core::format::format_tokens(header.tokens_sent),
+        oscilloscope_core::format::format_tokens(header.tokens_received)
+    );
     // The icon widening by one column (issue #535) left a long
     // document path able to push `effects`/the token counts past the
     // header's own right edge with nothing left to draw them at all
@@ -345,8 +359,18 @@ fn draw_header(
         + effects.chars().count()
         + 2
         + tokens.chars().count();
-    if let Some(eta) = header.innermost_loop_eta_s {
-        suffix_len += 2 + "ETA ".len() + format_duration(eta).chars().count();
+    // The innermost loop's ETA, as a clock time (`~HH:MM`, issue
+    // #613), not a remaining duration -- `None` whenever the
+    // duration-based ETA is, so a missing `format_clock_time` parse
+    // (never happens for a real timestamp) just drops it, same as
+    // having no ETA at all.
+    let eta_clock = header
+        .innermost_loop_eta_ts
+        .as_deref()
+        .and_then(|ts| oscilloscope_core::format::format_clock_time(ts, ctx.zone))
+        .map(|hhmmss| hhmmss[..5].to_string());
+    if let Some(eta) = &eta_clock {
+        suffix_len += 2 + "ETA ~".len() + eta.chars().count();
     }
     if let Some(run_id) = &header.run_id {
         suffix_len += 2 + run_id.chars().count();
@@ -378,8 +402,8 @@ fn draw_header(
             with_highlight(Style::default(), ctx.highlight("header:tokens")),
         ),
     ];
-    if let Some(eta) = header.innermost_loop_eta_s {
-        line.push(Span::raw(format!("  ETA {}", format_duration(eta))));
+    if let Some(eta) = &eta_clock {
+        line.push(Span::raw(format!("  ETA ~{eta}")));
     }
     if let Some(run_id) = &header.run_id {
         line.push(Span::styled(
@@ -607,8 +631,8 @@ mod snippet_wrap_tests {
 }
 
 /// One `sent`/`received` block's own header line (issue #535):
-/// `sent  ↑ 1,234 tokens` or `received  ↓ ≈567 tokens` (an estimate),
-/// formatted the same way the token bar formats its own counts.
+/// `sent  ↑ 1.2 kt` or `received  ↓ ≈567 t` (an estimate), formatted
+/// the same way every other token count in `osi` is.
 fn token_block_header(
     label: &str,
     arrow: char,
@@ -617,13 +641,13 @@ fn token_block_header(
     let text = match block.tokens {
         Some(tokens) if block.estimated => {
             format!(
-                "{label}  {arrow} ≈{} tokens",
-                with_thousands_separators(tokens)
+                "{label}  {arrow} ≈{}",
+                oscilloscope_core::format::format_tokens(tokens)
             )
         }
         Some(tokens) => format!(
-            "{label}  {arrow} {} tokens",
-            with_thousands_separators(tokens)
+            "{label}  {arrow} {}",
+            oscilloscope_core::format::format_tokens(tokens)
         ),
         None => format!("{label}  {arrow}"),
     };
@@ -663,10 +687,17 @@ fn draw_details(
     if app.details_scroll > max_scroll {
         app.details_scroll = max_scroll;
     }
+    // A loop pass's own `pass N of M
+    // (iter_N)` belongs in this title, not the `plan` line
+    // `details_lines` draws inside the pane.
+    let title = match details.and_then(|d| d.title.as_deref()) {
+        Some(title) => format!(" {title} "),
+        None => " details ".to_string(),
+    };
     let paragraph = paragraph.scroll((app.details_scroll as u16, 0)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" details ")
+            .title(title)
             .border_style(border_style),
     );
     frame.render_widget(paragraph, area);
@@ -875,7 +906,11 @@ fn draw_state(
         lines.push(line);
         if let Some((sent, received)) = row.tokens {
             lines.push(Line::styled(
-                format!("{indent}  ↑{sent} ↓{received}"),
+                format!(
+                    "{indent}  ↑{} ↓{}",
+                    oscilloscope_core::format::format_tokens(sent),
+                    oscilloscope_core::format::format_tokens(received)
+                ),
                 Style::default().fg(ctx.theme.dim),
             ));
         }
@@ -946,11 +981,16 @@ fn draw_treemap(
         if is_selected {
             style = style.add_modifier(Modifier::REVERSED);
         }
+        let labelled = format!(
+            "{} {}",
+            cell.label,
+            oscilloscope_core::format::format_tokens(cell.total)
+        );
         if cell.has_children {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(truncate_label(
-                    &cell.label,
+                    &labelled,
                     rect.width.saturating_sub(2) as usize,
                 ))
                 .border_style(with_highlight(style, highlight));
@@ -977,7 +1017,7 @@ fn draw_treemap(
             let fill = with_highlight(fill, highlight);
             frame.render_widget(Block::default().style(fill), rect);
             if rect.width >= 2 {
-                let label = truncate_label(&cell.label, rect.width as usize);
+                let label = truncate_label(&labelled, rect.width as usize);
                 let text_style = Style::default().bg(color).fg(ctx.theme.on_accent);
                 let text_style = if is_selected {
                     text_style.add_modifier(Modifier::REVERSED)
@@ -1016,8 +1056,8 @@ fn draw_token_bar(
     ctx: &DrawCtx,
 ) {
     let inner_width = area.width.saturating_sub(2) as usize;
-    let sent_str = with_thousands_separators(header.tokens_sent);
-    let received_str = with_thousands_separators(header.tokens_received);
+    let sent_str = oscilloscope_core::format::format_tokens(header.tokens_sent);
+    let received_str = oscilloscope_core::format::format_tokens(header.tokens_received);
     // Finding 2: the line holds *two* bars, each with its own label and
     // exact count ("in  " + bar + " <sent>   " + "out  " + bar + "
     // <received>") — a fixed-width bar for each (the old `inner - 24`)
@@ -1058,39 +1098,62 @@ fn draw_token_bar(
             with_highlight(Style::default(), totals_highlight),
         ),
     ]);
-    let line2 = if token_bar.prompts_running == 0 {
+    let line2 = if token_bar.prompts_running == 0 && token_bar.agents_running == 0 {
         Line::from("nothing in flight")
     } else {
-        let plural = if token_bar.prompts_running == 1 {
-            ""
-        } else {
-            "s"
-        };
-        // A tree-loop pass's prompt,
-        // and a `use: path:` child's, are counted as running even
-        // with no `prompt_sent` in state to estimate from at all
-        // (DESIGN.md §1.4), so the estimate is a lower bound, same as
-        // "effects planned" already does in the header -- a trailing
-        // `+` says so when it's still a real, nonzero estimate
-        // (`≈5+`, some known and some not). When *none* of the running
-        // prompts has a known `prompt_sent` at all, the estimate isn't
-        // merely low, it's entirely unknown -- `≈0+` reads as a
-        // broken number (zero tokens, running?), so this shows a
-        // plain `?` instead, the same glyph the header's own
-        // innermost-loop ETA uses for "unknown", not "zero".
-        let estimate = if token_bar.estimated_input_is_lower_bound {
-            if token_bar.estimated_input == 0 {
-                "?".to_string()
+        // Issue #613's "agents in flight": a running `agent` tool
+        // step is listed next to running prompts ("2 prompts · 1 agent
+        // in flight"), with no token estimate of its own.
+        let mut parts = Vec::new();
+        if token_bar.prompts_running > 0 {
+            let plural = if token_bar.prompts_running == 1 {
+                ""
             } else {
-                format!("≈{}+", with_thousands_separators(token_bar.estimated_input))
-            }
+                "s"
+            };
+            parts.push(format!("{} prompt{plural}", token_bar.prompts_running));
+        }
+        if token_bar.agents_running > 0 {
+            let plural = if token_bar.agents_running == 1 {
+                ""
+            } else {
+                "s"
+            };
+            parts.push(format!("{} agent{plural}", token_bar.agents_running));
+        }
+        let in_flight = format!("{} in flight", parts.join(" · "));
+        if token_bar.prompts_running == 0 {
+            Line::from(in_flight)
         } else {
-            format!("≈{}", with_thousands_separators(token_bar.estimated_input))
-        };
-        Line::from(format!(
-            "now in {estimate}   ({} prompt{plural} running)",
-            token_bar.prompts_running
-        ))
+            // A tree-loop pass's prompt,
+            // and a `use: path:` child's, are counted as running even
+            // with no `prompt_sent` in state to estimate from at all
+            // (DESIGN.md §1.4), so the estimate is a lower bound, same as
+            // "effects planned" already does in the header -- a trailing
+            // `+` says so when it's still a real, nonzero estimate
+            // (`≈5+`, some known and some not). When *none* of the running
+            // prompts has a known `prompt_sent` at all, the estimate isn't
+            // merely low, it's entirely unknown -- `≈0+` reads as a
+            // broken number (zero tokens, running?), so this shows a
+            // plain `?` instead, the same glyph the header's own
+            // innermost-loop ETA uses for "unknown", not "zero".
+            let estimate = if token_bar.estimated_input_is_lower_bound {
+                if token_bar.estimated_input == 0 {
+                    "?".to_string()
+                } else {
+                    format!(
+                        "≈{}+",
+                        oscilloscope_core::format::format_tokens(token_bar.estimated_input)
+                    )
+                }
+            } else {
+                format!(
+                    "≈{}",
+                    oscilloscope_core::format::format_tokens(token_bar.estimated_input)
+                )
+            };
+            Line::from(format!("now in {estimate}   ({in_flight})"))
+        }
     };
     let line2 = line2.style(with_highlight(Style::default(), tokenbar_highlight));
     let paragraph = Paragraph::new(vec![line1, line2])
@@ -1149,6 +1212,8 @@ const HELP_TEXT: &[&str] = &[
     "Home End     jump to the first / last row",
     "g G          same as Home / End",
     "← →          collapse / expand (orchestration or state)",
+    "⏎            expand a quick-steps row in place",
+    "z            fold on/off (breadcrumbs, quick steps)",
     "tab          orchestration → details → state",
     "f            follow the running row (on by default)",
     "e            errors only",
@@ -1250,12 +1315,21 @@ pub fn draw(
 
     if !two_column {
         app.state_viewport = 0;
+        // Issue #613: golden-ratio nested the same way the two-column
+        // layout's own left column is -- the details-plus-tree block
+        // gets the golden section's larger share of the height first
+        // (log, which only ever grows by appending, takes the rest),
+        // then that block splits again into details (minor) over the
+        // tree (major, the pane that grows with the run).
+        let log_rows = oscilloscope_core::layout::golden_section(body.height);
+        let top_rows = body.height - log_rows;
+        let details_rows = oscilloscope_core::layout::golden_section(top_rows);
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(45),
-                Constraint::Min(5),
+                Constraint::Length(details_rows),
+                Constraint::Length(top_rows - details_rows),
+                Constraint::Min(log_rows),
             ])
             .split(body);
         draw_details(frame, parts[0], details, selected_kind, app, ctx);
@@ -1288,12 +1362,23 @@ pub fn draw(
             && area.height >= thresholds::STATE_PANE_MIN_HEIGHT;
 
         if show_state && show_treemap {
+            // Issue #613: golden-ratio nested, top to bottom. The
+            // treemap is a snapshot of right-now, not something that
+            // grows with the run, so it takes the smaller share
+            // first; what's left splits again between the state
+            // pane (grows with the run, same reasoning as the
+            // orchestration tree) and the log pane (grows only by
+            // appending), the state pane keeping the larger share of
+            // that remainder.
+            let treemap_rows = oscilloscope_core::layout::golden_section(columns[1].height);
+            let rest_rows = columns[1].height - treemap_rows;
+            let log_rows = oscilloscope_core::layout::golden_section(rest_rows);
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(35),
-                    Constraint::Percentage(30),
-                    Constraint::Min(5),
+                    Constraint::Length(treemap_rows),
+                    Constraint::Length(rest_rows - log_rows),
+                    Constraint::Min(log_rows),
                 ])
                 .split(columns[1]);
             draw_treemap(
@@ -1306,9 +1391,15 @@ pub fn draw(
             draw_state(frame, right[1], &state_visible, app, ctx);
             draw_log(frame, right[2], log_lines, log_total, ctx);
         } else if show_state {
+            // The state pane (grows with the run) keeps the golden
+            // section's larger share; the log pane the rest.
+            let log_rows = oscilloscope_core::layout::golden_section(columns[1].height);
             let right = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(40), Constraint::Min(5)])
+                .constraints([
+                    Constraint::Length(columns[1].height - log_rows),
+                    Constraint::Min(log_rows),
+                ])
                 .split(columns[1]);
             draw_state(frame, right[0], &state_visible, app, ctx);
             draw_log(frame, right[1], log_lines, log_total, ctx);
@@ -1655,6 +1746,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1716,7 +1808,7 @@ mod golden_tests {
     /// [`snapshot`], with the log pane given real lines (review
     /// finding 3 on #458's comment 3: every golden here left it
     /// empty) -- `snapshot` itself is just this with none. `log_lines`
-    /// is the plain, already-formatted `mm:ss.s text` strings `draw`
+    /// is the plain, already-formatted `HH:MM:SS text` strings `draw`
     /// itself takes (`do_run`'s own `log_lines: Vec<String>`), not
     /// `render::build`'s own `log: &[LogLine]` -- the TUI's log pane
     /// never reads the latter.
@@ -1785,6 +1877,77 @@ mod golden_tests {
             "cof",
             "prime.a",
         );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #613's folding, drawn end to end through `render::
+    /// build_folded`: `fix` and its one child `agent` are both still
+    /// `Running`, so they fold into one breadcrumb row with the
+    /// running `agent`'s own path (so its `6.8s` elapsed and
+    /// `Running` status are the breadcrumb's own); `review`, already
+    /// `Done`, does not fold with its still-running child `fix` --
+    /// their statuses differ -- so both rows stay. Three
+    /// sub-second finished tool steps fold into one `3 quick steps`
+    /// row.
+    #[test]
+    fn folding_breadcrumbs_and_quick_steps() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "review": {"value": null, "meta": {"created_at": "2026-01-01T11:39:26Z", "completed_at": "2026-01-01T11:46:39Z", "error": null},
+                "fix": {"value": null, "meta": {"created_at": "2026-01-01T11:46:40Z", "completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent"}}
+                }
+            },
+            "q1": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.000Z", "completed_at": "2026-01-01T11:46:49.300Z", "error": null, "provider": "shell"}},
+            "q2": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.300Z", "completed_at": "2026-01-01T11:46:49.800Z", "error": null, "provider": "shell"}},
+            "q3": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.800Z", "completed_at": "2026-01-01T11:46:50.000Z", "error": null, "provider": "shell"}}
+        }});
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            390.0,
+            "2026-01-01T11:46:49.800Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        let details = render::details_for("prime.review.fix.agent", &plan, Some(&state));
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.review.fix.agent".to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+        };
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
     }
 
@@ -1886,8 +2049,8 @@ mod golden_tests {
             "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
         }});
         let log_lines = vec![
-            "00:00.0 ▶ prime.a  tool".to_string(),
-            "00:00.5 ✓ prime.a  0.5s  ok".to_string(),
+            "11:04:58 ▶ prime.a  tool".to_string(),
+            "11:04:58 ✓ prime.a  0.5s  ok".to_string(),
         ];
         let text = snapshot_with_log(
             &plan,
@@ -2029,6 +2192,7 @@ mod golden_tests {
                 interrupted: false,
                 likely_failed: true,
                 has_failure_reason: true,
+                exited_at: None,
             },
             "cof",
             "prime.a",
@@ -2216,6 +2380,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2349,6 +2514,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2440,6 +2606,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2515,6 +2682,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2576,13 +2744,17 @@ mod highlight_tests {
                 run_id: None,
                 status: oscilloscope_core::model::RunStatus::Running,
                 elapsed_s: 1.0,
+                run_start_ts: None,
+                run_end_ts: None,
                 effects_done: 1,
                 effects_planned: Some(1),
                 effects_planned_is_lower_bound: false,
                 tokens_sent: 0,
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
+                innermost_loop_eta_ts: None,
             },
+            unfolded_rows: Vec::new(),
             rows: vec![Row {
                 path: "prime.a".to_string(),
                 depth: 1,
@@ -2658,6 +2830,7 @@ mod highlight_tests {
             now,
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app_t0 = app.clone();
         let backend = TestBackend::new(100, 24);
@@ -2679,6 +2852,7 @@ mod highlight_tests {
             now: now + FADE_DURATION + Duration::from_millis(1),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app_after = app.clone();
         let backend2 = TestBackend::new(100, 24);
@@ -2720,6 +2894,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let has_bezel_corner = |width: u16| -> bool {
             let mut app = App::new(false);
@@ -2757,6 +2932,7 @@ mod highlight_tests {
             now,
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);
@@ -2802,6 +2978,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);
@@ -2832,6 +3009,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);
@@ -2855,6 +3033,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);

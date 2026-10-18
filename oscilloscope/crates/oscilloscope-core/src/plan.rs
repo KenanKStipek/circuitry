@@ -202,6 +202,11 @@ pub struct PlanEntry {
     /// (`None` for the document root) — DESIGN.md §2.1 rule 1 only
     /// applies to a chain-flow container.
     pub parent_flow: Option<Flow>,
+    /// A tool leaf's own `provider` (`None` for every other kind) —
+    /// issue #613's "agents in flight" needs this for a row events
+    /// alone have confirmed running, before state ever carries a
+    /// node (and so a `meta.provider`) for it at all.
+    pub provider: Option<String>,
 }
 
 /// One pass index resolved while matching a concrete path against a
@@ -531,10 +536,14 @@ fn record_op_entry(
         // showing reports is #610's own work, not this plan's.
         return path;
     }
+    let mut provider = None;
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
-            LeafKind::Tool(_) => PlanEntryKind::Leaf(LeafEffectKind::Tool),
+            LeafKind::Tool(tool) => {
+                provider = Some(tool.provider.clone());
+                PlanEntryKind::Leaf(LeafEffectKind::Tool)
+            }
             LeafKind::Prompt(_) => PlanEntryKind::Leaf(LeafEffectKind::Prompt),
             LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
             LeafKind::Reflector(_) => PlanEntryKind::Leaf(LeafEffectKind::Reflector),
@@ -565,6 +574,7 @@ fn record_op_entry(
             enabled: op.enabled,
             kind,
             parent_flow,
+            provider,
         },
     );
     path
@@ -954,6 +964,9 @@ mod tests {
         let m = plan.match_path("prime.step1").expect("should match");
         assert_eq!(m.entries.len(), 1);
         assert_eq!(m.entries[0].name.as_deref(), Some("step1"));
+        // A tool leaf's own `provider` survives into its `PlanEntry`,
+        // not just its `LeafEffectKind`.
+        assert_eq!(m.entries[0].provider.as_deref(), Some("shell"));
         assert!(plan.match_path("prime.nonexistent").is_none());
     }
 

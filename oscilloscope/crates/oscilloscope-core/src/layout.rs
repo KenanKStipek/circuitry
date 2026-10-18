@@ -22,11 +22,21 @@ pub fn golden_section(total: u16) -> u16 {
     ((total as f64) / PHI_SQUARED).round() as u16
 }
 
-/// The left column's own width (issue #535): the golden section,
-/// floored at [`LEFT_MIN`]. The right column takes `total -
+/// The golden section's own larger share of `total` --
+/// `total - golden_section(total)`, so the two always add back up to
+/// `total` exactly.
+pub fn golden_major_section(total: u16) -> u16 {
+    total - golden_section(total)
+}
+
+/// The left column's own width (issue #613: the larger share goes to
+/// the pane that grows with the run -- the orchestration tree, in the
+/// left column, below the details pane -- so the left column itself
+/// takes the golden section's *larger* share here, floored at
+/// [`LEFT_MIN`]). The right column takes `total -
 /// left_column_width(total)`.
 pub fn left_column_width(total: u16) -> u16 {
-    golden_section(total).max(LEFT_MIN).min(total)
+    golden_major_section(total).max(LEFT_MIN).min(total)
 }
 
 #[cfg(test)]
@@ -44,19 +54,30 @@ mod tests {
     }
 
     #[test]
-    fn left_column_matches_the_golden_section_above_the_minimum() {
+    fn golden_major_section_always_completes_the_minor_one() {
         for width in [80, 100, 120, 160, 200, 300] {
-            assert_eq!(left_column_width(width), golden_section(width));
+            assert_eq!(golden_major_section(width) + golden_section(width), width);
+        }
+    }
+
+    #[test]
+    fn left_column_matches_the_golden_majority_above_the_minimum() {
+        // Issue #613: the left column (details above the
+        // orchestration tree, the pane that grows with the run) gets
+        // the golden section's *larger* share, not its smaller one.
+        for width in [80, 100, 120, 160, 200, 300] {
+            assert_eq!(left_column_width(width), golden_major_section(width));
+            assert!(left_column_width(width) > width - left_column_width(width));
         }
     }
 
     #[test]
     fn left_column_never_drops_below_left_min() {
-        // The golden section of 80 already clears LEFT_MIN (31 > 30);
-        // this pins the floor would bite below that, were the
+        // The golden majority of 80 already clears LEFT_MIN (49 > 30);
+        // this pins where the floor would bite below that, were the
         // two-column threshold ever lowered.
-        assert_eq!(left_column_width(60), LEFT_MIN);
-        assert_eq!(golden_section(60), 23);
+        assert_eq!(left_column_width(40), LEFT_MIN);
+        assert_eq!(golden_major_section(40), 25);
     }
 
     #[test]

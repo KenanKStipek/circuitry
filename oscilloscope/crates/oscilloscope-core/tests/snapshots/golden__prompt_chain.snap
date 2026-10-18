@@ -5,9 +5,9 @@ expression: rendered
 --- observation 0 ---
 log:
   ▶ prime.greet  prompt scripted/scripted-model "Say hello!"
-  ✓ prime.greet  0.0s  ↑5 ↓3
+  ✓ prime.greet  0.0s  ↑5 t ↓3 t
   ▶ prime.thank  prompt scripted/scripted-model "Say thank you!"
-  ✓ prime.thank  0.0s  ↑4 ↓3
+  ✓ prime.thank  0.0s  ↑4 t ↓3 t
   ■ run ok  0.0s
 status:
 prime: Done skip=None retrying=false

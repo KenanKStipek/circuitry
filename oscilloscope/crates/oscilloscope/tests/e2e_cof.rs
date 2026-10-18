@@ -508,7 +508,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 
     assert!(status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
-    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 t ↓5 t"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
@@ -558,7 +558,7 @@ fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received
 
     assert!(status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
-    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 t ↓5 t"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }

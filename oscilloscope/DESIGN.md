@@ -459,16 +459,16 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 
 ### 6.2 Plain-text mode
 
-`osi --log` is chosen automatically when stdout is not a TTY or `CI` is set. It prints the §2.4 lines with `mm:ss.s` timestamps, plus the engine's stderr lines (prefixed `engine:`), and ends with a summary line and the engine's exit code. Example (from p4):
+`osi --log` is chosen automatically when stdout is not a TTY or `CI` is set. It prints the §2.4 lines, each prefixed with its own `HH:MM:SS` clock time (issue #613; local to the binary's own zone, clamped so the displayed time never runs backwards -- a line with no timestamp of its own, like a forwarded-signal notice, uses the time it's generated), plus the engine's stderr lines (prefixed `engine:`), and ends with a summary line and the engine's exit code. Durations and token counts throughout use `oscilloscope_core::format`'s one formatter each (DESIGN.md §6.3). Example (from p4, replayed at 19:56:22 local time):
 
 ```
-00:00.0 ▶ flaky                 prompt scripted/scripted-model "flaky"
-00:02.0 ✓ flaky                 2.0s  retries 2  ↑3 ↓1
-00:02.0 ▶ always_fails          shell ls /nonexistent-osi-probe
-00:02.9 ✗ always_fails          /bin/ls failed (exit 1): ls: … (on_error: continue)
-00:03.9 ✗ guarded.g_fail        /bin/ls failed (exit 1) …
-00:04.6 ✓ guarded.g_cleanup     0.7s  (finally)
-00:05.7 ■ run ok  5.7s · 12 effects · ↑3 ↓1
+19:56:22 ▶ flaky                 prompt scripted/scripted-model "flaky"
+19:56:24 ✓ flaky                 2.0s  retries 2  ↑3 t ↓1 t
+19:56:24 ▶ always_fails          shell ls /nonexistent-osi-probe
+19:56:24 ✗ always_fails          /bin/ls failed (exit 1): ls: … (on_error: continue)
+19:56:25 ✗ guarded.g_fail        /bin/ls failed (exit 1) …
+19:56:26 ✓ guarded.g_cleanup     0.7s  (finally)
+19:56:27 ■ run ok  5.7s · 12 effects · ↑3 t ↓1 t
 ```
 
 ### 6.3 TUI (shipped, issue #434; the state pane, treemap and token bar,
@@ -495,34 +495,74 @@ integer geometry, deterministic for the same input, computed in
 left on a wide enough terminal); a left column of the details pane over
 the orchestration pane; a right column of the `tokens by key` treemap,
 the state pane and the log pane; and the token bar across the full
-bottom width. The column split, and the left column's own row split, are
-both the golden section (`oscilloscope_core::layout::golden_section`/
-`left_column_width`): the left column is `round(W / φ²)` columns of the
-body's own width `W`, floored at `LEFT_MIN` (30) — the golden section
-already clears that floor at the two-column threshold itself (80 columns
-gives 31), so the floor only guards a later threshold change — and the
-details pane is `round(H / φ²)` rows of the left column's own height `H`,
-the orchestration pane the rest. On a terminal at least 120×40, every
-pane shows useful content. Below that, panes drop in this order until
-the rest fits — the header and the token bar never disappear:
+bottom width. Every split, at every level, is the golden section, 62/38
+(`oscilloscope_core::layout::golden_section`/`golden_major_section`/
+`left_column_width`) — and at each split, the larger share always goes
+to whichever side grows with the run, never to a fixed side: the left
+column (`golden_major_section(W)` of the body's own width `W`, floored
+at `LEFT_MIN` (30) — the golden section already clears that floor at
+the two-column threshold itself, 80 columns gives 49, so the floor only
+guards a later threshold change) over the right column, because the
+orchestration tree inside it only grows as the run goes deeper; within
+the left column, the orchestration pane (`H - golden_section(H)` of the
+left column's own height `H`) over the details pane, for the same
+reason; within the right column, the state pane over the treemap (a
+snapshot of right now, not something that grows) and over the log pane
+(which only ever grows by appending, so it comes last). On a terminal at
+least 120×40, every pane shows useful content. Below that, panes drop in
+this order until the rest fits — the header and the token bar never
+disappear:
 
 1. below 100 columns or 30 rows (`thresholds::TREEMAP_MIN_WIDTH`/
    `_MIN_HEIGHT` in `tui.rs`): the treemap, leaving the right column as
-   the state pane over the log pane;
+   the state pane (the golden section's larger share) over the log pane;
 2. below 90 columns or 24 rows (`STATE_PANE_MIN_WIDTH`/`_MIN_HEIGHT`): the
    state pane too, leaving the right column as the log pane alone;
 3. below 80 columns or 20 rows (`TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`): the
    two-column split itself, down to one column stacking the details
-   pane, the orchestration pane and the log pane (25%/45%/the rest) —
-   details still sits above the orchestration pane here too. The scope
-   icon is not drawn below this same width threshold; the header takes
-   the full width instead.
+   pane, the orchestration pane and the log pane, still golden-ratio
+   nested top to bottom (the details-plus-tree block takes the larger
+   share over the log pane, then splits again into details, the
+   smaller share, over the orchestration pane) — details still sits
+   above the orchestration pane here too. The scope icon is not drawn
+   below this same width threshold; the header takes the full width
+   instead.
 
-**Header (unchanged):** document, engine, run state (running / ok / failed
+**Header:** document, engine, run state (running / ok / failed
 / cancelled / aborted), elapsed time, effects done out of planned, tokens
 ↑↓, and the ETA of the innermost running loop. There is no run-level
 ETA: plans have data-dependent loops. The run ID shows once `--events`
-has carried a `run_start`; state alone never has one. "Planned"
+has carried a `run_start`; state alone never has one.
+
+Issue #613's "one clock": elapsed is measured from the run's own start
+-- the first `--events` `run_start`'s own `ts`, else the earliest
+`created_at` anywhere in state -- to `now`, the same `now` every row's
+own elapsed and the ETA use this frame, never from when `osi` itself
+happened to start (so `osi watch` attaching to a run already well
+under way shows its real elapsed time, not a few seconds). Once the
+run has ended, elapsed stops at its own end (`run_end`'s `ts`, else the
+final state's own `prime.meta.completed_at`). The header additionally
+shows the run's own start as a clock time (`since 11:04:58`) while it
+is going, and once it has ended, its start and end together
+(`11:04:58–11:31:10`); the ETA is shown as a clock time too (`ETA
+~11:42`), not a remaining duration. Every duration anywhere in `osi`
+(rows, the state pane, details, the header, the log's `end` lines, the
+ETA) goes through `oscilloscope_core::format::format_duration`'s one
+table (`0.4s` / `42.0s` under a minute, `6m12s` under an hour, `2h05m`
+under a day, `3d04h` beyond that, rounding carrying into the next unit
+at every boundary); every token count goes through `format_tokens`'s
+one table (`369 t` below 1,000, one decimal below 100 of a unit
+`18.0 kt`, no decimal at 100 or more `142 kt`, rounding carrying into
+the next unit the same way). A running row's own elapsed (the
+orchestration pane and the state pane both) updates every rebuild
+without that, alone, ever counting as a highlighted change
+(`changes::diff` never compares it). Every clock time is formatted
+through an explicitly passed `oscilloscope_core::format::ClockZone`
+(a `FixedOffset` in tests, the binary's own real local zone,
+resolved per timestamp so DST is right) -- never the machine's zone
+read directly, so golden snapshots are identical regardless of `TZ`.
+
+"Planned"
 multiplies a loop body's own leaf by that named loop's `meta.progress.
 total` once it's known (so a four-pass loop's one-leaf body counts as
 4, not 1), and "done" counts every finished pass separately; while any
@@ -758,8 +798,28 @@ the full bottom width, two content lines:
     *no* running prompt's `prompt_sent` is known at all, the estimate
     isn't merely low, it's entirely unknown — `≈0+` would read as a
     broken number (zero tokens, yet something's running?), so the
-    line shows a plain `?` instead (issue #527's own PR). With nothing running, the line says so
-    ("nothing in flight").
+    line shows a plain `?` instead (issue #527's own PR).
+
+    Issue #613's "agents in flight": a running *tool* row whose
+    `provider` is `agent` (cof's own rule at `core/compiler.py`,
+    trimmed and case-insensitive) is counted alongside running
+    prompts (`2 prompts · 1 agent in flight`), with no token estimate
+    of its own — live agent token usage (#612) is a later lane. Only
+    `cof` can ever produce a running agent: electricity compiles an
+    `agent` effect's prompt file for parity with `cof check`, but
+    refuses to run the step itself -- `agent` is a known cof plugin
+    name (`electricity-bytecode`'s own `PLUGIN_NAMES`), and
+    `electricity-tools`' registry has no builder for it, so its
+    refusal walker refuses it with the preview marker, the same way
+    it refuses any other orchestration outside electricity's own
+    preview scope. With neither a prompt nor an agent running, the
+    line says so ("nothing in flight").
+
+    This count also reads a running leaf's own `provider` from the
+    compiled plan, not state alone: a tree-loop pass's tool child,
+    like its prompt counterpart above, never gets a state node of its
+    own while `cof` runs it, so an agent there would otherwise never
+    be counted.
 
 **The token rule** (`model::node_tokens`): one node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to
@@ -791,6 +851,33 @@ disagree with another; `model::tests::subtree_tokens_matches_run_totals_
 for_a_retried_prompt_on_cof`/`_on_electricity` pin it against that same
 recorded shape from each engine.
 
+**Folding** (issue #613, `oscilloscope-core/src/fold.rs`) applies to
+the orchestration pane's own rows only, after they're built
+(`render::build_folded`, used by the TUI; every other caller of
+`render::build`, including `--log`/`osi watch`'s own plain stream and
+every existing test, sees the full, unfolded tree): on by default,
+`z` turns it off.
+
+- **Breadcrumbs.** A container with exactly one child folds with it
+  into one row, `outer › inner`, keeping the innermost row's own path
+  (so selection, details and follow all still target it) and status.
+  A still-`Pending` container or child (including an event-only row,
+  discovered from `--events` alone, whose status or duration isn't
+  known yet) stays unfolded until it is. A *running* row still folds
+  into its own breadcrumb, which is exactly the row follow mode
+  selects for it.
+- **Quick steps.** Two or more consecutive, finished, sub-second tool
+  steps fold into one `N quick steps` row, keyed by the first step's
+  own path. A step that is running, failed, queued or still pending
+  is never folded into one of these. `⏎` on that row expands the
+  group in place (adds its key to a per-session set folding skips);
+  `←` removes it again.
+- **Pass labels.** A loop pass is labelled `pass N of M` in the
+  orchestration pane (1-based; `pass N` alone while the loop's own
+  `progress.total` isn't known yet) -- the state pane keeps the real
+  `iter_N` key, and the details pane's own title shows both
+  (`pass 3 of 8 (iter_2)`).
+
 **Keys:**
 
 | Key | Action |
@@ -799,6 +886,8 @@ recorded shape from each engine.
 | `PgUp`/`PgDn` | move a page (the focused pane's own last-rendered interior height) |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
 | `←→` | collapse / expand (orchestration pane) |
+| `⏎` | expand a quick-steps row (issue #613) in place; `←` folds it again |
+| `z` | fold on/off (issue #613: breadcrumbs and quick-steps summaries); on by default |
 | `f` | follow the running row (on by default) |
 | `e` | errors only (keeps a failed leaf's own ancestors so there's still a tree to show it under) |
 | `/` | filter (substring, on path or label; same ancestor-keeping rule) |

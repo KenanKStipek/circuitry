@@ -12,6 +12,8 @@ pub mod changes;
 pub mod config_discovery;
 pub mod diff;
 pub mod engine;
+pub mod fold;
+pub mod format;
 pub mod icon;
 pub mod layout;
 pub mod model;

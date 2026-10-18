@@ -93,10 +93,10 @@ fn normalized_log_lines(dir_name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Replaces every `<digits>.<digits>s` duration token (`diff.rs`'s own
-/// `{:.1}s` formatting) with a fixed placeholder -- the only part of
-/// an effect's own log line that two real runs, even of the identical
-/// document, can't be expected to agree on byte for byte.
+/// Replaces every duration token (`duration_token_end`'s own four
+/// `format_duration` shapes) with a fixed placeholder -- the only
+/// part of an effect's own log line that two real runs, even of the
+/// identical document, can't be expected to agree on byte for byte.
 fn normalize_duration(text: &str) -> String {
     // Operates on `char`s, not bytes: every log line here can carry
     // multi-byte glyphs (▶/✓/✗), so indexing by byte offset the way a
@@ -116,23 +116,47 @@ fn normalize_duration(text: &str) -> String {
     out
 }
 
-/// Matches `^\d+\.\d+s` at the start of `chars`, returning the match
-/// length in `char`s (digits, then `.`, then digits, then a literal
-/// `s`), or `None` if `chars` doesn't start with that shape.
+/// Matches any of `format_duration`'s own shapes at the start of
+/// `chars` -- `\d+\.\d+s` (under a minute), `\d+m\d{2}s` (under an
+/// hour), `\d+h\d{2}m` (under a day) or `\d+d\d{2}h` (longer) --
+/// returning the match length in `char`s, or `None` if `chars`
+/// doesn't start with any of them.
 fn duration_token_end(chars: &[char]) -> Option<usize> {
+    for unit in ['.', 'm', 'h', 'd'] {
+        if let Some(end) = duration_shape_end(chars, unit) {
+            return Some(end);
+        }
+    }
+    None
+}
+
+/// One shape: a run of digits, then `unit`, then exactly the digits
+/// `format_duration` always pads to for that unit (one or more for
+/// `.` -- the fractional tenth -- or exactly two for `m`/`h`/`d`),
+/// then the fixed trailing letter that shape ends in (`s`, `s`, `m`,
+/// `h` respectively).
+fn duration_shape_end(chars: &[char], unit: char) -> Option<usize> {
+    let trailing = match unit {
+        '.' => 's',
+        'm' => 's',
+        'h' => 'm',
+        'd' => 'h',
+        _ => return None,
+    };
     let mut i = 0;
     while i < chars.len() && chars[i].is_ascii_digit() {
         i += 1;
     }
-    if i == 0 || i >= chars.len() || chars[i] != '.' {
+    if i == 0 || i >= chars.len() || chars[i] != unit {
         return None;
     }
     i += 1;
-    let frac_start = i;
+    let digits_start = i;
     while i < chars.len() && chars[i].is_ascii_digit() {
         i += 1;
     }
-    if i == frac_start || i >= chars.len() || chars[i] != 's' {
+    let min_digits = if unit == '.' { 1 } else { 2 };
+    if i - digits_start < min_digits || i >= chars.len() || chars[i] != trailing {
         return None;
     }
     Some(i + 1)

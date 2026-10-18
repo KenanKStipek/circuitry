@@ -272,7 +272,7 @@ pub fn parse_event(value: &Value) -> Option<Event> {
 
 /// Parses two `cof`-style timestamps (ISO-8601 UTC) and returns the
 /// elapsed seconds between them. Used for a log line's duration
-/// (DESIGN.md §2.4) and `--log`'s `mm:ss.s` elapsed clock (§6.2).
+/// (DESIGN.md §2.4) and the duration formatter's own rounding.
 pub fn duration_seconds(start: &str, end: &str) -> Option<f64> {
     let start = chrono::DateTime::parse_from_rfc3339(start).ok()?;
     let end = chrono::DateTime::parse_from_rfc3339(end).ok()?;
