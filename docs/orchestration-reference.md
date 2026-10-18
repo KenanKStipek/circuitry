@@ -1455,6 +1455,54 @@ Model-only keys — `prompt_type`, `schema`, `model`, `provider`, `provider_fall
 
 ---
 
+### `report`
+
+Tells watchers (`--events`, `osp`, `cof run`'s own console) what the run is doing: renders `message` and publishes it, with optional `data` selected from the shadow state. A report never fails the run — it has no retries, no `on_error`, no capability check, and a missing/`null` `{from:}` path in `data` becomes `null` with a warning rather than an error. It is never counted as work: it does not fire the start/end hooks a tool/prompt/yield/... fire, so it never shows up in `--events` as a `start`/`end` pair and never counts toward `runtime.last_run.totals.effects_run` or a watcher's own effect counts. It can go anywhere any other effect can: the top level, `dynamic`, `if` branches, loop bodies (chain and tree), `use` children and `finally`.
+
+**State output path:** `prime.<name>.value` — only when named. An unnamed report writes no state node at all; its `--events` line (below) still carries everything it published.
+
+| Field | Type | Required | Default | Constraints |
+|-------|------|----------|---------|-------------|
+| `type` | `"report"` | yes | — | |
+| `name` | string | no | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved. When set, the report also writes `prime.<name>.value = {message, level, data}` with the usual `meta.created_at`/`completed_at` |
+| `message` | string | yes | — | Mustache template, rendered like a prompt template — the shadow state plus the bindings of any enclosing loop — in the same scope a prompt's own `template` sees. `{{x}}` does not HTML-escape (prompt text, like a prompt's own `template`); a missing key renders empty, same as any other template |
+| `data` | object | no | — | Values attached to the report. A leaf anywhere in `data` (any depth, objects and lists) may be `{from: <path>}`, resolved in the same scope as [Params by reference](#params-by-reference) — but narrower: no `default:`, no `as:`, since a report never fails on an unresolved path. A leaf that is a string is Mustache-rendered the same way `message` is; anything else is kept as written |
+| `level` | `"info"` or `"warning"` | no | `info` | How watchers show the report — `cof run` styles a `warning` report the way it styles its own warnings |
+| `description` | string | no | — | Human-readable description |
+
+Model-only/retry-shaped keys — `on_error`, `retries`, `timeout_ms`, `expect`, and the like — are not accepted: a report never calls a model and is never retried.
+
+A `{from: <path>}` leaf in `data` that doesn't resolve — a missing path, or one that resolves to an explicit `null` — becomes `null`, with a warning naming the report and the path (`report at '<path>' data '<field>': '{from: <path>}' did not resolve to a value; using null.`). `cof check` validates `message`'s Mustache syntax and roots every `{from:}` leaf in `data` the same way a tool effect's `params` are rooted. If rendering raises anyway (a genuine template failure, not a missing path), it is logged as one warning and the report still publishes, with an empty message and no data — a report must never fail the run.
+
+**`--events`.** Each time a report runs, the stream gets one `report` line: `{"v":1,"seq":…,"ts":…,"ev":"report","path":…,"level":…,"message":…,"data":…}`. `path` is the report's own state path when it is named; otherwise it is the path of the container it runs in (`prime` at the top level, `prime.<loop>.iter_N` in a pass, a dynamic's own path inside it, and so on) — the same fallback `dispatch`'s own path uses for an unnamed container. `data` is omitted when the report has none; when its compact JSON exceeds 16 KiB, it is replaced by `"data_truncated": <size in bytes>` instead — a named report still keeps the full value in the shadow state regardless. See "Watching a Run" below and `electricity/docs/spec/runtime-semantics.md` §8.7 for the full line format.
+
+**Resume and dry run.** On `--resume`, a named report that already completed is skipped like any completed effect; an unnamed one runs again when reached. `--dry-run` renders and publishes reports normally — unlike most effects, there is nothing a dry run would skip, since a report never does anything besides render and publish.
+
+**Example — narrating a loop's progress, with a value other effects never see:**
+```yaml
+- type: loop
+  name: slices
+  each: {in: prime.plan.value.slices, as: slice}
+  body:
+    - type: report
+      message: "Implementing {{slice.title}}"
+      data:
+        files: {from: slice.files}
+    - type: tool
+      name: implement
+      provider: agent
+      params: {prompt: "…"}
+
+- type: report
+  name: review_summary
+  level: warning
+  message: "Review found {{prime.review.value.serious}} serious issue(s)"
+  data:
+    findings: {from: prime.review.value.findings}
+```
+
+---
+
 ## Prompt Composition
 
 A prompt is often built from reusable pieces: a house style, a set of rules, a brief another effect produced. Three features compose them, without a model call for the ones that don't need one.
@@ -2061,6 +2109,7 @@ starts, from whichever worker thread runs it:
 {"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
+{"v":1,"seq":20,"ts":"…","ev":"report","path":"prime.each_tree.iter_0","level":"info","message":"Implementing slice 1","data":{"files":["a.py"]}}
 {"v":1,"seq":99,"ts":"…","ev":"run_end","ok":false,"error":"Interrupted (Ctrl-C/SIGINT)","signal":"SIGINT"}
 ```
 
@@ -2069,13 +2118,14 @@ starts, from whichever worker thread runs it:
 | `v` | Format version, `1`. |
 | `seq` | Strictly increasing in file order. |
 | `ts` | Wall-clock UTC, millisecond precision. |
-| `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
+| `ev` | `run_start`, `dispatch`, `start`, `end`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report` existed still reads the rest of the stream fine. |
 | `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
 | `path` | The absolute state path, as in `--live-state`. |
 | `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is the true branch count: the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces — every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. Its `path` is always the absolute path its own `start`/`end` events would use — for a named loop, its own child path (`prime.outer.iter_0.inner` for a tree loop `inner` nested inside a tree loop `outer`'s pass `iter_0`); for an **unnamed** tree loop, which has no name of its own to carry a path, the absolute path of whichever container directly encloses its passes instead (the document root `prime`, a named ancestor, or a named loop's own pass node `prime.outer.iter_0`). Two unnamed tree loops dispatching one after another, at the same nesting depth, report that same path. A tree loop inside a `use` child's own document composes the same way: its `path` nests under the `use` effect's own absolute path exactly like its `start`/`end` events do (`prime.sub.fan` for a loop `fan` at the top of a child run as `sub`), never the child's own unnamespaced `prime.fan`. |
 | `ok` | On `end`: whether the effect's `meta.error` is `null`. On `run_end`: whether the run succeeded. |
 | `error` | Present only when `ok` is false: the first 500 characters of the effect's (or run's) error text, exactly as it appears in state. |
 | `signal` | On `run_end` after an interruption: `SIGINT`, `SIGTERM` or `SIGHUP`. |
+| `level`, `message`, `data` | On `report` only: the [`report`](#report) effect's own rendered `level`/`message`/`data`. `data` is omitted when the report has none; when its compact JSON exceeds 16 KiB, `data_truncated` (that size, in bytes) replaces it instead — a named report still keeps the full value in the shadow state regardless. `report` never carries `id`: it never pairs with a `start`/`end`, since it fires neither — it is never counted as work. `path` is the report's own state path when it is named, otherwise the path of the container it runs in, the same fallback `dispatch`'s own `path` uses for an unnamed loop/dynamic. |
 
 `run_start` is always the first line. `run_end` is always the last, written
 only after `--live-state`'s own final write — seeing it means that final
