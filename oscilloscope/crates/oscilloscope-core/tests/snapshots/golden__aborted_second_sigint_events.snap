@@ -3,6 +3,7 @@ source: crates/oscilloscope-core/tests/golden.rs
 expression: rendered
 ---
 log:
+  ■ run started  bd85af45-26c9-49a2-ac60-ffb4901a74ea
   ▶ prime.slow  effect
   ▶ prime.cleanup  effect
 status:

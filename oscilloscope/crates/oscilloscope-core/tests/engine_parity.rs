@@ -89,8 +89,19 @@ fn normalized_log_lines(dir_name: &str) -> Vec<String> {
     sort_log_lines(&mut lines);
     lines
         .into_iter()
-        .map(|line| normalize_duration(&line.text))
+        .map(|line| normalize_run_started(&normalize_duration(&line.text)))
         .collect()
+}
+
+/// `■ run started  <run_id>` (#610): the one other part of a log
+/// line two independently recorded fixtures can never agree on byte
+/// for byte -- each run gets its own fresh `run_id` (DESIGN.md §3's
+/// own format table), same reasoning as `normalize_duration` above.
+fn normalize_run_started(text: &str) -> String {
+    match text.strip_prefix("■ run started  ") {
+        Some(_) => "■ run started  <RUN_ID>".to_string(),
+        None => text.to_string(),
+    }
 }
 
 /// Replaces every duration token (`duration_token_end`'s own four

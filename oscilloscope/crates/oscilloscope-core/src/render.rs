@@ -24,7 +24,7 @@ use crate::treemap::TreemapNode;
 /// node's own `meta` shape can tell, a container kind for everything
 /// with children, `Unknown` for an observed-only path (no plan, no
 /// shape clue yet).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RowKind {
     Tool,
     Prompt,
@@ -37,12 +37,20 @@ pub enum RowKind {
     TryFinally,
     Pass,
     Root,
+    #[default]
     Unknown,
     /// A [`crate::fold::fold_rows`] summary row standing in for two
     /// or more merged quick steps -- never produced anywhere else, so
     /// a caller can always tell a summary row apart from a real one
     /// without parsing its label.
     QuickSteps,
+    /// A report's own state node (#605/#610) -- named reports only;
+    /// an unnamed one writes no node at all, so there is nothing for
+    /// this to ever match. Never a row in the orchestration tree
+    /// (`RunModel::observe` already left it out of `statuses`
+    /// entirely), but still a real row in the *state* pane, where
+    /// its own details apply.
+    Report,
 }
 
 impl RowKind {
@@ -65,6 +73,7 @@ impl RowKind {
             RowKind::Root => "root",
             RowKind::Unknown => "effect",
             RowKind::QuickSteps => "quick steps",
+            RowKind::Report => "report",
         }
     }
 
@@ -110,6 +119,23 @@ impl RowKind {
             RowKind::Tool | RowKind::Prompt | RowKind::Use | RowKind::Yield | RowKind::Reflector
         )
     }
+}
+
+/// Whether `value` is a report's own state value (#605): `{message:
+/// str, level: "info"|"warning", data: <any>}`, written only by
+/// `Store::fire_report`/`exec::report`'s own named-report branch --
+/// distinctive enough that nothing else this codebase writes to a
+/// node's own `value` could ever be mistaken for one.
+pub(crate) fn is_report_value(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    obj.get("message").is_some_and(Value::is_string)
+        && obj
+            .get("level")
+            .and_then(Value::as_str)
+            .is_some_and(|l| l == "info" || l == "warning")
+        && obj.contains_key("data")
 }
 
 /// A loop's own `n/total` and ETA (§6.3's plan-tree column; DESIGN.md
@@ -178,6 +204,28 @@ pub struct Header {
     /// innermost loop's ETA is shown as a clock time"). `None`
     /// exactly when `innermost_loop_eta_s` is.
     pub innermost_loop_eta_ts: Option<String>,
+    /// The latest report seen, once at least one has arrived (#610)
+    /// -- a front end shows this in the header's own status-line
+    /// slot, in place of `run_id`, for the rest of the run. `None`
+    /// before any report at all, in which case the header reads
+    /// exactly as it did before #610.
+    pub latest_report: Option<HeaderReport>,
+}
+
+/// [`Header::latest_report`]'s own shape (#610): just enough for the
+/// status line (`message`, styled by `level`) -- a report's `data` is
+/// a details-pane/log-pane concern only, never the header's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeaderReport {
+    pub level: crate::observe::ReportLevel,
+    pub message: String,
+    /// The sighting's own `ts` (#610): carried only so two sightings
+    /// with the same level and message still compare unequal --
+    /// `changes::header_changes` blames a new report for its own
+    /// highlight key purely by `latest_report` changing, and a repeat
+    /// report (the same "chain pass" message on every loop pass, for
+    /// instance) must still flash every time it actually arrives.
+    pub ts: String,
 }
 
 /// The selected row's own details (§6.3's right pane). `prompt_sent`
@@ -186,6 +234,12 @@ pub struct Header {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Details {
     pub path: String,
+    /// The row's own kind (#610): used to be a separate parameter
+    /// every caller of `details_lines`/`draw_details` had to thread
+    /// through on its own, kept in sync with whichever row happened
+    /// to be selected by hand -- now computed once, here, from the
+    /// exact same `path` this whole struct is already built from.
+    pub kind: RowKind,
     /// The details pane's own title (issue #613's pass labels:
     /// `pass 3 of 8 (iter_2)` belongs here, in the pane's
     /// title, not in `plan_summary`'s `plan` line) -- `None` for
@@ -344,7 +398,7 @@ pub fn build(
     // children once they land in state -- building it twice, once per
     // caller, would both cost the walk twice and risk the two counts
     // disagreeing about what "discovered" means.
-    let all_paths = all_observed_paths(&flat, &statuses);
+    let all_paths = all_observed_paths(&flat, &statuses, plan, model);
 
     let header = build_header(
         document, engine, model, state, process, elapsed_s, now, plan, &flat, &statuses, &all_paths,
@@ -778,10 +832,19 @@ fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanT
 
 /// The selected row's details, from the same inputs `build` used for
 /// this frame — a front end calls this only for the one row currently
-/// highlighted, not for every row on every redraw.
-pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Details {
+/// highlighted, not for every row on every redraw. `model` is only
+/// needed for #610's own additions (the root's own `run_id`, and a
+/// named report's latest event sighting) -- every other field here
+/// comes from `plan`/`state` exactly as before.
+pub fn details_for(
+    path: &str,
+    plan: &PlanTree,
+    model: &RunModel,
+    state: Option<&Value>,
+) -> Details {
     let empty = Value::Null;
     let flat = flatten_state(state.unwrap_or(&empty));
+    let kind = row_kind_for(path, plan, flat.get(path));
     let plan_entry = plan.match_path(path).and_then(|m| m.entries.first());
     let plan_summary = plan_entry
         .map(|entry| {
@@ -817,11 +880,17 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
     let Some(node) = flat.get(path) else {
         return Details {
             path: path.to_string(),
+            kind,
             title,
             plan_summary,
+            meta_summary: root_run_id_summary(path, model),
             ..Default::default()
         };
     };
+
+    if kind == RowKind::Report {
+        return report_details(path, node, model, title);
+    }
 
     let meta = &node.meta;
     // Issue #535: a node with `prompt_sent` gets the `sent`/`received`
@@ -830,7 +899,7 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
     // same thing twice.
     let has_prompt_sent = meta.get("prompt_sent").and_then(Value::as_str).is_some();
 
-    let mut meta_summary = Vec::new();
+    let mut meta_summary = root_run_id_summary(path, model);
     for key in [
         "provider",
         "model",
@@ -899,6 +968,7 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
 
     Details {
         path: path.to_string(),
+        kind,
         title,
         plan_summary,
         meta_summary,
@@ -910,6 +980,93 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
         value: Some(preview(&display_value(&node.value), DETAILS_PREVIEW_CHARS)),
         sent,
         received,
+    }
+}
+
+/// #610: the root row's own `run_id`, from `--events`' own
+/// `run_start` (DESIGN.md §3) -- the header no longer shows it once a
+/// report has arrived, so this is the only place left to see it,
+/// aside from `--log`'s own `■ run started` line. Empty for every
+/// path but `prime`, and for `prime` itself before a `run_start` has
+/// ever arrived (an engine with no `--events` support, or one that
+/// hasn't written one yet).
+fn root_run_id_summary(path: &str, model: &RunModel) -> Vec<(String, String)> {
+    if path != "prime" {
+        return Vec::new();
+    }
+    model
+        .run_start_id()
+        .map(|run_id| vec![("run_id".to_string(), run_id.to_string())])
+        .unwrap_or_default()
+}
+
+/// A named report's own details (#610): `type report`, its
+/// `level`, the latest `message` and the clock time it arrived, and
+/// `data` as pretty JSON. The latest `--events` sighting for this
+/// exact path wins over the state node's own copy wherever it has an
+/// answer -- state only ever holds the *first* named report's write
+/// at that path (`exec::report`'s own `set_leaf` overwrites it on a
+/// later pass, same as any other node, so in practice the two rarely
+/// disagree, but events are the more current source when they do).
+fn report_details(path: &str, node: &NodeMeta, model: &RunModel, title: Option<String>) -> Details {
+    let event = model.report_at(path);
+    let state_level = node.value.get("level").and_then(Value::as_str);
+    let level = match event.map(|e| e.level) {
+        Some(crate::observe::ReportLevel::Warning) => "warning",
+        Some(crate::observe::ReportLevel::Info) => "info",
+        None => state_level.unwrap_or("info"),
+    };
+    let message = event
+        .map(|e| e.message.clone())
+        .or_else(|| {
+            node.value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let clock_ts = event
+        .map(|e| e.ts.clone())
+        .or_else(|| node.completed_at.clone())
+        .or_else(|| node.created_at.clone());
+    // A named report keeps its full `data` in the shadow state even
+    // when the matching event sighting was truncated (the state write
+    // and the `--events` line are independent; only the line has a
+    // size cap), so the state value is the fallback, not a dead end.
+    let data = event
+        .and_then(|e| e.data.clone())
+        .or_else(|| node.value.get("data").cloned())
+        .filter(|d| !d.is_null());
+    let data_truncated = data.is_none() && event.is_some_and(|e| e.data_truncated);
+
+    let mut meta_summary = vec![
+        ("level".to_string(), level.to_string()),
+        ("message".to_string(), message),
+    ];
+    if let Some(ts) = &clock_ts {
+        meta_summary.push(("time".to_string(), ts.clone()));
+    }
+
+    let value = if data_truncated {
+        Some("(data truncated)".to_string())
+    } else {
+        data.map(|d| {
+            let pretty = serde_json::to_string_pretty(&d).unwrap_or_default();
+            preview(&pretty, DETAILS_PREVIEW_CHARS)
+        })
+    };
+
+    Details {
+        path: path.to_string(),
+        kind: RowKind::Report,
+        title,
+        plan_summary: String::new(),
+        meta_summary,
+        error: None,
+        prompt_sent: None,
+        value,
+        sent: None,
+        received: None,
     }
 }
 
@@ -1177,6 +1334,12 @@ fn build_header(
         })
     });
 
+    let latest_report = model.latest_report().map(|r| HeaderReport {
+        level: r.level,
+        message: r.message.clone(),
+        ts: r.ts.clone(),
+    });
+
     Header {
         document: document.to_string(),
         engine: engine.to_string(),
@@ -1192,6 +1355,7 @@ fn build_header(
         tokens_received,
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
+        latest_report,
     }
 }
 
@@ -1262,8 +1426,19 @@ fn row_kind_for(path: &str, plan: &PlanTree, node: Option<&NodeMeta>) -> RowKind
     if path == "prime" {
         return RowKind::Root;
     }
+    // The plan wins first: a report never has a plan entry of its
+    // own at all (`plan::record_op_entry`'s own early return), so
+    // checking it ahead of the report-shape guess below only ever
+    // skips paths a report could never be at anyway -- but a planned
+    // tool or prompt whose own output happens to match the report
+    // shape (`{message: str, level: info|warning, data}`) must still
+    // read as its real plan kind, not get misclassified as `Report`
+    // (#610).
     if let Some(entry) = plan.match_path(path).and_then(|m| m.entries.first()) {
         return RowKind::from_plan_entry(&entry.kind);
+    }
+    if node.is_some_and(|n| is_report_value(&n.value)) {
+        return RowKind::Report;
     }
     if let Some(node) = node {
         return RowKind::from_meta_shape(node);
@@ -1508,9 +1683,27 @@ fn earliest_created_at(
 fn all_observed_paths(
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
+    plan: &PlanTree,
+    model: &RunModel,
 ) -> BTreeMap<String, ()> {
     let mut all_paths: BTreeMap<String, ()> = BTreeMap::new();
+    // #610: `statuses` (`RunModel::observe`) already left a report
+    // path out, but `flat` (every `{value, meta}` node, report state
+    // nodes included) hasn't -- without the same exclusion here, a
+    // named report's own node would still seed a row for `walk_rows`
+    // to walk, just with a `Pending` status instead of the `Done` it
+    // used to show.
     for path in statuses.keys().chain(flat.keys()) {
+        // See `RunModel::observe`'s own matching guard: `prime` is
+        // never treated as report-only, and the no-plan fallback only
+        // trusts `--events`' own report paths where the plan has no
+        // real entry there and the node's value has the report shape.
+        let fallback_report = flat
+            .get(path)
+            .is_some_and(|node| model.is_report_event_path(path, plan, &node.value));
+        if plan.is_report_path(path) || (path != "prime" && fallback_report) {
+            continue;
+        }
         all_paths.insert(path.clone(), ());
     }
     all_paths.insert("prime".to_string(), ());
@@ -1812,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn a_named_reports_state_node_renders_as_a_finished_row_and_is_not_counted() {
+    fn a_named_reports_state_node_is_not_a_row_and_is_not_counted() {
         use electricity_bytecode::{
             EffectPath, Escape, LeafKind, NodeKind, OnError, Op, Region, ReportLevel, ReportOp,
             TemplateText,
@@ -1879,11 +2072,13 @@ mod tests {
             adapter: None,
             model: None,
         };
-        // A report fires no `effect_start`/`effect_complete`, so it never
-        // becomes a plan row (`plan.rs`'s own exclusion) -- but its state
-        // node is still a plain `{value, meta}` node, scanned by
-        // `RunModel::observe` the same as any other, so it still gets a
-        // `Done` entry in `statuses` (#605).
+        // A report fires no `effect_start`/`effect_complete`, so it
+        // never becomes a plan row (`plan.rs`'s own exclusion). Its
+        // state node is still a plain `{value, meta}` node (#605),
+        // but #610 keeps it out of the orchestration tree too --
+        // `PlanTree::is_report_path` marks a *named* report's own
+        // path, which `RunModel::observe` then skips entirely, so
+        // there is no row for it at all, not merely an uncounted one.
         let plan = PlanTree::from_program(&program);
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
@@ -1903,18 +2098,77 @@ mod tests {
             &[],
         );
 
-        let status_row = rendered
-            .rows
-            .iter()
-            .find(|r| r.path == "prime.status")
-            .expect("status row");
-        assert_eq!(status_row.kind, RowKind::Unknown);
-        assert_eq!(status_row.status.kind, crate::model::StatusKind::Done);
+        assert!(
+            rendered.rows.iter().all(|r| r.path != "prime.status"),
+            "a named report must not be a row in the orchestration tree at all: {:?}",
+            rendered.rows
+        );
 
-        // Only `step1` counts -- `status` is a finished row, but not a
-        // leaf (`RowKind::is_leaf`), so `effects_done` skips it.
+        // Only `step1` counts.
         assert_eq!(rendered.header.effects_planned, Some(1));
         assert_eq!(rendered.header.effects_done, 1);
+    }
+
+    /// #610: a planned tool's own output can coincidentally have the
+    /// exact shape a report's state value does (`{message: str,
+    /// level: info|warning, data}`) -- `row_kind_for` must still read
+    /// it as the tool it really is, from the plan, rather than
+    /// guessing `Report` from the value shape alone.
+    #[test]
+    fn a_tool_whose_output_looks_like_a_report_still_reads_as_a_tool() {
+        use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError, Op, Region, ToolOp};
+
+        let root_path = EffectPath::root();
+        let tool_path = root_path.clone().push_name("status");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: tool_path,
+                        name: Some("status".to_string()),
+                        kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                            provider: "json".to_string(),
+                            params: electricity_bytecode::ParamNode::Literal(
+                                electricity_value::Value::None,
+                            ),
+                            params_json: None,
+                            prompt: None,
+                            model: None,
+                            timeout_ms: None,
+                            retries: Default::default(),
+                            expect: None,
+                            description: None,
+                            group: None,
+                            prompt_file: None,
+                        }))),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "status": {"value": {"message": "ok", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+        }});
+        let details = details_for("prime.status", &plan, &model, Some(&state));
+        assert_eq!(details.kind, RowKind::Tool);
     }
 
     #[test]
@@ -1956,6 +2210,116 @@ mod tests {
     /// header's own elapsed must come from the run's own start (here,
     /// the earliest `created_at` in state, since no `--events` ever
     /// arrived) to `now`, not from osi's own freshly-created clock.
+    #[test]
+    fn header_latest_report_is_none_before_any_report_and_then_tracks_the_latest() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.header.latest_report, None);
+
+        model.observe_event(&Event::Report {
+            ts: "t0".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "first".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        model.observe_event(&Event::Report {
+            ts: "t1".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Warning,
+            message: "second".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(
+            rendered.header.latest_report,
+            Some(HeaderReport {
+                level: crate::observe::ReportLevel::Warning,
+                message: "second".to_string(),
+                ts: "t1".to_string(),
+            })
+        );
+    }
+
+    /// #610: a repeated report (the same level and message as the
+    /// one before it, e.g. the same "chain pass" message on every
+    /// loop pass) must still change `HeaderReport` -- its own `ts`
+    /// makes a genuinely new sighting compare unequal to the last
+    /// one even when the text is identical, so the header still
+    /// highlights (`changes::diff`'s own `header:report` key) on
+    /// every repeat, not just the first.
+    #[test]
+    fn a_repeated_report_still_changes_the_header_report() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        model.observe_event(&Event::Report {
+            ts: "t0".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "chain pass".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let first = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            1.0,
+            "t0",
+            &[],
+        );
+        model.observe_event(&Event::Report {
+            ts: "t1".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "chain pass".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let second = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            2.0,
+            "t1",
+            &[],
+        );
+        assert_ne!(first.header.latest_report, second.header.latest_report);
+        let changed = crate::changes::diff(Some(&first), &second);
+        assert!(changed.contains(&"header:report".to_string()));
+    }
+
     #[test]
     fn header_elapsed_is_measured_from_the_runs_own_start_not_osis_own_clock() {
         let plan = PlanTree::empty();
@@ -2243,7 +2607,12 @@ mod tests {
         assert_eq!(pass_row.label, "pass 3 of 8");
         // The pass label is the details pane's own
         // *title*, not its `plan` line.
-        let details = details_for("prime.each_tree.iter_2", &plan, Some(&state_json));
+        let details = details_for(
+            "prime.each_tree.iter_2",
+            &plan,
+            &RunModel::new(),
+            Some(&state_json),
+        );
         assert_eq!(details.title.as_deref(), Some("pass 3 of 8 (iter_2)"));
         assert_eq!(details.plan_summary, "");
     }
@@ -2494,6 +2863,113 @@ mod tests {
         );
         assert_eq!(rendered_without.header.effects_planned, Some(4));
         assert_eq!(rendered_without.header.effects_done, 2);
+    }
+
+    /// #610's own acceptance line: "a loop pass holding a named
+    /// report plus one step folds exactly like a pass without the
+    /// report" -- `fold_rows`' breadcrumb fold (`fold.rs`) only
+    /// applies to a container with exactly *one* child, so a named
+    /// report that wrongly became a second row under the pass would
+    /// silently turn this test's own single-step breadcrumb back into
+    /// two separate, unfolded rows.
+    #[test]
+    fn a_loop_pass_holding_a_named_report_plus_one_step_folds_the_same_as_without_it() {
+        fn with_a_named_report_added(
+            mut program: electricity_bytecode::Program,
+        ) -> electricity_bytecode::Program {
+            use electricity_bytecode::{
+                Escape, LeafKind, LoopId, NodeKind, OnError, Op, Region, ReportLevel, ReportOp,
+                TemplateText,
+            };
+            if let NodeKind::Control(Region::Block { ops, .. }) = &mut program.root.kind {
+                if let Some(Op {
+                    kind: NodeKind::Control(Region::Loop { body, .. }),
+                    path: loop_path,
+                    ..
+                }) = ops.get_mut(0)
+                {
+                    if let Region::Block { ops: body_ops, .. } = body.as_mut() {
+                        let pass_path = loop_path.clone().push_pass(LoopId(0));
+                        body_ops.insert(
+                            0,
+                            Op {
+                                path: pass_path.push_name("status"),
+                                name: Some("status".to_string()),
+                                kind: NodeKind::Leaf(Box::new(LeafKind::Report(ReportOp {
+                                    message: TemplateText::new("status", true, Escape::None),
+                                    data: None,
+                                    level: ReportLevel::Info,
+                                    description: None,
+                                }))),
+                                on_error: OnError::Fail,
+                                labels: None,
+                                enabled: true,
+                            },
+                        );
+                    }
+                }
+            }
+            program
+        }
+
+        fn rows_for(plan: &PlanTree, state: &Value) -> Vec<Row> {
+            let mut model = RunModel::new();
+            build_folded(
+                "do-thing.yml",
+                "cof",
+                plan,
+                &mut model,
+                Some(state),
+                ProcessState::Running,
+                1.0,
+                "t1",
+                &[],
+                true,
+                &std::collections::BTreeSet::new(),
+            )
+            .rows
+        }
+
+        let plan_without = PlanTree::from_program(&named_loop_with_one_leaf_program());
+        let plan_with = PlanTree::from_program(&with_a_named_report_added(
+            named_loop_with_one_leaf_program(),
+        ));
+
+        let state_without = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 1}},
+                "iter_0": {"nap": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}}
+            }
+        }});
+        // The named report's own state node (#605): a `{value, meta}`
+        // node at `prime.fan.iter_0.status`, same shape
+        // `exec::report`'s named branch writes.
+        let state_with = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 1}},
+                "iter_0": {
+                    "nap": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
+                    "status": {"value": {"message": "status", "level": "info", "data": null},
+                        "meta": {"created_at": "t0", "completed_at": "t0"}}
+                }
+            }
+        }});
+
+        let rows_without = rows_for(&plan_without, &state_without);
+        let rows_with = rows_for(&plan_with, &state_with);
+
+        let labels_without: Vec<_> = rows_without.iter().map(|r| r.label.as_str()).collect();
+        let labels_with: Vec<_> = rows_with.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(
+            labels_with, labels_without,
+            "a named report in the pass must not change which rows fold or how"
+        );
+        assert!(
+            labels_without.iter().any(|l| l.contains('›')),
+            "the single-step pass should still fold into a breadcrumb: {labels_without:?}"
+        );
+        assert!(
+            rows_with.iter().all(|r| !r.path.ends_with("status")),
+            "the named report must never be a row in the orchestration tree: {rows_with:?}"
+        );
     }
 
     #[test]
@@ -3077,7 +3553,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "tool": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell", "stderr": stderr}}
         }});
-        let details = details_for("prime.tool", &plan, Some(&state_json));
+        let details = details_for("prime.tool", &plan, &RunModel::new(), Some(&state_json));
         let tail = details
             .meta_summary
             .iter()
@@ -3094,10 +3570,96 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "ask": {"value": "the reply", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m", "prompt_sent": long_prompt.clone()}}
         }});
-        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         assert!(details.prompt_sent.as_ref().unwrap().len() < long_prompt.len());
         let full = full_value("prime.ask", FullValueField::PromptSent, Some(&state_json));
         assert_eq!(full, Some(long_prompt));
+    }
+
+    /// #610: a named report's details show its type, level, the
+    /// latest message and clock time, and `data` as pretty JSON --
+    /// falling back to the state node's own copy when no `--events`
+    /// sighting for the path exists at all.
+    #[test]
+    fn details_for_a_named_report_falls_back_to_the_state_node_with_no_events() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "status": {"value": {"message": "on track", "level": "info", "data": {"n": 3}},
+                "meta": {"created_at": "t0", "completed_at": "t1"}}
+        }});
+        let details = details_for("prime.status", &plan, &RunModel::new(), Some(&state_json));
+        assert_eq!(details.kind, RowKind::Report);
+        assert!(
+            details
+                .meta_summary
+                .contains(&("level".to_string(), "info".to_string()))
+        );
+        assert!(
+            details
+                .meta_summary
+                .contains(&("message".to_string(), "on track".to_string()))
+        );
+        assert!(
+            details
+                .meta_summary
+                .iter()
+                .any(|(k, v)| k == "time" && v == "t1")
+        );
+        let value = details.value.expect("a report with data gets a value");
+        assert!(value.contains("\"n\": 3"), "{value}");
+    }
+
+    /// The latest `--events` sighting for the path wins over the
+    /// state node's own (possibly stale) copy.
+    #[test]
+    fn details_for_a_named_report_prefers_the_latest_event_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Report {
+            ts: "t2".to_string(),
+            path: "prime.status".to_string(),
+            level: crate::observe::ReportLevel::Warning,
+            message: "falling behind".to_string(),
+            data: Some(json!({"n": 9})),
+            data_truncated: false,
+        });
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "status": {"value": {"message": "on track", "level": "info", "data": {"n": 3}},
+                "meta": {"created_at": "t0", "completed_at": "t1"}}
+        }});
+        let details = details_for("prime.status", &plan, &model, Some(&state_json));
+        assert!(
+            details
+                .meta_summary
+                .contains(&("level".to_string(), "warning".to_string()))
+        );
+        assert!(
+            details
+                .meta_summary
+                .contains(&("message".to_string(), "falling behind".to_string()))
+        );
+        let value = details.value.expect("a report with data gets a value");
+        assert!(value.contains("\"n\": 9"), "{value}");
+    }
+
+    /// #610: the root row's own details carry `run_id`, now that
+    /// the header shows a report there instead once one arrives.
+    #[test]
+    fn details_for_the_root_row_shows_the_run_id() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "t0".to_string(),
+            run_id: "run-xyz".to_string(),
+            pid: Some(1),
+        });
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let details = details_for("prime", &plan, &model, Some(&state_json));
+        assert!(
+            details
+                .meta_summary
+                .contains(&("run_id".to_string(), "run-xyz".to_string()))
+        );
     }
 
     #[test]
@@ -3110,7 +3672,7 @@ mod tests {
                 "tokens_sent": 12, "tokens_received": 34
             }}
         }});
-        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         let sent = details.sent.expect("a prompt node gets a sent block");
         assert_eq!(sent.snippet.as_deref(), Some("what is the answer"));
         assert_eq!(sent.tokens, Some(12));
@@ -3141,7 +3703,7 @@ mod tests {
                 "tokens_sent_total": 9, "tokens_received_total": 3
             }}
         }});
-        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         let received = details.received.unwrap();
         // no `meta.answer` here (not boolean/number), so the node's
         // own value, as compact JSON, is the snippet.
@@ -3161,7 +3723,7 @@ mod tests {
                 "prompt_sent": prompt_sent
             }}
         }});
-        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         let sent = details.sent.unwrap();
         assert_eq!(sent.tokens, Some(10)); // ceil(40/4)
         assert!(sent.estimated);
@@ -3181,7 +3743,7 @@ mod tests {
                 "tokens_sent": 1, "tokens_received": 2
             }}
         }});
-        let details = details_for("prime.gate", &plan, Some(&state_json));
+        let details = details_for("prime.gate", &plan, &RunModel::new(), Some(&state_json));
         let received = details.received.unwrap();
         assert_eq!(received.snippet.as_deref(), Some("yes, definitely"));
     }
@@ -3195,7 +3757,7 @@ mod tests {
                 "prompt_sent": "what is the answer", "error": "adapter unreachable"
             }}
         }});
-        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         assert!(details.sent.is_some(), "it still sent the prompt");
         assert!(details.received.is_none());
         assert_eq!(details.error.as_deref(), Some("adapter unreachable"));
@@ -3214,7 +3776,7 @@ mod tests {
                 "error": "expected a boolean reply, got \"maybe\""
             }}
         }});
-        let details = details_for("prime.gate", &plan, Some(&state_json));
+        let details = details_for("prime.gate", &plan, &RunModel::new(), Some(&state_json));
         assert!(details.sent.is_some());
         let received = details
             .received
@@ -3234,7 +3796,7 @@ mod tests {
                 "created_at": "t0", "completed_at": "t1", "provider": "shell", "exit_code": 0
             }}
         }});
-        let details = details_for("prime.ls", &plan, Some(&state_json));
+        let details = details_for("prime.ls", &plan, &RunModel::new(), Some(&state_json));
         assert!(details.sent.is_none());
         assert!(details.received.is_none());
     }

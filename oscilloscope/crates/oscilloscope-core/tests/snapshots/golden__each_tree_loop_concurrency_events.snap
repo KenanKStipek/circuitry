@@ -3,6 +3,7 @@ source: crates/oscilloscope-core/tests/golden.rs
 expression: rendered
 ---
 log:
+  ■ run started  f13cd727-1d8f-43b5-8853-d79200c80b1f
   ▶ prime.each_tree  effect
   ▶ prime.each_tree.iter_0.nap  effect
   ▶ prime.each_tree.iter_1.nap  effect
