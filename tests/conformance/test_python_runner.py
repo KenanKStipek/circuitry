@@ -66,6 +66,17 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
     if "python" not in metadata["engines"]:
         pytest.skip(f"{case_dir.name}: does not apply to the python engine")
 
+    python_runner_versions = metadata["python_runner_versions"]
+    if python_runner_versions is not None:
+        running_version = harness.running_python_version()
+        if running_version not in python_runner_versions:
+            pytest.skip(
+                f"{case_dir.name}: cof's own CEL nesting limits come from CPython's "
+                "recursion handling, which differs between Python versions -- the "
+                f"expected output was generated on Python {'/'.join(python_runner_versions)}, "
+                f"not {running_version}"
+            )
+
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     out_path = tmp_path / "out.json"

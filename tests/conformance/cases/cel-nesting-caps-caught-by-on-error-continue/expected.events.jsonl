@@ -1,0 +1,26 @@
+{"v":1,"seq":0,"ts":"2026-10-15T02:40:04.178Z","ev":"run_start","run_id":"2532c864-e91a-4933-97a4-9a0803182ef1","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":4671}
+{"v":1,"seq":1,"ts":"2026-10-15T02:40:04.183Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-15T02:40:04.184Z","ev":"start","id":1,"path":"prime.gate_paren"}
+{"v":1,"seq":3,"ts":"2026-10-15T02:40:04.185Z","ev":"start","id":2,"path":"prime.gate_paren.branch"}
+{"v":1,"seq":4,"ts":"2026-10-15T02:40:04.185Z","ev":"end","id":2,"path":"prime.gate_paren.branch","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-15T02:40:04.185Z","ev":"end","id":1,"path":"prime.gate_paren","ok":false,"ms":1,"error":"<THIRD_PARTY_TEXT>"}
+{"v":1,"seq":6,"ts":"2026-10-15T02:40:04.185Z","ev":"start","id":3,"path":"prime.gate_list"}
+{"v":1,"seq":7,"ts":"2026-10-15T02:40:04.186Z","ev":"start","id":4,"path":"prime.gate_list.branch"}
+{"v":1,"seq":8,"ts":"2026-10-15T02:40:04.186Z","ev":"end","id":4,"path":"prime.gate_list.branch","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-15T02:40:04.186Z","ev":"end","id":3,"path":"prime.gate_list","ok":false,"ms":1,"error":"<THIRD_PARTY_TEXT>"}
+{"v":1,"seq":10,"ts":"2026-10-15T02:40:04.186Z","ev":"start","id":5,"path":"prime.gate_chain"}
+{"v":1,"seq":11,"ts":"2026-10-15T02:40:04.188Z","ev":"start","id":6,"path":"prime.gate_chain.branch"}
+{"v":1,"seq":12,"ts":"2026-10-15T02:40:04.188Z","ev":"end","id":6,"path":"prime.gate_chain.branch","ok":true,"ms":0}
+{"v":1,"seq":13,"ts":"2026-10-15T02:40:04.188Z","ev":"end","id":5,"path":"prime.gate_chain","ok":false,"ms":1,"error":"CEL evaluation failed for 'state.input.a[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]["}
+{"v":1,"seq":14,"ts":"2026-10-15T02:40:04.188Z","ev":"start","id":7,"path":"prime.gate_logical"}
+{"v":1,"seq":15,"ts":"2026-10-15T02:40:04.192Z","ev":"start","id":8,"path":"prime.gate_logical.branch"}
+{"v":1,"seq":16,"ts":"2026-10-15T02:40:04.192Z","ev":"end","id":8,"path":"prime.gate_logical.branch","ok":true,"ms":0}
+{"v":1,"seq":17,"ts":"2026-10-15T02:40:04.192Z","ev":"end","id":7,"path":"prime.gate_logical","ok":false,"ms":4,"error":"CEL evaluation failed for 'true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || t"}
+{"v":1,"seq":18,"ts":"2026-10-15T02:40:04.192Z","ev":"start","id":9,"path":"prime.gate_method_call"}
+{"v":1,"seq":19,"ts":"2026-10-15T02:40:04.195Z","ev":"start","id":10,"path":"prime.gate_method_call.branch"}
+{"v":1,"seq":20,"ts":"2026-10-15T02:40:04.195Z","ev":"end","id":10,"path":"prime.gate_method_call.branch","ok":true,"ms":0}
+{"v":1,"seq":21,"ts":"2026-10-15T02:40:04.195Z","ev":"end","id":9,"path":"prime.gate_method_call","ok":false,"ms":2,"error":"CEL evaluation failed for '[1].map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x)"}
+{"v":1,"seq":22,"ts":"2026-10-15T02:40:04.195Z","ev":"start","id":11,"path":"prime.marker"}
+{"v":1,"seq":23,"ts":"2026-10-15T02:40:04.195Z","ev":"end","id":11,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":24,"ts":"2026-10-15T02:40:04.195Z","ev":"end","id":0,"path":"prime","ok":true,"ms":11}
+{"v":1,"seq":25,"ts":"2026-10-15T02:40:04.195Z","ev":"run_end","ok":true}

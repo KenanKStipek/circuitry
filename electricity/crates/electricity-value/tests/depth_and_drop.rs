@@ -207,14 +207,20 @@ fn py_partial_cmp_at_exactly_the_limit_on_a_2mib_stack() {
 }
 
 #[test]
-fn depth_of_nested_empty_lists_is_off_by_one_from_bracket_count() {
-    // 513 nested lists where the innermost is empty: depth() == 512
-    // (MAX_DEPTH), documented on `Value::depth` itself as one less than
-    // the bracket count `electricity-json` would enforce for the same
-    // shape.
+fn depth_of_nested_empty_lists_matches_the_bracket_count() {
+    // 513 nested lists where the innermost is empty: depth() == 513
+    // (MAX_DEPTH + 1, one level per `[`, the innermost's own included),
+    // matching `electricity-json`'s own bracket count for the same shape
+    // (`Value::depth`'s own docs).
     let mut v = Value::List(vec![]);
     for _ in 0..512 {
         v = Value::List(vec![v]);
     }
-    assert_eq!(v.depth(), MAX_DEPTH);
+    assert_eq!(v.depth(), MAX_DEPTH + 1);
+}
+
+#[test]
+fn depth_of_a_single_empty_container_is_one() {
+    assert_eq!(Value::List(vec![]).depth(), 1);
+    assert_eq!(Value::Dict(Default::default()).depth(), 1);
 }

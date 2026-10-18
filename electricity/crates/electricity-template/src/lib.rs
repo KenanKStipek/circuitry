@@ -59,6 +59,26 @@
 //!   distinguishes `Section`/`InvertedSection`, so it nests correctly
 //!   instead of reproducing chevron's miscount. Needs a list section
 //!   containing an inverted section that reuses the same key.
+//! - **Section nesting past [`MAX_SECTION_DEPTH`] (64).** `chevron`
+//!   recurses too (`render_from_tag`/`render_sections`), but Python's own
+//!   default recursion limit is far more forgiving of chevron's smaller,
+//!   simpler stack frames than a 2 MiB Rust thread stack is of this
+//!   port's own (`MAX_SECTION_DEPTH`'s own docs: somewhere between 350
+//!   and 400 levels, measured directly), so `core/templates.py` renders
+//!   a template nested far deeper than any real orchestration writes,
+//!   just slowly, where this port rejects it outright with
+//!   `"<label>: template nesting too deep (<depth> levels, max 64)."`
+//!   (`tests/nesting_limit.rs` pins the exact boundary). Making the walk
+//!   iterative would close this gap, but isn't done here: the tree it
+//!   walks is itself built by recursive descent
+//!   (`render.rs`'s `build_tree_inner`), the scope chain a section push
+//!   extends is a parent-linked, by-reference stack (this module's own
+//!   docs, above) not a flat list an iterative walk could index into
+//!   directly, and chevron's own partial/list/lambda interleaving would
+//!   need an explicit work-stack to reproduce without recursion --
+//!   templates don't nest sections anywhere near this deep in practice,
+//!   so the Rust-only safety cap stays the simpler, lower-risk fix for
+//!   now.
 //!
 //! Every lookup in `render.rs` (`get_key`/`walk_dotted`/`step`) walks the
 //! scope chain and the resolved `Value` by reference, cloning only the
