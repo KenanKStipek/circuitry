@@ -13,11 +13,11 @@
 //! implements one with the real local zone.
 
 /// `0.4s` / `42.0s` under a minute, `6m12s` under an hour, `2h05m`
-/// under a day, `3d04h` beyond that. Rounding carries into the next
-/// unit at every boundary (`59.96s` -> `1m00s`, `119.7s` -> `2m00s`):
-/// the whole duration is rounded to a whole number of seconds first,
-/// and the unit to show it in is picked from *that* integer, never
-/// from the unrounded value.
+/// under a day, `3d04h` beyond that. Each level rounds `secs` itself
+/// to its own unit once -- never the already-rounded value from the
+/// level below -- so a value never rounds twice on its way to its
+/// final shape (`61.46s` -> `1m01s`, not `1m02s`; `3629.5s` ->
+/// `1h00m`, not `1h01m`).
 pub fn format_duration(secs: f64) -> String {
     let secs = secs.max(0.0);
     // Rounded to the tenth of a second up front, so a value like
@@ -27,37 +27,23 @@ pub fn format_duration(secs: f64) -> String {
     if tenths < 600 {
         return format!("{}.{}s", tenths / 10, tenths % 10);
     }
-    // Rounded directly from `secs`, not from `tenths`: rounding the
-    // already-rounded tenths again would round twice (61.46s would
-    // show `1m02s` instead of the correct `1m01s`).
     let total_seconds = secs.round() as u64;
     if total_seconds < 3600 {
         let minutes = total_seconds / 60;
         let seconds = total_seconds % 60;
         return format!("{minutes}m{seconds:02}s");
     }
-    if total_seconds < 86_400 {
-        let mut hours = total_seconds / 3600;
-        // Rounded to the nearest minute, not truncated: a leftover
-        // 30s (7170s -> 1h59m30s) would otherwise just vanish,
-        // breaking this unit's own carry rule.
-        let mut minutes = ((total_seconds % 3600) as f64 / 60.0).round() as u64;
-        if minutes == 60 {
-            hours += 1;
-            minutes = 0;
-        }
-        if hours < 24 {
-            return format!("{hours}h{minutes:02}m");
-        }
-        return format!("1d{minutes:02}h", minutes = hours - 24);
+    // Rounded directly from `secs` to whole minutes, not from
+    // `total_seconds`: rounding an already-rounded value again is
+    // how the hours branch used to round twice.
+    let minutes_total = (secs / 60.0).round() as u64;
+    if minutes_total < 1440 {
+        return format!("{}h{:02}m", minutes_total / 60, minutes_total % 60);
     }
-    let mut days = total_seconds / 86_400;
-    let mut hours = ((total_seconds % 86_400) as f64 / 3600.0).round() as u64;
-    if hours == 24 {
-        days += 1;
-        hours = 0;
-    }
-    format!("{days}d{hours:02}h")
+    // Same rule one level up: rounded directly from `secs` to whole
+    // hours, not from `minutes_total`.
+    let hours_total = (secs / 3600.0).round() as u64;
+    format!("{}d{:02}h", hours_total / 24, hours_total % 24)
 }
 
 /// One unit's own value, formatted by the "below 100: one decimal,
@@ -193,6 +179,22 @@ mod tests {
         // 61.46 rounds to 61s directly; rounding the tenths (615)
         // again would give 62s and show `1m02s` instead of `1m01s`.
         assert_eq!(format_duration(61.46), "1m01s");
+    }
+
+    #[test]
+    fn duration_hours_round_only_once() {
+        // 3629.5s is 60.49 minutes; rounding seconds to 3630 first
+        // and then that to minutes would carry an extra minute and
+        // show `1h01m` instead of `1h00m`.
+        assert_eq!(format_duration(3629.5), "1h00m");
+    }
+
+    #[test]
+    fn duration_days_round_only_once() {
+        // 91799.5s is 25.4999 hours; rounding seconds or minutes
+        // first and then that to hours would carry an extra hour and
+        // show `1d02h` instead of `1d01h`.
+        assert_eq!(format_duration(91_799.5), "1d01h");
     }
 
     #[test]
