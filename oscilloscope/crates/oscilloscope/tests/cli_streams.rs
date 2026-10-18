@@ -302,3 +302,42 @@ fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     assert!(collected.contains("--events"), "stderr:\n{collected}");
     assert!(collected.contains("Ctrl-C"), "stderr:\n{collected}");
 }
+
+/// `OSI_THEME` picks the theme, and the pre-rename `OSP_THEME` is not read at
+/// all (#606: osi was never released under the old name, so there is no
+/// fallback). The theme is resolved before any engine is looked up, and
+/// electricity without a config stops right after it, so neither invocation
+/// needs `cof` or electricity on `PATH`.
+#[test]
+fn osi_theme_is_read_and_the_old_osp_theme_is_ignored() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let doc = dir.path().join("doc.yml");
+    std::fs::write(&doc, "effects: []\n").expect("write doc");
+    let empty_bin = dir.path().join("bin");
+    std::fs::create_dir(&empty_bin).expect("bin dir");
+    let run_with = |var: &str| {
+        Command::new(env!("CARGO_BIN_EXE_osi"))
+            .arg(&doc)
+            .args(["--engine", "electricity"])
+            .env_remove("OSI_THEME")
+            .env_remove("OSP_THEME")
+            .env(var, "bogus")
+            .env("PATH", &empty_bin)
+            .stdin(Stdio::null())
+            .output()
+            .expect("spawn osi")
+    };
+
+    let new_name = run_with("OSI_THEME");
+    let stderr = String::from_utf8_lossy(&new_name.stderr);
+    assert_eq!(new_name.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("osi: unknown theme \"bogus\""), "{stderr}");
+
+    let old_name = run_with("OSP_THEME");
+    let stderr = String::from_utf8_lossy(&old_name.stderr);
+    assert!(
+        !stderr.contains("unknown theme"),
+        "OSP_THEME must not be read: {stderr}"
+    );
+    assert!(stderr.contains("electricity needs a config"), "{stderr}");
+}
