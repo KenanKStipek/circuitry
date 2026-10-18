@@ -888,12 +888,16 @@ class DynamicRuntime:
     ) -> str:
         """Execute a single effect within the dynamic.
 
-        Returns which of three things happened: ``"disabled"`` (the effect
+        Returns which of four things happened: ``"disabled"`` (the effect
         didn't run, deterministically, regardless of resume), ``"resumed"``
-        (skipped because its own node already finished without error), or
-        ``"ran"`` (actually dispatched this call, success or an absorbed
-        failure). Chain flow uses this to know when to stop treating later
-        nodes as resumable — see the call site in ``execute()``.
+        (skipped because its own node already finished without error),
+        ``"reported"`` (a report ran -- it always does, whether or not
+        resume is active, but fires no effect_start/effect_complete and so
+        carries nothing for later siblings' resume eligibility), or
+        ``"ran"`` (any other effect actually dispatched this call, success
+        or an absorbed failure). Chain flow uses this to know when to stop
+        treating later nodes as resumable — see the call site in
+        ``execute()``.
         """
         effective_resume = self.resume if resume_active is None else resume_active
         # Local imports to avoid circular imports at module load time
@@ -1147,7 +1151,7 @@ class DynamicRuntime:
                     else:
                         _console.print(line)
 
-            return "ran"
+            return "reported" if is_report else "ran"
 
         except Exception:
             if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:

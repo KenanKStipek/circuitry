@@ -120,7 +120,13 @@ class ReportRuntime:
             meta["completed_at"] = now
             meta["dry_run"] = self.dry_run
 
-        store.fire_report(self.defn.name, level=self.defn.level, message=message, data=data)
+        try:
+            store.fire_report(self.defn.name, level=self.defn.level, message=message, data=data)
+        except Exception as exc:
+            # A report must never fail the run (#605) -- not even when an
+            # observer it never chose (the console, --events, a plugin)
+            # raises on it, e.g. unescaped Rich markup in the message.
+            logger.warning("report at '%s' observer raised; continuing: %s", path, exc)
 
     def _resolve_data(self, value: Any, ctx: dict[str, Any], *, path: str, field: str) -> Any:
         ref_path = report_data_reference(value)

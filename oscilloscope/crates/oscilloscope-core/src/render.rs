@@ -1687,6 +1687,102 @@ mod tests {
         }
     }
 
+    /// Review finding 1 on #607 / the oscilloscope follow-up (#610): a
+    /// report fires only `Store::fire_report`, never effect_start/
+    /// effect_complete, so adding one at the top level and one inside
+    /// a running loop's body must not change `effects_planned`/
+    /// `effects_done` at all -- a finished run must not show a
+    /// pending report forever.
+    #[test]
+    fn reports_do_not_change_effects_planned_or_effects_done() {
+        fn with_a_report_added(
+            mut program: electricity_bytecode::Program,
+        ) -> electricity_bytecode::Program {
+            use electricity_bytecode::{
+                EffectPath, Escape, LeafKind, LoopId, NodeKind, OnError, Op, Region, ReportLevel,
+                ReportOp, TemplateText,
+            };
+
+            fn report_op(path: EffectPath) -> Op {
+                Op {
+                    path,
+                    name: None,
+                    kind: NodeKind::Leaf(Box::new(LeafKind::Report(ReportOp {
+                        message: TemplateText::new("status", true, Escape::None),
+                        data: None,
+                        level: ReportLevel::Info,
+                        description: None,
+                    }))),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }
+            }
+
+            if let NodeKind::Control(Region::Block { ops, .. }) = &mut program.root.kind {
+                ops.insert(0, report_op(program.root.path.clone()));
+                if let Some(Op {
+                    kind: NodeKind::Control(Region::Loop { body, .. }),
+                    path: loop_path,
+                    ..
+                }) = ops.get_mut(1)
+                {
+                    if let Region::Block { ops: body_ops, .. } = body.as_mut() {
+                        body_ops.insert(0, report_op(loop_path.clone().push_pass(LoopId(0))));
+                    }
+                }
+            }
+            program
+        }
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 2, "total": 4}},
+                "iter_0": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
+                "iter_1": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}}
+            }
+        }});
+
+        let plan_without = PlanTree::from_program(&named_loop_with_one_leaf_program());
+        let plan_with =
+            PlanTree::from_program(&with_a_report_added(named_loop_with_one_leaf_program()));
+
+        let mut model = RunModel::new();
+        let rendered_without = build(
+            "do-thing.yml",
+            "cof",
+            &plan_without,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2.0,
+            "t2",
+            &[],
+        );
+        let mut model = RunModel::new();
+        let rendered_with = build(
+            "do-thing.yml",
+            "cof",
+            &plan_with,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2.0,
+            "t2",
+            &[],
+        );
+
+        assert_eq!(
+            rendered_with.header.effects_planned,
+            rendered_without.header.effects_planned
+        );
+        assert_eq!(
+            rendered_with.header.effects_done,
+            rendered_without.header.effects_done
+        );
+        assert_eq!(rendered_without.header.effects_planned, Some(4));
+        assert_eq!(rendered_without.header.effects_done, 2);
+    }
+
     #[test]
     fn effects_planned_multiplies_a_loop_bodys_leaf_by_its_known_total() {
         // Review finding 6: `fan`'s own single leaf template

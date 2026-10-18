@@ -296,18 +296,21 @@ def _make_report_console_observer(
 ) -> Callable[[str, str, str, Any], None]:
     """Build a ``report_observer`` that prints one line per ``report``
     effect, ``▸ <message>``, a ``level: warning`` one styled the way cof's
-    own warnings are (#605). Rides ``Store.fire_report``, never
-    ``effect_start``/``effect_complete``, so this is the only console line a
-    report ever produces — unlike every other effect's own verbose
-    start/done lines, it prints regardless of ``--verbose``; the caller
-    gates it on ``--quiet``/``--json`` instead, the same way it gates
-    ``--explain-routing``'s own observer.
+    own ``Warning:`` lines are, ``[yellow]...[/yellow]`` (#605). Rides
+    ``Store.fire_report``, never ``effect_start``/``effect_complete``, so
+    this is the only console line a report ever produces — unlike every
+    other effect's own verbose start/done lines, it prints regardless of
+    ``--verbose``; the caller gates it on ``--quiet``/``--json``/``--tail``/
+    a non-TTY stdout instead, the same way it gates ``--explain-routing``'s
+    own observer. ``message`` is escaped (review finding 3 on #607): it is
+    rendered orchestration output, so brackets in it (a path like
+    ``[/tmp/out]``, a model's own ``[INST]``-style text) are not Rich markup.
     """
 
     def _observer(path: str, level: str, message: str, data: Any) -> None:
         del path, data
-        text = f"▸ {message}"
-        print_line(f"[warn]{text}[/warn]" if level == "warning" else text)
+        text = f"▸ {escape(message)}"
+        print_line(f"[yellow]{text}[/yellow]" if level == "warning" else text)
 
     return _observer
 
@@ -1316,7 +1319,7 @@ def run_cmd(
     )
     report_observer = (
         _make_report_console_observer(console.print)
-        if not (quiet or json_out)
+        if not (quiet or json_out or tail or not sys.stdout.isatty())
         else None
     )
 
@@ -1738,7 +1741,7 @@ def run_library_cmd(
     )
     report_observer = (
         _make_report_console_observer(console.print)
-        if not (quiet or json_out)
+        if not (quiet or json_out or tail or not sys.stdout.isatty())
         else None
     )
 

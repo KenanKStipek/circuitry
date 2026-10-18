@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..core.saved_state import json_safe_default
 from .version import resolve_version
 
 logger = logging.getLogger(__name__)
@@ -131,8 +132,19 @@ class EventLog:
 
     def _write_line(self, payload: dict[str, Any]) -> None:
         """Write one JSON line; caller holds ``self._lock`` and has
-        already checked ``self._disabled``."""
-        self._file.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        already checked ``self._disabled``.
+
+        ``default=json_safe_default`` (review finding 7 on #607): a
+        report's own ``data`` can hold a shadow-state value
+        ``json.dumps`` can't otherwise encode (a YAML date, ``!!binary``
+        bytes), the same as ``--out``. Without it, encoding this one line
+        raises and disables every later write on this stream for the rest
+        of the run -- a watcher would silently lose every subsequent
+        ``start``/``end``/``run_end`` too, not just this report.
+        """
+        self._file.write(
+            json.dumps(payload, separators=(",", ":"), default=json_safe_default) + "\n"
+        )
         self._file.flush()
 
     def run_start(self, *, run_id: str, orchestration: str) -> None:
@@ -263,7 +275,9 @@ class EventLog:
                     "message": message,
                 }
                 if data is not None:
-                    encoded = json.dumps(data, separators=(",", ":")).encode("utf-8")
+                    encoded = json.dumps(
+                        data, separators=(",", ":"), default=json_safe_default
+                    ).encode("utf-8")
                     if len(encoded) > _REPORT_DATA_MAX_BYTES:
                         payload["data_truncated"] = len(encoded)
                     else:

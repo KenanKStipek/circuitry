@@ -1,0 +1,9 @@
+interface:
+  inputs:
+    d: {default: 2024-01-02}
+effects:
+  - type: report
+    name: status
+    message: "as of {{input.d}}"
+    data:
+      when: {from: input.d}

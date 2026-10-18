@@ -344,6 +344,34 @@ pub(crate) fn build_report_data(
             as_json: false,
         });
     }
+    // A tool param's richer `{from:, default:, as:}` form, not a report's
+    // narrower one (#605): `report_data_reference`'s exact `{from}` match
+    // above lets a key like `default`/`as` fall straight through to the
+    // `Value::Dict` branch below, which would otherwise silently publish
+    // `{"from": ..., "default": ...}` as a literal object with no warning
+    // (review finding 9 on #607). Ports `core/compiler.py::
+    // _check_report_data_leaves`'s own check.
+    if let Value::Dict(dict) = value {
+        let from_key = Value::Str("from".to_string());
+        if dict.contains_key(&from_key) && dict.len() != 1 {
+            let mut extra: Vec<String> = dict
+                .keys()
+                .filter(|k| *k != &from_key)
+                .map(|k| match k {
+                    Value::Str(s) => s.clone(),
+                    other => other.py_str(),
+                })
+                .collect();
+            extra.sort();
+            return Err(CompileError(format!(
+                "{effect_path}.{field}: a report's 'data' leaf with a 'from' key \
+                 takes no other key ({}) -- {{from: <path>}} is the whole form; a \
+                 report never fails on an unresolved path, so there is nothing for \
+                 'default'/'as' to do.",
+                extra.join(", ")
+            )));
+        }
+    }
     match value {
         Value::Str(s) => {
             check_templates(value, effect_path, field, true)?;
@@ -675,5 +703,28 @@ mod tests {
             )),
             _ => panic!("expected a map"),
         }
+    }
+
+    #[test]
+    fn report_data_rejects_from_plus_default_instead_of_a_silent_literal() {
+        // Unlike `use`'s own `inputs:` above, a report's narrower
+        // `{from:}` grammar has no literal-passthrough fallback for a
+        // tool param's richer `{from:, default:, as:}` shape (#605;
+        // review finding 9 on #607) -- it's a compile error instead.
+        let mut from_dict = Dict::new();
+        from_dict.insert(
+            Value::Str("from".to_string()),
+            Value::Str("input.x".to_string()),
+        );
+        from_dict.insert(Value::Str("default".to_string()), Value::Int(1.into()));
+        let err = build_report_data(
+            &Value::Dict(from_dict),
+            Some("status"),
+            "prime.status",
+            "data.bad",
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("takes no other key (default)"), "{}", err.0);
     }
 }

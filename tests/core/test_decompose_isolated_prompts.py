@@ -12,6 +12,7 @@ already accepted.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -101,3 +102,33 @@ def test_a_plan_referencing_the_parents_declared_prompt_by_name_is_unknown_to_it
             {"effects": [{"type": "yield", "name": "y", "template": "{{> leaked}}"}]},
             runtime_config=runtime_config,
         )
+
+
+def test_a_generated_plans_report_reaches_the_parents_own_report_observer() -> None:
+    """A decomposition/reflector plan's own `report` effects (the planner
+    is taught `type: report`, #605) must reach the parent's `report`
+    observer, namespaced under the decomposing node's own path, the same
+    way `effect_start`/`effect_complete` already do -- otherwise a
+    generated plan's reports never reach `--events` or the console
+    (review finding 8 on #607)."""
+    report_calls: list[tuple[str, str, str, Any]] = []
+    parent_store = Store(
+        state={"input": {}, "prime": {}},
+        report=lambda path, level, message, data: report_calls.append(
+            (path, level, message, data)
+        ),
+    )
+    _run_isolated(
+        {"effects": [{"type": "report", "name": "status", "message": "hi"}]},
+        initial_state={"input": {}, "prime": {}},
+        parent_store=parent_store,
+        node={},
+        node_path="decomp",
+        adapter=_mock_adapter(),
+        model="m",
+        runtime_config={},
+        timeout_seconds=30,
+        verbose=False,
+        display_depth=0,
+    )
+    assert report_calls == [("decomp.status", "info", "hi", None)]

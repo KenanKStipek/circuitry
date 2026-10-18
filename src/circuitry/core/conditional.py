@@ -331,9 +331,15 @@ class ConditionalRuntime:
                     )
                     continue
                 # The first branch effect that isn't reused continues inside
-                # itself when it can; every effect after it runs whole.
+                # itself when it can; every effect after it runs whole. A
+                # report is never "reused" (it always runs again when
+                # reached, per #605) and must not count as that first
+                # effect either — it fires no effect_start/effect_complete,
+                # so treating it as the pivot would re-run every
+                # already-completed sibling after it.
                 effect_resume = resume_active
-                resume_active = False
+                if not is_report:
+                    resume_active = False
 
                 if self.verbose and not is_prompt and not is_report:
                     _console.print(

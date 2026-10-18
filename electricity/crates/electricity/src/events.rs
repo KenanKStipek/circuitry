@@ -118,7 +118,17 @@ impl EventLog {
         if self.disabled.get() {
             return;
         }
-        let text = match electricity_json::dumps(&payload, electricity_json::WriteMode::EVENTS) {
+        // `dumps_default_str`, not `dumps` (review finding 7 on #607): a
+        // report's own `data` can hold a shadow-state value plain JSON
+        // can't otherwise encode (a YAML date, `!!binary` bytes), the same
+        // as `--out`. Without it, encoding this one line disables every
+        // later write on this stream for the rest of the run -- a watcher
+        // would silently lose every subsequent `start`/`end`/`run_end`
+        // too, not just this report.
+        let text = match electricity_json::dumps_default_str(
+            &payload,
+            electricity_json::WriteMode::EVENTS,
+        ) {
             Ok(text) => text,
             Err(err) => {
                 self.disable_with(op, &err);
@@ -316,7 +326,7 @@ impl EventLog {
             Value::Str(message.to_string()),
         );
         if let Some(data) = data {
-            match electricity_json::dumps(data, electricity_json::WriteMode::EVENTS) {
+            match electricity_json::dumps_default_str(data, electricity_json::WriteMode::EVENTS) {
                 Ok(text) => {
                     let byte_len = text.len();
                     if byte_len > REPORT_DATA_MAX_BYTES {
@@ -422,6 +432,64 @@ mod tests {
                 .unwrap()
                 .get(&Value::Str("ev".to_string())),
             Some(&Value::Str("run_end".to_string()))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    fn blob_dict(blob_len: usize) -> Value {
+        let mut d = electricity_value::Dict::new();
+        d.insert(
+            Value::Str("blob".to_string()),
+            Value::Str("x".repeat(blob_len)),
+        );
+        Value::Dict(d)
+    }
+
+    fn report_data(lines: &[Value]) -> &Value {
+        lines[0]
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("data".to_string()))
+            .unwrap()
+    }
+
+    #[test]
+    fn report_data_at_exactly_16384_bytes_is_not_truncated() {
+        // The limit is "exceeds 16 KiB", not "at least" (#605): a
+        // payload whose compact JSON is exactly REPORT_DATA_MAX_BYTES
+        // keeps `data`, with no `data_truncated` (review's exact-byte-
+        // boundary ask on #607).
+        let path = temp_path("boundary-exact");
+        let log = EventLog::open(&path);
+        let blob_len = REPORT_DATA_MAX_BYTES - "{\"blob\":\"\"}".len();
+        let data = blob_dict(blob_len);
+        let encoded = electricity_json::dumps(&data, electricity_json::WriteMode::EVENTS).unwrap();
+        assert_eq!(encoded.len(), REPORT_DATA_MAX_BYTES);
+        log.on_report("prime", "info", "boundary", Some(&data));
+        log.close();
+        let lines = read_lines(&path);
+        let payload = lines[0].as_dict().unwrap();
+        assert!(!payload.contains_key(&Value::Str("data_truncated".to_string())));
+        assert_eq!(report_data(&lines), &data);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn report_data_one_byte_over_16384_is_truncated() {
+        let path = temp_path("boundary-over");
+        let log = EventLog::open(&path);
+        let blob_len = REPORT_DATA_MAX_BYTES - "{\"blob\":\"\"}".len() + 1;
+        let data = blob_dict(blob_len);
+        let encoded = electricity_json::dumps(&data, electricity_json::WriteMode::EVENTS).unwrap();
+        assert_eq!(encoded.len(), REPORT_DATA_MAX_BYTES + 1);
+        log.on_report("prime", "info", "boundary", Some(&data));
+        log.close();
+        let lines = read_lines(&path);
+        let payload = lines[0].as_dict().unwrap();
+        assert!(!payload.contains_key(&Value::Str("data".to_string())));
+        assert_eq!(
+            payload.get(&Value::Str("data_truncated".to_string())),
+            Some(&Value::from(encoded.len() as i64))
         );
         fs::remove_file(&path).unwrap();
     }

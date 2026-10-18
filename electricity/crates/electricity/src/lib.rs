@@ -12,6 +12,7 @@
 //! and prints the result as JSON -- it never runs anything, so it has
 //! no refusal of its own either.
 
+use std::io::IsTerminal as _;
 use std::path::Path;
 
 pub mod events;
@@ -844,12 +845,18 @@ impl RunObserver for Observer<'_> {
     // reaches `self.totals` at all (#605) -- only `--events` (through
     // this hook) and the console line below. `electricity`'s own CLI
     // has no `--quiet`/`--json` flag to suppress the line under
-    // (unlike `cof run`'s), so it always prints -- the one place this
-    // crate writes to stdout directly rather than handing rendered
-    // text back to `electricity-cli`'s own writer, since `RunRequest`
-    // has no callback seam for a mid-run console line (`out`/`events`/
-    // `live_state` are all file paths, opened and owned entirely
-    // inside `run_orchestration`).
+    // (unlike `cof run`'s), so it prints whenever stdout is a TTY --
+    // the same auto-quiet rule `cof run` applies, since a non-TTY
+    // stdout is this crate's own state/failure-payload JSON contract
+    // (DESIGN.md §6.5) that a report line must not interleave with.
+    // `println!` panics on a write error (EPIPE/EIO -- a closed pipe,
+    // or a hung-up terminal, e.g. a report in `finally` after SIGHUP);
+    // `writeln!` to a locked stdout, its result discarded, cannot --
+    // the one place this crate writes to stdout directly rather than
+    // handing rendered text back to `electricity-cli`'s own writer,
+    // since `RunRequest` has no callback seam for a mid-run console
+    // line (`out`/`events`/`live_state` are all file paths, opened and
+    // owned entirely inside `run_orchestration`).
     fn report(
         &self,
         path: &EffectPath,
@@ -864,7 +871,10 @@ impl RunObserver for Observer<'_> {
         if let Some(log) = self.events {
             log.on_report(&path.to_string(), level_str, message, data);
         }
-        println!("▸ {message}");
+        if std::io::stdout().is_terminal() {
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stdout().lock(), "▸ {message}");
+        }
     }
 
     fn record_totals(&self, meta: &Value) {

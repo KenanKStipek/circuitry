@@ -501,6 +501,12 @@ fn is_transparent(op: &Op) -> bool {
         )
 }
 
+/// A report leaf, named or not (#605) -- see `record_op_entry`'s own
+/// doc comment for why it never becomes a real chain sibling either.
+fn is_report(op: &Op) -> bool {
+    matches!(&op.kind, NodeKind::Leaf(leaf) if matches!(leaf.as_ref(), LeafKind::Report(_)))
+}
+
 /// The shared first half of `walk_op`: computes `op`'s own effective
 /// path, its `PlanEntry` (the leaf/use/if/loop/dynamic/try-finally
 /// kind, with `named` cleared for an unnamed if/loop), and inserts
@@ -518,6 +524,13 @@ fn record_op_entry(
     ctx: &mut WalkCtx,
 ) -> EffectPath {
     let path = effective_path(&op.path, graft);
+    if is_report(op) {
+        // A report fires only `Store::fire_report`, never
+        // effect_start/effect_complete (#605), so it must not become a
+        // plan row or count toward effects_planned/effects_done --
+        // showing reports is #610's own work, not this plan's.
+        return path;
+    }
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
@@ -525,6 +538,7 @@ fn record_op_entry(
             LeafKind::Prompt(_) => PlanEntryKind::Leaf(LeafEffectKind::Prompt),
             LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
             LeafKind::Reflector(_) => PlanEntryKind::Leaf(LeafEffectKind::Reflector),
+            LeafKind::Report(_) => unreachable!("reports return above, via is_report"),
         },
         NodeKind::Control(region) => {
             let mut k = region_kind(region);
@@ -697,6 +711,14 @@ fn walk_block(
                 }
                 _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
             }
+        } else if is_report(op) {
+            // Not a real chain sibling (#605): an unnamed report's own
+            // path is its container's, not a new one, so treating it
+            // as one would duplicate an existing path's entry; a named
+            // report is real but still contributes no plan row
+            // (`record_op_entry`), so there is nothing here for a later
+            // sibling to usefully wait on either.
+            walk_op(op, graft, Some(Flow::Chain), trie, ctx);
         } else {
             let display = display_path(&effective_path(&op.path, graft));
             ctx.earlier_siblings
@@ -798,6 +820,110 @@ mod tests {
             labels: None,
             enabled: true,
         }
+    }
+
+    /// An unnamed report reuses its container's own path -- `path`
+    /// here is that container's, exactly as the real compiler emits it
+    /// (#605).
+    fn report_op(path: EffectPath) -> Op {
+        Op {
+            path,
+            name: None,
+            kind: NodeKind::Leaf(Box::new(LeafKind::Report(electricity_bytecode::ReportOp {
+                message: electricity_bytecode::TemplateText::new(
+                    "status",
+                    true,
+                    electricity_bytecode::Escape::None,
+                ),
+                data: None,
+                level: electricity_bytecode::ReportLevel::Info,
+                description: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    /// Review finding 1 on #607 / the oscilloscope follow-up (#610): a
+    /// report fires only `Store::fire_report`, never effect_start/
+    /// effect_complete, so it must contribute no plan row and no
+    /// `leaf_paths`/`all_paths` entry -- at the top level or inside a
+    /// loop body, same as a document with no reports at all.
+    #[test]
+    fn reports_at_the_top_level_and_in_a_loop_body_contribute_no_plan_row() {
+        fn program(with_reports: bool) -> Program {
+            let root_path = EffectPath::root();
+            let step1_path = root_path.push_name("step1");
+            let loop_path = root_path.push_name("items");
+            let pass_path = loop_path.push_pass(LoopId(0));
+            let nap_path = pass_path.push_name("nap");
+
+            let mut top_ops = Vec::new();
+            if with_reports {
+                top_ops.push(report_op(root_path.clone()));
+            }
+            top_ops.push(tool_op(step1_path, "step1"));
+
+            let mut body_ops = Vec::new();
+            if with_reports {
+                body_ops.push(report_op(pass_path));
+            }
+            body_ops.push(tool_op(nap_path, "nap"));
+
+            top_ops.push(Op {
+                path: loop_path.clone(),
+                name: Some("items".to_string()),
+                kind: NodeKind::Control(Region::Loop {
+                    name: Some("items".to_string()),
+                    spec: LoopSpec::Each {
+                        in_path: "prime.xs".to_string(),
+                        as_name: "x".to_string(),
+                        truncate: false,
+                    },
+                    body: Box::new(Region::Block {
+                        ops: body_ops,
+                        overlay: true,
+                    }),
+                    flow: electricity_bytecode::LoopFlow::Chain,
+                    max_concurrency: None,
+                    max_iterations: None,
+                    min_iterations: 0,
+                    collect: None,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            });
+
+            let root = Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: top_ops,
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            };
+            Program {
+                root,
+                prompts: Default::default(),
+                effect_names: Default::default(),
+                document: None,
+                runtime_block: None,
+                interface: None,
+                adapter: None,
+                model: None,
+            }
+        }
+
+        let without_reports = PlanTree::from_program(&program(false));
+        let with_reports = PlanTree::from_program(&program(true));
+        assert_eq!(with_reports.leaf_paths(), without_reports.leaf_paths());
+        assert_eq!(with_reports.all_paths(), without_reports.all_paths());
+        assert_eq!(with_reports.leaf_paths().len(), 2);
     }
 
     #[test]

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from circuitry.cli.events import EventLog
+from circuitry.cli.events import _REPORT_DATA_MAX_BYTES, EventLog
 
 
 def _lines(path: Path) -> list[dict[str, Any]]:
@@ -340,6 +340,38 @@ def test_on_report_truncates_data_over_16kib(tmp_path: Path) -> None:
     assert event["data_truncated"] == len(
         json.dumps(big, separators=(",", ":")).encode("utf-8")
     )
+
+
+def test_on_report_data_at_exactly_16384_bytes_is_not_truncated(tmp_path: Path) -> None:
+    """The limit is "exceeds 16 KiB", not "at least" (#605): a payload
+    whose compact JSON is exactly ``_REPORT_DATA_MAX_BYTES`` keeps
+    ``data``, with no ``data_truncated``."""
+    log = EventLog(tmp_path / "events.jsonl")
+    blob_len = _REPORT_DATA_MAX_BYTES - len('{"blob":""}')
+    payload = {"blob": "x" * blob_len}
+    assert len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) == (
+        _REPORT_DATA_MAX_BYTES
+    )
+    log.on_report("prime", "info", "boundary", payload)
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert event["data"] == payload
+    assert "data_truncated" not in event
+
+
+def test_on_report_data_one_byte_over_16384_is_truncated(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    blob_len = _REPORT_DATA_MAX_BYTES - len('{"blob":""}') + 1
+    payload = {"blob": "x" * blob_len}
+    expected_bytes = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    assert expected_bytes == _REPORT_DATA_MAX_BYTES + 1
+    log.on_report("prime", "info", "boundary", payload)
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert "data" not in event
+    assert event["data_truncated"] == expected_bytes
 
 
 def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:
