@@ -3106,5 +3106,55 @@
     },
     "instance": 1e+308,
     "message": null
+  },
+  {
+    "name": "not_with_a_nested_id_resolves_ref_against_the_parent_base",
+    "schema": {
+      "not": {
+        "$id": "https://example.com/sub/",
+        "properties": {
+          "a": {
+            "$ref": "#/$defs/str"
+          }
+        }
+      },
+      "$defs": {
+        "str": {
+          "type": "string"
+        }
+      }
+    },
+    "instance": {
+      "a": "x"
+    },
+    "message": "{'a': 'x'} should not be valid under {'$id': 'https://example.com/sub/', 'properties': {'a': {'$ref': '#/$defs/str'}}}"
+  },
+  {
+    "name": "if_with_a_nested_id_resolves_ref_against_the_parent_base",
+    "schema": {
+      "if": {
+        "$id": "https://example.com/sub/",
+        "properties": {
+          "a": {
+            "$ref": "#/$defs/str"
+          }
+        }
+      },
+      "then": {
+        "const": "then-branch"
+      },
+      "else": {
+        "const": "else-branch"
+      },
+      "$defs": {
+        "str": {
+          "type": "string"
+        }
+      }
+    },
+    "instance": {
+      "a": "x"
+    },
+    "message": "'then-branch' was expected"
   }
 ]

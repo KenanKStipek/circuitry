@@ -617,6 +617,40 @@ def cases() -> list[dict]:
             {"multipleOf": 0.5},
             1e308,
         ),
+        _case(
+            # Issue #507's own item 2: `not`'s own subschema
+            # goes through `validator.evolve(schema=...).is_valid(...)`,
+            # which never calls `descend()` -- the only place a `$id`
+            # subresource scope is ever pushed -- so the `$ref` inside it
+            # still resolves against the *parent* document's `$defs`, not
+            # the nested `$id`'s own (nonexistent) one. `a: "x"` makes the
+            # inner schema valid, so `not` itself fails.
+            "not_with_a_nested_id_resolves_ref_against_the_parent_base",
+            {
+                "not": {
+                    "$id": "https://example.com/sub/",
+                    "properties": {"a": {"$ref": "#/$defs/str"}},
+                },
+                "$defs": {"str": {"type": "string"}},
+            },
+            {"a": "x"},
+        ),
+        _case(
+            # The same quirk for `if`: the nested `$id` on `if`'s own
+            # subschema doesn't change what its `$ref` resolves against
+            # either, so `a: "x"` makes `if` itself valid and `then` runs.
+            "if_with_a_nested_id_resolves_ref_against_the_parent_base",
+            {
+                "if": {
+                    "$id": "https://example.com/sub/",
+                    "properties": {"a": {"$ref": "#/$defs/str"}},
+                },
+                "then": {"const": "then-branch"},
+                "else": {"const": "else-branch"},
+                "$defs": {"str": {"type": "string"}},
+            },
+            {"a": "x"},
+        ),
     ]
 
 
