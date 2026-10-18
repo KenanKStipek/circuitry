@@ -1,0 +1,10 @@
+name: schema-multipleof-exact-fraction-for-big-int
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    schema:
+      multipleOf: 2.7997908555096566e-301
+    template: "give json"

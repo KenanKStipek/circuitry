@@ -565,11 +565,81 @@ fn uniq_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// CPython's own `merge_compute_minrun` threshold -- a list shorter
+/// than this is always one single `listsort` "run" to begin with, so
+/// `cpython_list_sort`'s own `count_run` + `binarysort` port is exact,
+/// comparison for comparison, only below it.
+const CPYTHON_MINRUN_WIDTH: usize = 64;
+
+/// A stable, `Option<Ordering>`-aware top-down merge sort over *order*
+/// (indices into *items*), comparing with [`uniq_sort_cmp`] --
+/// [`cpython_list_sort`]'s own `O(n log n)`-moves replacement for its
+/// single-run `binarysort` port once `order.len()` reaches
+/// [`CPYTHON_MINRUN_WIDTH`] (issue #507's own item 12):
+/// each of the `log2(n)` merge levels moves every element exactly
+/// once, into a same-sized scratch buffer, rather than `binarysort`'s
+/// own per-insertion `rotate_right` (up to the whole sorted prefix so
+/// far, `O(n)` on its own, `O(n^2)` summed over `n` insertions).
+/// Returns `false` the instant any comparison is incomparable (`None`)
+/// -- *order* left in an unspecified state, the same contract
+/// [`cpython_list_sort`] already documents, so [`containers_have_a_
+/// duplicate`]'s own all-pairs fallback never looks at a partial sort
+/// either way. A tie (`Some(Equal)`) keeps the *left* run's own
+/// element first in the merge step below, preserving stability exactly
+/// like a real merge sort (and like `binarysort`'s own `bisect_right`
+/// insertion) -- never reordering two elements [`uniq_equal`]'s own
+/// adjacency check would otherwise still correctly call equal
+/// regardless, but kept for the same reason `cpython_list_sort` is a
+/// stable sort at all: a document a future change makes this ever
+/// expose ordering to (not just "any duplicate") must not regress.
+fn merge_sort_order(order: &mut [usize], items: &[&Value]) -> bool {
+    let n = order.len();
+    if n < 2 {
+        return true;
+    }
+    let mut scratch = vec![0usize; n];
+    merge_sort_rec(order, &mut scratch, items)
+}
+
+fn merge_sort_rec(order: &mut [usize], scratch: &mut [usize], items: &[&Value]) -> bool {
+    let n = order.len();
+    if n < 2 {
+        return true;
+    }
+    let mid = n / 2;
+    if !merge_sort_rec(&mut order[..mid], &mut scratch[..mid], items) {
+        return false;
+    }
+    if !merge_sort_rec(&mut order[mid..], &mut scratch[mid..], items) {
+        return false;
+    }
+    let (left, right) = order.split_at(mid);
+    let (mut i, mut j, mut k) = (0usize, 0usize, 0usize);
+    while i < left.len() && j < right.len() {
+        match uniq_sort_cmp(items[left[i]], items[right[j]]) {
+            None => return false,
+            Some(std::cmp::Ordering::Greater) => {
+                scratch[k] = right[j];
+                j += 1;
+            }
+            _ => {
+                scratch[k] = left[i];
+                i += 1;
+            }
+        }
+        k += 1;
+    }
+    scratch[k..k + (left.len() - i)].copy_from_slice(&left[i..]);
+    k += left.len() - i;
+    scratch[k..k + (right.len() - j)].copy_from_slice(&right[j..]);
+    order.copy_from_slice(scratch);
+    true
+}
+
 /// Simulates CPython `listsort`'s own `count_run` + `binarysort` --
 /// together, the *entire* algorithm it uses for a list shorter than
-/// `merge_compute_minrun`'s own threshold (64; `minrun` is the list's
-/// own length below that, so there is only ever one "run" to begin
-/// with) -- over *order* (indices into *items*), comparing with
+/// [`CPYTHON_MINRUN_WIDTH`] -- over *order* (indices into *items*),
+/// comparing with
 /// [`uniq_sort_cmp`]. `count_run` first finds *order*'s own natural
 /// ascending (ties continue it) or strictly-descending (ties break it)
 /// prefix, reversing it in place if descending; `binarysort` then
@@ -582,17 +652,30 @@ fn uniq_equal(a: &Value, b: &Value) -> bool {
 /// own uncaught `TypeError` unwinding the whole `sorted()` call.
 ///
 /// For a list of 64 or more, real timsort instead finds and merges
-/// several shorter runs with a galloping merge; this keeps the same
-/// single-run algorithm there too -- correct (any genuine total order
-/// still ends up fully, stably sorted), just not bit-for-bit identical
-/// to CPython's own comparison *sequence* that large (a documented,
-/// narrower divergence, `DESIGN.md` §13) -- rather than ever risk the
-/// transitivity-violation panic `[T]::sort_by` itself can raise when a
-/// comparator isn't a genuine total order, the way mapping
-/// "incomparable" to `Equal` used to (issue #498's own
-/// follow-up, finding C1).
+/// several shorter runs with a galloping merge -- already a documented,
+/// narrower divergence from that exact comparison *sequence*
+/// (`DESIGN.md` §13) before issue #507's own item 12, since
+/// this used to keep the same single-run binary-insertion algorithm
+/// there too, correct (any genuine total order still ends up fully,
+/// stably sorted) but *quadratic in element moves* there -- every
+/// insertion's own `rotate_right` shifts up to the whole sorted prefix
+/// so far, same as real CPython's own `binarysort` does for genuinely
+/// large input (CPython's *own* long tail from the comparisons
+/// `count_run` didn't already order would be just as quadratic, which
+/// is exactly why real timsort never binary-inserts a long tail like
+/// this at all). Dispatches to [`merge_sort_order`] once `n` reaches
+/// that same 64 threshold instead -- `O(n log n)` moves, never
+/// `O(n^2)`, while staying a correct, stable, `Option`-aware sort over
+/// the identical [`uniq_sort_cmp`] comparator (`uniq_items_of_lists_
+/// stays_fast_at_scale`'s own 600,000-list-element case is exactly
+/// this threshold crossed by four orders of magnitude). Below it, this
+/// keeps replicating real CPython comparison for comparison, since
+/// there's nothing to gain performance-wise at that size either way.
 fn cpython_list_sort(order: &mut [usize], items: &[&Value]) -> bool {
     let n = order.len();
+    if n >= CPYTHON_MINRUN_WIDTH {
+        return merge_sort_order(order, items);
+    }
     if n < 2 {
         return true;
     }
@@ -1316,6 +1399,9 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (prop_key, subschema) in properties.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(name) = prop_key.as_str() else {
                         continue;
                     };
@@ -1352,10 +1438,16 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (pattern_key, subschema) in patterns.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(pattern) = pattern_key.as_str() else {
                         continue;
                     };
                     for (prop_key, prop_instance) in obj.iter() {
+                        if lazy_should_stop(out) {
+                            break;
+                        }
                         let Some(name) = prop_key.as_str() else {
                             continue;
                         };
@@ -1489,6 +1581,9 @@ pub(crate) fn evaluate<'a>(
                         child_schema_path
                             .push(PathSegment::Key("additionalProperties".to_string()));
                         for extra_key in &extras {
+                            if lazy_should_stop(out) {
+                                break;
+                            }
                             let prop_instance = obj.get(*extra_key).expect("just found above");
                             let mut child_path = path.to_vec();
                             child_path.push(match extra_key.as_str() {
@@ -1545,6 +1640,9 @@ pub(crate) fn evaluate<'a>(
                 for (index, (subschema, element)) in
                     item_schemas.iter().zip(elements.iter()).enumerate()
                 {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let mut child_path = path.to_vec();
                     child_path.push(PathSegment::Index(index));
                     let mut child_schema_path = schema_path.to_vec();
@@ -1581,6 +1679,9 @@ pub(crate) fn evaluate<'a>(
                     Value::Bool(true) => {}
                     _ => {
                         for (offset, element) in rest.iter().enumerate() {
+                            if lazy_should_stop(out) {
+                                break;
+                            }
                             let mut child_path = path.to_vec();
                             child_path.push(PathSegment::Index(prefix + offset));
                             let mut child_schema_path = schema_path.to_vec();
@@ -1653,6 +1754,9 @@ pub(crate) fn evaluate<'a>(
                     });
                 } else {
                     for (index, element) in elements.iter().enumerate().skip(prefix) {
+                        if lazy_should_stop(out) {
+                            break;
+                        }
                         let mut child_path = path.to_vec();
                         child_path.push(PathSegment::Index(index));
                         let mut child_schema_path = schema_path.to_vec();
@@ -1675,6 +1779,9 @@ pub(crate) fn evaluate<'a>(
                 for (index, (subschema, element)) in
                     prefix_schemas.iter().zip(elements.iter()).enumerate()
                 {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let mut child_path = path.to_vec();
                     child_path.push(PathSegment::Index(index));
                     let mut child_schema_path = schema_path.to_vec();
@@ -1964,6 +2071,9 @@ pub(crate) fn evaluate<'a>(
                 // violations flow straight into `out`, never wrapped.
                 if let Value::List(subschemas) = value {
                     for (index, subschema) in subschemas.iter().enumerate() {
+                        if lazy_should_stop(out) {
+                            break;
+                        }
                         let mut child_schema_path = schema_path.to_vec();
                         child_schema_path.push(PathSegment::Key("allOf".to_string()));
                         child_schema_path.push(PathSegment::Index(index));
@@ -2030,6 +2140,9 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (prop_key, dependency) in dependent.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(property) = prop_key.as_str() else {
                         continue;
                     };
@@ -2053,6 +2166,9 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (prop_key, dependency) in dependent.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(depends_on) = prop_key.as_str() else {
                         continue;
                     };
@@ -2166,6 +2282,9 @@ pub(crate) fn evaluate<'a>(
                 let mut child_schema_path = schema_path.to_vec();
                 child_schema_path.push(PathSegment::Key("propertyNames".to_string()));
                 for prop_key in obj.keys() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     if prop_key.as_str().is_some() {
                         evaluate(value, prop_key, root, path, &child_schema_path, out);
                     }
@@ -2177,12 +2296,11 @@ pub(crate) fn evaluate<'a>(
         // `Validator.is_valid`) only ever pulls *one* value total from
         // the entire nested `iter_errors` generator tree -- every
         // validator function it hasn't reached yet (including this
-        // schema's own remaining top-level keywords) simply never runs
-        // at all. [`LAZY_MODE`] mirrors that at this one granularity
-        // (between top-level keywords of one schema node; a keyword's
-        // own internal loop over several properties/elements/
-        // subschemas is a documented, narrower approximation,
-        // `DESIGN.md` §13) -- stopping here, not just at the end of
+        // schema's own remaining top-level keywords, and every
+        // property/element/subschema a keyword's own internal loop
+        // hasn't reached yet either, via the same [`lazy_should_stop`]
+        // check each of those loops makes on its own) simply never
+        // runs at all. Stopping here, not just at the end of
         // [`is_valid`] itself, is what keeps a keyword `not`/`if`/
         // `contains` never actually reaches (e.g. a `$ref` cycle sitting
         // behind a sibling `type` that already failed) from ever
@@ -2224,6 +2342,28 @@ thread_local! {
 
 fn lazy_mode_active() -> bool {
     LAZY_MODE.with(|m| m.get())
+}
+
+/// Whether a keyword's own *internal* loop over several siblings
+/// (`properties`' own properties, `patternProperties`' own patterns and
+/// property names, `items`/`prefixItems`' own elements, `allOf`'s own
+/// subschemas, ...) must stop before its next iteration: Python's own
+/// `next(iter_errors(instance), None) is None` pulls exactly one value
+/// from the *entire* nested `iter_errors` generator tree, `yield from`
+/// flattening every nested validator call into that one generator --
+/// not just between a schema's own top-level keywords ([`evaluate`]'s
+/// own per-keyword check already stops there), but inside a single
+/// keyword's own loop over several properties/elements/subschemas too.
+/// A sibling this loop would otherwise reach next (e.g. a dangling
+/// `$ref`) must then never run at all: issue #507's own
+/// example, `not: {properties: {a: {type: string}, b: {$ref:
+/// '#/missing'}}}` against `{a: 1, b: 2}`, is `Valid` in Python (`a`'s
+/// own violation is the first and only one `next()` ever sees -- `b`'s
+/// `$ref` is never reached, so [`raise_python_exception`] never fires)
+/// but used to be a `PointerToNowhere` failure here, since nothing
+/// stopped this loop from reaching `b` once `a` already failed.
+fn lazy_should_stop(out: &[Violation]) -> bool {
+    lazy_mode_active() && !out.is_empty()
 }
 
 struct LazyModeGuard(bool);
@@ -2361,6 +2501,34 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
         }
         return n.to_bigint() % d != num_bigint::BigInt::from(0);
     }
+    // A `bool` divisor: Python's `bool` is an `int` subtype, so
+    // `isinstance(dB, float)` is `False` for one too -- the same `%`
+    // branch an ordinary `int` divisor takes, `True`/`False` arithmetic
+    // as `1`/`0` (issue #507's own item 5), reached only
+    // through a `$ref` into a key this engine's own schema-authority
+    // walk never specially recognizes (`$defs`, `properties`, ... are
+    // the only keys it knows house subschemas) -- the same reason
+    // `check_schema`'s own metaschema walk doesn't catch it up front in
+    // Python either, confirmed directly.
+    if let Value::Bool(b) = divisor {
+        let divisor_as_int = Value::from(i64::from(*b));
+        return multiple_of_failed(instance, &divisor_as_int);
+    }
+    if !matches!(divisor, Value::Int(_) | Value::Float(_)) {
+        // Every other non-numeric divisor (a string, `null`, a list, a
+        // dict -- reached the same way a `bool` one is, above):
+        // `isinstance(dB, float)` is `False`, so Python's own
+        // `multipleOf` validator still takes its `%` branch regardless
+        // of *instance*'s own type, raising this `TypeError` before
+        // computing anything at all (confirmed directly, every
+        // combination) -- never silently skipped.
+        raise_python_exception(format!(
+            "unsupported operand type(s) for %: '{}' and '{}'",
+            instance.type_name(),
+            divisor.type_name()
+        ));
+        return false;
+    }
     let Some(i) = as_f64(instance) else {
         return false;
     };
@@ -2403,27 +2571,52 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
         // `instance` and `divisor` are both finite here -- the quotient
         // itself simply overflowed `f64`'s own range computing `i / d`;
         // `Fraction(instance)`/`Fraction(dB)` succeed on two finite
-        // operands, so [`fraction_multiple_of_failed`] gets a clean run.
-        return fraction_multiple_of_failed(i, d);
+        // operands, so [`fraction_multiple_of_failed`] gets a clean run --
+        // from *instance*/*divisor* themselves, never `i`/`d` (issue
+        // #507's own item 4): `i` already lost precision for
+        // an `Int` instance past 2^53 (`IntValue::to_f64`), where
+        // Python's own `Fraction(instance)` on the *original* int is
+        // exact at any magnitude.
+        return fraction_multiple_of_failed(instance, divisor);
     }
     quotient.trunc() != quotient
+}
+
+/// *value*'s own exact `(numerator, denominator)` ratio -- an `Int`'s
+/// own `BigInt` directly (denominator `1`, at any magnitude, never
+/// routed through `f64` first: issue #507's own item 4), a
+/// finite `Float` via [`float_exact_ratio`]. `None` for anything else
+/// (a `NaN`/`Infinity` `Float`, never reached here -- the same
+/// `is_infinite()`/`is_nan()` checks [`multiple_of_failed`]'s own
+/// caller already made against the lossy `f64` cast still apply to the
+/// exact value one-for-one, finite-ness and sign never change on the
+/// way to a `BigInt`).
+fn exact_ratio(value: &Value) -> Option<(num_bigint::BigInt, num_bigint::BigInt)> {
+    match value {
+        Value::Int(n) => Some((n.to_bigint(), num_bigint::BigInt::from(1))),
+        Value::Float(f) => float_exact_ratio(*f),
+        _ => None,
+    }
 }
 
 /// `(Fraction(instance) / Fraction(dB)).denominator != 1` -- exact,
 /// never losing precision the way routing either side through `f64`
 /// division would (the same reason [`float_exact_ratio`] exists at
-/// all): each finite `f64` has its own exact `(numerator, denominator)`
-/// ratio already; dividing two fractions and reducing the result by
-/// their `BigInt` `gcd` decides whether the quotient is a whole number
-/// without ever computing it as a `f64`. [`multiple_of_failed`]'s own
-/// caller only ever reaches this with two already-finite operands, but
-/// a `None` here (impossible today) falls back to "no violation" --
-/// never a panic -- rather than trust that invariant with an `expect`.
-fn fraction_multiple_of_failed(instance: f64, divisor: f64) -> bool {
-    let Some((in_, id)) = float_exact_ratio(instance) else {
+/// all, and why this takes the original `Value`s, not their lossy `f64`
+/// casts: issue #507's own item 4, an `Int` instance past
+/// 2^53 is `IntValue::to_f64`-lossy, where Python's own `Fraction(int)`
+/// is exact at any magnitude). Dividing two fractions and reducing the
+/// result by their `BigInt` `gcd` decides whether the quotient is a
+/// whole number without ever computing it as a `f64`.
+/// [`multiple_of_failed`]'s own caller only ever reaches this with two
+/// already-finite operands, but a `None` here (impossible today) falls
+/// back to "no violation" -- never a panic -- rather than trust that
+/// invariant with an `expect`.
+fn fraction_multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
+    let Some((in_, id)) = exact_ratio(instance) else {
         return false;
     };
-    let Some((dn, dd)) = float_exact_ratio(divisor) else {
+    let Some((dn, dd)) = exact_ratio(divisor) else {
         return false;
     };
     let num = in_ * dd;
@@ -2494,10 +2687,65 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Clears [`TRANSLATED_PATTERN_CACHE`] -- [`crate::validate_prompt_schema`]'s
-/// own first step, the same reason [`take_recursion_exceeded`] is.
+/// Clears [`TRANSLATED_PATTERN_CACHE`] and [`COMPILED_PATTERN_CACHE`] --
+/// [`crate::validate_prompt_schema`]'s own first step, the same reason
+/// [`take_recursion_exceeded`] is.
 pub(crate) fn clear_pattern_cache() {
     TRANSLATED_PATTERN_CACHE.with(|c| c.borrow_mut().clear());
+    COMPILED_PATTERN_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// [`COMPILED_PATTERN_CACHE`]'s own value type -- named so the
+/// `thread_local!`'s own declaration stays under `clippy::type_
+/// complexity`, not because any caller needs to spell it out.
+type CompiledPatternCache =
+    std::collections::HashMap<(String, usize), Result<std::rc::Rc<fancy_regex::Regex>, String>>;
+
+thread_local! {
+    /// [`pattern_is_match`]'s own compiled-`fancy_regex::Regex` cache,
+    /// keyed by the *original* pattern text and the exact backtrack
+    /// limit [`electricity_pyre::backtrack_limit_for`] computed for one
+    /// call's own instance length (issue #507's own item 11):
+    /// that limit is a pure function of length alone, and
+    /// [`electricity_pyre::backtrack_limit_for`]'s own floor already
+    /// makes it the *same* number for every instance under about
+    /// 100,000 bytes (the floor dominates the per-byte term there) --
+    /// in practice, one bucket covers every ordinary property/array
+    /// value a real reply ever checks a given pattern against, so this
+    /// still compiles the pattern only once per schema for the
+    /// overwhelming majority of instances, not once per instance the
+    /// way rebuilding on every [`pattern_is_match`] call used to.
+    /// [`std::rc::Rc`] so a cache hit is a cheap clone, never a second
+    /// compile; the build error's own `Display` text is cached as a
+    /// plain `String` instead (`fancy_regex::Error` has no `Clone`),
+    /// reused verbatim by [`pattern_is_match`]'s own wrapped message on
+    /// every subsequent hit.
+    static COMPILED_PATTERN_CACHE: std::cell::RefCell<CompiledPatternCache> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// [`pattern_is_match`]'s own cached compile -- *pattern* is the
+/// original, untranslated text (the cache key [`pattern_is_match`]'s
+/// own error message is already keyed by), *translated* its already-
+/// cached [`translated_pattern`] output.
+fn compiled_pattern(
+    pattern: &str,
+    translated: &str,
+    limit: usize,
+) -> Result<std::rc::Rc<fancy_regex::Regex>, String> {
+    COMPILED_PATTERN_CACHE.with(|cache| {
+        let key = (pattern.to_string(), limit);
+        if let Some(cached) = cache.borrow().get(&key) {
+            return cached.clone();
+        }
+        let result = fancy_regex::RegexBuilder::new(translated)
+            .backtrack_limit(limit)
+            .build()
+            .map(std::rc::Rc::new)
+            .map_err(|e| e.to_string());
+        cache.borrow_mut().insert(key, result.clone());
+        result
+    })
 }
 
 /// Whether *pattern* is a construct Python's own `re.compile` accepts --
@@ -2689,10 +2937,7 @@ fn pattern_is_match(pattern: &str, text: &str) -> bool {
         return false;
     };
     let limit = electricity_pyre::backtrack_limit_for(text.len());
-    let compiled = match fancy_regex::RegexBuilder::new(&translated)
-        .backtrack_limit(limit)
-        .build()
-    {
+    let compiled = match compiled_pattern(pattern, &translated, limit) {
         Ok(re) => re,
         Err(e) => {
             raise_python_exception(format!(
@@ -2837,7 +3082,7 @@ pub(crate) fn schema_is_fully_supported(schema: &Value, root: &Value) -> bool {
         return cached;
     }
     let mut seen = std::collections::HashSet::new();
-    let result = schema_is_fully_supported_inner(schema, root, &mut seen, 0, true);
+    let result = schema_is_fully_supported_inner(schema, root, &mut seen, 0, true, false);
     FULLY_SUPPORTED_CACHE.with(|c| {
         c.borrow_mut().insert(ptr, result);
     });
@@ -2863,6 +3108,7 @@ fn schema_is_fully_supported_inner(
     seen: &mut std::collections::HashSet<*const Value>,
     depth: usize,
     is_root: bool,
+    id_is_annotation: bool,
 ) -> bool {
     if depth >= MAX_RECURSION_DEPTH || stack_budget_exceeded() {
         RECURSION_EXCEEDED.with(|e| e.set(true));
@@ -2887,7 +3133,14 @@ fn schema_is_fully_supported_inner(
                         if !seen.insert(ptr) {
                             return true;
                         }
-                        schema_is_fully_supported_inner(resolved, root, seen, depth + 1, false)
+                        schema_is_fully_supported_inner(
+                            resolved,
+                            root,
+                            seen,
+                            depth + 1,
+                            false,
+                            false,
+                        )
                     }
                 }
             }),
@@ -2919,10 +3172,27 @@ fn schema_is_fully_supported_inner(
                 // to the crate instead, which does resolve it correctly
                 // (confirmed directly) -- never a silent, wrong verdict
                 // (issue #498's own follow-up, finding
-                // F10, probe-schema7 c14). The document's own top-level
-                // `$id` (`is_root`) changes nothing a same-document
-                // `"#/..."` pointer's own resolution needs, so it stays
-                // a plain annotation.
+                // F10, probe-schema7 c14) -- *except* directly on the
+                // schema `not`/`if`/`contains` hands to `is_valid`
+                // (`id_is_annotation`, issue #507's own item
+                // 2): Python's own `evolve(schema=...).is_valid(...)`
+                // for those three keywords never calls `descend()` for
+                // *that* schema, which is the only place a subresource
+                // scope is ever pushed (confirmed directly against
+                // `jsonschema.validators.py`) -- so a `$id` written
+                // directly there changes nothing a `"#/..."` pointer
+                // resolves against either, there or deeper inside that
+                // same subschema's own `$ref`s, matching this engine's
+                // own `resolve_ref` (always against the document root)
+                // for free. A `$id` reached one level *deeper* still
+                // (through that subschema's own `properties`/`items`/
+                // ... -- any applicator that *does* call `descend()`)
+                // is unaffected: `id_is_annotation` is never threaded
+                // past the one call `not`/`if`/`contains` make
+                // directly, below. The document's own top-level `$id`
+                // (`is_root`) changes nothing a same-document `"#/..."`
+                // pointer's own resolution needs either, so it stays a
+                // plain annotation.
                 // A nested (non-root) `$schema` switches `jsonschema`'s
                 // own validator -- and therefore draft -- for that
                 // subschema and everything under it (`referencing`'s
@@ -2933,12 +3203,16 @@ fn schema_is_fully_supported_inner(
                 // routes to the crate instead rather than silently
                 // validating that subtree under the wrong draft (issue
                 // #498's own follow-up, P2 "nested
-                // `$schema`"). The document's own top-level `$schema`
-                // is already how `is_2020_12_or_unset` picked a draft
-                // in the first place, so it stays a plain annotation
-                // here, the same as `"$id"`.
+                // `$schema`") -- `not`/`if`/`contains`'s own quirk is
+                // specific to `$id`/subresource scope, never `$schema`
+                // (`evolve()` doesn't change which validator class
+                // handles the nested schema either way), so this one
+                // stays unaffected by `id_is_annotation`. The document's
+                // own top-level `$schema` is already how `is_2020_12_
+                // or_unset` picked a draft in the first place, so it
+                // stays a plain annotation here, the same as `"$id"`.
                 "$schema" => is_root,
-                "$id" => is_root,
+                "$id" => is_root || id_is_annotation,
                 // A `$ref` that doesn't resolve is not, by itself, a
                 // reason to fall back to the crate: Python resolves a
                 // `$ref` lazily, only once the validator actually
@@ -2961,7 +3235,14 @@ fn schema_is_fully_supported_inner(
                             if !seen.insert(ptr) {
                                 return true;
                             }
-                            schema_is_fully_supported_inner(resolved, root, seen, depth + 1, false)
+                            schema_is_fully_supported_inner(
+                                resolved,
+                                root,
+                                seen,
+                                depth + 1,
+                                false,
+                                false,
+                            )
                         }
                     }
                 }),
@@ -2982,25 +3263,35 @@ fn schema_is_fully_supported_inner(
                 // #498's own follow-up, finding F13).
                 "pattern" => v.as_str().is_some_and(python_regex_is_valid),
                 "properties" => v.as_dict().is_some_and(|d| {
-                    d.values()
-                        .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
+                    d.values().all(|sub| {
+                        schema_is_fully_supported_inner(sub, root, seen, depth, false, false)
+                    })
                 }),
                 // 2020-12 only -- under draft 7, Python never registers
                 // `dependentSchemas` at all, so it stays a plain
                 // annotation (`_ => true` below) regardless of its own
                 // content.
                 "dependentSchemas" if !draft7_mode_active() => v.as_dict().is_some_and(|d| {
-                    d.values()
-                        .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
+                    d.values().all(|sub| {
+                        schema_is_fully_supported_inner(sub, root, seen, depth, false, false)
+                    })
                 }),
                 "patternProperties" => v.as_dict().is_some_and(|d| {
                     d.iter().all(|(pattern_key, sub)| {
                         pattern_key.as_str().is_some_and(python_regex_is_valid)
-                            && schema_is_fully_supported_inner(sub, root, seen, depth, false)
+                            && schema_is_fully_supported_inner(sub, root, seen, depth, false, false)
                     })
                 }),
-                "additionalProperties" | "not" | "propertyNames" | "contains" => {
-                    schema_is_fully_supported_inner(v, root, seen, depth, false)
+                // `not`/`contains` hand *their* own subschema straight
+                // to `is_valid` (`id_is_annotation = true`, see `"$id"`
+                // above) -- `additionalProperties`/`propertyNames`
+                // don't share that quirk (real `descend()` calls, every
+                // one), so they stay plain (`false`).
+                "not" | "contains" => {
+                    schema_is_fully_supported_inner(v, root, seen, depth, false, true)
+                }
+                "additionalProperties" | "propertyNames" => {
+                    schema_is_fully_supported_inner(v, root, seen, depth, false, false)
                 }
                 // Draft 7's tuple form: every slot schema, plus
                 // `additionalItems` (its own match arm below, since
@@ -3011,13 +3302,13 @@ fn schema_is_fully_supported_inner(
                 "items" if draft7_mode_active() && matches!(v, Value::List(_)) => {
                     v.as_list().is_some_and(|subs| {
                         subs.iter().all(|sub| {
-                            schema_is_fully_supported_inner(sub, root, seen, depth, false)
+                            schema_is_fully_supported_inner(sub, root, seen, depth, false, false)
                         })
                     })
                 }
-                "items" => schema_is_fully_supported_inner(v, root, seen, depth, false),
+                "items" => schema_is_fully_supported_inner(v, root, seen, depth, false, false),
                 "additionalItems" if draft7_mode_active() => {
-                    schema_is_fully_supported_inner(v, root, seen, depth, false)
+                    schema_is_fully_supported_inner(v, root, seen, depth, false, false)
                 }
                 // Draft 7's combined `dependencies`: a schema-valued
                 // entry needs its own support check; a list-valued one
@@ -3025,23 +3316,29 @@ fn schema_is_fully_supported_inner(
                 "dependencies" if draft7_mode_active() => v.as_dict().is_some_and(|d| {
                     d.values().all(|sub| match sub {
                         Value::List(_) => true,
-                        _ => schema_is_fully_supported_inner(sub, root, seen, depth, false),
+                        _ => schema_is_fully_supported_inner(sub, root, seen, depth, false, false),
                     })
                 }),
+                // `if`'s own subschema (`v`) is the one `evolve(...).
+                // is_valid(...)` is called on -- `id_is_annotation =
+                // true`, the same reason `not`/`contains` get it above.
+                // `then`/`else` are each reached through a real
+                // `validator.descend(...)` call instead (`_keywords.
+                // if_`, confirmed directly), so they stay plain.
                 "if" => {
-                    schema_is_fully_supported_inner(v, root, seen, depth, false)
+                    schema_is_fully_supported_inner(v, root, seen, depth, false, true)
                         && dict.get(&key("then")).is_none_or(|t| {
-                            schema_is_fully_supported_inner(t, root, seen, depth, false)
+                            schema_is_fully_supported_inner(t, root, seen, depth, false, false)
                         })
                         && dict.get(&key("else")).is_none_or(|e| {
-                            schema_is_fully_supported_inner(e, root, seen, depth, false)
+                            schema_is_fully_supported_inner(e, root, seen, depth, false, false)
                         })
                 }
                 "then" | "else" => true, // handled alongside "if" above
                 "prefixItems" | "allOf" | "anyOf" | "oneOf" => v.as_list().is_some_and(|items| {
-                    items
-                        .iter()
-                        .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
+                    items.iter().all(|sub| {
+                        schema_is_fully_supported_inner(sub, root, seen, depth, false, false)
+                    })
                 }),
                 // Any other key -- a keyword Python's own Draft202012
                 // `VALIDATORS` dict never implements at all (e.g.
@@ -3057,6 +3354,168 @@ fn schema_is_fully_supported_inner(
         }),
         _ => false,
     }
+}
+
+/// Whether *root*'s own `$ref` graph has a hop chain reaching
+/// [`MAX_RECURSION_DEPTH`] -- [`crate::validate_prompt_schema_impl`]'s
+/// own guard against handing the `jsonschema` crate a schema whose
+/// `$ref` chain [`schema_is_fully_supported`] never actually walked
+/// (issue #507's own item 0): that walk's own `dict.iter().all(...)`
+/// short-circuits at the *first* unsupported keyword it sees (e.g. a
+/// root-level `unevaluatedProperties`), so a long `$defs` chain reached
+/// only through a *later* sibling key (`properties`, say) never gets
+/// measured at all -- [`recursion_exceeded_peek`] then reads `false`,
+/// and the schema falls straight through to the crate's own eager
+/// `$ref` resolution, which needs far more native stack per hop than
+/// this engine's own bounded walk ever had to (the same chain that's
+/// fine at 10,000 hops aborts the process past roughly 30,000). This
+/// walk never short-circuits on keyword support at all -- every dict
+/// value and list element but [`NON_SCHEMA_STRUCTURAL_KEYS`]'s own
+/// (`$defs`/`definitions`, reached only through an actual `$ref`,
+/// never structurally; `const`/`enum`/`examples`/`default`, literal
+/// instance data a `"$ref"` key inside can never be this engine's own
+/// keyword) is a plain structural edge, counted toward
+/// [`STRUCTURAL_DEPTH_CAP`] but never toward the hop total itself (an
+/// explicit `ref_hops` count, threaded through every call, the same
+/// convention [`schema_is_fully_supported_inner`]'s own `depth`
+/// parameter already uses for structural edges: `properties`'s own
+/// per-key recursion passes `depth` unchanged) -- so a chain hidden
+/// under any keyword, supported or not, is still found, at whatever
+/// structural depth it sits, without a hop sitting a few structural
+/// levels down (`properties.x.$ref`, say) ever being undercounted
+/// against a chain whose every hop sits at the top level instead.
+///
+/// Longest-path, not first-path: memoized by node identity once a
+/// node's own subtree has been fully explored, with cycle-cutting via
+/// *active* (the current path only, unlike
+/// [`schema_is_fully_supported_inner`]'s own never-popped `seen` --
+/// this needs the *true* longest path, not just "supported or not", so
+/// a back edge found near the top of a recursive-schema tree must only
+/// ever cut *that* edge, not stop one lucky shallow path from poisoning
+/// a later, deeper-reaching one through the same node). A real cycle
+/// (a `$defs` entry referencing itself, or a bare `$ref` to the whole
+/// document) is structurally infinite, but legitimate (a tree/linked-
+/// list schema); cutting it at the back edge -- contributing zero
+/// further hops from there, never treating the cycle as unbounded --
+/// is what keeps this from wrongly flagging an ordinary recursive
+/// schema just because it also happens to use a crate-only keyword
+/// somewhere.
+pub(crate) fn ref_chain_depth_exceeds_cap(schema: &Value, root: &Value) -> bool {
+    let mut memo = std::collections::HashMap::new();
+    let mut active = std::collections::HashSet::new();
+    longest_ref_chain(schema, root, &mut memo, &mut active, 0) >= MAX_RECURSION_DEPTH
+}
+
+/// Structural nesting (an ordinary `properties`/`items`/`allOf`/...
+/// edge, never a `$ref` hop) gets its own, far larger budget than
+/// [`MAX_RECURSION_DEPTH`]: a `$ref` chain whose every hop sits a few
+/// structural levels deep (`properties.x.$ref`, say) must still reach
+/// the *hop* cap, not an earlier, incidental structural one. Sized for
+/// the worst case this walk could ever see -- every one of
+/// [`MAX_RECURSION_DEPTH`]'s own hops preceded by a structurally-decoded
+/// schema nested as deep as [`electricity_value::MAX_DEPTH`] itself
+/// allows (past which no JSON/YAML reader would even hand this walk a
+/// `Value` to begin with) -- so only [`stack_budget_exceeded`] (a real
+/// native-stack-usage probe, not a frame count) ever needs to stop a
+/// walk actually this deep; hitting this cap at all, rather than that
+/// one, means something is genuinely unbounded, not just long.
+const STRUCTURAL_DEPTH_CAP: usize = MAX_RECURSION_DEPTH * electricity_value::MAX_DEPTH;
+
+/// Keys this walk never descends into structurally, because nothing
+/// ever evaluates a schema found there without going through an actual
+/// `$ref` into it first (so a chain hiding inside one, unreached by any
+/// `$ref` anywhere in the document, is dead weight no real validator --
+/// Python's, the crate's, or this engine's own -- ever resolves): the
+/// two definition-only containers ([`SUPPORTED_LEAF_KEYWORDS`] already
+/// treats both the same way), plus the data-only keywords whose own
+/// value is literal instance data, never a schema -- a `"$ref"` key
+/// *inside* one of those (`{"examples": [{"$ref": "#/$defs/a"}]}`) is
+/// someone's own example payload, not this engine's `$ref` keyword, and
+/// must never be followed as a hop.
+const NON_SCHEMA_STRUCTURAL_KEYS: &[&str] = &[
+    "$defs",
+    "definitions",
+    "const",
+    "enum",
+    "examples",
+    "default",
+];
+
+fn longest_ref_chain(
+    node: &Value,
+    root: &Value,
+    memo: &mut std::collections::HashMap<*const Value, usize>,
+    active: &mut std::collections::HashSet<*const Value>,
+    ref_hops: usize,
+) -> usize {
+    let ptr: *const Value = node;
+    if let Some(&cached) = memo.get(&ptr) {
+        return cached;
+    }
+    // A back edge to a node still on the active path: a structural
+    // cycle, cut here rather than explored again (see the doc comment
+    // above) -- never memoized, since the *true* longest path through
+    // this node depends on where the cycle is entered from.
+    if active.contains(&ptr) {
+        return 0;
+    }
+    // Already as deep in `$ref` hops as this engine's own cap can tell
+    // apart from genuinely unbounded -- stop descending (never
+    // overcounting past the cap, since the precise hop count no longer
+    // matters once it's known to be at least this large).
+    if ref_hops >= MAX_RECURSION_DEPTH {
+        return 0;
+    }
+    // Structural nesting alone, independent of hop count, already past
+    // its own far larger budget, or this walk's real native stack usage
+    // already past its own guard: either way the true value from here
+    // is unknown, not necessarily small, so assume the worst (at the
+    // cap) rather than silently undercounting a schema that is, in
+    // fact, unbounded.
+    if active.len() >= STRUCTURAL_DEPTH_CAP || stack_budget_exceeded() {
+        return MAX_RECURSION_DEPTH;
+    }
+    active.insert(ptr);
+    let mut longest = 0usize;
+    match node {
+        Value::Dict(dict) => {
+            for (k, v) in dict.iter() {
+                let Some(key_str) = k.as_str() else {
+                    continue;
+                };
+                if key_str == "$ref" {
+                    if let Some(pointer) = v.as_str() {
+                        if is_same_document_pointer_syntax(pointer) {
+                            if let Some(resolved) = resolve_ref(root, pointer) {
+                                let hop = 1 + longest_ref_chain(
+                                    resolved,
+                                    root,
+                                    memo,
+                                    active,
+                                    ref_hops + 1,
+                                );
+                                longest = longest.max(hop);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if NON_SCHEMA_STRUCTURAL_KEYS.contains(&key_str) {
+                    continue;
+                }
+                longest = longest.max(longest_ref_chain(v, root, memo, active, ref_hops));
+            }
+        }
+        Value::List(items) => {
+            for v in items {
+                longest = longest.max(longest_ref_chain(v, root, memo, active, ref_hops));
+            }
+        }
+        _ => {}
+    }
+    active.remove(&ptr);
+    memo.insert(ptr, longest);
+    longest.min(MAX_RECURSION_DEPTH)
 }
 
 /// Whether *instance* validates against *branch* at all, via this
@@ -3395,6 +3854,77 @@ mod tests {
 
         let mut with_duplicate = items.clone();
         with_duplicate.push(Value::from(1i64));
+        assert!(!py_uniq(&with_duplicate));
+    }
+
+    /// Issue #507's own item 12: a `List` element is unhashable
+    /// ([`uniq_key`] returns `None` for one), so a large array of them
+    /// never takes [`py_uniq`]'s own hash-bucketed fast path above at
+    /// all -- every one goes through [`containers_have_a_duplicate`]'s
+    /// own [`cpython_list_sort`] instead, whose old single-run
+    /// `binarysort` port moved `O(n)` elements per insertion
+    /// (`rotate_right` over the whole sorted prefix so far), `O(n^2)`
+    /// summed over `n` insertions -- confirmed directly against the
+    /// pre-fix code: at the 600,000-element size below, that already
+    /// took well past a minute in a debug build, the same unusable
+    /// shape the test above already fixed for hashable scalars.
+    /// [`merge_sort_order`]'s own `O(n log n)` moves finish this same
+    /// case in a few seconds instead -- a wide enough margin (`O(n^2)`
+    /// vs. `O(n log n)` at this `n`) that CI machine-speed variance
+    /// alone could never close it, unlike a margin sized against the
+    /// fixed algorithm's own wall-clock time at a size chosen only to
+    /// just clear it.
+    /// A pattern compiles once per (pattern, backtrack limit) until the
+    /// cache is cleared; a compile error is cached and returned as is.
+    #[test]
+    fn compiled_pattern_compiles_once_per_pattern_and_limit() {
+        clear_pattern_cache();
+        let a = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        let b = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        assert!(
+            std::rc::Rc::ptr_eq(&a, &b),
+            "same pattern and limit: a cache hit"
+        );
+        let c = compiled_pattern("^a+$", "^a+$", 2000).expect("compiles");
+        assert!(
+            !std::rc::Rc::ptr_eq(&a, &c),
+            "a different limit is its own entry"
+        );
+        clear_pattern_cache();
+        let d = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        assert!(
+            !std::rc::Rc::ptr_eq(&a, &d),
+            "a cleared cache compiles again"
+        );
+        let e1 = compiled_pattern("(", "(", 1000).expect_err("an unbalanced group");
+        let e2 = compiled_pattern("(", "(", 1000).expect_err("an unbalanced group");
+        assert_eq!(e1, e2);
+        clear_pattern_cache();
+    }
+
+    #[test]
+    fn uniq_items_of_lists_stays_fast_at_scale() {
+        // Shuffled (a simple LCG), not ascending/descending -- an
+        // already-sorted input lets `count_run` cover the whole array
+        // in one pass, with no `binarysort` insertion (so no
+        // `rotate_right`) at all either way, which would never
+        // distinguish this fix from the quadratic code it replaces.
+        let items: Vec<Value> = (0..600_000u64)
+            .map(|i| {
+                let shuffled = i.wrapping_mul(2_654_435_761) % 1_000_000;
+                Value::List(vec![Value::from(shuffled as i64), Value::from(i as i64)])
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        assert!(py_uniq(&items));
+        assert!(
+            start.elapsed().as_secs() < 10,
+            "py_uniq(600_000 unique shuffled list items) took {:?}",
+            start.elapsed()
+        );
+
+        let mut with_duplicate = items.clone();
+        with_duplicate.push(items[1234].clone());
         assert!(!py_uniq(&with_duplicate));
     }
 

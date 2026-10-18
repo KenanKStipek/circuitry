@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #507's own item 2",
+  "description": "A nested, non-root `$id` directly on `not`'s own subschema: Python's `validator.evolve(schema=...).is_valid(...)` (`not`/`if`/`contains`'s own building block) never calls `descend()` for that schema, the only place a `$id` subresource scope is pushed, so the `$ref` inside it still resolves against the parent document's own `$defs`, not the nested `$id`'s own base. `a: \"x\"` makes the inner schema valid, so `not` itself reports `schema_invalid`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

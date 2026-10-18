@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #507's own item 1",
+  "description": "`not` wrapping a `properties` keyword with two properties, the second a dangling `$ref`: Python's own `next(iter_errors(instance), None) is None` (`not`'s own lazy `is_valid` building block) pulls exactly one value from the whole nested generator tree, so the first property's own `type` violation is the only one it ever sees -- the second property's dangling `$ref` is never reached and never raises, so the wrapped `properties` schema is invalid from the first property's own mismatch alone, cleanly, and `not` itself reports the instance valid; the attempt succeeds with the reply unchanged.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

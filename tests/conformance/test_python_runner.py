@@ -71,9 +71,8 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         running_version = harness.running_python_version()
         if running_version not in python_runner_versions:
             pytest.skip(
-                f"{case_dir.name}: cof's own CEL nesting limits come from CPython's "
-                "recursion handling, which differs between Python versions -- the "
-                f"expected output was generated on Python {'/'.join(python_runner_versions)}, "
+                f"{case_dir.name}: the expected output depends on the CPython version "
+                f"running cof and holds for Python {'/'.join(python_runner_versions)}, "
                 f"not {running_version}"
             )
 

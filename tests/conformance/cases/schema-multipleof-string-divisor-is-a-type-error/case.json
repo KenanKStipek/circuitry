@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #507's own item 5",
+  "description": "A `multipleOf` divisor reached only through a `$ref` into a key no schema-structure walk recognizes as housing a subschema (`myCustomDefs` isn't a metaschema-recognized applicator), so `check_schema` never validates it against `multipleOf`'s own metaschema entry -- `isinstance(dB, str)` sends Python's own `%` operator down its generic path at validation time instead, raising `TypeError` before computing anything. A non-retryable, generic failure, never `schema_invalid`; `on_error: continue` lets the run finish.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

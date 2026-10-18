@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #507's own item 4",
+  "description": "An int reply past f64's own 2**53 integer-precision ceiling against a tiny float divisor: Python's own `multipleOf` validator falls back to `Fraction(int(instance))`, exact at any magnitude, so `1152921504606846978`'s own exact value really is a multiple of `2.7997908555096566e-301` even though the nearest f64-exact neighbour isn't.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

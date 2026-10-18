@@ -1,0 +1,16 @@
+name: schema-nested-id-under-not
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    on_error: continue
+    schema:
+      not:
+        $id: https://example.com/sub/
+        properties:
+          a: {$ref: "#/$defs/str"}
+      $defs:
+        str: {type: string}
+    template: "give json"
