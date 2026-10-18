@@ -1,0 +1,5 @@
+effects:
+  status:
+    enabled: false
+  box:
+    enabled: false

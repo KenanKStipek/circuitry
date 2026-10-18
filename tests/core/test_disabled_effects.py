@@ -140,6 +140,49 @@ def test_disabled_use_is_not_resolved() -> None:
     _assert_disabled_node(state["prime"]["child"])
 
 
+# ── report ───────────────────────────────────────────────────────────────────
+
+
+def test_disabled_named_report_writes_a_skip_node_but_fires_no_hooks() -> None:
+    """A report never fires effect_start/effect_complete, disabled or not
+    (#605) -- a disabled named report still gets the uniform skip node
+    every other disabled effect gets, but stays off those hooks, so it
+    still doesn't count toward runtime.last_run.totals.effects_run."""
+    orch = {
+        "effects": [
+            {"type": "prompt", "name": "a", "template": "a-template"},
+            {"type": "report", "name": "status", "message": "hi"},
+        ]
+    }
+    paths: list[str] = []
+    state, _ = _run(orch, {"status": {"enabled": False}}, effect_paths=paths)
+
+    _assert_disabled_node(state["prime"]["status"])
+    assert "prime.status" not in paths
+    assert "prime.a" in paths
+
+
+def test_disabled_container_holding_an_unnamed_report_runs_none_of_it() -> None:
+    """An unnamed report has no path of its own to target, so disabling
+    reaches it only via its enclosing named container -- which already
+    disables its whole subtree (#605), so the report inside never
+    dispatches and writes no node of its own either."""
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "box",
+                "effects": [{"type": "report", "message": "unnamed inside box"}],
+            },
+        ]
+    }
+    paths: list[str] = []
+    state, _ = _run(orch, {"box": {"enabled": False}}, effect_paths=paths)
+
+    _assert_disabled_node(state["prime"]["box"])
+    assert set(paths) == {"prime.box", "prime"}
+
+
 # ── containers: dynamic / loop / conditional / reflector ─────────────────────
 
 

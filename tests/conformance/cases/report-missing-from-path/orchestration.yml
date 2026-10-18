@@ -1,0 +1,7 @@
+effects:
+  - type: report
+    name: status
+    message: "checking {{input.topic}}"
+    data:
+      present: {from: input.topic}
+      missing: {from: input.nope}

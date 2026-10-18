@@ -115,6 +115,7 @@ _KINDS: dict[str, str] = {
     "if": "conditional",
     "conditional": "conditional",
     "yield": "yield",
+    "report": "report",
 }
 
 _ITER_KEY = re.compile(r"^iter_(\d+)$")

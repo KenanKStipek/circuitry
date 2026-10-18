@@ -237,6 +237,32 @@ pub struct YieldOp {
     pub description: Option<String>,
 }
 
+/// `ReportDefinition.level` (#605). Defaults to `Info`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ReportLevel {
+    Info,
+    Warning,
+}
+
+/// `ReportDefinition`, minus `name`/`enabled` (`ReportDefinition` has no
+/// `on_error` field of its own -- a report never fails the run, #605).
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportOp {
+    /// Rendered like a prompt template: `Escape::None`, composable
+    /// (`{{> name}}` partials allowed), the same scope a prompt template
+    /// sees.
+    pub message: TemplateText,
+    /// `data`, already walked into a [`ParamNode`] tree: a bare
+    /// `{from: <path>}` leaf (no `default:`/`as:` -- a report never fails
+    /// on an unresolved path, so there is nothing either would be for)
+    /// becomes `ParamNode::From`; a string becomes `ParamNode::Template`
+    /// (`Escape::None`); anything else is kept as written. `None` when
+    /// the effect has no `data:` at all.
+    pub data: Option<ParamNode>,
+    pub level: ReportLevel,
+    pub description: Option<String>,
+}
+
 /// `ReflectorDefinition`, minus `name`/`enabled` (`ReflectorDefinition`
 /// has no `on_error` field of its own).
 #[derive(Debug, Clone, Serialize)]

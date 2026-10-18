@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "A report's data: {} is published as {} on both engines, not omitted as if data were absent -- the shadow state gets data: {} and the --events line gets \"data\":{}.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

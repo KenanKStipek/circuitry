@@ -485,6 +485,17 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             "description": yield_op.description,
             "enabled": op.enabled,
         }),
+        LeafKind::Report(report) => json!({
+            "name": op.name,
+            "message": report.message.source,
+            "data": report.data.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
+            "level": match report.level {
+                electricity_bytecode::ReportLevel::Info => "info",
+                electricity_bytecode::ReportLevel::Warning => "warning",
+            },
+            "description": report.description,
+            "enabled": op.enabled,
+        }),
         LeafKind::Reflector(reflector) => json!({
             "name": op.name,
             "inner": project_dynamic_region(

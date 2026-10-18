@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from ..core.loop import LoopDefinition
     from ..core.prompt import PromptDefinition
     from ..core.reflector import ReflectorDefinition
+    from ..core.report import ReportDefinition
     from ..core.tool import ToolDefinition
     from ..core.use import UseDefinition
     from ..core.yield_effect import YieldDefinition
@@ -97,6 +98,7 @@ def _load_compiler_chain() -> None:
     from ..core.loop import LoopDefinition
     from ..core.prompt import PromptDefinition
     from ..core.reflector import ReflectorDefinition
+    from ..core.report import ReportDefinition
     from ..core.tool import ToolDefinition
     from ..core.use import UseDefinition
     from ..core.yield_effect import YieldDefinition
@@ -113,6 +115,7 @@ def _load_compiler_chain() -> None:
         LoopDefinition=LoopDefinition,
         PromptDefinition=PromptDefinition,
         ReflectorDefinition=ReflectorDefinition,
+        ReportDefinition=ReportDefinition,
         ToolDefinition=ToolDefinition,
         UseDefinition=UseDefinition,
         YieldDefinition=YieldDefinition,
@@ -149,6 +152,10 @@ TOOL_REASON = (
 YIELD_REASON = (
     "not a prompt: a yield effect renders a template and stores the text with "
     "no model call, so there is no prompt to score."
+)
+REPORT_REASON = (
+    "not a prompt: a report effect renders a message for watchers, with no "
+    "model call, so there is no prompt to score."
 )
 DISABLED_REASON = "disabled for this run by the profile, so it will not execute."
 UNKNOWN_REASON = (
@@ -267,6 +274,17 @@ def _walk(
                 type="yield",
                 scoreable=False,
                 reason=DISABLED_REASON if node_disabled else YIELD_REASON,
+            )
+        )
+        return
+
+    if isinstance(node, ReportDefinition):
+        rows.append(
+            ScoredEffect(
+                path=own_path,
+                type="report",
+                scoreable=False,
+                reason=DISABLED_REASON if node_disabled else REPORT_REASON,
             )
         )
         return

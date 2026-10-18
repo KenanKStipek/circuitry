@@ -12,6 +12,7 @@
 //! and prints the result as JSON -- it never runs anything, so it has
 //! no refusal of its own either.
 
+use std::io::IsTerminal as _;
 use std::path::Path;
 
 pub mod events;
@@ -316,7 +317,7 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
                 matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
             }
             LeafKind::Reflector(reflector) => region_has_prompt_effects(&reflector.inner),
-            LeafKind::Yield(_) => false,
+            LeafKind::Yield(_) | LeafKind::Report(_) => false,
         },
         NodeKind::Control(region) => region_has_prompt_effects(region),
     }
@@ -387,7 +388,7 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
                 matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
             }
             LeafKind::Reflector(reflector) => region_calls_default_adapter(&reflector.inner),
-            LeafKind::Yield(_) => false,
+            LeafKind::Yield(_) | LeafKind::Report(_) => false,
         },
         NodeKind::Control(region) => region_calls_default_adapter(region),
     }
@@ -456,7 +457,7 @@ fn profile_provider_unbuildable(
                 }
             }
             LeafKind::Reflector(reflector) => region_find(&reflector.inner, adapters),
-            LeafKind::Tool(_) | LeafKind::Use(_) | LeafKind::Yield(_) => None,
+            LeafKind::Tool(_) | LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Report(_) => None,
         },
         NodeKind::Control(region) => region_find(region, adapters),
     }
@@ -840,8 +841,82 @@ impl RunObserver for Observer<'_> {
         self.live_state.is_some()
     }
 
+    // A report never fires effect_start/effect_complete, so it never
+    // reaches `self.totals` at all (#605) -- only `--events` (through
+    // this hook) and the console line below. `electricity`'s own CLI
+    // has no `--quiet`/`--json` flag to suppress the line under
+    // (unlike `cof run`'s), so it prints whenever stdout is a TTY --
+    // the same auto-quiet rule `cof run` applies, since a non-TTY
+    // stdout is this crate's own state/failure-payload JSON contract
+    // (DESIGN.md §6.5) that a report line must not interleave with.
+    // `println!` panics on a write error (EPIPE/EIO -- a closed pipe,
+    // or a hung-up terminal, e.g. a report in `finally` after SIGHUP);
+    // `writeln!` to a locked stdout, its result discarded, cannot --
+    // the one place this crate writes to stdout directly rather than
+    // handing rendered text back to `electricity-cli`'s own writer,
+    // since `RunRequest` has no callback seam for a mid-run console
+    // line (`out`/`events`/`live_state` are all file paths, opened and
+    // owned entirely inside `run_orchestration`).
+    fn report(
+        &self,
+        path: &EffectPath,
+        level: electricity_bytecode::ReportLevel,
+        message: &str,
+        data: Option<&Value>,
+    ) {
+        let level_str = match level {
+            electricity_bytecode::ReportLevel::Info => "info",
+            electricity_bytecode::ReportLevel::Warning => "warning",
+        };
+        if let Some(log) = self.events {
+            log.on_report(&path.to_string(), level_str, message, data);
+        }
+        if std::io::stdout().is_terminal() {
+            use std::io::Write as _;
+            let colors_enabled = report_line_colors_enabled(
+                std::env::var_os("NO_COLOR").as_deref(),
+                std::env::var_os("TERM").as_deref(),
+            );
+            let line = format_report_line(level, message, colors_enabled);
+            let _ = writeln!(std::io::stdout().lock(), "{line}");
+        }
+    }
+
     fn record_totals(&self, meta: &Value) {
         self.totals.observe_meta(meta);
+    }
+}
+
+/// Whether the report console line may use ANSI color, mirroring Rich's
+/// own rule (`cof run`'s `[yellow]...[/yellow]` goes through Rich, which
+/// cof never overrides): no color when `NO_COLOR` is set to a non-empty
+/// value, or when `TERM` is exactly `dumb`.
+fn report_line_colors_enabled(
+    no_color: Option<&std::ffi::OsStr>,
+    term: Option<&std::ffi::OsStr>,
+) -> bool {
+    if no_color.is_some_and(|v| !v.is_empty()) {
+        return false;
+    }
+    if term == Some(std::ffi::OsStr::new("dumb")) {
+        return false;
+    }
+    true
+}
+
+/// The report console line's text -- `▸ {message}`, wrapped in
+/// `\x1b[33m...\x1b[0m` (cof's own yellow) at `level: warning` when
+/// *colors_enabled*, matching `cof run`'s own `[yellow]...[/yellow]` styling.
+fn format_report_line(
+    level: electricity_bytecode::ReportLevel,
+    message: &str,
+    colors_enabled: bool,
+) -> String {
+    let warning = matches!(level, electricity_bytecode::ReportLevel::Warning);
+    if warning && colors_enabled {
+        format!("\x1b[33m▸ {message}\x1b[0m")
+    } else {
+        format!("▸ {message}")
     }
 }
 
@@ -1985,6 +2060,59 @@ mod tests {
     use electricity_bytecode::region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
     use electricity_bytecode::template::{Escape, TemplateText};
     use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError};
+
+    #[test]
+    fn report_line_is_plain_for_info() {
+        let line = format_report_line(electricity_bytecode::ReportLevel::Info, "hi", true);
+        assert_eq!(line, "▸ hi");
+    }
+
+    #[test]
+    fn report_line_is_yellow_for_warning_when_colors_enabled() {
+        let line = format_report_line(electricity_bytecode::ReportLevel::Warning, "hi", true);
+        assert_eq!(line, "\x1b[33m▸ hi\x1b[0m");
+    }
+
+    #[test]
+    fn report_line_is_plain_for_warning_when_colors_disabled() {
+        let line = format_report_line(electricity_bytecode::ReportLevel::Warning, "hi", false);
+        assert_eq!(line, "▸ hi");
+    }
+
+    #[test]
+    fn report_line_colors_enabled_by_default() {
+        assert!(report_line_colors_enabled(None, None));
+        assert!(report_line_colors_enabled(
+            None,
+            Some(std::ffi::OsStr::new("xterm-256color"))
+        ));
+    }
+
+    #[test]
+    fn report_line_colors_disabled_by_non_empty_no_color() {
+        assert!(!report_line_colors_enabled(
+            Some(std::ffi::OsStr::new("1")),
+            None
+        ));
+    }
+
+    #[test]
+    fn report_line_colors_not_disabled_by_an_empty_no_color() {
+        // Matches Rich: an empty `NO_COLOR=` (set but empty) does not
+        // disable color -- only a non-empty value does.
+        assert!(report_line_colors_enabled(
+            Some(std::ffi::OsStr::new("")),
+            None
+        ));
+    }
+
+    #[test]
+    fn report_line_colors_disabled_by_term_dumb() {
+        assert!(!report_line_colors_enabled(
+            None,
+            Some(std::ffi::OsStr::new("dumb"))
+        ));
+    }
 
     fn leaf(kind: LeafKind) -> electricity_bytecode::Op {
         electricity_bytecode::Op {

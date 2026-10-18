@@ -82,7 +82,7 @@ fn apply_fields(op: &mut Op, override_: &Dict) {
                 tool_op.provider = provider.to_string();
             }
         }
-        LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Reflector(_) => {}
+        LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Reflector(_) | LeafKind::Report(_) => {}
     }
 }
 

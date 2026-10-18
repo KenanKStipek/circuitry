@@ -44,6 +44,7 @@ from .prompt_files import (
     resolve_text_or_file,
 )
 from .reflector import ReflectorDefinition
+from .report import ReportDefinition, report_data_reference
 from .resume import RESUME_MODES, ResumeMode
 from .state_ns import (
     validate_bare_input_refs,
@@ -66,6 +67,7 @@ EffectDef = (
     | ToolDefinition
     | UseDefinition
     | YieldDefinition
+    | ReportDefinition
 )
 
 #: Keys a ``yield`` effect never accepts — it never calls a model, so
@@ -909,6 +911,11 @@ def _compile_effect(
         )
         return _compile_yield(effect, effect_path=effect_path)
 
+    if effect_type == "report":
+        return _compile_report(
+            effect, scope_path=scope_path, effect_path=effect_path, loop_names=loop_names
+        )
+
     if effect_type == "reflector":
         if name is None:
             raise ValueError(
@@ -1318,6 +1325,77 @@ def _check_param_leaves(
     elif isinstance(value, list):
         for index, item in enumerate(value):
             _check_param_leaves(
+                item,
+                name=name,
+                effect_path=effect_path,
+                field=f"{field}[{index}]",
+                loop_names=loop_names,
+            )
+
+
+def _check_report_data_leaves(
+    value: Any,
+    *,
+    name: str | None,
+    effect_path: str,
+    field: str,
+    loop_names: frozenset[str],
+) -> None:
+    """Walk a report effect's ``data`` for malformed templates and bad
+    ``{from:}`` roots -- the same rooting check ``params`` gets
+    (:func:`_check_param_leaves`), but with a report's narrower ``{from:}``
+    grammar (:func:`circuitry.core.report.report_data_reference`): no
+    ``default:``/``as:``, since a report never fails the run on an
+    unresolved path (#605).
+    """
+    label = f"Report effect '{name}'" if name else "Report effect"
+    ref_path = report_data_reference(value)
+    if ref_path is not None:
+        validate_reference_path(
+            ref_path,
+            label=f"{label} data '{field}'",
+            effect_path=effect_path,
+            loop_names=loop_names,
+        )
+        return
+    if isinstance(value, dict) and "from" in value:
+        from_value = value["from"]
+        if not isinstance(from_value, str):
+            raise ValueError(
+                f"{effect_path}.{field}: a report's 'data' leaf's 'from' key "
+                "must be a string path."
+            )
+        # A tool param's richer `{from:, default:, as:}` form, not a
+        # report's narrower one (#605) -- `default:`/`as:` are silently
+        # ignored by report_data_reference's exact-match check above, so
+        # without this a leaf like this one would fall through to the
+        # dict branch below and publish `{"from": ..., "default": ...}`
+        # as a literal object, with no warning (#605).
+        extra = ", ".join(sorted(str(k) for k in set(value) - {"from"}))
+        raise ValueError(
+            f"{effect_path}.{field}: a report's 'data' leaf with a 'from' key "
+            f"takes no other key ({extra}) -- {{from: <path>}} is the whole "
+            "form; a report never fails on an unresolved path, so there is "
+            "nothing for 'default'/'as' to do."
+        )
+    if isinstance(value, str):
+        reason = template_syntax_error(value, allow_partials=True)
+        if reason is not None:
+            raise ValueError(
+                f"{effect_path}.{field}: malformed Mustache template: {reason}"
+            )
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_report_data_leaves(
+                item,
+                name=name,
+                effect_path=effect_path,
+                field=f"{field}.{key}",
+                loop_names=loop_names,
+            )
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_report_data_leaves(
                 item,
                 name=name,
                 effect_path=effect_path,
@@ -1827,6 +1905,67 @@ def _compile_yield(effect: dict[str, Any], *, effect_path: str) -> YieldDefiniti
         template=template,
         inputs=inputs,
         on_error=on_error,
+        description=description,
+    )
+
+
+def _compile_report(
+    effect: dict[str, Any],
+    *,
+    scope_path: str,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
+) -> ReportDefinition:
+    """Compile a ``report`` effect -- tells watchers what the run is doing,
+    with no effect of its own on the run (#605)."""
+    name = effect.get("name")
+    valid_name: str | None = None
+    if name is not None:
+        valid_name = _validate_name(
+            name=name,
+            effect_type="report",
+            scope_path=scope_path,
+            effect_path=effect_path,
+        )
+
+    message = effect.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError(
+            f"Report effect at '{effect_path}' must have a non-empty 'message'."
+        )
+    _check_templates(message, effect_path=effect_path, field="message", allow_partials=True)
+
+    level_raw = effect.get("level", "info")
+    level = str(level_raw).strip().lower()
+    if level not in ("info", "warning"):
+        raise ValueError(
+            f"Report effect at '{effect_path}' has invalid 'level' {level_raw!r} "
+            "-- expected 'info' or 'warning'."
+        )
+
+    data_raw = effect.get("data")
+    data: dict[str, Any] | None = None
+    if data_raw is not None:
+        if not isinstance(data_raw, dict):
+            raise ValueError(f"Report effect at '{effect_path}': 'data' must be an object.")
+        _check_report_data_leaves(
+            data_raw,
+            name=valid_name,
+            effect_path=effect_path,
+            field="data",
+            loop_names=loop_names,
+        )
+        data = data_raw
+
+    description = effect.get("description")
+    if description is not None and not isinstance(description, str):
+        description = None
+
+    return ReportDefinition(
+        message=message,
+        name=valid_name,
+        data=data,
+        level=cast(Literal["info", "warning"], level),
         description=description,
     )
 

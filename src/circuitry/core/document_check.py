@@ -60,6 +60,7 @@ _EFFECT_DEFS = {
     "tool": "ToolEffect",
     "use": "UseEffect",
     "yield": "YieldEffect",
+    "report": "ReportEffect",
 }
 
 #: Keys the compiler still reads that the schema does not list: the legacy

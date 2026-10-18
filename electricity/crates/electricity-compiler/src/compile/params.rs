@@ -298,6 +298,131 @@ pub(crate) fn build_use_inputs(
     Ok(ParamNode::Map(map))
 }
 
+/// A report effect's `data` leaf's by-reference form (#605): exactly
+/// `{from: <path>}` -- no `default:`/`as:`, since a report never fails
+/// the run on an unresolved path, so there is nothing either would be
+/// for. Ports `core/report.py::report_data_reference`.
+fn report_data_reference(value: &Value) -> Option<String> {
+    let Value::Dict(dict) = value else {
+        return None;
+    };
+    if dict.len() != 1 {
+        return None;
+    }
+    let from_key = Value::Str("from".to_string());
+    let path = dict.get(&from_key)?.as_str()?;
+    Some(path.trim().to_string())
+}
+
+/// Builds the [`ParamNode`] for a report effect's `data:` (#605) --
+/// ports `core/compiler.py::_check_report_data_leaves` plus the
+/// IR-building half, the same pattern [`build_param_node`] follows for
+/// a tool's `params`, but with the narrower reference grammar above and
+/// `Escape::None` for a string leaf (rendered like a prompt template,
+/// unescaped, same as the report's own `message`).
+pub(crate) fn build_report_data(
+    value: &Value,
+    name: Option<&str>,
+    effect_path: &str,
+    field: &str,
+    loop_names: &BTreeSet<String>,
+) -> Result<ParamNode, CompileError> {
+    let label = match name {
+        Some(n) => format!("Report effect '{n}'"),
+        None => "Report effect".to_string(),
+    };
+    if let Some(path) = report_data_reference(value) {
+        validate_reference_path(
+            &path,
+            &format!("{label} data '{field}'"),
+            effect_path,
+            loop_names,
+        )?;
+        return Ok(ParamNode::From {
+            path,
+            default: None,
+            as_json: false,
+        });
+    }
+    // A tool param's richer `{from:, default:, as:}` form, not a report's
+    // narrower one (#605): `report_data_reference`'s exact `{from}` match
+    // above lets a key like `default`/`as` fall straight through to the
+    // `Value::Dict` branch below, which would otherwise silently publish
+    // `{"from": ..., "default": ...}` as a literal object with no warning.
+    // Ports `core/compiler.py::_check_report_data_leaves`'s own check.
+    if let Value::Dict(dict) = value {
+        let from_key = Value::Str("from".to_string());
+        if let Some(from_value) = dict.get(&from_key) {
+            if !matches!(from_value, Value::Str(_)) {
+                return Err(CompileError(format!(
+                    "{effect_path}.{field}: a report's 'data' leaf's 'from' key \
+                     must be a string path."
+                )));
+            }
+            if dict.len() != 1 {
+                let mut extra: Vec<String> = dict
+                    .keys()
+                    .filter(|k| *k != &from_key)
+                    .map(|k| match k {
+                        Value::Str(s) => s.clone(),
+                        other => other.py_str(),
+                    })
+                    .collect();
+                extra.sort();
+                return Err(CompileError(format!(
+                    "{effect_path}.{field}: a report's 'data' leaf with a 'from' key \
+                     takes no other key ({}) -- {{from: <path>}} is the whole form; a \
+                     report never fails on an unresolved path, so there is nothing for \
+                     'default'/'as' to do.",
+                    extra.join(", ")
+                )));
+            }
+        }
+    }
+    match value {
+        Value::Str(s) => {
+            check_templates(value, effect_path, field, true)?;
+            Ok(ParamNode::Template(TemplateText::new(
+                s.clone(),
+                true,
+                Escape::None,
+            )))
+        }
+        Value::Dict(dict) => {
+            let mut map = IndexMap::new();
+            for (key, item) in dict {
+                let key_label = match key {
+                    Value::Str(s) => s.clone(),
+                    other => other.py_str(),
+                };
+                let child = build_report_data(
+                    item,
+                    name,
+                    effect_path,
+                    &format!("{field}.{key_label}"),
+                    loop_names,
+                )?;
+                map.insert(key.clone(), child);
+            }
+            Ok(ParamNode::Map(map))
+        }
+        Value::List(items) => {
+            let mut list = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                list.push(build_report_data(
+                    item,
+                    name,
+                    effect_path,
+                    &format!("{field}[{index}]"),
+                    loop_names,
+                )?);
+            }
+            Ok(ParamNode::List(list))
+        }
+        other => Ok(ParamNode::Literal(other.clone())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +710,71 @@ mod tests {
             )),
             _ => panic!("expected a map"),
         }
+    }
+
+    #[test]
+    fn report_data_rejects_from_plus_default_instead_of_a_silent_literal() {
+        // Unlike `use`'s own `inputs:` above, a report's narrower
+        // `{from:}` grammar has no literal-passthrough fallback for a
+        // tool param's richer `{from:, default:, as:}` shape (#605) --
+        // it's a compile error instead.
+        let mut from_dict = Dict::new();
+        from_dict.insert(
+            Value::Str("from".to_string()),
+            Value::Str("input.x".to_string()),
+        );
+        from_dict.insert(Value::Str("default".to_string()), Value::Int(1.into()));
+        let err = build_report_data(
+            &Value::Dict(from_dict),
+            Some("status"),
+            "prime.status",
+            "data.bad",
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("takes no other key (default)"), "{}", err.0);
+    }
+
+    #[test]
+    fn report_data_rejects_a_non_string_from_path() {
+        for bad_from in [
+            Value::Int(5.into()),
+            Value::None,
+            Value::List(vec![
+                Value::Str("a".to_string()),
+                Value::Str("b".to_string()),
+            ]),
+        ] {
+            let mut from_dict = Dict::new();
+            from_dict.insert(Value::Str("from".to_string()), bad_from);
+            let err = build_report_data(
+                &Value::Dict(from_dict),
+                None,
+                "prime",
+                "data.bad",
+                &BTreeSet::new(),
+            )
+            .unwrap_err();
+            assert!(err.0.contains("must be a string path"), "{}", err.0);
+        }
+    }
+
+    #[test]
+    fn report_data_rejects_a_from_plus_default_with_a_non_string_extra_key() {
+        let mut from_dict = Dict::new();
+        from_dict.insert(
+            Value::Str("from".to_string()),
+            Value::Str("input.x".to_string()),
+        );
+        from_dict.insert(Value::Int(1.into()), Value::Str("y".to_string()));
+        let err = build_report_data(
+            &Value::Dict(from_dict),
+            None,
+            "prime",
+            "data.bad",
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("takes no other key (1)"), "{}", err.0);
     }
 }

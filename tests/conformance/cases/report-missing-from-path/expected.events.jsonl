@@ -1,0 +1,5 @@
+{"v":1,"seq":0,"ts":"2026-10-18T00:41:40.264Z","ev":"run_start","run_id":"0ad5d15a-d25e-4842-987f-b5d5088f3198","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":64456}
+{"v":1,"seq":1,"ts":"2026-10-18T00:41:40.270Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-18T00:41:40.270Z","ev":"report","path":"prime.status","level":"info","message":"checking widgets","data":{"present":"widgets","missing":null}}
+{"v":1,"seq":3,"ts":"2026-10-18T00:41:40.270Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-18T00:41:40.270Z","ev":"run_end","ok":true}

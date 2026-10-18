@@ -129,6 +129,28 @@ def _namespaced_branch_settled_cb(
     return _forward
 
 
+def _namespaced_report_cb(
+    callback: Callable[[str, str, str, Any], None] | None, node_path: str
+) -> Callable[[str, str, str, Any], None] | None:
+    """Wrap ``report`` the same way :func:`_namespaced_dispatch_cb` wraps
+    ``concurrent_dispatch`` (#605) -- an unnamed report running directly in
+    the child's own root (its own path is the child root, same as an
+    unnamed tree loop's own dispatch) lands at *node_path* itself; a named
+    one, or one nested under a named child container, nests under it.
+    """
+    if callback is None:
+        return None
+
+    def _forward(child_path: str, level: str, message: str, data: Any) -> None:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            callback(node_path, level, message, data)
+            return
+        callback(f"{node_path}.{relative}", level, message, data)
+
+    return _forward
+
+
 def _grafted_snapshot(
     root_state: dict[str, Any],
     node_path: str,
@@ -1180,6 +1202,7 @@ class UseRuntime:
                         branch_settled=_namespaced_branch_settled_cb(
                             store.branch_settled, node_path
                         ),
+                        report=_namespaced_report_cb(store.report, node_path),
                         _lock=store._lock,
                     )
 

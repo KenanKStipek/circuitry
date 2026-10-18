@@ -888,10 +888,14 @@ class DynamicRuntime:
     ) -> str:
         """Execute a single effect within the dynamic.
 
-        Returns which of three things happened: ``"disabled"`` (the effect
+        Returns which of four things happened: ``"disabled"`` (the effect
         didn't run, deterministically, regardless of resume), ``"resumed"``
-        (skipped because its own node already finished without error), or
-        ``"ran"`` (actually dispatched this call, success or an absorbed
+        (skipped because its own node already finished without error --
+        this is how a completed named report is skipped too), ``"reported"``
+        (an unnamed report ran -- it always does, whether or not resume is
+        active, but fires no effect_start/effect_complete and so carries
+        nothing for later siblings' resume eligibility), or ``"ran"`` (any
+        other effect actually dispatched this call, success or an absorbed
         failure). Chain flow uses this to know when to stop treating later
         nodes as resumable — see the call site in ``execute()``.
         """
@@ -900,6 +904,7 @@ class DynamicRuntime:
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .loop import LoopDefinition, LoopRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .report import ReportDefinition, ReportRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
         from .yield_effect import YieldDefinition, YieldRuntime
@@ -912,6 +917,7 @@ class DynamicRuntime:
         is_tool = isinstance(effect, ToolDefinition)
         is_use = isinstance(effect, UseDefinition)
         is_yield = isinstance(effect, YieldDefinition)
+        is_report = isinstance(effect, ReportDefinition)
 
         # If a tracker is provided, derive all callbacks from it
         _cb_running: Callable[[str, int], None] | None = None
@@ -944,7 +950,7 @@ class DynamicRuntime:
             and name != "?"
             and effect_completed_ok(store.state.get(name))
         ):
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 line = (
                     f"{indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
                     f" {name} [dim](resumed)[/dim]"
@@ -955,7 +961,7 @@ class DynamicRuntime:
                     _console.print(line)
             return "resumed"
 
-        if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+        if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
             if cb_start is not None:
                 cb_start()
             else:
@@ -1100,10 +1106,17 @@ class DynamicRuntime:
                     ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
+            elif isinstance(effect, ReportDefinition):
+                ReportRuntime(
+                    effect,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                ).execute(store=store, ctx=ctx)
+
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 # A dynamic with on_error: skip/continue absorbs its own
@@ -1138,10 +1151,10 @@ class DynamicRuntime:
                     else:
                         _console.print(line)
 
-            return "ran"
+            return "reported" if is_report else "ran"
 
         except Exception:
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -1191,9 +1204,13 @@ def _skip_disabled_effect(
     dispatched. An anonymous effect (transparent conditional/loop) has no
     state node to write, so it is simply not executed.
     """
+    from .report import ReportDefinition
+
     name = getattr(effect, "name", None)
     if isinstance(name, str) and name:
-        write_disabled_node(store=store, name=name)
+        write_disabled_node(
+            store=store, name=name, fire_hooks=not isinstance(effect, ReportDefinition)
+        )
     if verbose:
         label = name or "?"
         line = (
@@ -1217,6 +1234,7 @@ def _effect_type_label(effect: Any) -> str:
     from .conditional import ConditionalDefinition
     from .loop import LoopDefinition
     from .reflector import ReflectorDefinition
+    from .report import ReportDefinition
     from .tool import ToolDefinition
     from .use import UseDefinition
     from .yield_effect import YieldDefinition
@@ -1225,6 +1243,8 @@ def _effect_type_label(effect: Any) -> str:
         return "prompt"
     if isinstance(effect, YieldDefinition):
         return "yield"
+    if isinstance(effect, ReportDefinition):
+        return "report"
     if isinstance(effect, DynamicDefinition):
         return f"dynamic:{effect.flow}"
     if isinstance(effect, ConditionalDefinition):
@@ -1253,6 +1273,7 @@ _EFFECT_STYLE: dict[str, tuple[str, str]] = {
     "reflector": ("✺", "green"),
     "tool": ("⚙", "white"),
     "use": ("⊕", "green"),
+    "report": ("▸", "cyan"),
 }
 
 
