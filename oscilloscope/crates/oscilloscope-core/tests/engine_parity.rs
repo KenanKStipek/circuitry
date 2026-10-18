@@ -1,7 +1,7 @@
 //! Engine parity golden tests (issue #431's lane E2, SCOPE item 5):
 //! the same document, recorded against both `cof` and `electricity`
 //! (`PARITY_CASES` in `oscilloscope/scripts/record_fixtures.py`,
-//! `--parity-only`), must produce the same osp `--log` lines once
+//! `--parity-only`), must produce the same osi `--log` lines once
 //! their own event streams *and* final state snapshot are replayed
 //! through `Differ`/`RunModel`, the same two sources `main.rs`'s own
 //! `observe_tick` polls each tick (events for every leaf's ▶/✓/✗, the

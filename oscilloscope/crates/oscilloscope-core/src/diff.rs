@@ -17,7 +17,7 @@ use crate::plan::PlanTree;
 
 /// One line of the `--log` stream (DESIGN.md §2.4, §6.2). `ts` is the
 /// event's own timestamp (`meta.created_at`/`completed_at`, never when
-/// osp noticed the change) — `None` only for the final run-summary
+/// osi noticed the change) — `None` only for the final run-summary
 /// line when no timestamp is available at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogLine {
@@ -296,7 +296,7 @@ fn duration_text(created_at: &Option<String>, completed_at: &Option<String>) -> 
 /// which only *marks* the live-state mirror pending). Both engines
 /// coalesce the actual write to disk to once per 500ms
 /// (`cli/live_state.py`'s `LIVE_STATE_INTERVAL_SECONDS` and
-/// `live_state.rs`'s `LIVE_STATE_INTERVAL`), and osp polls that file
+/// `live_state.rs`'s `LIVE_STATE_INTERVAL`), and osi polls that file
 /// every `observe::POLL_INTERVAL` (100ms) — a line can therefore need
 /// to outlive two full coalescing windows, not just one more poll, so
 /// the bound is wall-clock time, not a poll count: two coalescing
@@ -365,7 +365,7 @@ pub struct Differ {
     /// The freshest state `note_preview` has been handed, kept
     /// separate from `last` (which only ever advances inside `diff`
     /// itself): container detection for an event whose own `start`
-    /// outruns the next state poll (`osp watch` with no `--plan`,
+    /// outruns the next state poll (`osi watch` with no `--plan`,
     /// issue #433) needs the very latest snapshot available, even one
     /// `diff` hasn't been handed yet this tick.
     preview: BTreeMap<String, NodeMeta>,
@@ -390,7 +390,7 @@ impl Differ {
 
     /// Records the latest polled state for [`Differ::diff_event`]'s
     /// own container detection to fall back on, ahead of `diff` itself
-    /// ever being handed this same snapshot (issue #433: `osp watch`
+    /// ever being handed this same snapshot (issue #433: `osi watch`
     /// with no `--plan` could otherwise misjudge a container whose
     /// very first state write lands in the same tick as its own
     /// `start` event, since events are processed before that tick's
@@ -729,7 +729,7 @@ impl Differ {
                         // named `if`'s `meta.branch` is already set
                         // before its body even starts (DESIGN.md
                         // §1.2), and a loop's `meta.progress` can
-                        // already be non-trivial the first time osp
+                        // already be non-trivial the first time osi
                         // observes it at all (a fast first pass, or
                         // attaching mid-run) — both must still be
                         // checked on first sight, not only against a
@@ -977,7 +977,7 @@ mod tests {
     /// nor `adapter`, so with no plan at all `summary_for` has nothing
     /// to go on but the generic `"effect"` fallback (DESIGN.md §6.2's
     /// example never needs it: every leaf there is a tool or a
-    /// prompt) — but with a real plan, osp can and should say
+    /// prompt) — but with a real plan, osi can and should say
     /// `"yield"` instead.
     #[test]
     fn a_yield_leaf_with_no_distinguishing_meta_takes_its_kind_from_the_plan() {
@@ -1389,7 +1389,7 @@ mod tests {
         // analogue of `unnamed_pass_counts` for leaves). cof emits one
         // `end` event with `ok: false` per pass for a body that fails
         // on its own each time (tests/conformance/cases/on-error-if/
-        // expected.events.jsonl), so osp must print one ✗ per pass
+        // expected.events.jsonl), so osi must print one ✗ per pass
         // too -- a path-keyed "already reported" set would wrongly
         // collapse the second pass's ✗ into nothing.
         let mut differ = Differ::new();
@@ -1492,7 +1492,7 @@ mod tests {
     #[test]
     fn container_failure_in_a_reused_loop_path_without_events_prints_once_per_pass() {
         // The state-only counterpart of the previous test (an engine
-        // with no `--events`, or a state-only `osp watch`): `diff`'s
+        // with no `--events`, or a state-only `osi watch`): `diff`'s
         // own branch must still print one ✗ per pass, exactly as main
         // always has, with no event ever marking the path as
         // event-sourced.
@@ -1928,7 +1928,7 @@ mod tests {
 
     #[test]
     fn a_named_if_already_branched_on_first_sight_gets_a_diamond_line() {
-        // F9: `meta.branch` is already set the very first time osp
+        // F9: `meta.branch` is already set the very first time osi
         // observes a named `if` at all (DESIGN.md §1.2), so there is no
         // earlier `prev` without a branch to compare against.
         let mut differ = Differ::new();
@@ -2140,7 +2140,7 @@ mod tests {
 
     #[test]
     fn diff_event_detects_a_container_from_a_just_polled_preview_with_no_plan_and_no_prior_last() {
-        // Issue #433: `osp watch` with no `--plan` has no static plan
+        // Issue #433: `osi watch` with no `--plan` has no static plan
         // to check, so a container whose first-ever state write lands
         // in the very same tick as its own `start` event must still
         // be recognised from that fresh snapshot, not misread as a

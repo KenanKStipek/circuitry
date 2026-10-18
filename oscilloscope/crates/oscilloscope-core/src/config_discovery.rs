@@ -1,6 +1,6 @@
 //! Mirrors cof's own config discovery (`cli/config.py`'s
 //! `resolve_config`/`discover_project_config`, `cli/config_trust.py`'s
-//! `check_trust`), narrowed to the one case `osp`'s plan compile
+//! `check_trust`), narrowed to the one case `osi`'s plan compile
 //! cares about: no `--config` and no config positional, the case a
 //! bare `cof run <doc>` resolves on its own by layering the global
 //! config (`~/.config/circuitry/config.json`) and a *trusted* project
@@ -72,7 +72,7 @@ fn env_trusts(trust_env: Option<&str>) -> bool {
 /// `cli/config_trust.py::check_trust`, narrowed to whether `path`
 /// (whose contents are `data`) may be applied at all -- `trusted`/
 /// `env` both do, `untrusted`/`changed` (an unreadable store counts as
-/// `untrusted`) neither does; osp's plan compile has no `cof trust`/
+/// `untrusted`) neither does; osi's plan compile has no `cof trust`/
 /// `cof doctor` surface of its own to explain *why* a skip happened.
 /// `trust_key` in the real module resolves symlinks too
 /// (`path.expanduser().resolve()`); `path` here is already expected to

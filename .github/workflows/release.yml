@@ -90,8 +90,8 @@ jobs:
       binary-name: electricity
       build-image: true
 
-  osp-build:
-    name: Build osp (release, preview)
+  osi-build:
+    name: Build osi (release, preview)
     needs: verify-version
     permissions:
       contents: read
@@ -99,7 +99,7 @@ jobs:
     with:
       workspace-dir: oscilloscope
       binary-crate: oscilloscope
-      binary-name: osp
+      binary-name: osi
       build-image: false
 
   build:
@@ -170,7 +170,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [build, electricity-build, osp-build]
+    needs: [build, electricity-build, osi-build]
     environment:
       name: pypi
       url: https://pypi.org/p/circuitry-cof
@@ -198,7 +198,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-pypi, publish-image, verify-version, electricity-build, osp-build]
+    needs: [publish-pypi, publish-image, verify-version, electricity-build, osi-build]
     permissions:
       contents: write
     steps:
@@ -216,11 +216,11 @@ jobs:
           pattern: "electricity-*"
           path: electricity-dist/
           merge-multiple: true
-      - name: Download osp archives
+      - name: Download osi archives
         uses: actions/download-artifact@v4
         with:
-          pattern: "osp-*"
-          path: osp-dist/
+          pattern: "osi-*"
+          path: osi-dist/
           merge-multiple: true
       - name: Extract changelog section
         id: changelog
@@ -243,7 +243,7 @@ jobs:
             echo ""
             image_version="${{ needs.electricity-build.outputs.version }}"
             echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$image_version\`) are attached below as a **preview**: it runs many orchestrations and refuses, with a clear message, what it doesn't support yet — see [electricity/README.md](https://github.com/${{ github.repository }}/blob/v$version/electricity/README.md)."
-            echo "osp's (oscilloscope's) binaries are attached below as a **preview**: it watches and launches a run on either engine — see [oscilloscope/README.md](https://github.com/${{ github.repository }}/blob/v$version/oscilloscope/README.md)."
+            echo "osi's (oscilloscope's) binaries are attached below as a **preview**: it watches and launches a run on either engine — see [oscilloscope/README.md](https://github.com/${{ github.repository }}/blob/v$version/oscilloscope/README.md)."
           } >> "$notes_file"
           {
             echo "notes_file=$notes_file"
@@ -265,4 +265,4 @@ jobs:
             $prerelease_flag \
             dist/* \
             electricity-dist/* \
-            osp-dist/*
+            osi-dist/*

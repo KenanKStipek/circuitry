@@ -1200,7 +1200,7 @@ mod unit_tests {
     }
 
     #[test]
-    fn osps_own_invocation_shape_still_parses() {
+    fn osis_own_invocation_shape_still_parses() {
         // oscilloscope's `ElectricityEngine` (`oscilloscope/crates/
         // oscilloscope-core/src/engine.rs`) passes `<config> <doc> -e
         // k=v... --out <dir>/state.json` -- issue #431's CLI section:
@@ -1298,7 +1298,7 @@ mod unit_tests {
     }
 
     #[test]
-    fn osps_own_invocation_shape_still_parses_with_the_equals_form() {
+    fn osis_own_invocation_shape_still_parses_with_the_equals_form() {
         match classify(&[
             "config.json".to_string(),
             "doc.yml".to_string(),

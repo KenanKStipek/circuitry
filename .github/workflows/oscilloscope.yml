@@ -102,10 +102,10 @@ jobs:
       - name: install Circuitry (cof) from this checkout
         run: python3 -m pip install -e .
 
-      - name: cargo test (OSP_E2E_COF=1)
+      - name: cargo test (OSI_E2E_COF=1)
         working-directory: oscilloscope
         env:
-          OSP_E2E_COF: "1"
+          OSI_E2E_COF: "1"
           CARGO_BUILD_JOBS: "4"
         run: cargo test --workspace
 
@@ -139,10 +139,10 @@ jobs:
           cargo build -p electricity-cli --features test-tools
           echo "$PWD/target/debug" >> "$GITHUB_PATH"
 
-      - name: cargo test (OSP_E2E_ELECTRICITY=1)
+      - name: cargo test (OSI_E2E_ELECTRICITY=1)
         working-directory: oscilloscope
         env:
-          OSP_E2E_ELECTRICITY: "1"
+          OSI_E2E_ELECTRICITY: "1"
           CARGO_BUILD_JOBS: "4"
         run: cargo test --workspace
 
@@ -154,5 +154,5 @@ jobs:
     with:
       workspace-dir: oscilloscope
       binary-crate: oscilloscope
-      binary-name: osp
+      binary-name: osi
       build-image: false

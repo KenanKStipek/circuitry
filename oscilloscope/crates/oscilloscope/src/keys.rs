@@ -45,7 +45,7 @@ pub enum Action {
     /// so the main loop reuses its own `forward`/`signal_count` path.
     Cancel,
     /// Leave the TUI now: `q` with nothing running, or `q` confirmed
-    /// to cancel while `osp watch`'s own `quit_after` has nothing to
+    /// to cancel while `osi watch`'s own `quit_after` has nothing to
     /// wait on cancelling at all (watch owns no engine to cancel —
     /// `q` there always just detaches, §6.3).
     Quit,
@@ -54,7 +54,7 @@ pub enum Action {
     /// once with no confirm while something's running (a second
     /// Ctrl-C starts the same 10s kill deadline a real repeated
     /// SIGINT would), quits immediately with nothing running, and in
-    /// `osp watch` always just detaches — the same three cases a real
+    /// `osi watch` always just detaches — the same three cases a real
     /// forwarded SIGINT already covers in plain mode.
     CtrlC,
     /// `t` (issue #535): cycle to the next colour theme, wrapping.
@@ -62,8 +62,8 @@ pub enum Action {
 }
 
 /// The TUI's whole navigation/dialog state (DESIGN.md §6.3). `running`
-/// is the caller's own signal of whether the engine osp started (or,
-/// for `osp watch`, the watched run) is still going — it decides
+/// is the caller's own signal of whether the engine osi started (or,
+/// for `osi watch`, the watched run) is still going — it decides
 /// whether `q` asks first at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
@@ -82,7 +82,7 @@ pub struct App {
     pub errors_only: bool,
     pub filter: Option<String>,
     pub dialog: Dialog,
-    /// `osp watch`'s own flavour of quitting (§6.3): `q` never needs a
+    /// `osi watch`'s own flavour of quitting (§6.3): `q` never needs a
     /// confirm there, since watch owns no engine of its own to cancel
     /// — it only ever detaches.
     pub is_watch: bool,
@@ -430,7 +430,7 @@ impl App {
         self.state_selected_path = Some(rows[next].path.clone());
     }
 
-    /// `f`'s own target (§6.3): the innermost row osp considers
+    /// `f`'s own target (§6.3): the innermost row osi considers
     /// "happening right now" — a strict `Running` leaf over a
     /// `LikelyRunning`/`RunningOrQueued` guess, and the deepest path
     /// among ties, since a nested running effect is more specific
@@ -778,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn osp_watch_q_always_just_detaches_with_no_confirm() {
+    fn osi_watch_q_always_just_detaches_with_no_confirm() {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(true);

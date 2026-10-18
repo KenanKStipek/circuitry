@@ -19,7 +19,7 @@ use clap::ValueEnum;
 use oscilloscope_core::model::StatusKind;
 use ratatui::style::Color;
 
-/// The eleven themes, in the order `--theme`/`OSP_THEME` accept and
+/// The eleven themes, in the order `--theme`/`OSI_THEME` accept and
 /// `t` cycles through (issue #535). Derives `ValueEnum` (finding 10)
 /// so `--help` lists every name as clap's own possible-values list,
 /// in this same declaration order -- clap's default kebab-case
@@ -71,7 +71,7 @@ impl ThemeName {
         }
     }
 
-    /// An unknown `--theme`/`OSP_THEME` name: a usage error listing
+    /// An unknown `--theme`/`OSI_THEME` name: a usage error listing
     /// every valid one, in cycle order.
     pub fn parse(name: &str) -> Result<ThemeName, String> {
         ThemeName::ALL
@@ -83,7 +83,7 @@ impl ThemeName {
                     .map(|t| t.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("osp: unknown theme {name:?}; choose one of: {names}")
+                format!("osi: unknown theme {name:?}; choose one of: {names}")
             })
     }
 
@@ -859,7 +859,7 @@ mod tests {
         let err = ThemeName::parse("bogus").unwrap_err();
         assert_eq!(
             err,
-            "osp: unknown theme \"bogus\"; choose one of: terminal, dracula, nord, \
+            "osi: unknown theme \"bogus\"; choose one of: terminal, dracula, nord, \
              solarized-dark, solarized-light, gruvbox-dark, gruvbox-light, \
              catppuccin-mocha, catppuccin-latte, tokyo-night, one-dark"
         );

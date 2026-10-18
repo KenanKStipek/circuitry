@@ -1,18 +1,18 @@
 # oscilloscope
 
-`osp` (oscilloscope) launches a Circuitry orchestration on either engine —
+`osi` (oscilloscope) launches a Circuitry orchestration on either engine —
 `cof` (this repository's Python reference implementation) or `electricity`
 (the Rust runner in `../electricity`) — and shows it running: every effect's
 status against the document's plan, plus a readable log of what is
 processing. A terminal UI comes first; a GUI can reuse the same core later.
 
 ```
-CYBERDINER_TOKEN=... osp do-thing.yml config.json
+CYBERDINER_TOKEN=... osi do-thing.yml config.json
 ```
 
-**This is a preview.** Milestone O-1 (issue #424) filled in the core: `osp
+**This is a preview.** Milestone O-1 (issue #424) filled in the core: `osi
 <orchestration>` launches and supervises `cof` or `electricity` and exits
-with the engine's own exit code; `osp watch <dir>` attaches to a run `osp`
+with the engine's own exit code; `osi watch <dir>` attaches to a run `osi`
 didn't start. Milestone O-2 (issue #434) adds the terminal UI below.
 electricity's own run path, `--events` and `--live-state` give
 `--engine electricity` the same live view `cof` does for the content it
@@ -22,22 +22,22 @@ refused up front, with a message naming the preview marker, before any
 state is written. See [`DESIGN.md`](DESIGN.md) §4.2.
 
 ```
-osp do-thing.yml config.json
-osp do-thing.yml -e key=value --engine cof --out-dir ./run
-osp watch ./run
-osp watch ./run --plan do-thing.yml --config config.json -e key=value
+osi do-thing.yml config.json
+osi do-thing.yml -e key=value --engine cof --out-dir ./run
+osi watch ./run
+osi watch ./run --plan do-thing.yml --config config.json -e key=value
 ```
 
 - With no `config.json`, `cof` resolves its own config layers (global,
-  project, environment) exactly as `cof run` would. The plan osp compiles
+  project, environment) exactly as `cof run` would. The plan osi compiles
   from the document uses the same `config.json`/`-e` pair passed on the
   command line (`electricity::check_options`, the exact options a real
   `electricity <config> <doc> -e k=v...` run would check it against). With
-  no `config.json` given here either, osp now mirrors `cof`'s own
+  no `config.json` given here either, osi now mirrors `cof`'s own
   discovery for the plan too: `CIRCUITRY_CONFIG`, if set, replaces
   discovery entirely (the same precedence `cof run` itself uses);
   otherwise the global config (`~/.config/circuitry/config.json`) and a
-  *trusted* project `circuitry.config.json`/`config.json` found in osp's
+  *trusted* project `circuitry.config.json`/`config.json` found in osi's
   own working directory are deep-merged the same way `cof run` layers
   them (`cof trust` still governs whether a discovered project config
   applies at all). A document whose plan depends on a
@@ -46,32 +46,32 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, ...) still apply on top once
   there's a file for them to layer onto, the same as `cof run`. An
   explicit `config.json` given here already wins over all of the above,
-  same as `cof run` itself. `osp watch --plan do-thing.yml` takes its own
+  same as `cof run` itself. `osi watch --plan do-thing.yml` takes its own
   `--config`/`-e` for the same reason, independent of whatever the
   watched run itself was started with, and gets the same discovery with
   neither.
 - `--engine electricity` needs a config (electricity has no config
   discovery yet). For a document outside electricity's current scope, it
   shows electricity's own preview-marker refusal and exit code, the same
-  way osp shows any other pre-execution failure.
+  way osi shows any other pre-execution failure.
 - Run files (`state.live.json`, `state.json`, `events.jsonl`, `stdout.txt`,
   `stderr.txt`) go to a fresh temporary directory by default, printed when
   the run ends; `--out-dir DIR` keeps them in a chosen directory instead —
-  the same layout `osp watch` reads.
+  the same layout `osi watch` reads.
 - `cof run --events` (issue #419) is detected from `cof run --help`, and
   electricity's own `--events`/`--live-state` (issue #431) the same way from
-  `electricity --help`; without them `osp` falls back to `--live-state`/
+  `electricity --help`; without them `osi` falls back to `--live-state`/
   `--out` alone, state-only (DESIGN.md §2's "From state alone" rules).
-- `osp watch <dir>` on a run with no `--events` stream has no engine pid to
+- `osi watch <dir>` on a run with no `--events` stream has no engine pid to
   check and no way to tell a genuinely aborted run (a second signal,
   `SIGKILL`, a crash) from one that's simply still going quietly: neither
-  ever writes a final snapshot. `osp watch` warns once on stderr when this
+  ever writes a final snapshot. `osi watch` warns once on stderr when this
   is the case, and otherwise just keeps waiting — there is no staleness
   timeout, since a quiet run can stay quiet for a long time. Ctrl-C always
   stops the watch.
 - A document that fails to compile (or an engine whose compiler is still a
   stub) falls back to a plan-free run: rows come only from what's observed.
-- `osp watch <dir>` without `--plan` detects an `if`/loop container from
+- `osi watch <dir>` without `--plan` detects an `if`/loop container from
   the freshest state it has for that path (`meta.mode` for an `if`,
   `meta.flow` for a dynamic) before printing an event line for it, even
   within the very same poll tick its own state first appears in -- the
@@ -79,21 +79,21 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   already finished. A container whose own `start` event is tailed in a
   *live* run before its state has been written even once yet (no entry
   for that path at all, same tick or earlier) still can't be told from a
-  leaf, so it can briefly print its own `▶`/`✓` the way a live `osp <doc>`
+  leaf, so it can briefly print its own `▶`/`✓` the way a live `osi <doc>`
   run of the same document never does (it already has a compiled plan
-  from the start). Pass `--plan do-thing.yml` to `osp watch` for the same
+  from the start). Pass `--plan do-thing.yml` to `osi watch` for the same
   output a live run gives.
 - The first Ctrl-C forwards `SIGINT` to the engine's process group and logs
   a cancelling notice; a second forwards it again; still running 10s later,
-  `osp` sends `SIGKILL`. `SIGTERM`/`SIGHUP` are forwarded the same way. `osp`
+  `osi` sends `SIGKILL`. `SIGTERM`/`SIGHUP` are forwarded the same way. `osi`
   always exits with the engine's own exit code, and never leaves it running
-  after `osp` itself exits cleanly — including on a panic. The one exception
-  is `osp` itself being `SIGKILL`ed: nothing can run its own cleanup code
+  after `osi` itself exits cleanly — including on a panic. The one exception
+  is `osi` itself being `SIGKILL`ed: nothing can run its own cleanup code
   after that, so the engine (in its own process group) keeps running.
 
 ## The terminal UI
 
-On a TTY, `osp <doc>` and `osp watch <dir>` show the interactive terminal UI
+On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 (DESIGN.md §6.3) instead of the plain-text stream. `--log`, or any non-TTY
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
@@ -134,14 +134,14 @@ independent of the orchestration pane's.
 Whatever just changed gets a soft background tint that fades out over about
 a second, so the eye goes to it: a row's status, a state row, a treemap
 cell, a new log line or the token totals. The first observation never
-highlights anything (so `osp watch` attaching to a finished run opens on a
+highlights anything (so `osi watch` attaching to a finished run opens on a
 calm screen), and neither does elapsed time, selection, scrolling, the
-filter or a resize. `--theme <name>` (or `OSP_THEME`) paints the whole
+filter or a resize. `--theme <name>` (or `OSI_THEME`) paints the whole
 screen in one of ten named colour themes (`dracula`, `nord`, `solarized-
 dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
 `tokyo-night`, `one-dark`) instead of the terminal's own default colours;
 `t` cycles through them live. `--no-animation` turns the highlight fade and
-the scope icon's own trace off, both on `osp <doc>` and `osp watch`.
+the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 
 | Key | Action |
 |---|---|
@@ -156,8 +156,8 @@ the scope icon's own trace off, both on `osp <doc>` and `osp watch`.
 | `v` | show the full value; `v` again cycles between the prompt and the value when the row has both |
 | `t` | cycle the colour theme |
 | `c` | cancel, with a confirm (the same as a confirmed `q`) |
-| `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osp watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
-| Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osp watch` always just detaches |
+| `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osi watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
+| Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osi watch` always just detaches |
 | `?` | help |
 
 The token rule is the same everywhere a count shows up (the header, the
@@ -171,7 +171,7 @@ both engines report a prompt's tokens only once it finishes.
 The engine exiting does not, on its own, end the TUI: the header, every
 row's final status and the details pane stay live on whatever the run
 ended with until the user leaves with a confirmed `q`, a Ctrl-C cancel, or
-an external `INT`/`TERM`/`HUP` to osp itself (a `SIGHUP` never waits for a
+an external `INT`/`TERM`/`HUP` to osi itself (a `SIGHUP` never waits for a
 key — the terminal is gone by definition). Short of one of those three, a
 run that finishes on its own stays up for `q`/Ctrl-C to leave.
 
@@ -222,11 +222,11 @@ golden tests) at 120×40, every pane populated:
 ```
 
 Raw mode and the alternate screen are entered once and restored on every
-exit path — a normal end, osp's own error, a panic (a panic hook), and a
+exit path — a normal end, osi's own error, a panic (a panic hook), and a
 forwarded `SIGINT`/`SIGTERM`/`SIGHUP`, forwarded to the engine as the same
 signal it was — the same `SIGKILL` exception as the supervision section
-below. Quitting while osp is running the engine cancels the run first (the
-confirmed `q`/`c` dialog, or Ctrl-C): osp never leaves the engine running.
+below. Quitting while osi is running the engine cancels the run first (the
+confirmed `q`/`c` dialog, or Ctrl-C): osi never leaves the engine running.
 
 `oscilloscope/` is its own Cargo workspace, versioned in lockstep with the
 rest of this repository (`pyproject.toml`, `electricity/Cargo.toml`). It
@@ -245,8 +245,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`cargo build --release -p oscilloscope` produces the `osp` binary at
-`target/release/osp`.
+`cargo build --release -p oscilloscope` produces the `osi` binary at
+`target/release/osi`.
 
 ## Layout
 
@@ -255,7 +255,7 @@ oscilloscope/
   Cargo.toml                 # workspace; path deps on ../electricity/crates/{electricity-compiler,electricity-bytecode}
   crates/
     oscilloscope-core/       # no terminal code, so a future GUI can reuse it (render.rs: the TUI's own render model, treemap.rs: the `tokens by key` layout)
-    oscilloscope/            # the `osp` binary: clap CLI, the plain stream, and the ratatui/crossterm TUI (tui.rs, keys.rs, terminal.rs)
+    oscilloscope/            # the `osi` binary: clap CLI, the plain stream, and the ratatui/crossterm TUI (tui.rs, keys.rs, terminal.rs)
 ```
 
 ## Read more

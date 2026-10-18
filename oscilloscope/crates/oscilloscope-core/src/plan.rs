@@ -1,4 +1,4 @@
-//! The plan side: compiling a document into the tree `osp` displays
+//! The plan side: compiling a document into the tree `osi` displays
 //! (DESIGN.md §5, `PlanTree`). O-1 fills in the tree itself — the path
 //! pattern matching against state and event paths, `use` grafting, and
 //! the fallback for a document that fails to compile.
@@ -23,7 +23,7 @@ pub use electricity::parse_inputs;
 ///
 /// With a config, this is exactly `electricity::check_options` — the
 /// one place that options a real `electricity` run uses are built, so
-/// osp's own plan can't drift from what the engine itself checks a
+/// osi's own plan can't drift from what the engine itself checks a
 /// document against (its `config_runtime` merge included, e.g. a
 /// config-defined `concurrency_groups`). With none, this never
 /// reproduces `cof`'s own config discovery (the global or project
@@ -228,7 +228,7 @@ struct TrieNode {
 /// The compiled plan, joined against concrete state/event paths
 /// (DESIGN.md §5's "Joining plan paths with state and event paths").
 /// `PlanTree::empty()` is the no-plan fallback: every path matches
-/// nothing, and `osp` builds its tree purely from what it observes.
+/// nothing, and `osi` builds its tree purely from what it observes.
 pub struct PlanTree {
     root: TrieNode,
     has_plan: bool,
@@ -279,7 +279,7 @@ impl PlanTree {
 
     /// Every plan path, in a display-stable form (a `Pass` segment
     /// renders as `iter_*`, DESIGN.md §5's path-display ask) — used to
-    /// seed rows for plan paths osp hasn't observed yet. A path under a
+    /// seed rows for plan paths osi hasn't observed yet. A path under a
     /// named loop appears once per compiled body, not once per pass:
     /// per-pass rows come from what's observed.
     pub fn all_paths(&self) -> &[String] {
@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn compile_a_missing_file_is_an_error() {
         let err = compile(
-            Path::new("/nonexistent-osp-path/does-not-exist.yml"),
+            Path::new("/nonexistent-osi-path/does-not-exist.yml"),
             None,
             &indexmap::IndexMap::new(),
         );
@@ -997,7 +997,7 @@ mod tests {
     fn a_document_with_a_required_input_only_compiles_with_the_matching_dash_e() {
         // K4: a document with a required `interface.inputs` entry
         // fails check_for_run with no plan at all until the matching
-        // `-e` is given -- the exact osp-side plumbing this issue asks
+        // `-e` is given -- the exact osi-side plumbing this issue asks
         // for (`electricity::check_options`/`parse_inputs`), not just
         // electricity-compiler's own already-tested behavior.
         let dir = tempfile::tempdir().unwrap();
@@ -1316,7 +1316,7 @@ mod tests {
         // F8: `try_graft_use` needs a real, canonicalizable file (its
         // own missing-file/cycle checks run before the loader is ever
         // called), but not a *compilable* one — the loader is injected
-        // so this exercises osp's own grafting walk, independent of
+        // so this exercises osi's own grafting walk, independent of
         // `electricity-compiler`'s lane-B/C stubs, which fail on every
         // real document today.
         let dir = tempfile::tempdir().unwrap();

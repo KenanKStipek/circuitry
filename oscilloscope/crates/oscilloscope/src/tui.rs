@@ -1944,7 +1944,7 @@ mod golden_tests {
 
     #[test]
     fn cancelled_row_with_no_final_write_yet() {
-        // The process exited and osp itself forwarded a signal
+        // The process exited and osi itself forwarded a signal
         // (`interrupted: true`), but the state it has is a snapshot
         // from *before* the final write landed (no `runtime` key at
         // all) -- a transient race, not an ended run. `prime.a`'s own
@@ -2037,7 +2037,7 @@ mod golden_tests {
     }
 
     #[test]
-    fn osp_watch() {
+    fn osi_watch() {
         let plan = sample_plan();
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},

@@ -1,4 +1,4 @@
-//! oscilloscope-core: the engine- and terminal-independent half of `osp`
+//! oscilloscope-core: the engine- and terminal-independent half of `osi`
 //! (see `../../DESIGN.md`, especially §6.1's module map). It holds no
 //! terminal code, so a GUI front end can reuse it unchanged once one
 //! exists.

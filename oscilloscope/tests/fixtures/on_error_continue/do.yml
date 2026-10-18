@@ -5,7 +5,7 @@ effects:
     on_error: continue
     params:
       command: ls
-      args: ["/nonexistent-osp-fixture-path"]
+      args: ["/nonexistent-osi-fixture-path"]
   - name: cleanup
     type: tool
     provider: shell

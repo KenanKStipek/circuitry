@@ -5,7 +5,7 @@ Cybernetic orchestration framework (Python). Core library in `src/`, tests in
 `tests/`, bundled orchestration curation in `src/circuitry/curation/`, docs in
 `docs/`. `electricity/` is a preview Rust runner for the same orchestrations
 (its own Cargo workspace; see `electricity/README.md` and `electricity/DESIGN.md`).
-`oscilloscope/` is `osp`, a preview terminal UI that watches an orchestration
+`oscilloscope/` is `osi`, a preview terminal UI that watches an orchestration
 run on either engine (its own Cargo workspace; see `oscilloscope/README.md`
 and `oscilloscope/DESIGN.md`).
 
@@ -74,7 +74,7 @@ check); bump both together. Build output stays in `electricity/target/`
 and the credential variables removed, exactly like `cof` subprocesses.
 
 ## Rust (`oscilloscope/`)
-`oscilloscope/` is `osp`'s own Cargo workspace (preview, milestone O-0; see
+`oscilloscope/` is `osi`'s own Cargo workspace (preview, milestone O-0; see
 `oscilloscope/DESIGN.md`). It depends on `electricity`'s `electricity-compiler`
 and `electricity-bytecode` crates by path, so a change to either can break it.
 Any change under `oscilloscope/`, or under `electricity/crates/`, additionally

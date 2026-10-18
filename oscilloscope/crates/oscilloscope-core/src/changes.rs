@@ -9,7 +9,7 @@
 //!
 //! The first observation (`old: None`) never reports anything (issue
 //! #535: "the first observation highlights nothing... that includes
-//! `osp watch` attaching to a finished run"). Nothing here ever looks
+//! `osi watch` attaching to a finished run"). Nothing here ever looks
 //! at `elapsed_s`, selection, scrolling, the filter or collapsed
 //! sets, or a resize — none of those are part of `RenderState` at
 //! all, so they can never appear as a change by construction.
