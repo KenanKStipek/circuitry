@@ -2419,6 +2419,34 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
         }
         return n.to_bigint() % d != num_bigint::BigInt::from(0);
     }
+    // A `bool` divisor: Python's `bool` is an `int` subtype, so
+    // `isinstance(dB, float)` is `False` for one too -- the same `%`
+    // branch an ordinary `int` divisor takes, `True`/`False` arithmetic
+    // as `1`/`0` (issue #507's own item 5), reached only
+    // through a `$ref` into a key this engine's own schema-authority
+    // walk never specially recognizes (`$defs`, `properties`, ... are
+    // the only keys it knows house subschemas) -- the same reason
+    // `check_schema`'s own metaschema walk doesn't catch it up front in
+    // Python either, confirmed directly.
+    if let Value::Bool(b) = divisor {
+        let divisor_as_int = Value::from(i64::from(*b));
+        return multiple_of_failed(instance, &divisor_as_int);
+    }
+    if !matches!(divisor, Value::Int(_) | Value::Float(_)) {
+        // Every other non-numeric divisor (a string, `null`, a list, a
+        // dict -- reached the same way a `bool` one is, above):
+        // `isinstance(dB, float)` is `False`, so Python's own
+        // `multipleOf` validator still takes its `%` branch regardless
+        // of *instance*'s own type, raising this `TypeError` before
+        // computing anything at all (confirmed directly, every
+        // combination) -- never silently skipped.
+        raise_python_exception(format!(
+            "unsupported operand type(s) for %: '{}' and '{}'",
+            instance.type_name(),
+            divisor.type_name()
+        ));
+        return false;
+    }
     let Some(i) = as_f64(instance) else {
         return false;
     };
@@ -2461,27 +2489,52 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
         // `instance` and `divisor` are both finite here -- the quotient
         // itself simply overflowed `f64`'s own range computing `i / d`;
         // `Fraction(instance)`/`Fraction(dB)` succeed on two finite
-        // operands, so [`fraction_multiple_of_failed`] gets a clean run.
-        return fraction_multiple_of_failed(i, d);
+        // operands, so [`fraction_multiple_of_failed`] gets a clean run --
+        // from *instance*/*divisor* themselves, never `i`/`d` (issue
+        // #507's own item 4): `i` already lost precision for
+        // an `Int` instance past 2^53 (`IntValue::to_f64`), where
+        // Python's own `Fraction(instance)` on the *original* int is
+        // exact at any magnitude.
+        return fraction_multiple_of_failed(instance, divisor);
     }
     quotient.trunc() != quotient
+}
+
+/// *value*'s own exact `(numerator, denominator)` ratio -- an `Int`'s
+/// own `BigInt` directly (denominator `1`, at any magnitude, never
+/// routed through `f64` first: issue #507's own item 4), a
+/// finite `Float` via [`float_exact_ratio`]. `None` for anything else
+/// (a `NaN`/`Infinity` `Float`, never reached here -- the same
+/// `is_infinite()`/`is_nan()` checks [`multiple_of_failed`]'s own
+/// caller already made against the lossy `f64` cast still apply to the
+/// exact value one-for-one, finite-ness and sign never change on the
+/// way to a `BigInt`).
+fn exact_ratio(value: &Value) -> Option<(num_bigint::BigInt, num_bigint::BigInt)> {
+    match value {
+        Value::Int(n) => Some((n.to_bigint(), num_bigint::BigInt::from(1))),
+        Value::Float(f) => float_exact_ratio(*f),
+        _ => None,
+    }
 }
 
 /// `(Fraction(instance) / Fraction(dB)).denominator != 1` -- exact,
 /// never losing precision the way routing either side through `f64`
 /// division would (the same reason [`float_exact_ratio`] exists at
-/// all): each finite `f64` has its own exact `(numerator, denominator)`
-/// ratio already; dividing two fractions and reducing the result by
-/// their `BigInt` `gcd` decides whether the quotient is a whole number
-/// without ever computing it as a `f64`. [`multiple_of_failed`]'s own
-/// caller only ever reaches this with two already-finite operands, but
-/// a `None` here (impossible today) falls back to "no violation" --
-/// never a panic -- rather than trust that invariant with an `expect`.
-fn fraction_multiple_of_failed(instance: f64, divisor: f64) -> bool {
-    let Some((in_, id)) = float_exact_ratio(instance) else {
+/// all, and why this takes the original `Value`s, not their lossy `f64`
+/// casts: issue #507's own item 4, an `Int` instance past
+/// 2^53 is `IntValue::to_f64`-lossy, where Python's own `Fraction(int)`
+/// is exact at any magnitude). Dividing two fractions and reducing the
+/// result by their `BigInt` `gcd` decides whether the quotient is a
+/// whole number without ever computing it as a `f64`.
+/// [`multiple_of_failed`]'s own caller only ever reaches this with two
+/// already-finite operands, but a `None` here (impossible today) falls
+/// back to "no violation" -- never a panic -- rather than trust that
+/// invariant with an `expect`.
+fn fraction_multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
+    let Some((in_, id)) = exact_ratio(instance) else {
         return false;
     };
-    let Some((dn, dd)) = float_exact_ratio(divisor) else {
+    let Some((dn, dd)) = exact_ratio(divisor) else {
         return false;
     };
     let num = in_ * dd;

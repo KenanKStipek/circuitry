@@ -1247,7 +1247,7 @@ pub fn value_from_json(json: &serde_json::Value) -> electricity_value::Value {
 /// top doc comment), so this never needs that function's own marker
 /// handling, only the plain scalar/container cases.
 fn value_to_json(value: &electricity_value::Value) -> Value {
-    value_to_json_inner(value, false)
+    value_to_json_inner(value, false, false)
 }
 
 /// [`validate_prompt_schema`]'s own engine-authority well-formedness
@@ -1258,15 +1258,44 @@ fn value_to_json(value: &electricity_value::Value) -> Value {
 /// accept/reject directly from the original `Value`, `Infinity` included
 /// -- so turning it into `null` here would only ever trip the crate's
 /// own meta-schema check (`"maximum": {"type": "number"}`) on a schema
-/// Python itself accepts just fine (probe-schema7 c20). A harmless finite
-/// stand-in (`0`) keeps that check meaningful for everything else
-/// (`{"type": 5}`, still genuinely malformed) without that false
-/// positive.
+/// Python itself accepts just fine (probe-schema7 c20). A harmless,
+/// sign-preserving finite stand-in keeps that check meaningful for
+/// everything else (`{"type": 5}`, still genuinely malformed) without
+/// that false positive -- `multipleOf`'s own meta-schema entry
+/// (`{"type": "number", "exclusiveMinimum": 0}`) additionally needs
+/// the stand-in's *sign* preserved, never flattened to a single `0`
+/// (issue #507's own item 3): `NaN <= 0` and `Infinity <=
+/// 0` are both `False` in Python, so a schema-literal `multipleOf:
+/// NaN`/`multipleOf: Infinity` passes that `exclusiveMinimum` check
+/// there (`NaN`/`Infinity` never violate *any* one-sided numeric bound
+/// in Python, being incomparable) -- `0` itself is the one stand-in
+/// that would wrongly fail it (`0 <= 0` is `True`). Only a genuinely
+/// negative `multipleOf` (`-Infinity` included) fails that check in
+/// Python too.
+///
+/// Every `"$ref"` key is also dropped (never a `null`/absent sibling
+/// set -- just that one key) rather than handed to the probe as-is
+/// (issue #507's own item 5): the probe only ever runs once
+/// [`engine::schema_is_fully_supported`] has already confirmed every
+/// `"$ref"` in *schema* is this engine's own supported same-document-
+/// pointer shape, lazily resolved exactly as Python resolves it --
+/// the crate's own build step resolves a `$ref` *eagerly* instead
+/// (finding F5, `DESIGN.md` §13), so a reference into a subschema this
+/// engine will only ever reach, lazily, through [`engine::evaluate`]'s
+/// own instance-driven walk (a key no schema-structure walk, Python's
+/// own `check_schema` included, recognizes as housing a subschema at
+/// all -- confirmed directly) used to fail the *build* outright on a
+/// type error [`engine::evaluate`] itself already reports correctly,
+/// lazily, once an instance actually reaches it.
 fn schema_json_for_well_formedness_probe(schema: &electricity_value::Value) -> Value {
-    value_to_json_inner(schema, true)
+    value_to_json_inner(schema, true, true)
 }
 
-fn value_to_json_inner(value: &electricity_value::Value, non_finite_as_zero: bool) -> Value {
+fn value_to_json_inner(
+    value: &electricity_value::Value,
+    non_finite_as_zero: bool,
+    strip_ref: bool,
+) -> Value {
     use electricity_value::{IntValue, Value as EValue};
     match value {
         EValue::None => Value::Null,
@@ -1294,7 +1323,20 @@ fn value_to_json_inner(value: &electricity_value::Value, non_finite_as_zero: boo
         EValue::Float(f) if f.is_finite() => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .unwrap_or(Value::Null),
-        EValue::Float(_) if non_finite_as_zero => Value::Number(0.into()),
+        // `NaN` is treated as positive here (never negative): Python
+        // never treats it as violating a one-sided bound either way, so
+        // the stand-in only needs to land on the same side of `0` as
+        // every other case this probe must get right (`multipleOf`'s
+        // own `exclusiveMinimum: 0`, see this function's own doc
+        // comment) -- `1`/`-1`, never a single `0` for every non-finite
+        // value regardless of sign.
+        EValue::Float(f) if non_finite_as_zero => {
+            Value::Number(if !f.is_nan() && f.is_sign_negative() {
+                (-1).into()
+            } else {
+                1.into()
+            })
+        }
         EValue::Float(_) => Value::Null,
         EValue::Str(s) => Value::String(s.clone()),
         EValue::Bytes(_) => Value::Null,
@@ -1306,14 +1348,24 @@ fn value_to_json_inner(value: &electricity_value::Value, non_finite_as_zero: boo
         EValue::List(items) => Value::Array(
             items
                 .iter()
-                .map(|v| value_to_json_inner(v, non_finite_as_zero))
+                .map(|v| value_to_json_inner(v, non_finite_as_zero, strip_ref))
                 .collect(),
         ),
         EValue::Dict(dict) => {
             let mut map = Map::new();
             for (k, v) in dict.iter() {
-                let key = k.as_str().map(str::to_string).unwrap_or_else(|| k.py_str());
-                map.insert(key, value_to_json_inner(v, non_finite_as_zero));
+                let Some(key_str) = k.as_str() else {
+                    let key = k.py_str();
+                    map.insert(key, value_to_json_inner(v, non_finite_as_zero, strip_ref));
+                    continue;
+                };
+                if strip_ref && key_str == "$ref" {
+                    continue;
+                }
+                map.insert(
+                    key_str.to_string(),
+                    value_to_json_inner(v, non_finite_as_zero, strip_ref),
+                );
             }
             Value::Object(map)
         }
