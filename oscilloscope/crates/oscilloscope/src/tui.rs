@@ -8,7 +8,7 @@
 use std::time::Instant;
 
 use oscilloscope_core::model::{RunStatus, StatusKind};
-use oscilloscope_core::render::{Details, Header, Row, StateRow, TokenBar};
+use oscilloscope_core::render::{Details, Header, Row, RowKind, StateRow, TokenBar};
 use oscilloscope_core::treemap::TreemapNode;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -550,10 +550,21 @@ fn draw_tree(
 /// opens the untruncated text either way.
 const SNIPPET_MAX_LINES: usize = 3;
 
-fn details_lines(details: &Details, ctx: &DrawCtx, inner_width: u16) -> Vec<Line<'static>> {
+/// `row_kind` is the drawn orchestration row's own kind for this same
+/// path, when there is one: only the drawn rows know a folded row's
+/// kind (`quick steps`), which `details_for` can't derive from the path
+/// alone. Without one (a state-pane-only node, such as a named report),
+/// the path-derived `details.kind` is used.
+fn details_lines(
+    details: &Details,
+    row_kind: Option<RowKind>,
+    ctx: &DrawCtx,
+    inner_width: u16,
+) -> Vec<Line<'static>> {
+    let kind = row_kind.unwrap_or(details.kind);
     let mut lines = vec![
         Line::from(format!("path   {}", details.path)),
-        Line::from(format!("type   {}", details.kind.label())),
+        Line::from(format!("type   {}", kind.label())),
     ];
     // Issue #535/finding 6: these two blocks come right after path/
     // type, before plan/meta/error -- at the pane's own golden-
@@ -728,6 +739,7 @@ fn draw_details(
     frame: &mut Frame,
     area: Rect,
     details: Option<&Details>,
+    row_kind: Option<RowKind>,
     app: &mut App,
     ctx: &DrawCtx,
 ) {
@@ -738,7 +750,7 @@ fn draw_details(
     };
     let inner_width = area.width.saturating_sub(2);
     let text = details
-        .map(|d| details_lines(d, ctx, inner_width))
+        .map(|d| details_lines(d, row_kind, ctx, inner_width))
         .unwrap_or_else(|| vec![Line::from("(nothing selected)")]);
     let viewport = area.height.saturating_sub(2) as usize;
     app.details_viewport = viewport;
@@ -1410,6 +1422,13 @@ pub fn draw(
     let body = sections[1];
     let visible = visible_rows(&state.rows, app);
     let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
+    // Only while the details follow the orchestration pane's selection:
+    // a state-pane selection of a step folded into a `quick steps` row
+    // still reads as that step's own kind.
+    let details_row_kind = details
+        .filter(|_| app.details_source == Pane::Tree)
+        .and_then(|d| state.rows.iter().find(|r| r.path == d.path))
+        .map(|r| r.kind);
     let two_column = area.width >= thresholds::TWO_COLUMN_MIN_WIDTH
         && area.height >= thresholds::TWO_COLUMN_MIN_HEIGHT;
 
@@ -1432,7 +1451,7 @@ pub fn draw(
                 Constraint::Min(log_rows),
             ])
             .split(body);
-        draw_details(frame, parts[0], details, app, ctx);
+        draw_details(frame, parts[0], details, details_row_kind, app, ctx);
         draw_tree(frame, parts[1], &visible, app, &state.header.document, ctx);
         draw_log(frame, parts[2], log_lines, log_total, ctx);
     } else {
@@ -1453,7 +1472,7 @@ pub fn draw(
                 Constraint::Length(columns[0].height - details_rows),
             ])
             .split(columns[0]);
-        draw_details(frame, left[0], details, app, ctx);
+        draw_details(frame, left[0], details, details_row_kind, app, ctx);
         draw_tree(frame, left[1], &visible, app, &state.header.document, ctx);
 
         let show_treemap = area.width >= thresholds::TREEMAP_MIN_WIDTH
@@ -2056,6 +2075,80 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    #[test]
+    fn a_selected_quick_steps_row_reads_quick_steps_in_the_details_pane() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "q1": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.000Z", "completed_at": "2026-01-01T11:46:49.300Z", "error": null, "provider": "shell"}},
+            "q2": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.300Z", "completed_at": "2026-01-01T11:46:49.800Z", "error": null, "provider": "shell"}}
+        }});
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T11:46:50.000Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        assert!(
+            rendered
+                .rows
+                .iter()
+                .any(|r| r.path == "prime.q1" && r.kind == RowKind::QuickSteps),
+            "the two quick steps fold into one row keyed on the first step"
+        );
+        let details = render::details_for("prime.q1", &plan, &RunModel::new(), Some(&state));
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+        };
+        let screen = |source: crate::keys::Pane| {
+            let mut app = App::new(false);
+            app.selected_path = Some("prime.q1".to_string());
+            app.details_source = source;
+            app.follow = false;
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        Some(&details),
+                        &[],
+                        0,
+                        &mut app,
+                        Some(&state),
+                        &test_ctx,
+                        0,
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(screen(crate::keys::Pane::Tree).contains("type   quick steps"));
+        // Selected from the state pane, the same node is still its own step.
+        assert!(!screen(crate::keys::Pane::State).contains("type   quick steps"));
+    }
     #[test]
     fn running_tree_loop_with_max_concurrency() {
         let plan = sample_plan();
