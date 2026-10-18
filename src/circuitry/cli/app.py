@@ -302,7 +302,7 @@ def _make_report_console_observer(
     other effect's own verbose start/done lines, it prints regardless of
     ``--verbose``; the caller gates it on ``--quiet``/``--json``/``--tail``/
     a non-TTY stdout instead, the same way it gates ``--explain-routing``'s
-    own observer. ``message`` is escaped (review finding 3 on #607): it is
+    own observer. ``message`` is escaped (#605): it is
     rendered orchestration output, so brackets in it (a path like
     ``[/tmp/out]``, a model's own ``[INST]``-style text) are not Rich markup.
     """

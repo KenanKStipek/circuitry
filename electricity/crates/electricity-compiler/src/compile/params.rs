@@ -709,8 +709,8 @@ mod tests {
     fn report_data_rejects_from_plus_default_instead_of_a_silent_literal() {
         // Unlike `use`'s own `inputs:` above, a report's narrower
         // `{from:}` grammar has no literal-passthrough fallback for a
-        // tool param's richer `{from:, default:, as:}` shape (#605;
-        // review finding 9 on #607) -- it's a compile error instead.
+        // tool param's richer `{from:, default:, as:}` shape (#605) --
+        // it's a compile error instead.
         let mut from_dict = Dict::new();
         from_dict.insert(
             Value::Str("from".to_string()),

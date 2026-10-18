@@ -134,7 +134,7 @@ class EventLog:
         """Write one JSON line; caller holds ``self._lock`` and has
         already checked ``self._disabled``.
 
-        ``default=json_safe_default`` (review finding 7 on #607): a
+        ``default=json_safe_default`` (#605): a
         report's own ``data`` can hold a shadow-state value
         ``json.dumps`` can't otherwise encode (a YAML date, ``!!binary``
         bytes), the same as ``--out``. Without it, encoding this one line

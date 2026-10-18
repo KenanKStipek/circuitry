@@ -109,8 +109,7 @@ def test_a_generated_plans_report_reaches_the_parents_own_report_observer() -> N
     is taught `type: report`, #605) must reach the parent's `report`
     observer, namespaced under the decomposing node's own path, the same
     way `effect_start`/`effect_complete` already do -- otherwise a
-    generated plan's reports never reach `--events` or the console
-    (review finding 8 on #607)."""
+    generated plan's reports never reach `--events` or the console."""
     report_calls: list[tuple[str, str, str, Any]] = []
     parent_store = Store(
         state={"input": {}, "prime": {}},

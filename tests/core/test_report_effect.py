@@ -112,7 +112,7 @@ def test_compile_report_data_from_rejects_unrooted_path() -> None:
 def test_compile_report_data_from_rejects_a_tool_params_default_or_as() -> None:
     """A report's data leaf's {from:} is narrower than a tool param's
     (#605): a from plus default/as key is a compile error, not a
-    silent literal object (review finding 9 on #607)."""
+    silent literal object."""
     orch = {
         "effects": [
             {
@@ -237,7 +237,7 @@ def test_an_observer_that_raises_never_fails_the_run(
 ) -> None:
     """A report must never fail the run (#605) -- not even when an
     observer it never chose raises, e.g. the console's own Rich markup
-    parsing on an unescaped message (review finding 3 on #607)."""
+    parsing on an unescaped message."""
     orch = {"effects": [{"type": "report", "name": "status", "message": "hi"}]}
     root = compile_orchestration(orch=orch, root_name="prime")
 
@@ -350,7 +350,7 @@ def test_resume_still_skips_a_completed_prompt_after_an_unnamed_report_at_top_le
     """An unnamed report always runs again when reached, but it fires no
     effect_start/effect_complete and so must not count as the chain's
     "first effect that wasn't reused" -- a completed sibling after it
-    must still resume, not re-dispatch (review finding 2 on #607)."""
+    must still resume, not re-dispatch (#605)."""
     from circuitry.cli.runtime_shim import RunRequest, run
 
     orch_path = tmp_path / "doc.yml"

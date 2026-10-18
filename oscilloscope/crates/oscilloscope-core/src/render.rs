@@ -1687,8 +1687,7 @@ mod tests {
         }
     }
 
-    /// Review finding 1 on #607 / the oscilloscope follow-up (#610): a
-    /// report fires only `Store::fire_report`, never effect_start/
+    /// A report fires only `Store::fire_report`, never effect_start/
     /// effect_complete, so adding one at the top level and one inside
     /// a running loop's body must not change `effects_planned`/
     /// `effects_done` at all -- a finished run must not show a

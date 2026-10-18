@@ -118,7 +118,7 @@ impl EventLog {
         if self.disabled.get() {
             return;
         }
-        // `dumps_default_str`, not `dumps` (review finding 7 on #607): a
+        // `dumps_default_str`, not `dumps` (#605): a
         // report's own `data` can hold a shadow-state value plain JSON
         // can't otherwise encode (a YAML date, `!!binary` bytes), the same
         // as `--out`. Without it, encoding this one line disables every
@@ -457,8 +457,7 @@ mod tests {
     fn report_data_at_exactly_16384_bytes_is_not_truncated() {
         // The limit is "exceeds 16 KiB", not "at least" (#605): a
         // payload whose compact JSON is exactly REPORT_DATA_MAX_BYTES
-        // keeps `data`, with no `data_truncated` (review's exact-byte-
-        // boundary ask on #607).
+        // keeps `data`, with no `data_truncated` at that exact boundary.
         let path = temp_path("boundary-exact");
         let log = EventLog::open(&path);
         let blob_len = REPORT_DATA_MAX_BYTES - "{\"blob\":\"\"}".len();

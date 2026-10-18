@@ -845,8 +845,7 @@ mod tests {
         }
     }
 
-    /// Review finding 1 on #607 / the oscilloscope follow-up (#610): a
-    /// report fires only `Store::fire_report`, never effect_start/
+    /// A report fires only `Store::fire_report`, never effect_start/
     /// effect_complete, so it must contribute no plan row and no
     /// `leaf_paths`/`all_paths` entry -- at the top level or inside a
     /// loop body, same as a document with no reports at all.
