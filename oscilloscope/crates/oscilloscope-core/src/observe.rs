@@ -216,6 +216,30 @@ pub enum Event {
         error: Option<String>,
         signal: Option<String>,
     },
+    /// A `report` effect (#605/#610): never paired with a `start`/
+    /// `end` of its own, so there is no `id` here at all. `data` is
+    /// `None` either when the report had none, or when the engine
+    /// replaced an oversized one with `data_truncated: <size in bytes>`
+    /// instead.
+    Report {
+        ts: String,
+        path: String,
+        level: ReportLevel,
+        message: String,
+        data: Option<Value>,
+        data_truncated: bool,
+    },
+}
+
+/// `ev: "report"`'s own `level` (electricity's runtime-semantics.md
+/// §8.7, orchestration-reference "### report"): `info` unless the line says `warning`. Deliberately
+/// not `electricity_bytecode::ReportLevel` -- that type belongs to the
+/// compiler's own IR, not to a parsed `--events` line, and osi's own
+/// read of this field must not depend on an engine crate at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportLevel {
+    Info,
+    Warning,
 }
 
 /// Parses one already-deserialized `--events` line. An unrecognized
@@ -265,6 +289,23 @@ pub fn parse_event(value: &Value) -> Option<Event> {
                 .get("signal")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+        }),
+        "report" => Some(Event::Report {
+            ts,
+            path: value.get("path")?.as_str()?.to_string(),
+            level: match value.get("level").and_then(Value::as_str) {
+                Some("warning") => ReportLevel::Warning,
+                _ => ReportLevel::Info,
+            },
+            message: value.get("message")?.as_str()?.to_string(),
+            data: value.get("data").cloned(),
+            // Both engines write the compact JSON's byte count here
+            // (`"data_truncated": <size in bytes>`), not a boolean --
+            // any value other than `null` or `false` marks a report as
+            // truncated.
+            data_truncated: value
+                .get("data_truncated")
+                .is_some_and(|v| !v.is_null() && v.as_bool() != Some(false)),
         }),
         _ => None,
     }
@@ -519,6 +560,94 @@ mod tests {
         let value: Value =
             serde_json::from_str(r#"{"v":1,"seq":1,"ts":"t","ev":"something_future"}"#).unwrap();
         assert_eq!(parse_event(&value), None);
+    }
+
+    #[test]
+    fn parse_event_reads_a_report_with_data() {
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime.status","level":"info","message":"halfway","data":{"n":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&value),
+            Some(Event::Report {
+                ts: "t".to_string(),
+                path: "prime.status".to_string(),
+                level: ReportLevel::Info,
+                message: "halfway".to_string(),
+                data: Some(serde_json::json!({"n": 3})),
+                data_truncated: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_reads_a_warning_report_with_no_data() {
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime","level":"warning","message":"slow"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&value),
+            Some(Event::Report {
+                ts: "t".to_string(),
+                path: "prime".to_string(),
+                level: ReportLevel::Warning,
+                message: "slow".to_string(),
+                data: None,
+                data_truncated: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_reads_a_report_with_data_truncated() {
+        // Both engines write the compact JSON's byte count here, not a
+        // boolean (electricity/src/events.rs, src/circuitry/cli/events.py).
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime","level":"info","message":"big","data_truncated":20000}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&value),
+            Some(Event::Report {
+                ts: "t".to_string(),
+                path: "prime".to_string(),
+                level: ReportLevel::Info,
+                message: "big".to_string(),
+                data: None,
+                data_truncated: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_treats_a_null_or_false_data_truncated_as_not_truncated() {
+        for raw in [r#"null"#, r#"false"#] {
+            let value: Value = serde_json::from_str(&format!(
+                r#"{{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime","level":"info","message":"m","data_truncated":{raw}}}"#
+            ))
+            .unwrap();
+            match parse_event(&value) {
+                Some(Event::Report { data_truncated, .. }) => {
+                    assert!(!data_truncated, "data_truncated: {raw}")
+                }
+                other => panic!("expected a report event, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_event_skips_a_malformed_report_missing_path_or_message() {
+        let no_path: Value =
+            serde_json::from_str(r#"{"v":1,"seq":1,"ts":"t","ev":"report","message":"m"}"#)
+                .unwrap();
+        assert_eq!(parse_event(&no_path), None);
+
+        let no_message: Value =
+            serde_json::from_str(r#"{"v":1,"seq":1,"ts":"t","ev":"report","path":"prime"}"#)
+                .unwrap();
+        assert_eq!(parse_event(&no_message), None);
     }
 
     #[test]

@@ -210,6 +210,14 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
 | a complete unnamed-loop node's `created_at` moved | `▶`/`✓` lines for the new pass, numbered `#k` |
 | `last_run.completed_at` set | `■ run ok / failed: <prime.meta.error>  <totals>` |
 
+A `report` effect (#605) fires none of the above — it has its own log
+line, from `--events`' own `report` line (§3), not from a snapshot diff:
+`▸ <message>`, or `▸ warning: <message>` for `level: warning`, with a
+compact one-line JSON preview of `data` after it (`(data truncated)`
+when the engine itself replaced an oversized one) — truncated to fit
+the TUI's own log pane width, or to 200 characters in `--log`. The run's
+own `run_start` gets a line of its own too, `■ run started  <run_id>`.
+
 Values are never logged in full: one line, with a character cap. The details pane shows the full value on request.
 
 ---
@@ -253,6 +261,7 @@ The runtime already has exactly the right hooks (`on_effect_start`/`on_effect_co
 | `path` | The absolute path, as in state and in scripted-replies keys. |
 | `dispatch` | Sent once by a tree loop or tree dynamic before its branches start. This is the existing `concurrent_dispatch` callback. `branches` is the true branch count (an `each` loop's item total, or a `dynamic`'s effect count); `concurrency`, when present, is the ceiling — at most this many run at once. `concurrency` is optional: a stream from a `cof` built before it was added has `branches` alone, and osi still works, just with a less precise bound (DESIGN.md §2.1 rule 4). |
 | `error` | Present only when `ok` is false. Its first 500 characters, already redacted. |
+| `report` | A `report` effect (#605): `path`/`level`/`message`, then `data` or `data_truncated` — see electricity's own `runtime-semantics.md` §8.7 for the exact shape. Never paired with a `start`/`end` (no `id`, never counted toward `effects_run`); `path` is the report's own state path when it is named, else its enclosing container's. osi's own handling of this line is #610 (§2.4's log line, §6.3's header and details pane). |
 
 What the format leaves out, and why:
 
@@ -534,6 +543,23 @@ disappear:
 ETA: plans have data-dependent loops. The run ID shows once `--events`
 has carried a `run_start`; state alone never has one.
 
+**Reports (#605/#610).** Once a `report` effect's own event (§3) has
+arrived, the header shows the latest one's message in that same
+trailing slot instead — `▸ <message>`, or `▸ warning: <message>` for
+`level: warning`, styled in the theme's own warning colour — for the
+rest of the run; the run ID moves to the root row's own details (and
+to `--log`'s `■ run started` line, §2.4). When space is short, the
+document path and the report's own message truncate before status,
+elapsed, effects or tokens ever do — document first, down to its own
+floor, then the message, collapsing to a bare `▸` once fewer than
+about 8 columns are left for it at all. Before any report, the header
+is exactly as above. A new report counts as its own header change for
+update-highlighting (`header:report`, never folded into
+`header:status`) even when it repeats the previous one's own level and
+message word for word -- each sighting carries its own `ts`, so a
+repeated "chain pass" on every loop pass still flashes every time, not
+just the first; elapsed time still never highlights.
+
 Issue #613's "one clock": elapsed is measured from the run's own start
 -- the first `--events` `run_start`'s own `ts`, else the earliest
 `created_at` anywhere in state -- to `now`, the same `now` every row's
@@ -608,6 +634,25 @@ reached a terminal status, it reads done; otherwise it stays pending.
 The same rule applies to a chain-flow loop's own pass container, which
 has the identical no-node-of-its-own shape.
 
+A `report` effect (#605) never becomes a row here, named or not
+(#610): it fires no `start`/`end` and so is never a plan row to
+begin with, but a *named* one still writes a `{value, meta}` node
+(§1.2) that `RunModel::observe` would otherwise show as a finished
+row -- `PlanTree::is_report_path` (resolved the same way `match_path`
+resolves a loop's own `iter_N`, so a report inside a named loop's pass
+or a grafted `use: path:` child is covered too, and `false` again when
+some other op shares that exact path, DESIGN.md §5's own `then`/`else`
+name reuse, since that op's row must still show) keeps it out. Where
+the plan has no real entry at that path at all (`osi watch`, a `use:
+inline:`/`ref:` child), `RunModel::is_report_event_path` (from the
+report's own `--events` line, and only once the node's own value also
+has the report shape) does the same job instead -- never when the plan
+already has something to say about the path, so a named `if`/
+`dynamic`/`use` whose first thing is an unnamed report keeps its own
+row even though that report's own event also names its path. Either
+way, a loop pass that holds a named report alongside one real step
+still folds exactly as if the report weren't there at all.
+
 Follow is **on when the TUI starts**: the selection tracks the running
 effect (`App::follow_target`, unchanged, now routed through
 `App::select_tree_path` so it also resets the details pane's own
@@ -653,10 +698,39 @@ blocks also cover model-mode conditions) does not hold on either
 engine as measured; extending it would need upstream work in both
 engines, out of scope for `oscilloscope/`-only changes.
 
+A named report's own node (#605/#610) gets its own details shape
+instead of the generic meta list: `type report`, its `level`, the
+latest `message` and the clock time it last arrived, and `data` as
+pretty JSON, scrollable the same way a long `prompt_sent`/`value` is.
+`message`/`level`/`data` come from the latest `--events` `report` line
+for that exact path when one has arrived, falling back to the state
+node's own copy otherwise; `data_truncated` (the engine's own 16 KiB
+cap on the *line*, not the state write) shows `(data truncated)` only
+when that fallback has nothing either -- a named report's own state
+node always keeps its full value, so a line truncated for size still
+shows it there. An *unnamed* report writes no node at all, so its own
+`data` is visible only in its log line's preview (§2.4), never here.
+The details pane follows whichever selection *last actually changed*
+(`App::details_source`) -- the state pane's own
+(`App::state_selected_path`) or the orchestration pane's (`App::
+selected_path`) -- not whichever pane merely has focus right now: `tab`
+passes through `Details` with neither of the other two focused, so
+that alone can never answer it, and a selection made in the state pane
+must still be what `Details` shows (and lets the user scroll) once
+they tab there, since a named report has no row in the orchestration
+pane at all to select instead. The two selections stay independent of
+each other exactly as before. Only a selection the user moves switches
+the details pane's source: follow, a row folding away mid-run and the
+first selection of a run move the orchestration pane's selection
+without taking the details pane away from a state-pane selection, and
+`v` and the details pane's own highlights always act on the node the
+details pane is showing.
+
 The details pane scrolls when it has focus (`↑↓`, `PgUp`/`PgDn`,
 `Home`/`End`, `g`/`G`, via `ratatui::widgets::Paragraph::scroll`), and
-returns to the top the instant the orchestration pane's own selection
-changes (`App::select_tree_path`).
+returns to the top the instant either selection actually changes
+(`App::select_tree_path`, `App::select_state_path`), whichever one
+was moved.
 
 **Focus** (`tab`) cycles orchestration → details → state →
 orchestration, each highlighted with the theme's own focused-border
@@ -679,6 +753,12 @@ N` when `retries_used > 0`, and `n/total` for a loop, all in dim text
 summarize); and `↑sent ↓received` on a second line, only when at least
 one is nonzero — a leaf's own tokens, or (for a container, bare or
 not) the sum over its whole subtree (`model::subtree_tokens`).
+
+A *named* report's own node (#605/#610) is a row here like any
+other leaf's, unlike the orchestration pane's own exclusion above --
+selecting it is how its `level`/message/`data` reach the details pane
+at all. An unnamed report writes no node, so it has no row here
+either.
 
 Order is latest-or-current first, at every level, ties broken by key
 (`render::state_subtree_recency`): a row's recency is the latest update

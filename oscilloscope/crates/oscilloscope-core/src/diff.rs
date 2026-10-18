@@ -12,7 +12,7 @@ use crate::model::{
     EndedOutcome, NodeMeta, RunModel, ended_outcome, flatten_state, run_ended, run_error,
     run_totals,
 };
-use crate::observe::Event;
+use crate::observe::{Event, ReportLevel};
 use crate::plan::PlanTree;
 
 /// One line of the `--log` stream (DESIGN.md §2.4, §6.2). `ts` is the
@@ -83,6 +83,54 @@ fn truncate_reason(s: &str, max: usize) -> String {
         let truncated: String = s.chars().take(max).collect();
         format!("{truncated}…")
     }
+}
+
+/// A report's own `data`'s cap in `--log` (#610): the TUI applies
+/// a further, tighter clip of its own at draw time, to the pane's
+/// real width -- this is the one true cap for plain `--log`, where
+/// there is no pane to fit at all.
+const REPORT_DATA_LOG_CHARS: usize = 200;
+
+/// A report's own `message`'s cap in `--log` (#610), the same rule
+/// `truncate_chars` already applies to an effect's own error text
+/// (DESIGN.md §2.4's "one line, with a character cap").
+const REPORT_MESSAGE_LOG_CHARS: usize = 120;
+
+/// A report's own log line (#610): `▸ <message>`, `▸ warning:
+/// <message>` for a warning -- the leading `▸` is never used for any
+/// other kind of line this crate ever builds, so a front end can
+/// still tell a report line apart from every other one by its text
+/// alone, with no extra field on [`LogLine`] needed. `data`, when the
+/// report has any and it wasn't itself truncated by the engine, is a
+/// compact one-line JSON preview appended after two spaces, capped to
+/// [`REPORT_DATA_LOG_CHARS`] here; `data_truncated` (set by the
+/// engine once `data` itself exceeds 16 KiB) shows `(data truncated)`
+/// instead, since there is nothing left of `data` to preview at all.
+fn report_line(
+    level: ReportLevel,
+    message: &str,
+    data: Option<&Value>,
+    data_truncated: bool,
+) -> String {
+    let prefix = match level {
+        ReportLevel::Info => String::new(),
+        ReportLevel::Warning => "warning: ".to_string(),
+    };
+    // A Mustache-rendered message can contain a newline; `truncate_chars`
+    // keeps only its first line and caps it, the same rule every other
+    // `--log` entry's own value already follows (DESIGN.md §2.4: "one
+    // line, with a character cap") -- a report's message had neither
+    // before this (#610).
+    let message = truncate_chars(message, REPORT_MESSAGE_LOG_CHARS);
+    let mut text = format!("▸ {prefix}{message}");
+    if data_truncated {
+        text.push_str("  (data truncated)");
+    } else if let Some(data) = data {
+        let json = serde_json::to_string(data).unwrap_or_default();
+        text.push_str("  ");
+        text.push_str(&truncate_reason(&json, REPORT_DATA_LOG_CHARS));
+    }
+    text
 }
 
 /// The run summary's own failure reason (M2, DESIGN.md §2.4's `■ run
@@ -376,6 +424,14 @@ pub struct Differ {
     /// `End{ok: true}` lines still waiting on their node's own state
     /// (#545) — see [`PendingEnd`].
     pending_ends: Vec<PendingEnd>,
+    /// Every path a `report` event has ever named (#610): `diff`'s own
+    /// state walk has no engine/model to ask `PlanTree::is_report_path`
+    /// couldn't already answer, so this stands in for it exactly where
+    /// the plan has no real entry at that path -- a named report's
+    /// state node must never grow its own `▶`/`✓` lines here, even
+    /// under `osi watch` or a `use: inline:`/`ref:` child with no
+    /// compiled plan to resolve it from at all.
+    report_paths: BTreeSet<String>,
 }
 
 impl Differ {
@@ -389,6 +445,7 @@ impl Differ {
             path_failed_without_id: BTreeSet::new(),
             preview: BTreeMap::new(),
             pending_ends: Vec::new(),
+            report_paths: BTreeSet::new(),
         }
     }
 
@@ -639,6 +696,24 @@ impl Differ {
                     ),
                 }]
             }
+            Event::Report {
+                ts,
+                path,
+                level,
+                message,
+                data,
+                data_truncated,
+            } => {
+                self.report_paths.insert(path.clone());
+                vec![LogLine {
+                    ts: Some(ts.clone()),
+                    text: report_line(*level, message, data.as_ref(), *data_truncated),
+                }]
+            }
+            Event::RunStart { ts, run_id, .. } => vec![LogLine {
+                ts: Some(ts.clone()),
+                text: format!("■ run started  {run_id}"),
+            }],
             Event::RunEnd { .. } => Vec::new(),
             _ => Vec::new(),
         }
@@ -724,6 +799,26 @@ impl Differ {
         let mut lines = Vec::new();
 
         for (path, node) in &flat {
+            // #610: a named report writes a state node (#605), but a
+            // report never fires start/end, so this must never grow
+            // its own ▶/✓/✗ line here -- `report_line` (from
+            // `diff_event`'s own `Event::Report` branch) is its one
+            // and only log line. With a plan, `PlanTree::is_report_path`
+            // resolves this exactly; where the plan has no real entry
+            // at this path at all (`osi watch`, a `use: inline:`/
+            // `ref:` child), the paths `diff_event` has seen a report
+            // on stand in instead, same as `RunModel::observe`'s own
+            // fallback -- gated the same way, by whether the plan
+            // already has something to say about this exact path, and
+            // by the node's own value looking like a report, so a
+            // real container sharing the path isn't hidden by it.
+            let report_only = plan.is_report_path(path)
+                || (plan.match_path(path).is_none_or(|m| m.entries.is_empty())
+                    && self.report_paths.contains(path)
+                    && crate::render::is_report_value(&node.value));
+            if report_only {
+                continue;
+            }
             let is_container = is_container(&node.meta);
             let event_sourced = self.event_sourced.contains(path);
             match self.last.get(path) {
@@ -964,6 +1059,101 @@ mod tests {
     }
 
     #[test]
+    fn report_line_formats_an_info_report_with_no_data() {
+        assert_eq!(
+            report_line(ReportLevel::Info, "halfway", None, false),
+            "▸ halfway"
+        );
+    }
+
+    /// #610: a Mustache-rendered message can contain a newline, which
+    /// must never flow into the log as a second, untimestamped line.
+    #[test]
+    fn report_line_collapses_a_multiline_message_to_its_first_line() {
+        assert_eq!(
+            report_line(ReportLevel::Info, "line one\nline two", None, false),
+            "▸ line one"
+        );
+    }
+
+    #[test]
+    fn report_line_caps_a_long_message_at_120_chars() {
+        let long_message = "x".repeat(200);
+        let line = report_line(ReportLevel::Info, &long_message, None, false);
+        let message = line.strip_prefix("▸ ").expect("message prefix");
+        assert_eq!(message.chars().count(), REPORT_MESSAGE_LOG_CHARS);
+    }
+
+    #[test]
+    fn report_line_formats_a_warning_with_a_data_preview() {
+        let data = json!({"n": 3});
+        assert_eq!(
+            report_line(ReportLevel::Warning, "slow", Some(&data), false),
+            "▸ warning: slow  {\"n\":3}"
+        );
+    }
+
+    #[test]
+    fn report_line_shows_data_truncated_instead_of_a_preview() {
+        let data = json!({"n": 3});
+        assert_eq!(
+            report_line(ReportLevel::Info, "big", Some(&data), true),
+            "▸ big  (data truncated)"
+        );
+    }
+
+    #[test]
+    fn report_line_caps_the_data_preview_at_200_chars_with_an_ellipsis() {
+        let long_value = "x".repeat(250);
+        let data = json!({ "v": long_value });
+        let line = report_line(ReportLevel::Info, "m", Some(&data), false);
+        let preview = line.strip_prefix("▸ m  ").expect("message prefix");
+        assert_eq!(
+            preview.chars().count(),
+            REPORT_DATA_LOG_CHARS + 1,
+            "{preview}"
+        );
+        assert!(preview.ends_with('…'), "{preview}");
+    }
+
+    #[test]
+    fn diff_event_turns_a_report_event_into_its_own_log_line() {
+        let mut differ = Differ::new();
+        let event = Event::Report {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            path: "prime".to_string(),
+            level: ReportLevel::Warning,
+            message: "slow progress".to_string(),
+            data: None,
+            data_truncated: false,
+        };
+        let model = RunModel::new();
+        let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "▸ warning: slow progress");
+        assert_eq!(lines[0].ts.as_deref(), Some("2026-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn diff_event_turns_a_run_start_event_into_its_own_log_line_naming_the_run_id() {
+        let mut differ = Differ::new();
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+        };
+        let model = RunModel::new();
+        let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
+        assert_eq!(
+            lines,
+            vec![LogLine {
+                ts: Some("t".to_string()),
+                text: "■ run started  abc123".to_string()
+            }]
+        );
+    }
+
+    #[test]
     fn new_running_node_gets_a_start_line() {
         let mut differ = Differ::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
@@ -1035,6 +1225,39 @@ mod tests {
             .find(|l| l.text.starts_with("▶ prime.announce"))
             .expect("start line");
         assert_eq!(line.text, "▶ prime.announce  yield");
+    }
+
+    /// #610: a named report's own state node must never grow its
+    /// own `▶`/`✓` line in `diff`'s state walk -- `report_line`
+    /// (from `diff_event`'s own `Event::Report` branch) is its one
+    /// and only log line. Exercised with no plan at all (`osi
+    /// watch`'s own shape): the one case `diff` has no `PlanTree::
+    /// is_report_path` to lean on, only the paths `diff_event` has
+    /// itself seen a report on.
+    #[test]
+    fn a_named_reports_state_node_never_gets_a_start_or_done_line() {
+        let mut differ = Differ::new();
+        differ.diff_event(
+            &Event::Report {
+                ts: "t0".to_string(),
+                path: "prime.status".to_string(),
+                level: ReportLevel::Info,
+                message: "on track".to_string(),
+                data: None,
+                data_truncated: false,
+            },
+            &PlanTree::empty(),
+            &RunModel::new(),
+        );
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t0"},
+            "status": {"value": {"message": "on track", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t0"}}
+        }});
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines.iter().all(|l| !l.text.contains("prime.status")),
+            "a named report must never grow its own step line: {lines:?}"
+        );
     }
 
     #[test]

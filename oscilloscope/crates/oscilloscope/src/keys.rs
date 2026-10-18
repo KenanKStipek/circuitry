@@ -117,6 +117,17 @@ pub struct App {
     /// asked ⏎ to expand in place -- the existing collapse key (`←`)
     /// removes a path from here, folding that group again.
     pub expanded_quick_steps: std::collections::BTreeSet<String>,
+    /// Which of the two independent selections (`selected_path`,
+    /// `state_selected_path`) the details pane shows (#610): whichever
+    /// one last actually changed, not whatever `pane` happens to be
+    /// right now. `Tab`'s own cycle (`Tree` → `Details` → `State` →
+    /// `Tree`) passes through `Details` with neither of the other two
+    /// focused, so a selection made in the state pane must still be
+    /// what `Details` (and its own scrolling, which only `Pane::
+    /// Details` focus allows) shows once the user tabs there --
+    /// `pane == Pane::State` is only true while that pane itself has
+    /// focus, never while scrolling its own selection's details.
+    pub details_source: Pane,
 }
 
 impl App {
@@ -142,6 +153,7 @@ impl App {
             details_viewport: 0,
             fold_enabled: true,
             expanded_quick_steps: std::collections::BTreeSet::new(),
+            details_source: Pane::Tree,
         }
     }
 
@@ -155,6 +167,22 @@ impl App {
         if self.selected_path != path {
             self.selected_path = path;
             self.details_scroll = 0;
+            self.details_source = Pane::Tree;
+        }
+    }
+
+    /// Moves the orchestration pane's selection the way follow, folding
+    /// and the first selection of a run do: like `select_tree_path`,
+    /// but it never takes the details pane away from a state-pane
+    /// selection being read (#610). The details pane switches source
+    /// only when the user moves a selection; its scroll resets here
+    /// only when it was already showing the tree's selection.
+    pub fn select_tree_path_keeping_details(&mut self, path: Option<String>) {
+        if self.selected_path != path {
+            self.selected_path = path;
+            if self.details_source == Pane::Tree {
+                self.details_scroll = 0;
+            }
         }
     }
 
@@ -426,7 +454,7 @@ impl App {
                     } else {
                         state_rows[state_rows.len() - 1]
                     };
-                    self.state_selected_path = Some(target.path.clone());
+                    self.select_state_path(Some(target.path.clone()));
                 }
             }
             Pane::Details => {
@@ -477,7 +505,20 @@ impl App {
             None if delta >= 0 => 0,
             None => rows.len() - 1,
         };
-        self.state_selected_path = Some(rows[next].path.clone());
+        self.select_state_path(Some(rows[next].path.clone()));
+    }
+
+    /// The state pane's own selection, resetting the details pane
+    /// back to its top and marking it as what `Details` should now
+    /// show (#610) whenever it actually changes -- the same rule
+    /// `select_tree_path` already applies for the orchestration
+    /// pane's own selection.
+    fn select_state_path(&mut self, path: Option<String>) {
+        if self.state_selected_path != path {
+            self.state_selected_path = path;
+            self.details_scroll = 0;
+            self.details_source = Pane::State;
+        }
     }
 
     /// `f`'s own target (§6.3): the innermost row osi considers
@@ -517,7 +558,7 @@ impl App {
         if let Some(selected) = self.selected_path.clone() {
             if !rows.iter().any(|r| r.path == selected) {
                 if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
-                    self.select_tree_path(Some(absorbed));
+                    self.select_tree_path_keeping_details(Some(absorbed));
                 }
             }
         }
@@ -632,6 +673,34 @@ pub fn visible_state_rows<'a>(rows: &'a [StateRow], app: &App) -> Vec<&'a StateR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follow_moves_the_tree_selection_without_taking_the_details_from_the_state_pane() {
+        let mut app = App::new(false);
+        app.select_tree_path(Some("prime.a".to_string()));
+        // The user picks a named report in the state pane and scrolls its details.
+        app.select_state_path(Some("status".to_string()));
+        app.details_scroll = 5;
+        // Follow (or folding) moves the tree selection on the next rebuild.
+        app.select_tree_path_keeping_details(Some("prime.b".to_string()));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        assert_eq!(app.details_source, Pane::State);
+        assert_eq!(app.details_scroll, 5);
+        // A tree selection the user moves takes the details back.
+        app.select_tree_path(Some("prime.c".to_string()));
+        assert_eq!(app.details_source, Pane::Tree);
+        assert_eq!(app.details_scroll, 0);
+    }
+
+    #[test]
+    fn follow_resets_the_details_scroll_when_the_details_show_the_tree_selection() {
+        let mut app = App::new(false);
+        app.select_tree_path(Some("prime.a".to_string()));
+        app.details_scroll = 3;
+        app.select_tree_path_keeping_details(Some("prime.b".to_string()));
+        assert_eq!(app.details_source, Pane::Tree);
+        assert_eq!(app.details_scroll, 0);
+    }
     use crossterm::event::{KeyEventKind, KeyEventState};
     use oscilloscope_core::model::{RowStatus, StatusKind};
     use oscilloscope_core::render::RowKind;

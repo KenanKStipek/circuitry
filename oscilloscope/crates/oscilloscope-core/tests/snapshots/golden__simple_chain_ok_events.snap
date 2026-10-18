@@ -3,6 +3,7 @@ source: crates/oscilloscope-core/tests/golden.rs
 expression: rendered
 ---
 log:
+  ■ run started  ffac16ae-8f24-4abd-9f45-e390dcd0a7bb
   ▶ prime.first  effect
   ✓ prime.first  0.0s  ok
   ▶ prime.second  effect

@@ -124,6 +124,20 @@ bar never disappear:
 2. below 90×24: the state pane too (the right column becomes the log pane alone);
 3. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked); the scope icon stops being drawn at this width too.
 
+A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in three places.
+Once the run's first report arrives, the header shows its message in
+place of the run id (a warning styled in the theme's own warning colour);
+document path and message both truncate before status, elapsed, effects
+or tokens ever do, collapsing to a bare `▸` once there's barely room for
+it at all. The run id itself moves to the root row's own details, and to
+a `■ run started` line in `--log`. Every report, named or not, gets its
+own log line (`▸ <message>`, `▸ warning: <message>`), with a compact
+`data` preview after it when it has one. A *named* report still writes a
+shadow-state node (so it has a row in the state pane, with its own
+`level`/message/clock time and `data` as pretty JSON in the details pane
+once selected there) but, named or not, a report never becomes a row in
+the orchestration pane, and never changes how a loop pass folds.
+
 Follow is on when the TUI starts: the orchestration pane's own selection
 tracks the running effect, and the details pane shows it with no key press.
 Any manual move (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`) turns

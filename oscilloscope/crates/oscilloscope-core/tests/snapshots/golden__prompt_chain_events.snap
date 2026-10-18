@@ -3,6 +3,7 @@ source: crates/oscilloscope-core/tests/golden.rs
 expression: rendered
 ---
 log:
+  ■ run started  22db13a7-268a-4e0b-b828-a7a742e7bd4c
   ▶ prime.greet  effect
   ▶ prime.thank  effect
   ✓ prime.greet  0.0s  ok
