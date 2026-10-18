@@ -78,14 +78,13 @@ fn fold_forest(trees: Vec<RowTree>, expanded_quick_steps: &BTreeSet<String>) -> 
 
 fn fold_node(node: RowTree, expanded_quick_steps: &BTreeSet<String>) -> RowTree {
     let children = fold_forest(node.children, expanded_quick_steps);
-    // Review finding 2 on #613: a breadcrumb used to take the
-    // child's status unconditionally, dropping the container's own --
-    // a `use` whose `expect` fails after its one child succeeded
-    // showed `✓`, and a still-running container whose only visible
-    // child had already finished showed `Done`. Folding a container
-    // with its one child is only safe when their statuses actually
-    // agree; when they differ, both rows stay, unfolded, so neither
-    // one's own status is ever hidden behind the other's.
+    // Folding a container with its one child is only safe when their
+    // statuses actually agree -- a `use` whose `expect` fails after
+    // its one child succeeded must not show `✓`, and a still-running
+    // container whose only visible child has already finished must
+    // not show `Done`. When the statuses differ, both rows stay,
+    // unfolded, so neither one's own status is ever hidden behind
+    // the other's.
     if children.len() == 1
         && breadcrumb_eligible(&node.row)
         && breadcrumb_eligible(&children[0].row)
@@ -122,10 +121,10 @@ fn fold_node(node: RowTree, expanded_quick_steps: &BTreeSet<String>) -> RowTree 
 /// breadcrumb that would have to be relabelled again the moment real
 /// data arrives. A running row *is* eligible: its own breadcrumb is
 /// exactly the row DESIGN.md says follow mode should target. The
-/// document root never folds away. Review finding 10 on #613: a loop
-/// container never folds away either -- its own `n/total` progress
-/// (`fan  1/4`) would otherwise vanish into the breadcrumb label; a
-/// *pass* (one iteration of that loop) still can.
+/// document root never folds away, and neither does a loop container
+/// -- its own `n/total` progress (`fan  1/4`) would otherwise vanish
+/// into the breadcrumb label. A *pass* (one iteration of that loop)
+/// still can.
 fn breadcrumb_eligible(row: &Row) -> bool {
     row.kind != RowKind::Root
         && row.kind != RowKind::QuickSteps
@@ -138,7 +137,7 @@ fn breadcrumb_eligible(row: &Row) -> bool {
 /// a step that is running, failed, queued or still pending is never
 /// folded, so this requires exactly [`StatusKind::Done`], not merely
 /// "not running".
-fn is_quick_step(row: &Row) -> bool {
+pub fn is_quick_step(row: &Row) -> bool {
     !row.has_children
         && row.kind == RowKind::Tool
         && row.status.kind == StatusKind::Done
@@ -151,10 +150,10 @@ fn is_quick_step(row: &Row) -> bool {
 /// key is in `expanded_quick_steps`, in which case this run is left
 /// exactly as it was (⏎'s own "expand in place").
 fn merge_quick_steps(trees: Vec<RowTree>, expanded_quick_steps: &BTreeSet<String>) -> Vec<RowTree> {
-    // Review finding 10 on #613: consumes `trees` by value and moves
-    // each `RowTree` at most once, rather than cloning whole subtrees
-    // -- a clone here, repeated at every depth `fold_forest` recurses
-    // through, was O(rows × depth) instead of O(rows).
+    // Consumes `trees` by value and moves each `RowTree` at most once,
+    // rather than cloning whole subtrees -- a clone here, repeated at
+    // every depth `fold_forest` recurses through, would be
+    // O(rows × depth) instead of O(rows).
     let mut out = Vec::with_capacity(trees.len());
     let mut iter = trees.into_iter().peekable();
     while let Some(first) = iter.next() {
@@ -233,11 +232,10 @@ mod tests {
         r
     }
 
-    /// Review finding 10 on #613: a loop container with exactly one
-    /// pass never folds away into a breadcrumb -- its own `n/total`
-    /// progress would otherwise be lost under the pass's label. The
-    /// pass itself, one level in, still folds with its own single
-    /// child as usual.
+    /// A loop container with exactly one pass never folds away into
+    /// a breadcrumb -- its own `n/total` progress would otherwise be
+    /// lost under the pass's label. The pass itself, one level in,
+    /// still folds with its own single child as usual.
     #[test]
     fn a_loop_never_folds_but_its_single_pass_still_can() {
         let mut fan = container("prime.fan", 1, RowKind::Loop, StatusKind::Running);
@@ -325,12 +323,12 @@ mod tests {
         assert_eq!(folded.len(), 3, "{folded:?}");
     }
 
-    /// Review finding 2 on #613: a container whose own `expect` fails
-    /// after its one child already succeeded must not fold into one
-    /// breadcrumb at all -- a merged row could only ever show one of
-    /// the two statuses, hiding the other's. Both rows stay, so the
-    /// container's own failure is still there to see and to find with
-    /// `e` (errors only).
+    /// A container whose own `expect` fails after its one child
+    /// already succeeded must not fold into one breadcrumb at all --
+    /// a merged row could only ever show one of the two statuses,
+    /// hiding the other's. Both rows stay, so the container's own
+    /// failure is still there to see and to find with `e` (errors
+    /// only).
     #[test]
     fn a_container_whose_own_status_differs_from_its_done_childs_does_not_fold() {
         let rows = vec![
@@ -351,10 +349,10 @@ mod tests {
         assert_eq!(review.status.kind, StatusKind::Failed);
     }
 
-    /// Review finding 2: the reverse case -- a still-running container
-    /// whose only visible child has already finished must likewise
-    /// stay unfolded, not show either the container's `Running` or
-    /// the child's `Done` alone under one path.
+    /// The reverse case -- a still-running container whose only
+    /// visible child has already finished must likewise stay
+    /// unfolded, not show either the container's `Running` or the
+    /// child's `Done` alone under one path.
     #[test]
     fn a_container_whose_own_status_differs_from_its_running_childs_does_not_fold() {
         let rows = vec![
@@ -373,12 +371,11 @@ mod tests {
         assert!(!folded.iter().any(|r| r.label.contains('›')), "{folded:?}");
     }
 
-    /// Review finding 3 on #613: a container whose children are all
-    /// quick steps folds first into a single `N quick steps` summary
-    /// row, which must not then itself be treated as a breadcrumb-
-    /// eligible single child -- that would swallow the container's
-    /// own path/status into an unexpandable breadcrumb like
-    /// `pass 1 of 8 › 3 quick steps`.
+    /// A container whose children are all quick steps folds first
+    /// into a single `N quick steps` summary row, which must not then
+    /// itself be treated as a breadcrumb-eligible single child --
+    /// that would swallow the container's own path/status into an
+    /// unexpandable breadcrumb like `pass 1 of 8 › 3 quick steps`.
     #[test]
     fn a_container_whose_children_are_all_quick_steps_is_not_folded_into_a_breadcrumb() {
         let rows = vec![
@@ -416,11 +413,10 @@ mod tests {
         assert_eq!(folded[2].label, "3 quick steps");
     }
 
-    /// Review finding 3, as a loop pass specifically (the shape #613
-    /// itself calls out: "a loop pass made of a few quick shell
-    /// steps"): the pass keeps its own `pass N of M` label and status,
-    /// with an expandable quick-steps row under it, not swallowed into
-    /// an unexpandable `pass 1 of 8 › 3 quick steps` breadcrumb.
+    /// The same rule for a loop pass made of a few quick shell steps:
+    /// the pass keeps its own `pass N of M` label and status, with an
+    /// expandable quick-steps row under it, not swallowed into an
+    /// unexpandable `pass 1 of 8 › 3 quick steps` breadcrumb.
     #[test]
     fn a_pass_whose_children_are_all_quick_steps_stays_expandable() {
         let mut pass = container("prime.fan.iter_0", 1, RowKind::Pass, StatusKind::Done);

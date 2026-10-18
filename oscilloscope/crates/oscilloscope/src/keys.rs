@@ -283,16 +283,23 @@ impl App {
                 if let Some(path) = self.selected_path.clone() {
                     self.collapsed.insert(path.clone());
                     // Issue #613: the same key re-folds a quick-steps
-                    // group ⏎ had expanded in place -- from any of its
-                    // steps (review finding 10), not only its own
-                    // representative (`expanded_quick_steps`' only key):
-                    // scan backward over same-depth rows from the
-                    // selected one until the representative's own row
-                    // is found.
+                    // group ⏎ had expanded in place, from any of its
+                    // steps, not only its own representative
+                    // (`expanded_quick_steps`' only key): scan backward
+                    // over same-depth rows from the selected one until
+                    // the representative's own row is found. The scan
+                    // stops at the first row that is neither itself a
+                    // quick step (`fold::is_quick_step`'s own test) nor
+                    // an unexpanded quick-steps summary row, so an
+                    // unrelated sibling between two groups -- or
+                    // before the selected row -- never gets scanned
+                    // past into an earlier group's expansion.
                     if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
                         let depth = rows[selected_idx].depth;
                         for row in rows[..=selected_idx].iter().rev() {
-                            if row.depth != depth {
+                            let in_group = oscilloscope_core::fold::is_quick_step(row)
+                                || row.kind == oscilloscope_core::render::RowKind::QuickSteps;
+                            if row.depth != depth || !in_group {
                                 break;
                             }
                             if self.expanded_quick_steps.remove(&row.path) {
@@ -497,6 +504,42 @@ impl App {
                     .max_by_key(|r| r.depth)
             })
             .map(|r| r.path.as_str())
+    }
+
+    /// Keeps selection and `collapsed` meaningful once folding has
+    /// changed what `rows` actually draws (issue #613): if the
+    /// selected path (or a `collapsed` entry) is no longer among
+    /// `rows` at all -- its own container folded into a breadcrumb
+    /// mid-run -- this re-points it to the visible row whose path is
+    /// that one, or extends it with `.` (the breadcrumb that
+    /// absorbed it).
+    pub fn reconcile_folding(&mut self, rows: &[Row]) {
+        if let Some(selected) = self.selected_path.clone() {
+            if !rows.iter().any(|r| r.path == selected) {
+                if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
+                    self.select_tree_path(Some(absorbed));
+                }
+            }
+        }
+        let stale: Vec<String> = self
+            .collapsed
+            .iter()
+            .filter(|path| !rows.iter().any(|r| &r.path == *path))
+            .cloned()
+            .collect();
+        for path in stale {
+            if let Some(absorbed) = Self::absorbing_row_path(rows, &path) {
+                self.collapsed.remove(&path);
+                self.collapsed.insert(absorbed);
+            }
+        }
+    }
+
+    fn absorbing_row_path(rows: &[Row], path: &str) -> Option<String> {
+        let prefix = format!("{path}.");
+        rows.iter()
+            .find(|r| r.path == path || r.path.starts_with(&prefix))
+            .map(|r| r.path.clone())
     }
 }
 
@@ -729,6 +772,31 @@ mod tests {
         assert!(app.fold_enabled);
     }
 
+    /// Issue #613: a container the user selected can fold into a
+    /// breadcrumb mid-run (its own status catching up to its child's)
+    /// -- the selection must follow it to the breadcrumb row that
+    /// absorbed it, not point at a path `rows` no longer has at all.
+    #[test]
+    fn selection_follows_its_container_folding_into_a_breadcrumb() {
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.collapsed.insert("prime.a".to_string());
+        let folded_rows = [row("prime.a.b", 1, StatusKind::Done)];
+        app.reconcile_folding(&folded_rows);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a.b"));
+        assert!(app.collapsed.contains("prime.a.b"));
+        assert!(!app.collapsed.contains("prime.a"));
+    }
+
+    #[test]
+    fn selection_is_untouched_when_its_own_row_is_still_drawn() {
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        app.reconcile_folding(&rows);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+    }
+
     #[test]
     fn enter_expands_a_quick_steps_row_and_left_folds_it_again() {
         let mut quick_steps_row = row("prime.a", 1, StatusKind::Done);
@@ -744,24 +812,48 @@ mod tests {
         assert!(!app.expanded_quick_steps.contains("prime.a"));
     }
 
-    /// Review finding 10 on #613: ← re-folds an expanded group from
-    /// any of its steps, not only from its own representative (the
-    /// first one, and the only path `expanded_quick_steps` ever
-    /// stores) -- selecting the *second* exploded step and pressing
-    /// ← must still re-fold the whole group.
+    /// ← re-folds an expanded group from any of its steps, not only
+    /// from its own representative (the first one, and the only path
+    /// `expanded_quick_steps` ever stores) -- selecting the *second*
+    /// exploded step and pressing ← must still re-fold the whole
+    /// group.
     #[test]
     fn left_re_folds_an_expanded_quick_steps_group_from_any_of_its_steps() {
-        let rows = [
-            row("prime.a", 1, StatusKind::Done),
-            row("prime.b", 1, StatusKind::Done),
-            row("prime.c", 1, StatusKind::Done),
-        ];
+        let quick = |path: &str| {
+            let mut r = row(path, 1, StatusKind::Done);
+            r.duration_s = Some(0.3);
+            r
+        };
+        let rows = [quick("prime.a"), quick("prime.b"), quick("prime.c")];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.expanded_quick_steps.insert("prime.a".to_string());
         app.selected_path = Some("prime.b".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
         assert!(!app.expanded_quick_steps.contains("prime.a"));
+    }
+
+    /// The backward scan stops at the first row that isn't itself a
+    /// quick step, so an unrelated sibling between two groups -- or
+    /// after one -- never gets scanned past into an earlier group's
+    /// own expansion.
+    #[test]
+    fn left_on_an_unrelated_sibling_leaves_an_earlier_groups_expansion_alone() {
+        let mut slow = row("prime.slow", 1, StatusKind::Done);
+        slow.duration_s = Some(5.0);
+        let rows = [
+            row("prime.q1", 1, StatusKind::Done),
+            row("prime.q2", 1, StatusKind::Done),
+            slow,
+            row("prime.box", 1, StatusKind::Done),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.expanded_quick_steps.insert("prime.q1".to_string());
+        app.selected_path = Some("prime.box".to_string());
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        assert!(app.expanded_quick_steps.contains("prime.q1"));
+        assert!(app.collapsed.contains("prime.box"));
     }
 
     #[test]
