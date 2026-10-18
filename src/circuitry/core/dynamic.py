@@ -890,14 +890,14 @@ class DynamicRuntime:
 
         Returns which of four things happened: ``"disabled"`` (the effect
         didn't run, deterministically, regardless of resume), ``"resumed"``
-        (skipped because its own node already finished without error),
-        ``"reported"`` (a report ran -- it always does, whether or not
-        resume is active, but fires no effect_start/effect_complete and so
-        carries nothing for later siblings' resume eligibility), or
-        ``"ran"`` (any other effect actually dispatched this call, success
-        or an absorbed failure). Chain flow uses this to know when to stop
-        treating later nodes as resumable — see the call site in
-        ``execute()``.
+        (skipped because its own node already finished without error --
+        this is how a completed named report is skipped too), ``"reported"``
+        (an unnamed report ran -- it always does, whether or not resume is
+        active, but fires no effect_start/effect_complete and so carries
+        nothing for later siblings' resume eligibility), or ``"ran"`` (any
+        other effect actually dispatched this call, success or an absorbed
+        failure). Chain flow uses this to know when to stop treating later
+        nodes as resumable — see the call site in ``execute()``.
         """
         effective_resume = self.resume if resume_active is None else resume_active
         # Local imports to avoid circular imports at module load time

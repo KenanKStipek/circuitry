@@ -1550,9 +1550,10 @@ Should the loop continue? Answer (yes/no):"""
                 ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
             # The first body effect that isn't reused continues inside
-            # itself when it can; every effect after it runs whole. A
-            # report is never "reused" (it always runs again when
-            # reached, per #605) and must not count as that first
+            # itself when it can; every effect after it runs whole. An
+            # unnamed report is never "reused" (it always runs again
+            # when reached, per #605; a completed named report is
+            # skipped above instead) and must not count as that first
             # effect either — it fires no effect_start/effect_complete,
             # so it carries no record of whether it "ran" on resume at
             # all, and treating it as the pivot would re-run every
