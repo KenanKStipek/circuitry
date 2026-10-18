@@ -1,0 +1,10 @@
+name: report-disabled
+effects:
+  - type: report
+    name: status
+    message: "named"
+  - type: dynamic
+    name: box
+    effects:
+      - type: report
+        message: "unnamed inside box"

@@ -12,6 +12,9 @@ from ..saved_state import dumps_saved_state
 #: ``Store.effect_start`` / ``Store.effect_complete``.
 _EffectCallback = Callable[[str, dict[str, Any]], None]
 
+#: ``Store.report`` -- ``(path, level, message, data)``.
+_ReportCallback = Callable[[str, str, str, Any], None]
+
 
 def replace_node(
     state: dict[str, Any], parts: list[str], replacement: dict[str, Any]
@@ -85,6 +88,22 @@ def _prefixed_branch_settled_cb(
     return _forward
 
 
+def _prefixed_report_cb(
+    callback: _ReportCallback | None, prefix: str
+) -> _ReportCallback | None:
+    """Wrap ``report`` the same way :func:`_prefixed_effect_cb` wraps
+    ``effect_start``/``effect_complete`` (#605) — a ``report`` fired from
+    inside a parallel branch must nest under this store's own path too.
+    """
+    if callback is None or not prefix:
+        return callback
+
+    def _forward(path: str, level: str, message: str, data: Any) -> None:
+        callback(_under_prefix(prefix, path), level, message, data)
+
+    return _forward
+
+
 @dataclass
 class Store:
     """
@@ -128,6 +147,14 @@ class Store:
     #: waiting out the full safety-net budget for a count that can never be
     #: reached (#237).
     branch_settled: Callable[[str], None] | None = None
+    #: Fired by a ``report`` effect (#605), never by any other — a report
+    #: never fires ``effect_start``/``effect_complete``, so it never counts
+    #: as work and never appears as a start/end event.
+    #: ``(path, level, message, data)``: ``path`` is the report's own state
+    #: path when it is named, otherwise the path of the container it runs
+    #: in (see ``Store.fire_report``); ``data`` is the already-resolved
+    #: value (``None`` when the report has none).
+    report: _ReportCallback | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     #: The top-level state dict this store is a view into; None for a root.
@@ -219,6 +246,7 @@ class Store:
             effect_start=self.effect_start,
             concurrent_dispatch=self.concurrent_dispatch,
             branch_settled=self.branch_settled,
+            report=self.report,
             _path_prefix=new_prefix,
             _lock=self._lock,
             _root_state=self.root_state,
@@ -282,6 +310,7 @@ class Store:
                 branch_settled=_prefixed_branch_settled_cb(
                     self.branch_settled, self._path_prefix
                 ),
+                report=_prefixed_report_cb(self.report, self._path_prefix),
                 _lock=self._lock,
                 _true_root=self.true_root_state,
             )
@@ -361,6 +390,24 @@ class Store:
             return
         path = self.own_path if name is None else self.effect_path(name)
         self.branch_settled(path)
+
+    def fire_report(
+        self, name: str | None, *, level: str, message: str, data: Any
+    ) -> None:
+        """Notify ``report`` (if set) that a ``report`` effect published
+        *message* (#605).
+
+        *name* is ``None`` for an unnamed report — the same fallback
+        :meth:`fire_concurrent_dispatch`/:meth:`fire_branch_settled` use:
+        the path of the container it runs in (:attr:`own_path`) rather than
+        ``effect_path``'s literal ``"None"`` suffix if handed straight
+        through. Never fires ``effect_start``/``effect_complete``, so a
+        report never counts as work and never appears as a start/end event.
+        """
+        if self.report is None:
+            return
+        path = self.own_path if name is None else self.effect_path(name)
+        self.report(path, level, message, data)
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

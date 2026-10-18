@@ -1,7 +1,7 @@
 //! Lane A: `Op`, `NodeKind`, `LeafKind`, `OnError` (issue #408's Scope
 //! section; DESIGN.md §5.1).
 
-use crate::effects::{PromptOp, ReflectorOp, ToolOp, UseOp, YieldOp};
+use crate::effects::{PromptOp, ReflectorOp, ReportOp, ToolOp, UseOp, YieldOp};
 use crate::path::EffectPath;
 use crate::region::Region;
 use electricity_value::Value;
@@ -28,6 +28,7 @@ pub fn python_type_name(kind: &NodeKind) -> &'static str {
             LeafKind::Tool(_) => "ToolDefinition",
             LeafKind::Use(_) => "UseDefinition",
             LeafKind::Yield(_) => "YieldDefinition",
+            LeafKind::Report(_) => "ReportDefinition",
             LeafKind::Reflector(_) => "ReflectorDefinition",
         },
         NodeKind::Control(region) => match region {
@@ -65,6 +66,7 @@ pub enum LeafKind {
     Tool(ToolOp),
     Use(UseOp),
     Yield(YieldOp),
+    Report(ReportOp),
     Reflector(ReflectorOp),
 }
 

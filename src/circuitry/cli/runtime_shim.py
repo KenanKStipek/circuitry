@@ -153,6 +153,11 @@ class RunRequest:
     # RunManager lower how many settle points it's still owed by a branch
     # that will never produce one (#237).
     branch_settled_observer: Callable[[str], None] | None = None
+    # Fired by a ``report`` effect (#605), never by any other —
+    # ``(path, level, message, data)``, the same payload ``Store.fire_report``
+    # takes. Composes with ``--events``'s own report line, never replaces it
+    # (``cli.app``'s console line for ``cof run`` rides this).
+    report_observer: Callable[[str, str, str, Any], None] | None = None
     skip_preflight: bool = False
     # Caller-level overrides, ranked above the orchestration's own
     # ``adapter``/``model`` (the ``cli`` tier of resolve_effective_settings).
@@ -976,10 +981,14 @@ def run(req: RunRequest) -> RunResult:
             totals_accumulator.observe
         ]
         dispatch_observers: list[Callable[[str, int, int], None]] = []
+        report_observers: list[Callable[[str, str, str, Any], None]] = []
         if event_log is not None:
             start_observers.append(event_log.on_start)
             effect_observers.append(event_log.on_complete)
             dispatch_observers.append(event_log.on_dispatch)
+            report_observers.append(event_log.on_report)
+        if req.report_observer is not None:
+            report_observers.append(req.report_observer)
         if req.concurrent_dispatch_observer is not None:
             dispatch_observers.append(req.concurrent_dispatch_observer)
         if plugins:
@@ -1036,6 +1045,7 @@ def run(req: RunRequest) -> RunResult:
             effect_start=_compose_effect_observers(start_observers),
             concurrent_dispatch=_compose_dispatch_observers(dispatch_observers),
             branch_settled=req.branch_settled_observer,
+            report=_compose_report_observers(report_observers),
             _lock=store_lock,
         )
 
@@ -1293,6 +1303,24 @@ def _compose_dispatch_observers(
     def fan_out(path: str, concurrency: int, total: int) -> None:
         for observer in observers:
             observer(path, concurrency, total)
+
+    return fan_out
+
+
+def _compose_report_observers(
+    observers: list[Callable[[str, str, str, Any], None]],
+) -> Callable[[str, str, str, Any], None] | None:
+    """Fold ``--events``' own report observer and ``RunRequest.report_observer``
+    into the single callback ``Store`` takes (#605), the same way
+    :func:`_compose_dispatch_observers` composes ``dispatch``."""
+    if not observers:
+        return None
+    if len(observers) == 1:
+        return observers[0]
+
+    def fan_out(path: str, level: str, message: str, data: Any) -> None:
+        for observer in observers:
+            observer(path, level, message, data)
 
     return fan_out
 

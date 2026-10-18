@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "A report's data, once rendered to compact JSON, over 16 KiB: the --events line replaces data with data_truncated (that byte count); a named report still keeps the full value in the shadow state (#605).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

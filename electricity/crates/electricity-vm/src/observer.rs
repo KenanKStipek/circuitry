@@ -4,7 +4,7 @@
 //! scope for M0-H) both hang off of.
 
 use crate::store::NodeRef;
-use electricity_bytecode::EffectPath;
+use electricity_bytecode::{EffectPath, ReportLevel};
 use electricity_value::Value;
 
 /// An opaque per-call identifier [`RunObserver::effect_start`] hands
@@ -156,6 +156,26 @@ pub trait RunObserver {
     /// every other hook's own tolerant default here.
     fn clear_tree_branches(&self, _node_path: &EffectPath, _branches: &[NodeRef]) {}
 
+    /// A `report` effect published *message* (#605) at *path* -- the
+    /// report's own state path when named, otherwise the path of the
+    /// container it runs in (`Frame::effect_path`'s own fallback for an
+    /// unnamed node, the same one `dispatch`/`register_tree_branches`
+    /// use). *data* is the already-resolved value, `None` when the
+    /// report has none. A report never calls [`RunObserver::
+    /// effect_start`]/[`RunObserver::effect_complete`] -- it fires only
+    /// this hook, so it never counts toward `runtime.last_run.totals.
+    /// effects_run` and never appears as a start/end event. Default
+    /// no-op, like every other hook here; only `electricity` (lib)'s
+    /// own `Observer` implements it for real.
+    fn report(
+        &self,
+        _path: &EffectPath,
+        _level: ReportLevel,
+        _message: &str,
+        _data: Option<&Value>,
+    ) {
+    }
+
     /// Hands a completing effect's own `meta` snapshot to the run's
     /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
     /// _TotalsAccumulator.observe`'s own `tokens_sent`/`tokens_received`/
@@ -199,5 +219,6 @@ mod tests {
         observer.record_totals(&Value::None);
         observer.register_tree_branches(&path, &[]);
         observer.clear_tree_branches(&path, &[]);
+        observer.report(&path, ReportLevel::Info, "hi", None);
     }
 }

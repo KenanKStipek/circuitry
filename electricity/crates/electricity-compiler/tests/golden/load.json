@@ -3719,7 +3719,7 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].type: 'Conditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']"
+        "effects[0].type: 'Conditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield', 'report']"
       ],
       "warnings": [
         "effects[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented.",
@@ -3730,7 +3730,7 @@
         "effects[0]: unknown key 'flow' on a 'conditional' effect is ignored. Known keys: description, else, if, labels, name, on_error, then, threshold, type."
       ]
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].type: 'Conditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']",
+    "run_error": "Orchestration validation failed:\n  - effects[0].type: 'Conditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield', 'report']",
     "definition": {
       "name": "prime",
       "effects": [
@@ -3958,13 +3958,13 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].type: '\\x1cconditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']"
+        "effects[0].type: '\\x1cconditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield', 'report']"
       ],
       "warnings": [
         "effects[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented."
       ]
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].type: '\\x1cconditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']",
+    "run_error": "Orchestration validation failed:\n  - effects[0].type: '\\x1cconditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield', 'report']",
     "definition": {
       "name": "prime",
       "effects": [

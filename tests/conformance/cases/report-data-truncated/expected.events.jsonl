@@ -1,0 +1,5 @@
+{"v":1,"seq":0,"ts":"2026-10-18T00:42:07.191Z","ev":"run_start","run_id":"56409536-e8f0-42cc-bf47-8bd141a8c768","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":64715}
+{"v":1,"seq":1,"ts":"2026-10-18T00:42:07.194Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-18T00:42:07.195Z","ev":"report","path":"prime.status","level":"info","message":"big payload","data_truncated":20011}
+{"v":1,"seq":3,"ts":"2026-10-18T00:42:07.195Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-18T00:42:07.195Z","ev":"run_end","ok":true}

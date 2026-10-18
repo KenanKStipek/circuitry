@@ -47,12 +47,20 @@ def is_disabled_node(node: Any) -> bool:
     return isinstance(meta, dict) and meta.get(DISABLED_META_KEY) is True
 
 
-def write_disabled_node(*, store: Store, name: str) -> dict[str, Any]:
+def write_disabled_node(
+    *, store: Store, name: str, fire_hooks: bool = True
+) -> dict[str, Any]:
     """Write the skip node for a disabled effect named *name* and notify hooks.
 
     Any pre-existing content at *name* (e.g. a value restored from persisted
     state) is replaced — the effect did not run in *this* run, so its node must
     not advertise a stale value.
+
+    *fire_hooks* is ``False`` for a disabled ``report``: a report never fires
+    ``effect_start``/``effect_complete`` even when it runs, so a disabled one
+    writes its node the same as any other disabled effect but stays just as
+    silent on those hooks, and so still doesn't count toward
+    ``runtime.last_run.totals.effects_run``.
     """
     node = store.ensure_dict(name)
     now = _now_iso()
@@ -62,10 +70,11 @@ def write_disabled_node(*, store: Store, name: str) -> dict[str, Any]:
         "created_at": now,
         "completed_at": now,
     }
-    # A skip is a zero-length effect: it still opens and closes its pair so
-    # an observer counting starts against completes stays balanced.
-    store.fire_effect_start(name, node)
-    store.fire_effect_complete(name, node)
+    if fire_hooks:
+        # A skip is a zero-length effect: it still opens and closes its pair
+        # so an observer counting starts against completes stays balanced.
+        store.fire_effect_start(name, node)
+        store.fire_effect_complete(name, node)
     if store.on_write:
         store.on_write(store.root_state)
     return node

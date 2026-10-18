@@ -20,7 +20,7 @@ const LEAF_EFFECT_TYPES: [&str; 2] = ["tool", "prompt"];
 
 /// `core/document_check.py::_EFFECT_DEFS`: effect type -> the schema
 /// definition listing its keys.
-const EFFECT_DEFS: [(&str, &str); 9] = [
+const EFFECT_DEFS: [(&str, &str); 10] = [
     ("prompt", "PromptEffect"),
     ("dynamic", "DynamicEffect"),
     ("if", "ConditionalEffect"),
@@ -30,6 +30,7 @@ const EFFECT_DEFS: [(&str, &str); 9] = [
     ("tool", "ToolEffect"),
     ("use", "UseEffect"),
     ("yield", "YieldEffect"),
+    ("report", "ReportEffect"),
 ];
 
 /// `core/document_check.py::_LEGACY_CONTAINER_KEYS`.

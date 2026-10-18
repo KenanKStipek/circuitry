@@ -30,6 +30,11 @@ use std::time::Instant;
 /// reaches the stream -- `cli/events.py::_ERROR_MAX_CHARS`.
 const ERROR_MAX_CHARS: usize = 500;
 
+/// A `report` event's compact `data` JSON, in bytes, above which it is
+/// replaced by `"data_truncated": <that byte count>` instead (#605) --
+/// `cli/events.py::_REPORT_DATA_MAX_BYTES`.
+const REPORT_DATA_MAX_BYTES: usize = 16 * 1024;
+
 fn truncate_error(error: &str) -> String {
     error.chars().take(ERROR_MAX_CHARS).collect()
 }
@@ -113,7 +118,17 @@ impl EventLog {
         if self.disabled.get() {
             return;
         }
-        let text = match electricity_json::dumps(&payload, electricity_json::WriteMode::EVENTS) {
+        // `dumps_default_str`, not `dumps` (#605): a
+        // report's own `data` can hold a shadow-state value plain JSON
+        // can't otherwise encode (a YAML date, `!!binary` bytes), the same
+        // as `--out`. Without it, encoding this one line disables every
+        // later write on this stream for the rest of the run -- a watcher
+        // would silently lose every subsequent `start`/`end`/`run_end`
+        // too, not just this report.
+        let text = match electricity_json::dumps_default_str(
+            &payload,
+            electricity_json::WriteMode::EVENTS,
+        ) {
             Ok(text) => text,
             Err(err) => {
                 self.disable_with(op, &err);
@@ -280,6 +295,58 @@ impl EventLog {
         self.write_line("end", Value::Dict(payload));
     }
 
+    /// One `report` line (#605): `v`, `seq`, `ts`, `ev`, `path`,
+    /// `level`, `message`, then `data` (omitted when *data* is `None`)
+    /// or `data_truncated` (the compact JSON's byte count) when that
+    /// JSON exceeds 16 KiB -- a named report still keeps the full
+    /// value in the shadow state, only this line is capped. Ports
+    /// `cli/events.py::EventLog.on_report`.
+    pub fn on_report(&self, path: &str, level: &str, message: &str, data: Option<&Value>) {
+        if self.disabled.get() {
+            return;
+        }
+        let mut payload = Dict::new();
+        payload.insert(Value::Str("v".to_string()), Value::from(1i64));
+        payload.insert(
+            Value::Str("seq".to_string()),
+            Value::from(self.take_seq() as i64),
+        );
+        payload.insert(Value::Str("ts".to_string()), Value::Str(now_iso_ms()));
+        payload.insert(
+            Value::Str("ev".to_string()),
+            Value::Str("report".to_string()),
+        );
+        payload.insert(Value::Str("path".to_string()), Value::Str(path.to_string()));
+        payload.insert(
+            Value::Str("level".to_string()),
+            Value::Str(level.to_string()),
+        );
+        payload.insert(
+            Value::Str("message".to_string()),
+            Value::Str(message.to_string()),
+        );
+        if let Some(data) = data {
+            match electricity_json::dumps_default_str(data, electricity_json::WriteMode::EVENTS) {
+                Ok(text) => {
+                    let byte_len = text.len();
+                    if byte_len > REPORT_DATA_MAX_BYTES {
+                        payload.insert(
+                            Value::Str("data_truncated".to_string()),
+                            Value::from(byte_len as i64),
+                        );
+                    } else {
+                        payload.insert(Value::Str("data".to_string()), data.clone());
+                    }
+                }
+                Err(err) => {
+                    self.disable_with("report", &err);
+                    return;
+                }
+            }
+        }
+        self.write_line("report", Value::Dict(payload));
+    }
+
     pub fn run_end(&self, ok: bool, error: Option<&str>, signal: Option<&str>) {
         if self.disabled.get() {
             return;
@@ -365,6 +432,63 @@ mod tests {
                 .unwrap()
                 .get(&Value::Str("ev".to_string())),
             Some(&Value::Str("run_end".to_string()))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    fn blob_dict(blob_len: usize) -> Value {
+        let mut d = electricity_value::Dict::new();
+        d.insert(
+            Value::Str("blob".to_string()),
+            Value::Str("x".repeat(blob_len)),
+        );
+        Value::Dict(d)
+    }
+
+    fn report_data(lines: &[Value]) -> &Value {
+        lines[0]
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("data".to_string()))
+            .unwrap()
+    }
+
+    #[test]
+    fn report_data_at_exactly_16384_bytes_is_not_truncated() {
+        // The limit is "exceeds 16 KiB", not "at least" (#605): a
+        // payload whose compact JSON is exactly REPORT_DATA_MAX_BYTES
+        // keeps `data`, with no `data_truncated` at that exact boundary.
+        let path = temp_path("boundary-exact");
+        let log = EventLog::open(&path);
+        let blob_len = REPORT_DATA_MAX_BYTES - "{\"blob\":\"\"}".len();
+        let data = blob_dict(blob_len);
+        let encoded = electricity_json::dumps(&data, electricity_json::WriteMode::EVENTS).unwrap();
+        assert_eq!(encoded.len(), REPORT_DATA_MAX_BYTES);
+        log.on_report("prime", "info", "boundary", Some(&data));
+        log.close();
+        let lines = read_lines(&path);
+        let payload = lines[0].as_dict().unwrap();
+        assert!(!payload.contains_key(&Value::Str("data_truncated".to_string())));
+        assert_eq!(report_data(&lines), &data);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn report_data_one_byte_over_16384_is_truncated() {
+        let path = temp_path("boundary-over");
+        let log = EventLog::open(&path);
+        let blob_len = REPORT_DATA_MAX_BYTES - "{\"blob\":\"\"}".len() + 1;
+        let data = blob_dict(blob_len);
+        let encoded = electricity_json::dumps(&data, electricity_json::WriteMode::EVENTS).unwrap();
+        assert_eq!(encoded.len(), REPORT_DATA_MAX_BYTES + 1);
+        log.on_report("prime", "info", "boundary", Some(&data));
+        log.close();
+        let lines = read_lines(&path);
+        let payload = lines[0].as_dict().unwrap();
+        assert!(!payload.contains_key(&Value::Str("data".to_string())));
+        assert_eq!(
+            payload.get(&Value::Str("data_truncated".to_string())),
+            Some(&Value::from(encoded.len() as i64))
         );
         fs::remove_file(&path).unwrap();
     }

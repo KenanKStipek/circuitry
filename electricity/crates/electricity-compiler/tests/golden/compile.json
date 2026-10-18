@@ -1740,11 +1740,11 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].type: 'bogus' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']"
+        "effects[0].type: 'bogus' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield', 'report']"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].type: 'bogus' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']",
+    "run_error": "Orchestration validation failed:\n  - effects[0].type: 'bogus' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield', 'report']",
     "definition": null,
     "definition_error": "ValueError: Unsupported effect type at 'prime.effects[0]': 'bogus'",
     "digest": "1766ff510b591407e9feddb9c628f69a225bee599780454e8af6a92ec7c90081",

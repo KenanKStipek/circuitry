@@ -56,6 +56,7 @@ from .use import (
     _clean_yaml_fences,
     _grafted_snapshot,
     _namespaced_effect_cb,
+    _namespaced_report_cb,
     _resolve_dot_path,
     _validate_inline_yaml,
 )
@@ -767,6 +768,7 @@ def _run_isolated(
         effect_complete=_namespaced_effect_cb(
             parent_store.effect_complete, node_path
         ),
+        report=_namespaced_report_cb(parent_store.report, node_path),
         _lock=parent_store._lock,
     )
     # A child document run with `use` sees only its own declared prompts

@@ -42,7 +42,7 @@ fn collect_effect_groups(op: &Op, groups: &mut BTreeSet<String>) {
                     groups.insert(group.clone());
                 }
             }
-            LeafKind::Use(_) | LeafKind::Yield(_) => {}
+            LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Report(_) => {}
             LeafKind::Reflector(reflector) => collect_region_groups(&reflector.inner, groups),
         },
         NodeKind::Control(region) => collect_region_groups(region, groups),

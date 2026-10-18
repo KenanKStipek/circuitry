@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "A report's data leaf resolving to a YAML 1.1 date (an interface input default with no declared type:, issue #512): --events encodes it stringified via default=str, the same as --out, rather than raising and disabling every later write on the stream.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

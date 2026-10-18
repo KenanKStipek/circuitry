@@ -222,6 +222,18 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     );
     add("YieldDefinition", "enabled", "op::Op::enabled");
 
+    // ReportDefinition -> effects::ReportOp (#605)
+    add("ReportDefinition", "message", "effects::ReportOp::message");
+    add("ReportDefinition", "name", "op::Op::name");
+    add("ReportDefinition", "data", "effects::ReportOp::data");
+    add("ReportDefinition", "level", "effects::ReportOp::level");
+    add(
+        "ReportDefinition",
+        "description",
+        "effects::ReportOp::description",
+    );
+    add("ReportDefinition", "enabled", "op::Op::enabled");
+
     // ReflectorDefinition -> effects::ReflectorOp
     add("ReflectorDefinition", "name", "op::Op::name");
     add(

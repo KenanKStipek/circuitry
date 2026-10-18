@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "A report's data leaf is a literal YAML 1.1 !!binary value (issue #512): both --out and --events encode it stringified via default=str, the same as a report's own date leaf, rather than raising and disabling every later write on the stream.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

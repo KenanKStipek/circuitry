@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "A profile-disabled report fires no start/end events and doesn't count toward runtime.last_run.totals.effects_run on either engine -- a named report still writes its own disabled skip node, like any other disabled effect; an unnamed one (inside the disabled container here) never gets a node at all.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

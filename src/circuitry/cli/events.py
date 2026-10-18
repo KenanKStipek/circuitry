@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..core.saved_state import json_safe_default
 from .version import resolve_version
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,12 @@ logger = logging.getLogger(__name__)
 #: An effect's (or the run's) error text is cut to this many characters
 #: before it reaches the stream — the same limit the format documents.
 _ERROR_MAX_CHARS = 500
+
+#: A ``report`` event's compact ``data`` JSON, in bytes, above which it is
+#: replaced by ``"data_truncated": <that byte count>`` instead (#605). A
+#: named report still keeps the full value in the shadow state — only the
+#: event line is capped.
+_REPORT_DATA_MAX_BYTES = 16 * 1024
 
 
 def _now_iso_ms() -> str:
@@ -125,8 +132,19 @@ class EventLog:
 
     def _write_line(self, payload: dict[str, Any]) -> None:
         """Write one JSON line; caller holds ``self._lock`` and has
-        already checked ``self._disabled``."""
-        self._file.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        already checked ``self._disabled``.
+
+        ``default=json_safe_default`` (#605): a
+        report's own ``data`` can hold a shadow-state value
+        ``json.dumps`` can't otherwise encode (a YAML date, ``!!binary``
+        bytes), the same as ``--out``. Without it, encoding this one line
+        raises and disables every later write on this stream for the rest
+        of the run -- a watcher would silently lose every subsequent
+        ``start``/``end``/``run_end`` too, not just this report.
+        """
+        self._file.write(
+            json.dumps(payload, separators=(",", ":"), default=json_safe_default) + "\n"
+        )
         self._file.flush()
 
     def run_start(self, *, run_id: str, orchestration: str) -> None:
@@ -233,6 +251,40 @@ class EventLog:
                 self._write_line(payload)
         except Exception as exc:
             self._disable("end", exc)
+
+    def on_report(self, path: str, level: str, message: str, data: Any) -> None:
+        """Write one ``report`` line (#605): ``v``, ``seq``, ``ts``, ``ev``,
+        ``path``, ``level``, ``message``, then ``data`` (omitted when there
+        is none) or ``data_truncated`` (the compact JSON's byte count) when
+        that JSON exceeds 16 KiB -- a named report still keeps the full
+        value in the shadow state, only this line is capped.
+        """
+        if self._disabled:
+            return
+        try:
+            with self._lock:
+                if self._disabled:
+                    return
+                payload: dict[str, Any] = {
+                    "v": 1,
+                    "seq": self._take_seq(),
+                    "ts": _now_iso_ms(),
+                    "ev": "report",
+                    "path": path,
+                    "level": level,
+                    "message": message,
+                }
+                if data is not None:
+                    encoded = json.dumps(
+                        data, separators=(",", ":"), default=json_safe_default
+                    ).encode("utf-8")
+                    if len(encoded) > _REPORT_DATA_MAX_BYTES:
+                        payload["data_truncated"] = len(encoded)
+                    else:
+                        payload["data"] = data
+                self._write_line(payload)
+        except Exception as exc:
+            self._disable("report", exc)
 
     def run_end(self, *, ok: bool, error: str | None, signal: str | None) -> None:
         if self._disabled:

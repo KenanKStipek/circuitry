@@ -1,0 +1,37 @@
+effects:
+  - type: report
+    message: "starting {{input.topic}}"
+  - type: report
+    name: started
+    level: warning
+    message: "note on {{input.topic}}"
+    data:
+      topic: {from: input.topic}
+      literal: 7
+  - type: if
+    if: {mode: cel, expr: "true"}
+    then:
+      - type: report
+        message: "in then branch"
+  - type: loop
+    name: chain_loop
+    each: {in: input.items, as: item}
+    body:
+      - type: report
+        message: "chain {{item}}"
+  - type: loop
+    name: tree_loop
+    flow: tree
+    each: {in: input.one, as: item}
+    body:
+      - type: report
+        message: "tree {{item}}"
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: report
+          message: "in use child"
+finally:
+  - type: report
+    message: "cleanup done"

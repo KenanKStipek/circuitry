@@ -14,8 +14,8 @@ use crate::prompt_files::compile_dispatch_file as compile_dispatch_file_dict;
 use crate::state_ns::validate_reference_path;
 use crate::{CompileError, DocumentOrigin, prompt_files};
 use electricity_bytecode::effects::{
-    AssetRef, DispatchFile, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role,
-    TimeoutFrom, TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
+    AssetRef, DispatchFile, Message, PromptContent, PromptOp, PromptType, ReflectorOp, ReportLevel,
+    ReportOp, Role, TimeoutFrom, TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
 };
 use electricity_bytecode::path::EffectPath;
 use electricity_bytecode::{Escape, LeafKind, NodeKind, OnError, Op, ParamNode, Region};
@@ -823,6 +823,109 @@ pub(crate) fn compile_yield(
         description,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Yield(op), on_error))
+}
+
+/// `core/compiler.py::_compile_report` (#605): `message` is required,
+/// `name` is optional (unlike every other leaf type here), `level`
+/// must be `info`/`warning` when present, and `data` is walked by
+/// [`crate::compile::params::build_report_data`]'s own narrower
+/// `{from:}` grammar. The schema's own `additionalProperties: false`
+/// (mirrored in `structural.rs`'s `EFFECT_DEFS`) rejects every other
+/// key, so there is no forbidden-keys list here the way `compile_yield`
+/// has one.
+pub(crate) fn compile_report(
+    effect: &Dict,
+    path: &EffectPath,
+    scope_path: &str,
+    effect_path: &str,
+    loop_names: &BTreeSet<String>,
+) -> Result<Op, CompileError> {
+    let validated_name = match effect
+        .get(&Value::Str("name".to_string()))
+        .filter(|v| !v.is_none())
+    {
+        Some(name) => Some(crate::compile::names::validate_name(
+            name,
+            "report",
+            scope_path,
+            effect_path,
+        )?),
+        None => None,
+    };
+
+    let message_raw = effect
+        .get(&Value::Str("message".to_string()))
+        .filter(|v| !v.is_none());
+    let Some(Value::Str(message_raw)) = message_raw else {
+        return Err(CompileError(format!(
+            "Report effect at '{effect_path}' must have a non-empty 'message'."
+        )));
+    };
+    if message_raw.trim().is_empty() {
+        return Err(CompileError(format!(
+            "Report effect at '{effect_path}' must have a non-empty 'message'."
+        )));
+    }
+    let message = template_text(message_raw, effect_path, "message", true, Escape::None)?;
+
+    let level = match effect
+        .get(&Value::Str("level".to_string()))
+        .filter(|v| !v.is_none())
+    {
+        None => ReportLevel::Info,
+        Some(Value::Str(level)) if level.trim().eq_ignore_ascii_case("info") => ReportLevel::Info,
+        Some(Value::Str(level)) if level.trim().eq_ignore_ascii_case("warning") => {
+            ReportLevel::Warning
+        }
+        Some(other) => {
+            return Err(CompileError(format!(
+                "Report effect at '{effect_path}' has invalid 'level' {} \
+                 -- expected 'info' or 'warning'.",
+                other.py_repr()
+            )));
+        }
+    };
+
+    let data = match effect
+        .get(&Value::Str("data".to_string()))
+        .filter(|v| !v.is_none())
+    {
+        None => None,
+        Some(Value::Dict(data_dict)) => Some(crate::compile::params::build_report_data(
+            &Value::Dict(data_dict.clone()),
+            validated_name.as_deref(),
+            effect_path,
+            "data",
+            loop_names,
+        )?),
+        Some(_) => {
+            return Err(CompileError(format!(
+                "Report effect at '{effect_path}': 'data' must be an object."
+            )));
+        }
+    };
+
+    let description = optional_str(effect, "description");
+
+    let own_path = match &validated_name {
+        Some(n) => path.push_name(n),
+        None => path.clone(),
+    };
+
+    let op = ReportOp {
+        message,
+        data,
+        level,
+        description,
+    };
+    Ok(Op {
+        path: own_path,
+        name: validated_name,
+        kind: NodeKind::Leaf(Box::new(LeafKind::Report(op))),
+        on_error: OnError::Fail,
+        labels: None,
+        enabled: true,
+    })
 }
 
 pub(crate) fn compile_reflector(

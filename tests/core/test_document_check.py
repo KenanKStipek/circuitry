@@ -56,6 +56,7 @@ def test_misspelled_while_is_an_error_naming_the_key(tmp_path: Path) -> None:
          "temlpate", "template"),
         ({**_TOOL, "Params": {}}, "Params", "params"),
         ({"type": "yield", "name": "y", "templte": "hi"}, "templte", "template"),
+        ({"type": "report", "messge": "hi"}, "messge", "message"),
     ],
 )
 def test_near_miss_keys_are_errors(effect: dict, key: str, meant: str) -> None:
