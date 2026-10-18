@@ -601,7 +601,15 @@ fn details_lines(
     for (key, value) in &details.meta_summary {
         // Finding 11: a label of 7+ characters ("provider",
         // "adapter_noop") left no gap from `{key:<7}` alone.
-        lines.push(Line::from(format!("{key:<8} {value}")));
+        // A report's `time` is a raw timestamp; shown as a local clock
+        // time like every other time on screen (#613).
+        let shown = if key == "time" {
+            oscilloscope_core::format::format_clock_time(value, ctx.zone)
+                .unwrap_or_else(|| value.clone())
+        } else {
+            value.clone()
+        };
+        lines.push(Line::from(format!("{key:<8} {shown}")));
     }
     if let Some(error) = &details.error {
         lines.push(Line::from(""));
@@ -2073,6 +2081,35 @@ mod golden_tests {
             .unwrap();
         let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn a_reports_details_show_its_time_as_a_clock_time() {
+        let details = Details {
+            path: "prime.status".to_string(),
+            kind: RowKind::Report,
+            meta_summary: vec![
+                ("level".to_string(), "info".to_string()),
+                ("message".to_string(), "hello".to_string()),
+                ("time".to_string(), "2026-01-01T11:46:49.300Z".to_string()),
+            ],
+            ..Details::default()
+        };
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+        };
+        let text: Vec<String> = details_lines(&details, None, &test_ctx, 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(text.iter().any(|l| l == "time     11:46:49"), "{text:?}");
     }
 
     #[test]
