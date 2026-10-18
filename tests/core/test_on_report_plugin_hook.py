@@ -44,26 +44,32 @@ effects:
 """.strip() + "\n"
 
 
-def test_a_plugin_without_on_report_is_untouched(tmp_path: Path) -> None:
+def test_a_plugin_without_on_report_is_untouched(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     """A plugin implementing every other hook but not ``on_report`` keeps
     working unchanged -- the hasattr guard skips it silently, the same as
-    a plugin missing ``on_effect_start``."""
+    a plugin missing ``on_effect_start``. Without the guard, dispatching
+    the hook would raise ``AttributeError`` and log a hook-failure warning
+    (see the raising-plugin test below), which the guard must prevent."""
     orch = _write(tmp_path, "orch.yml", REPORT_ORCH)
     cfg = CircuitryConfig(plugins=["plugin_fixtures:make_recording_plugin"])
-    result = run(
-        RunRequest(
-            orchestration_path=orch,
-            state_path=None,
-            out_path=None,
-            dry_run=True,
-            validate_only=False,
-            initial_state={},
-            config=cfg,
+    with caplog.at_level("WARNING"):
+        result = run(
+            RunRequest(
+                orchestration_path=orch,
+                state_path=None,
+                out_path=None,
+                dry_run=True,
+                validate_only=False,
+                initial_state={},
+                config=cfg,
+            )
         )
-    )
     assert result.ok is True, result.error
     events = result.state["runtime"]["plugins"]["events"]
     assert not any(e["hook"] == "on_report" for e in events)
+    assert not any("on_report" in r.message for r in caplog.records)
     # The plugin's own on_run_start still ran -- it is genuinely untouched,
     # not silently broken.
     assert result.state["runtime"]["plugin_marker"]["started"] is True

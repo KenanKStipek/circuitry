@@ -245,6 +245,7 @@ def test_kafka_publishes_report_events(
     assert events[1]["level"] == "warning"
     assert events[1]["message"] == "note"
     assert events[1]["data"] == {"x": 1}
+    assert "data_truncated" not in events[1]
 
 
 def test_kafka_requires_brokers(
@@ -872,6 +873,7 @@ def test_loki_report_pushes_a_leveled_log_line(
     assert body["path"] == "prime"
     assert body["message"] == "note"
     assert body["data"] == {"x": 1}
+    assert "data_truncated" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -941,3 +943,4 @@ def test_cloudwatch_report_writes_a_log_event(
     assert msg["level"] == "warning"
     assert msg["message"] == "note"
     assert msg["data"] == {"x": 1}
+    assert "data_truncated" not in msg

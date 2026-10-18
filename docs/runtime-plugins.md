@@ -47,10 +47,10 @@ Persists each run as a `runs` row plus one `effect_results` row per effect
 — see [SQL family](#sql-family-postgres-mysql-mssql-cockroachdb-duckdb-clickhouse-sqlite)
 below for the shared schema. Stdlib `sqlite3` only. Suitable for
 single-machine development; multi-process workloads should reach for
-postgres or mysql. The SQL family and `sqlite` already keep the run's
-complete state snapshot, which carries a *named* report; they don't
-implement `on_report` on top of that (an unnamed report has no state node
-of its own either way).
+postgres or mysql. Like the rest of the SQL family, it does not
+implement `on_report`: `effect_results` holds effects, and a report is
+not one; pair it with a forwarding plugin such as `jsonl-file` to keep
+reports too.
 
 | setting | env var | config key (`runtime.runtime_plugins.sqlite.*`) | default |
 | --- | --- | --- | --- |
@@ -80,11 +80,12 @@ redacted in prod — see [Prod redaction](#prod-redaction-sql-and-surrealdb)
 below), `tokens_sent`/`tokens_received`, `started_at`/`ended_at`, `status`,
 `error`.
 
-Only `clickhouse` implements `on_report` (#615): a report becomes an
-`effect_results` row too, `effect_type: "report"`, `value` holding
-`{level, message, data|data_truncated}`, `status` always `"success"`. The
-six `SqlPersistenceBase` plugins don't — a *named* report is already in
-the run's own state, which they persist wholesale; see
+None of the seven implement `on_report` (#615): `effect_results` holds
+effects, and a report is not one — it never counts toward
+`effects_run` either, and a `report`-typed row would change what
+existing queries and dashboards count. Pair any of them with a
+forwarding plugin (`jsonl-file`, a pub/sub publisher, OpenTelemetry,
+...) to keep reports as well as effects; see
 [`plugins.md`](plugins.md#report-hook-optional).
 
 | plugin | extra | connection | config keys |
@@ -150,9 +151,9 @@ Unlike the SQL dialects, `inputs` / `value` / `raw` are stored as native
 SurrealDB objects rather than JSON-encoded text, and `effects` has no
 managed `id` column — SurrealDB assigns its own record id per `CREATE`.
 
-Like `clickhouse`, `surrealdb` implements `on_report` (#615): a report
-becomes an `effects` row too, `effect_type: "report"`, `value` holding
-`{level, message, data|data_truncated}`, `status` always `"success"`.
+Like the rest of the SQL family, `surrealdb` does not implement
+`on_report` (#615): `effects` holds effects, and a report is not one;
+pair it with a forwarding plugin to keep reports too.
 
 ### Connection / auth
 

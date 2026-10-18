@@ -131,16 +131,19 @@ class PubSubBase:
         if not self._publish_per_effect:
             return
         with self._lock:
-            self._emit({
+            message = {
                 "event": "report",
                 "run_id": context.run_id,
                 "path": report.get("path"),
                 "level": report.get("level"),
                 "message": report.get("message"),
-                "data": report.get("data"),
-                "data_truncated": report.get("data_truncated"),
-                "timestamp": _now_iso(),
-            })
+                "timestamp": report.get("ts") or _now_iso(),
+            }
+            if "data_truncated" in report:
+                message["data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                message["data"] = report["data"]
+            self._emit(message)
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state

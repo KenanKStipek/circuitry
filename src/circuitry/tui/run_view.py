@@ -44,6 +44,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.message import Message
 from textual.widgets import Button, Input, Label, Select, Static
 
@@ -100,6 +101,11 @@ CANCELLED = "Cancelled"
 
 #: Placeholder for the tree pane before an orchestration is picked.
 NO_TREE = "No orchestration picked — the effect tree appears here."
+
+#: The run log trims from the front past this many reports (#615), the
+#: same cap osi's run log uses, so a chatty run cannot grow the pane --
+#: or the full ``Text`` rebuilt from it -- without bound.
+MAX_LOG_LINES = 10_000
 
 #: Shown in place of the picker when discovery came back with nothing. An
 #: empty dropdown is a dead end; this says whose turn it is.
@@ -798,6 +804,8 @@ class RunScreen(ViewScreen):
         message.stop()
         line = report_line_text(message.message)
         self._report_log.append((message.level, line))
+        if len(self._report_log) > MAX_LOG_LINES:
+            del self._report_log[: len(self._report_log) - MAX_LOG_LINES]
         self._latest_report = line
         self._render_log()
         self._render_status()
@@ -1005,7 +1013,13 @@ class RunScreen(ViewScreen):
         status.remove_class("-failed", "-done")
         if self._status_class:
             status.add_class(self._status_class)
-        status.update(text)
+        # A report's message is free text (#615): escaping only that part
+        # keeps a literal bracket in it from being parsed as markup and
+        # crashing the app, without touching the status line's own markup.
+        markup = self._status_base
+        if self._latest_report:
+            markup = f"{markup}\n\u25b8 {escape(self._latest_report)}"
+        status.update(markup)
         self._status_text = text
 
     @property

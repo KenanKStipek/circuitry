@@ -15,7 +15,6 @@ ClickHouse uses a different driver model and gets its own coverage.
 from __future__ import annotations
 
 import importlib.util
-import json as _json
 import sys
 import types
 from dataclasses import dataclass
@@ -581,33 +580,12 @@ def test_clickhouse_lifecycle_uses_insert_and_alter(
     assert client.closed is True
 
 
-def test_clickhouse_report_writes_an_effect_results_row(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``on_report`` (#615): a row in the same ``effect_results`` table,
-    ``effect_type: "report"``."""
-    client = _FakeClickhouseClient()
-    _install_fake_clickhouse(monkeypatch, client)
-
+def test_clickhouse_does_not_implement_on_report(tmp_path: Path) -> None:
+    """ClickHouse's ``effect_results`` table holds effects, not reports
+    (#615): a report is never an effect, and the hook is absent here the
+    same way it is on every other storage plugin."""
     plugin = clickhouse_mod.plugin()
-    ctx = _make_clickhouse_context(tmp_path)
-    plugin.on_run_start(state={}, context=ctx)
-    plugin.on_report(
-        state={}, context=ctx,
-        report={"path": "prime.status", "level": "warning", "message": "note", "data": {"x": 1}},
-    )
-
-    reports = [i for i in client.inserts if i[0] == "effect_results"]
-    assert len(reports) == 1
-    _, rows, columns = reports[0]
-    row = dict(zip(columns, rows[0], strict=True))
-    assert row["state_path"] == "prime.status"
-    assert row["effect_type"] == "report"
-    assert row["status"] == "success"
-    value = _json.loads(row["value"])
-    assert value["level"] == "warning"
-    assert value["message"] == "note"
-    assert value["data"] == {"x": 1}
+    assert not hasattr(plugin, "on_report")
 
 
 def test_clickhouse_url_parsed_to_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:

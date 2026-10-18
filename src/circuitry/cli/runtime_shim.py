@@ -988,8 +988,6 @@ def run(req: RunRequest) -> RunResult:
             effect_observers.append(event_log.on_complete)
             dispatch_observers.append(event_log.on_dispatch)
             report_observers.append(event_log.on_report)
-        if req.report_observer is not None:
-            report_observers.append(req.report_observer)
         if req.concurrent_dispatch_observer is not None:
             dispatch_observers.append(req.concurrent_dispatch_observer)
         if plugins:
@@ -1046,6 +1044,8 @@ def run(req: RunRequest) -> RunResult:
             start_observers.append(req.effect_start_observer)
         if req.effect_observer is not None:
             effect_observers.append(req.effect_observer)
+        if req.report_observer is not None:
+            report_observers.append(req.report_observer)
         if req.decompose_out is not None:
             from .decompose_out import make_decompose_out_observer
 

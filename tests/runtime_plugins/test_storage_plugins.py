@@ -861,6 +861,7 @@ def test_jsonl_writes_a_report_event(tmp_path: Path) -> None:
     assert events[1]["level"] == "warning"
     assert events[1]["message"] == "note"
     assert events[1]["data"] == {"x": 1}
+    assert "data_truncated" not in events[1]
 
 
 def test_jsonl_skips_effect_events_when_disabled(tmp_path: Path) -> None:

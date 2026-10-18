@@ -25,7 +25,14 @@ from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, RunResult
 from circuitry.tui.launch import CUSTOM_MODEL, NO_OVERRIDE, OrchestrationChoice
-from circuitry.tui.run_view import CANCELLED, DONE, FAILED, RunScreen
+from circuitry.tui.run_view import (
+    CANCELLED,
+    DONE,
+    FAILED,
+    MAX_LOG_LINES,
+    RunScreen,
+    _log_text,
+)
 from circuitry.tui.screens import VIEWS
 
 RUN_SPEC = next(spec for spec in VIEWS if spec.slug == "run")
@@ -306,6 +313,74 @@ def test_a_report_shows_in_the_log_and_the_status_line(
     # The status line keeps its own headline and adds the latest report.
     assert status.startswith(DONE)
     assert "▸ careful with widgets" in status
+
+
+def test_a_warning_report_is_styled_in_the_theme_s_warning_colour() -> None:
+    """``_log_text`` (#615) styles a ``warning`` report's line with the
+    theme's own warning colour, and leaves other levels unstyled."""
+    text = _log_text(
+        [("warning", "careful with widgets"), ("info", "starting widgets")],
+        {"warning": "#ff0000"},
+    )
+    styled = [text.plain[start:end] for start, end, style in text.spans]
+    assert styled == ["▸ careful with widgets"]
+    assert text.spans[0].style == "#ff0000"
+
+
+BRACKETED_REPORT: dict[str, Any] = {
+    "adapter": "echo",
+    "model": "echo-1",
+    "effects": [
+        {"type": "report", "message": "wrote [/tmp/out]"},
+        {"type": "prompt", "name": "greet", "template": "hello"},
+    ],
+}
+
+
+def test_a_report_containing_brackets_does_not_crash_the_status_line(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """A report message is free text, not markup: a literal ``[...]`` in
+    it must not be parsed as a Textual tag and bring the app down (#615)."""
+    path = _write(tmp_path, BRACKETED_REPORT)
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[str, str, RunResult | None]:
+        screen = await _open(pilot, _screen(path))
+        screen.query_one("#run-launch", Button).press()
+        await _settle(pilot, lambda: screen.last_result is not None)
+        return screen.log_text, screen.status_text, screen.last_result
+
+    log_text, status, result = run_app(scenario)
+    assert result is not None and result.ok, result
+    assert "wrote [/tmp/out]" in log_text
+    assert "wrote [/tmp/out]" in status
+
+
+def test_the_run_log_trims_from_the_front_past_its_cap(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """The run log never grows past :data:`MAX_LOG_LINES`: pushing more
+    reports than that drops the oldest, not the newest (#615)."""
+    path = _write(tmp_path, TWO_INPUTS)
+
+    async def scenario(pilot: Pilot[Any]) -> str:
+        screen = await _open(pilot, _screen(path))
+        # Seed most of the cap directly -- pushing each through the real
+        # handler (and its full render) would make this test itself slow.
+        screen._report_log = [
+            ("info", f"line {i}") for i in range(MAX_LOG_LINES - 1)
+        ]
+        for i in range(MAX_LOG_LINES - 1, MAX_LOG_LINES + 5):
+            screen.on_run_screen_run_report(
+                screen.RunReport("prime.status", "info", f"line {i}", None)
+            )
+        return screen.log_text
+
+    log_text = run_app(scenario)
+    lines = log_text.split("\n")
+    assert len(lines) == MAX_LOG_LINES
+    assert lines[0] == f"▸ line {5}"
+    assert lines[-1] == f"▸ line {MAX_LOG_LINES + 4}"
 
 
 def test_the_ui_stays_responsive_while_the_run_is_in_flight(

@@ -170,57 +170,6 @@ class SurrealdbPlugin:
                 )
                 raise
 
-    def on_report(
-        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
-    ) -> None:
-        """A row in ``effects`` (``effect_type: "report"``) (#615): the
-        same per-effect table ``on_effect_complete`` writes to -- ``value``
-        carries ``level``, ``message`` and ``data``/``data_truncated``;
-        ``status`` is always ``"success"``, since a report never fails.
-        """
-        del state
-        with self._lock:
-            if self._client is None or self._run_id is None:
-                return
-            path = str(report.get("path", ""))
-            effect_name, parent_path, iter_index, _ = parse_effect_path(path)
-            value: dict[str, Any] = {
-                "level": report.get("level"),
-                "message": report.get("message"),
-            }
-            if "data_truncated" in report:
-                value["data_truncated"] = report["data_truncated"]
-            elif "data" in report:
-                value["data"] = report["data"]
-            try:
-                self._client.query(
-                    "CREATE effects CONTENT $data",
-                    {
-                        "data": {
-                            "run_id": context.run_id,
-                            "state_path": path,
-                            "effect_name": effect_name,
-                            "effect_type": "report",
-                            "parent_path": parent_path,
-                            "iteration_index": iter_index,
-                            "value": value,
-                            "raw": None,
-                            "tokens_sent": None,
-                            "tokens_received": None,
-                            "started_at": now_iso(),
-                            "ended_at": now_iso(),
-                            "status": "success",
-                            "error": None,
-                        }
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "surrealdb plugin failed to record report %r: %s",
-                    path, exc, exc_info=True,
-                )
-                raise
-
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state
         self._finalize_run(run_id=context.run_id, status="success", error=None)

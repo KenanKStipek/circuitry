@@ -18,8 +18,8 @@ Configuration:
      ``runtime_plugins.jsonl-file.path`` (default ``./circuitry-runs.jsonl``).
   2. Env var ``CIRCUITRY_JSONL_INCLUDE_EFFECTS`` /
      ``runtime_plugins.jsonl-file.include_effects`` (bool, default True):
-     when False, ``effect_complete`` events are omitted (only run-level
-     events are recorded).
+     when False, ``effect_complete`` events are omitted; ``report`` events
+     are written regardless, since a report is never counted as an effect.
 """
 
 from __future__ import annotations
@@ -116,16 +116,19 @@ class JsonlFilePlugin:
     ) -> None:
         del state
         with self._lock:
-            self._append({
+            line = {
                 "event": "report",
                 "run_id": context.run_id,
                 "path": report.get("path"),
                 "level": report.get("level"),
                 "message": report.get("message"),
-                "data": report.get("data"),
-                "data_truncated": report.get("data_truncated"),
-                "timestamp": _now_iso(),
-            })
+                "timestamp": report.get("ts") or _now_iso(),
+            }
+            if "data_truncated" in report:
+                line["data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                line["data"] = report["data"]
+            self._append(line)
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state
