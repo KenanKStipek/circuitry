@@ -72,6 +72,12 @@ class FailingPlugin:
         del state, context, effect_path, effect_result
         raise RuntimeError("plugin effect_complete exploded")
 
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state, context, report
+        raise RuntimeError("plugin report exploded")
+
 
 class LifecyclePlugin:
     """Records the per-effect lifecycle as an ordered ``kind:path`` log.
@@ -155,6 +161,34 @@ class StartOnlyPlugin:
         marker.setdefault("effect_paths", []).append(effect_path)
 
 
+class ReportPlugin:
+    """Records every ``report`` dict the ``on_report`` hook receives, in
+    the order it fires (#615) -- the end-to-end counterpart to
+    ``LifecyclePlugin``'s start/complete log."""
+
+    name = "report-plugin"
+
+    def on_run_start(self, *, state: dict[str, Any], context: Any) -> None:
+        del context
+        state.setdefault("runtime", {}).setdefault("report_marker", {}).setdefault(
+            "reports", []
+        )
+
+    def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
+        del state, context
+
+    def on_run_failure(self, *, state: dict[str, Any], context: Any, error: str) -> None:
+        del state, context, error
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del context
+        runtime = state.setdefault("runtime", {})
+        marker = runtime.setdefault("report_marker", {})
+        marker.setdefault("reports", []).append(dict(report))
+
+
 class InvalidPlugin:
     name = "invalid-plugin"
 
@@ -177,3 +211,7 @@ def make_lifecycle_plugin() -> LifecyclePlugin:
 
 def make_start_only_plugin() -> StartOnlyPlugin:
     return StartOnlyPlugin()
+
+
+def make_report_plugin() -> ReportPlugin:
+    return ReportPlugin()

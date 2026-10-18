@@ -31,6 +31,7 @@ from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
 from ..core.parsed_stdout import parsed_stdout_errors
 from ..core.prompt_record import prompt_sent_errors
+from ..core.report import build_report_payload
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -987,8 +988,6 @@ def run(req: RunRequest) -> RunResult:
             effect_observers.append(event_log.on_complete)
             dispatch_observers.append(event_log.on_dispatch)
             report_observers.append(event_log.on_report)
-        if req.report_observer is not None:
-            report_observers.append(req.report_observer)
         if req.concurrent_dispatch_observer is not None:
             dispatch_observers.append(req.concurrent_dispatch_observer)
         if plugins:
@@ -1025,12 +1024,28 @@ def run(req: RunRequest) -> RunResult:
                     effect_result=effect_result,
                 )
 
+            def _notify_plugins_report(
+                path: str, level: str, message: str, data: Any
+            ) -> None:
+                invoke_plugins(
+                    plugins=plugins,
+                    hook_name="on_report",
+                    state=state,
+                    context=_plugin_ctx,
+                    report=build_report_payload(
+                        path=path, level=level, message=message, data=data
+                    ),
+                )
+
             start_observers.append(_notify_plugins_start)
             effect_observers.append(_notify_plugins)
+            report_observers.append(_notify_plugins_report)
         if req.effect_start_observer is not None:
             start_observers.append(req.effect_start_observer)
         if req.effect_observer is not None:
             effect_observers.append(req.effect_observer)
+        if req.report_observer is not None:
+            report_observers.append(req.report_observer)
         if req.decompose_out is not None:
             from .decompose_out import make_decompose_out_observer
 

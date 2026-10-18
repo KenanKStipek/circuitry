@@ -15,6 +15,7 @@ registration modes:
 Metrics emitted:
   - Counter ``circuitry_runs_total{status="started|succeeded|failed"}``.
   - Counter ``circuitry_effects_total``.
+  - Counter ``circuitry_reports_total{level="info|warning"}``.
   - Histogram ``circuitry_tokens_sent`` / ``circuitry_tokens_received``.
 
 Optional dep: ``prometheus-client``. Install with
@@ -90,6 +91,11 @@ class PrometheusPlugin:
             "Circuitry effects completed.",
             (),
         )
+        self._counters["reports"] = self._get_or_create_counter(
+            Counter, "circuitry_reports_total",
+            "Circuitry reports published.",
+            ("level",),
+        )
         self._histograms["tokens_sent"] = self._get_or_create_counter(
             Histogram, "circuitry_tokens_sent",
             "Tokens sent per effect.",
@@ -142,6 +148,15 @@ class PrometheusPlugin:
             v = meta.get(key)
             if isinstance(v, int):
                 self._histograms[hist_key].observe(v)
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state, context
+        if not self._counters:
+            return
+        level = report.get("level") or "info"
+        self._counters["reports"].labels(level=level).inc()
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state, context

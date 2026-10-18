@@ -8,12 +8,13 @@ event is fire-and-forget.
 Each event has a stable shape:
 
     {
-        "event": "run_start" | "effect_complete" | "run_success" | "run_failure",
+        "event": "run_start" | "effect_complete" | "report" | "run_success" | "run_failure",
         "run_id": str,
         "orchestration_path": str,
         "timestamp": iso_8601_str,
         # plus event-specific fields:
         # effect_complete → effect_path, value, error
+        # report          → path, level, message, data/data_truncated
         # run_failure     → error
     }
 
@@ -122,6 +123,27 @@ class PubSubBase:
                 "error": meta.get("error"),
                 "timestamp": _now_iso(),
             })
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state
+        if not self._publish_per_effect:
+            return
+        with self._lock:
+            message = {
+                "event": "report",
+                "run_id": context.run_id,
+                "path": report.get("path"),
+                "level": report.get("level"),
+                "message": report.get("message"),
+                "timestamp": report.get("ts") or _now_iso(),
+            }
+            if "data_truncated" in report:
+                message["data_truncated"] = report["data_truncated"]
+            elif "data" in report:
+                message["data"] = report["data"]
+            self._emit(message)
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state

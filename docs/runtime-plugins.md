@@ -3,7 +3,10 @@
 This catalogs every bundled `circuitry.runtime_plugins.*` sidecar that
 persists or forwards run telemetry. See [`plugins.md`](plugins.md) for the
 hook contract itself (`on_run_start` / `on_effect_start` / `on_effect_complete`
-/ `on_run_success` / `on_run_failure`, registration, failure isolation).
+/ `on_report` / `on_run_success` / `on_run_failure`, registration, failure
+isolation). Each plugin below that forwards a `report` effect (#605) says
+so under its own entry; the rest record or publish one item per effect
+event and, where noted, one per report in the same shape.
 
 Enable any of them via `plugins` + `enabled_plugins` in config.json (or an
 orchestration's own `runtime:` block, subject to the trust rules in
@@ -28,9 +31,10 @@ persistence without installing anything.
 ### `jsonl-file`
 
 Appends one JSON line per lifecycle event (`run_start`, `effect_complete`,
-`run_success`, `run_failure`) to a local file — an event stream, not a
-latest-state snapshot, which makes it well suited to `grep`/`jq` and CI
-logs. Stdlib only.
+`report`, `run_success`, `run_failure`) to a local file — an event stream,
+not a latest-state snapshot, which makes it well suited to `grep`/`jq` and
+CI logs. Stdlib only. A `report` line is written regardless of
+`include_effects`, since a report is never counted as an effect.
 
 | setting | env var | config key (`runtime.runtime_plugins.jsonl-file.*`) | default |
 | --- | --- | --- | --- |
@@ -43,7 +47,10 @@ Persists each run as a `runs` row plus one `effect_results` row per effect
 — see [SQL family](#sql-family-postgres-mysql-mssql-cockroachdb-duckdb-clickhouse-sqlite)
 below for the shared schema. Stdlib `sqlite3` only. Suitable for
 single-machine development; multi-process workloads should reach for
-postgres or mysql.
+postgres or mysql. Like the rest of the SQL family, it does not
+implement `on_report`: `effect_results` holds effects, and a report is
+not one; pair it with a forwarding plugin such as `jsonl-file` to keep
+reports too.
 
 | setting | env var | config key (`runtime.runtime_plugins.sqlite.*`) | default |
 | --- | --- | --- | --- |
@@ -72,6 +79,14 @@ plugin's behaviour with its own dialect.
 redacted in prod — see [Prod redaction](#prod-redaction-sql-and-surrealdb)
 below), `tokens_sent`/`tokens_received`, `started_at`/`ended_at`, `status`,
 `error`.
+
+None of the seven implement `on_report` (#615): `effect_results` holds
+effects, and a report is not one — it never counts toward
+`effects_run` either, and a `report`-typed row would change what
+existing queries and dashboards count. Pair any of them with a
+forwarding plugin (`jsonl-file`, a pub/sub publisher, OpenTelemetry,
+...) to keep reports as well as effects; see
+[`plugins.md`](plugins.md#report-hook-optional).
 
 | plugin | extra | connection | config keys |
 | --- | --- | --- | --- |
@@ -136,6 +151,10 @@ Unlike the SQL dialects, `inputs` / `value` / `raw` are stored as native
 SurrealDB objects rather than JSON-encoded text, and `effects` has no
 managed `id` column — SurrealDB assigns its own record id per `CREATE`.
 
+Like the rest of the SQL family, `surrealdb` does not implement
+`on_report` (#615): `effects` holds effects, and a report is not one;
+pair it with a forwarding plugin to keep reports too.
+
 ### Connection / auth
 
 Config sources (env wins, then `runtime.runtime_plugins.surrealdb.*` in
@@ -194,7 +213,9 @@ These twelve plugins all extend `SnapshotPersistenceBase`: each writes (or
 overwrites) one whole-state JSON snapshot per run — keyed, indexed, or
 named by `run_id` — rather than a row per effect. There is no cross-run
 query surface built in; each store's own tooling (a `SELECT`, a `scan`, a
-bucket listing) is how you look at more than one run at a time.
+bucket listing) is how you look at more than one run at a time. None of
+them implement `on_report` (#615): a named report is already in the
+whole-state snapshot they write.
 
 | plugin | extra | storage shape | required config | optional config |
 | --- | --- | --- | --- | --- |
@@ -221,7 +242,9 @@ wins when both are set. The runtime `s3` plugin and the LLM-callable `s3`
 
 These three publish JSON-encoded lifecycle events to a topic/queue/exchange
 instead of persisting anything themselves — a downstream consumer is
-responsible for storage. All extend the shared `PubSubBase`.
+responsible for storage. All extend the shared `PubSubBase`, which also
+publishes a `report` message (#615), gated by the same
+`publish_per_effect` setting as `effect_complete`.
 
 | plugin | extra | broker setting | topic (default `circuitry-runs`) | notes |
 | --- | --- | --- | --- | --- |
@@ -236,10 +259,10 @@ persisting run state.
 
 | plugin | extra | signal | required config | notes |
 | --- | --- | --- | --- | --- |
-| `opentelemetry` | `opentelemetry-api`/`-sdk`/`-exporter-otlp-proto-http` (`[opentelemetry]`) | one span per run, one child span per effect, nested along the orchestration's own structure (a loop/`use`/dynamic's span parents every effect its body runs); each span's start/end come from the effect's own `meta.created_at`/`completed_at`, not from whenever the exporter happens to run, so durations are real | — | standard `OTEL_*` env vars (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, ...); falls back to a console exporter when no OTLP endpoint is set |
-| `honeycomb` | same OTel packages (`[honeycomb]`) | one zero-duration, unparented span per effect, exported to Honeycomb's OTLP ingest — not yet on `opentelemetry`'s real-timing/nesting span schema (tracked separately) | `HONEYCOMB_API_KEY` | `HONEYCOMB_DATASET` (default `circuitry`), `HONEYCOMB_API_HOST` (default `https://api.honeycomb.io`) |
-| `sentry` | `sentry-sdk` (`[sentry]`) | exceptions on run failure, tagged with `run_id`/`orchestration_path`; completed effects become breadcrumbs | `SENTRY_DSN` | — |
-| `datadog` | `datadog` (`[datadog]`) | count metrics (`circuitry.runs.started`, `circuitry.effects.completed`, `circuitry.runs.succeeded`/`failed`) plus token-count histograms | `DD_API_KEY` | `DD_APP_KEY`, `DD_SITE` (default `datadoghq.com`) |
-| `prometheus` | `prometheus-client` (`[prometheus]`) | counters (`circuitry_runs_total{status=...}`, `circuitry_effects_total`) and token histograms | — | Pushgateway mode when `PROMETHEUS_PUSHGATEWAY` is set; otherwise accumulates in the default registry for an external scrape endpoint |
-| `cloudwatch` | `boto3` (`[cloudwatch]`) | JSON lifecycle events as CloudWatch Logs lines | `CLOUDWATCH_LOG_GROUP` (log group must pre-exist) | `CLOUDWATCH_REGION`, `runtime.runtime_plugins.cloudwatch.log_stream` (default `circuitry-{run_id}`) |
-| `loki` | `requests` (`[loki]`) | JSON lifecycle events pushed to Loki's `/loki/api/v1/push`, labelled `run_id`+`event` | `LOKI_URL` | `LOKI_USER`/`LOKI_PASSWORD` (basic auth), `runtime.runtime_plugins.loki.labels` (extra static labels) |
+| `opentelemetry` | `opentelemetry-api`/`-sdk`/`-exporter-otlp-proto-http` (`[opentelemetry]`) | one span per run, one child span per effect, nested along the orchestration's own structure (a loop/`use`/dynamic's span parents every effect its body runs); each span's start/end come from the effect's own `meta.created_at`/`completed_at`, not from whenever the exporter happens to run, so durations are real | — | standard `OTEL_*` env vars (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, ...); falls back to a console exporter when no OTLP endpoint is set. A report (#615) adds a `report` span event on the run's own span, with `path`/`level`/`message` attributes plus `data` as a JSON string attribute (or `data_truncated`) |
+| `honeycomb` | same OTel packages (`[honeycomb]`) | one zero-duration, unparented span per effect, exported to Honeycomb's OTLP ingest — not yet on `opentelemetry`'s real-timing/nesting span schema (tracked separately) | `HONEYCOMB_API_KEY` | `HONEYCOMB_DATASET` (default `circuitry`), `HONEYCOMB_API_HOST` (default `https://api.honeycomb.io`). A report (#615) adds the same `report` span event `opentelemetry`'s own `on_report` does |
+| `sentry` | `sentry-sdk` (`[sentry]`) | exceptions on run failure, tagged with `run_id`/`orchestration_path`; completed effects become breadcrumbs | `SENTRY_DSN` | A report (#615) becomes a breadcrumb too, `level: warning` mapped to Sentry's own `warning` level |
+| `datadog` | `datadog` (`[datadog]`) | count metrics (`circuitry.runs.started`, `circuitry.effects.completed`, `circuitry.runs.succeeded`/`failed`) plus token-count histograms | `DD_API_KEY` | `DD_APP_KEY`, `DD_SITE` (default `datadoghq.com`). A report (#615) increments `circuitry.reports`, tagged `level:info`/`level:warning` |
+| `prometheus` | `prometheus-client` (`[prometheus]`) | counters (`circuitry_runs_total{status=...}`, `circuitry_effects_total`, `circuitry_reports_total{level=...}` (#615)) and token histograms | — | Pushgateway mode when `PROMETHEUS_PUSHGATEWAY` is set; otherwise accumulates in the default registry for an external scrape endpoint |
+| `cloudwatch` | `boto3` (`[cloudwatch]`) | JSON lifecycle events as CloudWatch Logs lines | `CLOUDWATCH_LOG_GROUP` (log group must pre-exist) | `CLOUDWATCH_REGION`, `runtime.runtime_plugins.cloudwatch.log_stream` (default `circuitry-{run_id}`). A report (#615) becomes an `event: "report"` log line the same way |
+| `loki` | `requests` (`[loki]`) | JSON lifecycle events pushed to Loki's `/loki/api/v1/push`, labelled `run_id`+`event` | `LOKI_URL` | `LOKI_USER`/`LOKI_PASSWORD` (basic auth), `runtime.runtime_plugins.loki.labels` (extra static labels). A report (#615) adds a `level` label (Loki has no native severity concept of its own) |

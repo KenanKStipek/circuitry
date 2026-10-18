@@ -70,6 +70,21 @@ class RuntimePlugin(Protocol):
         effect_result: dict[str, Any],
     ) -> None: ...
 
+    # Optional: fired by a ``report`` effect, never by any other hook -- a
+    # report never fires on_effect_start/on_effect_complete, so it never
+    # counts as work (#605, #615). ``report`` is a dict with the same
+    # fields as the ``--events`` report line minus the envelope
+    # (v/seq/ev): ``ts``, ``path``, ``level``, ``message``, then ``data``
+    # or ``data_truncated``. Same optionality guard as on_effect_start: a
+    # plugin missing this hook is skipped silently.
+    def on_report(
+        self,
+        *,
+        state: dict[str, Any],
+        context: PluginContext,
+        report: dict[str, Any],
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class PluginLoadResult:
@@ -125,6 +140,7 @@ def invoke_plugins(
     effect_path: str | None = None,
     effect_result: dict[str, Any] | None = None,
     effect_node: dict[str, Any] | None = None,
+    report: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
@@ -162,6 +178,17 @@ def invoke_plugins(
                     context=context,
                     effect_path=effect_path or "",
                     effect_result=effect_result or {},
+                )
+            elif hook_name == "on_report":
+                # Optional hook, same guard as on_effect_start/complete --
+                # a plugin predating #615 is skipped silently.
+                report_handler = getattr(plugin, "on_report", None)
+                if report_handler is None or not callable(report_handler):
+                    continue
+                report_handler(
+                    state=state,
+                    context=context,
+                    report=report or {},
                 )
             else:
                 raise ValueError(f"Unknown plugin hook: {hook_name}")

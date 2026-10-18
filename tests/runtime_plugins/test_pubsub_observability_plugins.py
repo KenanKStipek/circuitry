@@ -221,6 +221,33 @@ def test_kafka_lifecycle_publishes_each_event(
     assert producer.flushed >= 1
 
 
+def test_kafka_publishes_report_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``on_report`` (#615), via the shared ``PubSubBase`` every pub/sub
+    plugin extends."""
+    holder = _install_fake_kafka(monkeypatch)
+    monkeypatch.setenv("KAFKA_BROKERS", "localhost:9092")
+
+    plugin = kafka_mod.plugin()
+    ctx = _make_context(tmp_path, "kafka")
+
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+    plugin.on_run_success(state={}, context=ctx)
+
+    events = [_json.loads(body) for _, body in holder["p"].produced]
+    assert [e["event"] for e in events] == ["run_start", "report", "run_success"]
+    assert events[1]["path"] == "prime"
+    assert events[1]["level"] == "warning"
+    assert events[1]["message"] == "note"
+    assert events[1]["data"] == {"x": 1}
+    assert "data_truncated" not in events[1]
+
+
 def test_kafka_requires_brokers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -402,6 +429,34 @@ def test_sentry_captures_failure_message(
     assert any(m[0].startswith("circuitry run failed") for m in captured["messages"])
 
 
+def test_sentry_report_becomes_a_breadcrumb(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = types.ModuleType("sentry_sdk")
+    captured: dict[str, Any] = {"breadcrumbs": [], "tags": {}}
+
+    fake.init = lambda **kwargs: None
+    fake.set_tag = lambda k, v: captured["tags"].update({k: v})
+    fake.add_breadcrumb = lambda **kwargs: captured["breadcrumbs"].append(kwargs)
+    monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
+    monkeypatch.setenv("SENTRY_DSN", "https://abc@sentry.example/1")
+
+    plugin = sentry_mod.plugin()
+    ctx = _make_context(tmp_path, "sentry")
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+    report_crumbs = [
+        c for c in captured["breadcrumbs"] if c["category"] == "circuitry.report"
+    ]
+    assert len(report_crumbs) == 1
+    assert report_crumbs[0]["message"] == "note"
+    assert report_crumbs[0]["level"] == "warning"
+    assert report_crumbs[0]["data"] == {"path": "prime", "data": {"x": 1}}
+
+
 # ---------------------------------------------------------------------------
 # Datadog
 # ---------------------------------------------------------------------------
@@ -443,6 +498,36 @@ def test_datadog_emits_run_and_effect_metrics(
     assert any(h[0] == "circuitry.tokens.sent" and h[1] == 10 for h in histograms)
 
 
+def test_datadog_report_increments_a_leveled_counter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = types.ModuleType("datadog")
+    increments: list[tuple[str, list]] = []
+
+    class FakeStatsd:
+        def increment(self, metric: str, tags: list | None = None) -> None:
+            increments.append((metric, list(tags or [])))
+
+    fake.initialize = lambda **k: None
+    fake.statsd = FakeStatsd()
+    monkeypatch.setitem(sys.modules, "datadog", fake)
+    monkeypatch.setenv("DD_API_KEY", "abc")
+
+    plugin = datadog_mod.plugin()
+    ctx = _make_context(tmp_path, "datadog")
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note"},
+    )
+
+    report_increments = [
+        tags for m, tags in increments if m == "circuitry.reports"
+    ]
+    assert len(report_increments) == 1
+    assert "level:warning" in report_increments[0]
+
+
 # ---------------------------------------------------------------------------
 # Honeycomb
 # ---------------------------------------------------------------------------
@@ -454,12 +539,16 @@ class _FakeSpan:
         self.attributes = dict(attributes or {})
         self.ended = False
         self.status: Any = None
+        self.events: list[tuple[str, dict]] = []
 
     def set_status(self, status: Any) -> None:
         self.status = status
 
     def end(self) -> None:
         self.ended = True
+
+    def add_event(self, name: str, attributes: dict | None = None) -> None:
+        self.events.append((name, dict(attributes or {})))
 
     def __enter__(self) -> _FakeSpan:
         return self
@@ -481,14 +570,16 @@ class _FakeTracer:
         return self.start_span(name, attributes)
 
 
-def test_honeycomb_includes_team_header(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def _install_fake_otel(
+    monkeypatch: pytest.MonkeyPatch, tracer: _FakeTracer
+) -> dict[str, Any]:
+    """Install fake ``opentelemetry``/OTLP-exporter modules wired to
+    *tracer*, returning the dict ``on_run_start`` fills with what it built
+    (resource, processor, endpoint, headers, shutdown)."""
     captured_init: dict[str, Any] = {}
 
     fake_api = types.ModuleType("opentelemetry")
     fake_trace = types.ModuleType("opentelemetry.trace")
-    tracer = _FakeTracer()
 
     class FakeStatus:
         def __init__(self, code: Any, description: str = "") -> None:
@@ -550,6 +641,14 @@ def test_honeycomb_includes_team_header(
     ):
         monkeypatch.setitem(sys.modules, name, mod)
 
+    return captured_init
+
+
+def test_honeycomb_includes_team_header(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tracer = _FakeTracer()
+    captured_init = _install_fake_otel(monkeypatch, tracer)
     monkeypatch.setenv("HONEYCOMB_API_KEY", "team-secret")
 
     plugin = honeycomb_mod.plugin()
@@ -560,6 +659,33 @@ def test_honeycomb_includes_team_header(
     assert captured_init["headers"]["x-honeycomb-team"] == "team-secret"
     assert captured_init["endpoint"].endswith("/v1/traces")
     assert captured_init["shutdown"] is True
+
+
+def test_honeycomb_report_adds_a_span_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``on_report`` (#615) -- the same span-event schema :mod:`.opentelemetry`
+    uses, since honeycomb delegates span creation to the same OTel tracer."""
+    tracer = _FakeTracer()
+    _install_fake_otel(monkeypatch, tracer)
+    monkeypatch.setenv("HONEYCOMB_API_KEY", "team-secret")
+
+    plugin = honeycomb_mod.plugin()
+    ctx = _make_context(tmp_path, "honeycomb")
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+
+    run_span = next(s for s in tracer.spans if s.name == "circuitry.run")
+    events = [e for e in run_span.events if e[0] == "report"]
+    assert len(events) == 1
+    attrs = events[0][1]
+    assert attrs["circuitry.path"] == "prime"
+    assert attrs["circuitry.level"] == "warning"
+    assert attrs["circuitry.message"] == "note"
+    assert attrs["circuitry.data"] == '{"x": 1}'
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +746,50 @@ def test_prometheus_increments_run_counter(
     assert ("circuitry_tokens_received", 4) in histograms
 
 
+def test_prometheus_report_increments_a_leveled_counter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = types.ModuleType("prometheus_client")
+    increments: list[tuple[str, dict]] = []
+
+    class FakeRegistry:
+        _names_to_collectors: ClassVar[dict] = {}
+
+    class FakeCounter:
+        def __init__(self, name: str, doc: str, labelnames: list | None = None, registry: Any = None) -> None:
+            self.name = name
+
+        def labels(self, **kwargs: Any) -> FakeCounter:
+            self._labels = kwargs
+            return self
+
+        def inc(self) -> None:
+            increments.append((self.name, getattr(self, "_labels", {})))
+
+    class FakeHistogram:
+        def __init__(self, name: str, doc: str, registry: Any = None) -> None:
+            self.name = name
+
+        def observe(self, value: float) -> None:
+            del value
+
+    fake.CollectorRegistry = FakeRegistry
+    fake.Counter = FakeCounter
+    fake.Histogram = FakeHistogram
+    fake.REGISTRY = FakeRegistry()
+    monkeypatch.setitem(sys.modules, "prometheus_client", fake)
+
+    plugin = prometheus_mod.plugin()
+    ctx = _make_context(tmp_path, "prometheus")
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note"},
+    )
+
+    assert ("circuitry_reports_total", {"level": "warning"}) in increments
+
+
 # ---------------------------------------------------------------------------
 # Loki
 # ---------------------------------------------------------------------------
@@ -673,6 +843,39 @@ def test_loki_no_op_without_url(
     plugin.on_run_success(state={}, context=ctx)
 
 
+def test_loki_report_pushes_a_leveled_log_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = types.ModuleType("requests")
+    posts: list[dict] = []
+
+    def fake_post(url: str, **kwargs: Any) -> Any:
+        posts.append({"url": url, **kwargs})
+        return types.SimpleNamespace(status_code=204)
+
+    fake.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake)
+    monkeypatch.setenv("LOKI_URL", "http://loki.example:3100")
+
+    plugin = loki_mod.plugin()
+    ctx = _make_context(tmp_path, "loki")
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+
+    report_post = posts[-1]
+    streams = report_post["json"]["streams"]
+    assert streams[0]["stream"]["event"] == "report"
+    assert streams[0]["stream"]["level"] == "warning"
+    body = _json.loads(streams[0]["values"][0][1])
+    assert body["path"] == "prime"
+    assert body["message"] == "note"
+    assert body["data"] == {"x": 1}
+    assert "data_truncated" not in body
+
+
 # ---------------------------------------------------------------------------
 # CloudWatch
 # ---------------------------------------------------------------------------
@@ -706,3 +909,38 @@ def test_cloudwatch_writes_log_events_with_run_stream(
     assert len(captured["events"]) == 2
     msgs = [_json.loads(e["logEvents"][0]["message"]) for e in captured["events"]]
     assert [m["event"] for m in msgs] == ["run_start", "run_success"]
+
+
+def test_cloudwatch_report_writes_a_log_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = types.ModuleType("boto3")
+    captured: dict[str, Any] = {"streams": [], "events": []}
+
+    class FakeLogsClient:
+        def create_log_stream(self, **kwargs: Any) -> None:
+            captured["streams"].append(kwargs)
+
+        def put_log_events(self, **kwargs: Any) -> dict:
+            captured["events"].append(kwargs)
+            return {"nextSequenceToken": "tok-2"}
+
+    fake.client = lambda service, **kwargs: FakeLogsClient()
+    monkeypatch.setitem(sys.modules, "boto3", fake)
+    monkeypatch.setenv("CLOUDWATCH_LOG_GROUP", "/circuitry/runs")
+
+    plugin = cloudwatch_mod.plugin()
+    ctx = _make_context(tmp_path, "cloudwatch")
+    plugin.on_run_start(state={}, context=ctx)
+    plugin.on_report(
+        state={}, context=ctx,
+        report={"path": "prime", "level": "warning", "message": "note", "data": {"x": 1}},
+    )
+
+    msg = _json.loads(captured["events"][-1]["logEvents"][0]["message"])
+    assert msg["event"] == "report"
+    assert msg["path"] == "prime"
+    assert msg["level"] == "warning"
+    assert msg["message"] == "note"
+    assert msg["data"] == {"x": 1}
+    assert "data_truncated" not in msg

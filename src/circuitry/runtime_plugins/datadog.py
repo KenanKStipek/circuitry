@@ -3,6 +3,7 @@
 Emits one count metric per lifecycle event:
   - ``circuitry.runs.started``
   - ``circuitry.effects.completed``
+  - ``circuitry.reports`` (tagged ``level:info``/``level:warning``)
   - ``circuitry.runs.succeeded`` / ``circuitry.runs.failed``
 
 Plus a histogram for token counts when present:
@@ -83,6 +84,17 @@ class DatadogPlugin:
             v = meta.get(key)
             if isinstance(v, int):
                 self._statsd.histogram(metric_name, v, tags=tags)
+
+    def on_report(
+        self, *, state: dict[str, Any], context: Any, report: dict[str, Any]
+    ) -> None:
+        del state, context
+        if self._statsd is None:
+            return
+        level = report.get("level") or "info"
+        self._statsd.increment(
+            "circuitry.reports", tags=[*self._tags, f"level:{level}"]
+        )
 
     def on_run_success(self, *, state: dict[str, Any], context: Any) -> None:
         del state, context
