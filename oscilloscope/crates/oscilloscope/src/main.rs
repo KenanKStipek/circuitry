@@ -1416,7 +1416,7 @@ fn run_tui(
             mark_details_highlights(
                 &mut highlights,
                 &mut prev_details_highlight,
-                app.selected_path.as_deref(),
+                details_selection_path(&app).as_deref(),
                 &plan,
                 &model,
                 current_state.as_ref(),
@@ -1426,13 +1426,13 @@ fn run_tui(
             needs_rebuild = false;
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.select_tree_path(Some(target.to_string()));
+                    app.select_tree_path_keeping_details(Some(target.to_string()));
                 }
             }
             app.reconcile_folding(&render_state.rows);
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
-                app.select_tree_path(first);
+                app.select_tree_path_keeping_details(first);
             }
         }
         // K4: computed every tick regardless (collapse/filter/errors-
@@ -1457,9 +1457,9 @@ fn run_tui(
                 Ok(Ok(ev)) => match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
                         let running = exit_status.is_none();
-                        let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
+                        let has_prompt_sent = details_selection_path(&app).is_some_and(|p| {
                             oscilloscope_core::render::full_value(
-                                p,
+                                &p,
                                 oscilloscope_core::render::FullValueField::PromptSent,
                                 current_state.as_ref(),
                             )
@@ -2445,7 +2445,7 @@ fn run_tui_watch(
             mark_details_highlights(
                 &mut highlights,
                 &mut prev_details_highlight,
-                app.selected_path.as_deref(),
+                details_selection_path(&app).as_deref(),
                 &plan,
                 &model,
                 last_state.as_ref(),
@@ -2455,13 +2455,13 @@ fn run_tui_watch(
             needs_rebuild = false;
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.select_tree_path(Some(target.to_string()));
+                    app.select_tree_path_keeping_details(Some(target.to_string()));
                 }
             }
             app.reconcile_folding(&render_state.rows);
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
-                app.select_tree_path(first);
+                app.select_tree_path_keeping_details(first);
             }
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
@@ -2486,9 +2486,9 @@ fn run_tui_watch(
                         // `c` does nothing, and `q` detaches at once,
                         // with no confirm, whether the watched run is
                         // still going or not.
-                        let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
+                        let has_prompt_sent = details_selection_path(&app).is_some_and(|p| {
                             oscilloscope_core::render::full_value(
-                                p,
+                                &p,
                                 oscilloscope_core::render::FullValueField::PromptSent,
                                 last_state.as_ref(),
                             )

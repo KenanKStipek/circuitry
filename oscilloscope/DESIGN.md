@@ -719,7 +719,12 @@ that alone can never answer it, and a selection made in the state pane
 must still be what `Details` shows (and lets the user scroll) once
 they tab there, since a named report has no row in the orchestration
 pane at all to select instead. The two selections stay independent of
-each other exactly as before.
+each other exactly as before. Only a selection the user moves switches
+the details pane's source: follow, a row folding away mid-run and the
+first selection of a run move the orchestration pane's selection
+without taking the details pane away from a state-pane selection, and
+`v` and the details pane's own highlights always act on the node the
+details pane is showing.
 
 The details pane scrolls when it has focus (`↑↓`, `PgUp`/`PgDn`,
 `Home`/`End`, `g`/`G`, via `ratatui::widgets::Paragraph::scroll`), and

@@ -118,7 +118,7 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
     }
     // #610: a new report counts as its own header change, never
     // folded into `header:status` -- the run's own status and the
-    // latest report's message are shown in the same slot but change
+    // latest report's message are both in the header but change
     // for different reasons, and elapsed time (ticking every
     // rebuild) must never highlight at all, which comparing the
     // whole `Header` by equality here would risk if a report's

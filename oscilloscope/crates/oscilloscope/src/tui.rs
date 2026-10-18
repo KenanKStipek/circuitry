@@ -1561,9 +1561,10 @@ pub fn draw(
             // Finding 5: reads straight from `raw_state`, bypassing
             // `details`' own truncated preview entirely — that's the
             // whole point of asking to see it in full.
-            let full = app
-                .selected_path
-                .as_deref()
+            // The node the details pane is showing (#610: a state-pane
+            // selection such as a named report), not the tree's own.
+            let full = details
+                .map(|d| d.path.as_str())
                 .and_then(|p| oscilloscope_core::render::full_value(p, *field, raw_state));
             let text = vec![Line::from(full.unwrap_or_default())];
             draw_overlay(
@@ -2081,6 +2082,77 @@ mod golden_tests {
             .unwrap();
         let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn the_full_value_overlay_opens_the_node_the_details_pane_shows() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "TREE-ROW-VALUE", "meta": {"created_at": "2026-01-01T11:46:49.000Z", "completed_at": "2026-01-01T11:46:50.000Z", "error": null, "provider": "shell"}},
+            "status": {"value": {"message": "m", "level": "info", "data": {"k": "REPORT-DATA"}},
+                "meta": {"created_at": "2026-01-01T11:46:50.000Z", "completed_at": "2026-01-01T11:46:50.000Z"}}
+        }});
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T11:46:51.000Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        // The tree selection is `prime.a`; the details pane shows the
+        // named report picked in the state pane.
+        let details = render::details_for("prime.status", &plan, &model, Some(&state));
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.state_selected_path = Some("status".to_string());
+        app.details_source = Pane::State;
+        app.follow = false;
+        app.dialog = Dialog::FullValue(oscilloscope_core::render::FullValueField::Value);
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen: String = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("full value"), "{screen}");
+        assert!(screen.contains("REPORT-DATA"), "{screen}");
+        assert!(!screen.contains("TREE-ROW-VALUE"), "{screen}");
     }
 
     #[test]

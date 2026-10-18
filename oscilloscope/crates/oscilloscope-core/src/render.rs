@@ -2005,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn a_named_reports_state_node_renders_as_a_finished_row_and_is_not_counted() {
+    fn a_named_reports_state_node_is_not_a_row_and_is_not_counted() {
         use electricity_bytecode::{
             EffectPath, Escape, LeafKind, NodeKind, OnError, Op, Region, ReportLevel, ReportOp,
             TemplateText,

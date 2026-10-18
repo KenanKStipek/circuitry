@@ -231,8 +231,8 @@ pub enum Event {
     },
 }
 
-/// `ev: "report"`'s own `level` (DESIGN.md §8.7/orchestration-reference
-/// "### report"): `info` unless the line says `warning`. Deliberately
+/// `ev: "report"`'s own `level` (electricity's runtime-semantics.md
+/// §8.7, orchestration-reference "### report"): `info` unless the line says `warning`. Deliberately
 /// not `electricity_bytecode::ReportLevel` -- that type belongs to the
 /// compiler's own IR, not to a parsed `--events` line, and osi's own
 /// read of this field must not depend on an engine crate at all.

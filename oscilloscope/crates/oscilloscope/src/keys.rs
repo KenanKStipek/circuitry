@@ -171,6 +171,21 @@ impl App {
         }
     }
 
+    /// Moves the orchestration pane's selection the way follow, folding
+    /// and the first selection of a run do: like `select_tree_path`,
+    /// but it never takes the details pane away from a state-pane
+    /// selection being read (#610). The details pane switches source
+    /// only when the user moves a selection; its scroll resets here
+    /// only when it was already showing the tree's selection.
+    pub fn select_tree_path_keeping_details(&mut self, path: Option<String>) {
+        if self.selected_path != path {
+            self.selected_path = path;
+            if self.details_source == Pane::Tree {
+                self.details_scroll = 0;
+            }
+        }
+    }
+
     /// `rows` is the already-visible list this frame drew (collapsed
     /// subtrees and the errors-only/filter views already applied,
     /// `visible_rows` below) — navigation and collapse/expand act on
@@ -543,7 +558,7 @@ impl App {
         if let Some(selected) = self.selected_path.clone() {
             if !rows.iter().any(|r| r.path == selected) {
                 if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
-                    self.select_tree_path(Some(absorbed));
+                    self.select_tree_path_keeping_details(Some(absorbed));
                 }
             }
         }
@@ -658,6 +673,34 @@ pub fn visible_state_rows<'a>(rows: &'a [StateRow], app: &App) -> Vec<&'a StateR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follow_moves_the_tree_selection_without_taking_the_details_from_the_state_pane() {
+        let mut app = App::new(false);
+        app.select_tree_path(Some("prime.a".to_string()));
+        // The user picks a named report in the state pane and scrolls its details.
+        app.select_state_path(Some("status".to_string()));
+        app.details_scroll = 5;
+        // Follow (or folding) moves the tree selection on the next rebuild.
+        app.select_tree_path_keeping_details(Some("prime.b".to_string()));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        assert_eq!(app.details_source, Pane::State);
+        assert_eq!(app.details_scroll, 5);
+        // A tree selection the user moves takes the details back.
+        app.select_tree_path(Some("prime.c".to_string()));
+        assert_eq!(app.details_source, Pane::Tree);
+        assert_eq!(app.details_scroll, 0);
+    }
+
+    #[test]
+    fn follow_resets_the_details_scroll_when_the_details_show_the_tree_selection() {
+        let mut app = App::new(false);
+        app.select_tree_path(Some("prime.a".to_string()));
+        app.details_scroll = 3;
+        app.select_tree_path_keeping_details(Some("prime.b".to_string()));
+        assert_eq!(app.details_source, Pane::Tree);
+        assert_eq!(app.details_scroll, 0);
+    }
     use crossterm::event::{KeyEventKind, KeyEventState};
     use oscilloscope_core::model::{RowStatus, StatusKind};
     use oscilloscope_core::render::RowKind;
