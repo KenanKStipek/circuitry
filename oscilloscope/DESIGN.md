@@ -393,7 +393,7 @@ error).
   `--out`), so osi's plan join, status inference and `--log` output
   work unchanged.
 
-**Argument order.** The owner's form is `osi <orchestration> [config]`; osi maps it to `electricity <config> <orchestration>`. Neither file can be recognised by its extension (an orchestration may be `.json`). osi therefore keeps the order strict. It gives a hint only when the first argument has no `effects` key and the second has one.
+**Argument order.** The documented form is `osi <orchestration> [config]`; osi maps it to `electricity <config> <orchestration>`. Neither file can be recognised by its extension (an orchestration may be `.json`). osi therefore keeps the order strict. It gives a hint only when the first argument has no `effects` key and the second has one.
 
 **Missing config.** With no config, osi tells the user that electricity needs one. It does not invent a `{}` config, because that would silently drop the user's global settings, which `cof` would have applied.
 
