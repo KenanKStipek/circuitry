@@ -3,6 +3,7 @@ source: crates/oscilloscope-core/tests/golden.rs
 expression: rendered
 ---
 log:
+  ■ run started  6bb47085-e20c-4f91-84f2-8a7bec069abc
   ▶ prime.slow  effect
   ✗ prime  Interrupted (Ctrl-C/SIGINT)
 status:
