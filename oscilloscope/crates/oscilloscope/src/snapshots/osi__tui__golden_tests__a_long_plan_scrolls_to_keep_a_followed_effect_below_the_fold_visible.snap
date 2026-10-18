@@ -3,7 +3,7 @@ source: crates/oscilloscope/src/tui.rs
 expression: text
 ---
 "┌────────────────────────────────────────────────────────────────────┐"
-"│do-thing.yml  cof  running  44.0s  effects 44/48  ↑0 t ↓0 t         │"
+"│do-thing.yml  cof  running  44.0s  effects 44/49  ↑0 t ↓0 t         │"
 "└────────────────────────────────────────────────────────────────────┘"
 "┌ details ───────────────────────────────────────────────────────────┐"
 "│path   prime.step_44                                                │"

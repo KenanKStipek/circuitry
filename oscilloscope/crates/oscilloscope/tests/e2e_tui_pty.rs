@@ -1157,9 +1157,10 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
         !rendered.contains("aborted"),
         "the TUI showed the finished run as aborted instead of ok; got:\n{rendered:?}"
     );
+    // The root counts too (issue #620), alongside `hello`.
     assert!(
-        rendered.contains("effects 1/1"),
-        "the TUI never showed every effect counted (effects 1/1); got:\n{rendered:?}"
+        rendered.contains("effects 2/2"),
+        "the TUI never showed every effect counted (effects 2/2); got:\n{rendered:?}"
     );
 
     assert_no_leftover_process(work.path());

@@ -611,6 +611,33 @@ final state even once it succeeds (§1.2), so without that fallback such
 a `use` would count toward neither side, ever. "Done" never exceeds
 "planned".
 
+Both counts count the document root and every *named* `if`/loop/
+`dynamic`/`finally`-wrapped scope too, not only leaves — a transparent
+(unnamed) `if`/loop is the one exception, since it never fires its own
+start/end hooks and so never writes a node of its own (§1.3/§1.4)
+either. This matches `runtime.last_run.totals.effects_run`, the
+engine's own count: "every completed node, the root and the containers
+included" (§1.2).
+
+Once a run has ended with a real `--out` write of its own — `ok`,
+`failed`, or a first-signal `cancelled` (DESIGN.md §2.1 rule 7's
+"ended" outcomes; never a second-signal `aborted`, which never writes
+one) — "planned" stops being a forward-looking estimate and simply
+becomes "done" (issue #620): nothing more will ever run, so an
+untaken `if` branch, an empty loop pass, a chain a failure stopped
+early, or a disabled container's own un-run children all leave the
+planned total the same way, by never having a node to count on either
+side. This reads `N/N` for every shape this engine's own count can
+reach, with one standing exception: an *unnamed* loop with more than
+one pass. Every pass overwrites the same state path (§1.3), so only
+the last one ever survives into the final state — both "planned" and
+"done" undercount by the same, unrecoverable amount, and `osi` still
+reads as fully done, just not against the engine's own literal
+`effects_run`. `osi watch` (no plan at all, §7) gets this guarantee
+too: the override needs nothing from the plan, only the run's own
+ended status and whatever `effects_done` could already tell from
+state.
+
 **The orchestration pane** (formerly "plan"; `draw_tree` in `tui.rs`).
 Titled ` orchestration <name> `, `<name>` the top-level document's file
 name without its extension (orchestration documents have no `name:` of
