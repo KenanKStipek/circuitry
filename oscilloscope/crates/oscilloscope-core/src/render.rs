@@ -1367,39 +1367,52 @@ fn build_header(
         .count() as u64;
     // Once the engine has deterministically ended the run (issue
     // #620) -- `Ok`, `Failed`, or a single-signal `Cancelled`, every
-    // outcome DESIGN.md §2.1 rule 7 reaches from a real `--out`
-    // write with its own `totals.effects_run` -- nothing more will
-    // ever run, so "planned" can only mean "what actually ran":
-    // an untaken `if` branch, an empty loop pass, a chain stopped by
-    // an earlier failure, a disabled container's own un-run children,
-    // and the rest of DESIGN.md §6.3's "effects done out of planned"
-    // all leave the planned total the same way, by simply never
-    // having a node to count on either side. `Aborted` (no final
-    // write at all, DESIGN.md §1.1's second-SIGINT case) is excluded:
-    // there is no `effects_run` to match there, and real work may
-    // still be left incomplete. This is exact for everything except
-    // an *unnamed* loop with more than one pass -- each pass
-    // overwrites the same state path (DESIGN.md §1.3), so the final
-    // state can only ever show the last one, undercounting both
-    // sides here by the same amount; `osi` reads as 100% done
-    // either way, just not against the engine's own literal count.
-    let run_has_ended = matches!(
-        status,
-        RunStatus::Ok | RunStatus::Failed | RunStatus::Cancelled
-    );
-    let (effects_planned, effects_planned_is_lower_bound) = if run_has_ended {
-        (Some(effects_done_raw), false)
+    // outcome DESIGN.md §2.1 rule 7 reaches from `runtime.last_run.
+    // completed_at` landing in a real `--out` write of its own --
+    // nothing more will ever run, so "planned" can only mean "what
+    // actually ran": an untaken `if` branch, an empty loop pass, a
+    // chain stopped by an earlier failure, a disabled container's own
+    // un-run children, and the rest of DESIGN.md §6.3's "effects done
+    // out of planned" all leave the planned total the same way.
+    // `Aborted` is excluded, whether a second signal left no final
+    // write at all (DESIGN.md §1.1) or a pre-execution validation
+    // failure never wrote one in the first place (`run_status`'s own
+    // "no ended state" branch): there is no `effects_run` to match
+    // either way, and real work may still be left incomplete.
+    let run_has_ended = state.is_some_and(crate::model::run_ended)
+        && matches!(
+            status,
+            RunStatus::Ok | RunStatus::Failed | RunStatus::Cancelled
+        );
+    // The engine's own `runtime.last_run.totals.effects_run` is
+    // recorded live as each effect completes (DESIGN.md §6.3,
+    // `_TotalsAccumulator.observe`/`Totals::observe_complete`), not by
+    // walking the final state -- so once it's present it's the exact
+    // count on both sides, including the two shapes `effects_done_raw`
+    // can't see: a declared-outputs `use` child, whose own effects
+    // never land in the final state tree at all even though they ran,
+    // and an *unnamed* loop with more than one pass, whose every pass
+    // overwrites the very same state path so only the last survives
+    // for a walk to find. Walking the state tree stays the fallback
+    // only for an ended run with no totals to read at all (a
+    // synthetic state, as in this module's own unit tests).
+    let effects_run_from_totals = state
+        .and_then(run_totals)
+        .and_then(|totals| totals.get("effects_run").and_then(Value::as_u64));
+    let (effects_planned, effects_planned_is_lower_bound, effects_done) = if run_has_ended {
+        let count = effects_run_from_totals.unwrap_or(effects_done_raw);
+        (Some(count), false, count)
     } else {
-        (effects_planned, effects_planned_is_lower_bound)
+        // Invariant: "done" never outruns
+        // "planned" -- true by construction once a `use` child's effects
+        // are counted the same way on both sides above, but kept as an
+        // explicit floor rather than trusting that invariant silently,
+        // since a document this walker has never seen could still surprise
+        // it.
+        let done =
+            effects_planned.map_or(effects_done_raw, |planned| effects_done_raw.min(planned));
+        (effects_planned, effects_planned_is_lower_bound, done)
     };
-    // Invariant: "done" never outruns
-    // "planned" -- true by construction once a `use` child's effects
-    // are counted the same way on both sides above, but kept as an
-    // explicit floor rather than trusting that invariant silently,
-    // since a document this walker has never seen could still surprise
-    // it.
-    let effects_done =
-        effects_planned.map_or(effects_done_raw, |planned| effects_done_raw.min(planned));
 
     let (tokens_sent, tokens_received) = state
         .and_then(run_totals)
@@ -3767,6 +3780,52 @@ mod tests {
         assert_eq!(rendered.header.effects_done, 2);
     }
 
+    /// A declared-outputs `use`: its children ran (the engine's own
+    /// `effects_run` counts them) but never land in the final state
+    /// at all, so a walk over state alone can only ever see the root
+    /// and the `use` node's own fallback entry -- 2, not the engine's
+    /// real 4 (root, `my_use`, `child1`, `child2`). Once the run has
+    /// ended, the header must read the engine's own total instead of
+    /// that undercount.
+    #[test]
+    fn effects_planned_and_done_read_the_engines_own_total_for_a_declared_outputs_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: my_use\n    type: use\n    inline: |\n      effects:\n        - name: child1\n          type: tool\n          provider: shell\n          params:\n            command: echo\n            args: [\"c1\"]\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .expect("a real document should compile");
+        let plan = PlanTree::from_program(&program);
+
+        let mut model = RunModel::new();
+        // No `child1`/`child2` under `my_use` at all -- a declared-
+        // outputs `use` drops its children from the final state even
+        // once it succeeds (DESIGN.md §1.2) -- but the engine's own
+        // `effects_run` still counted all four.
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1", "totals": {"effects_run": 4}}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+            "my_use": {"value": {"ans": "ok"}, "meta": {"created_at": "t0", "completed_at": "t1", "inline": true}}
+        }});
+        let rendered = build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.header.effects_planned, Some(4));
+        assert!(!rendered.header.effects_planned_is_lower_bound);
+        assert_eq!(rendered.header.effects_done, 4);
+    }
+
     /// A real `use: path:` document: its children are statically known
     /// (grafted into the plan, DESIGN.md §5), so "planned" is exact
     /// from the start -- counting the grafted children, never the
@@ -5148,6 +5207,26 @@ mod tests {
         }
     }
 
+    fn dynamic_chain_op(
+        path: electricity_bytecode::EffectPath,
+        name: Option<&str>,
+        on_error: electricity_bytecode::OnError,
+        ops: Vec<electricity_bytecode::Op>,
+    ) -> electricity_bytecode::Op {
+        use electricity_bytecode::{NodeKind, Op, Region};
+        Op {
+            path,
+            name: name.map(str::to_string),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error,
+            labels: None,
+            enabled: true,
+        }
+    }
+
     fn each_loop_op(
         path: electricity_bytecode::EffectPath,
         name: Option<&str>,
@@ -5496,6 +5575,45 @@ mod tests {
         // The root, `gate` itself (failed, handled), and `after` --
         // neither `chosen_then` nor `chosen_else` ever ran.
         assert_finished_n_of_n(&plan, &state, 3);
+    }
+
+    #[test]
+    fn a_chain_dynamics_on_error_skip_leaves_its_stopped_siblings_out_once_finished() {
+        use electricity_bytecode::{EffectPath, OnError};
+        let task_path = EffectPath::root().push_name("task");
+        let step_a_path = task_path.clone().push_name("step_a");
+        let step_b_path = task_path.clone().push_name("step_b");
+        let after_path = EffectPath::root().push_name("after");
+        let program = wrap_root(vec![
+            dynamic_chain_op(
+                task_path,
+                Some("task"),
+                OnError::Skip,
+                vec![
+                    tool_leaf(step_a_path, "step_a"),
+                    tool_leaf(step_b_path, "step_b"),
+                ],
+            ),
+            tool_leaf(after_path, "after"),
+        ]);
+        let plan = PlanTree::from_program(&program);
+        // `step_a` fails under its own default `on_error: fail`,
+        // which stops the chain before `step_b` ever starts; `task`'s
+        // own `on_error: skip` then swallows that failure onto its
+        // own `meta.error`, letting `after` run (DESIGN.md's dynamic
+        // reference entry on `on_error`).
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+                "task": {"value": null, "meta": {"completed_at": "t1", "error": "step_a failed"},
+                    "step_a": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+                },
+                "after": {"value": "", "meta": {"created_at": "t1", "completed_at": "t1", "provider": "shell"}}
+            }
+        });
+        // The root, `task` itself, `task.step_a`, and `after` -- never
+        // `task.step_b`.
+        assert_finished_n_of_n(&plan, &state, 4);
     }
 
     #[test]

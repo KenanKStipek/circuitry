@@ -1044,6 +1044,11 @@ fn watch_counts_the_same_effects_as_a_planned_run_with_no_prompts() {
         &[],
     );
     assert_eq!(
+        watched.header.effects_planned,
+        Some(8),
+        "osi watch must count the same effects as a planned run"
+    );
+    assert_eq!(
         watched.header.effects_done, 8,
         "osi watch must count the same effects as a planned run"
     );
@@ -1071,4 +1076,122 @@ fn watch_counts_the_same_effects_as_a_planned_run_with_no_prompts() {
             );
         }
     }
+}
+
+/// Issue #620: a finished run's header must read `effects_run` from
+/// `runtime.last_run.totals` exactly, on a document combining every
+/// shape that leaves effects planned but never run -- an `if` whose
+/// condition is false (its `else` branch's own effect is the only one
+/// that runs), an `each` over an empty list, and a `while` that stops
+/// before its `max_iterations`.
+#[test]
+fn a_finished_runs_effects_count_matches_effects_run() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"effects:
+  - name: items
+    type: tool
+    provider: json
+    params: {mode: parse, input: "[]"}
+  - name: gate
+    type: if
+    if: {mode: cel, expr: "false"}
+    then:
+      - name: taken
+        type: tool
+        provider: shell
+        params: {command: echo, args: ["taken"]}
+    else:
+      - name: not_taken
+        type: tool
+        provider: shell
+        params: {command: echo, args: ["not_taken"]}
+  - name: empty_each
+    type: loop
+    each: {in: prime.items.value, as: item}
+    body:
+      - name: never
+        type: tool
+        provider: shell
+        params: {command: echo, args: ["never"]}
+  - name: short_while
+    type: loop
+    while: {mode: cel, expr: "state.iter.index < 2"}
+    max_iterations: 10
+    body:
+      - name: tick
+        type: tool
+        provider: shell
+        params: {command: echo, args: ["tick"]}
+"#,
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let mut electricity = Command::new("electricity");
+    electricity
+        .arg(&config)
+        .arg(&doc)
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        electricity.env_remove(key);
+    }
+    let status = wait_with_timeout(
+        electricity.spawn().expect("spawn electricity"),
+        Duration::from_secs(30),
+    );
+    assert!(status.success());
+
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(run_dir.path().join("state.json")).expect("read state.json"),
+    )
+    .expect("parse state.json");
+    let effects_run = state
+        .pointer("/runtime/last_run/totals/effects_run")
+        .and_then(serde_json::Value::as_u64)
+        .expect("effects_run in state.json");
+
+    let inputs = oscilloscope_core::plan::parse_inputs(&[]).expect("no -e inputs");
+    let program = oscilloscope_core::plan::compile(&doc, Some(&config), &inputs)
+        .expect("the document compiles");
+    let plan = oscilloscope_core::plan::PlanTree::from_program(&program);
+    let process = oscilloscope_core::model::ProcessState::Exited {
+        interrupted: false,
+        likely_failed: false,
+        has_failure_reason: false,
+        exited_at: None,
+    };
+
+    let mut model = oscilloscope_core::model::RunModel::new();
+    let rendered = oscilloscope_core::render::build(
+        "do.yml",
+        "electricity",
+        &plan,
+        &mut model,
+        Some(&state),
+        process,
+        0.0,
+        "2026-01-01T00:00:10Z",
+        &[],
+    );
+    assert_eq!(rendered.header.effects_planned, Some(effects_run));
+    assert_eq!(rendered.header.effects_done, effects_run);
 }

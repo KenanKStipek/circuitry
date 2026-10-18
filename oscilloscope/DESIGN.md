@@ -627,22 +627,21 @@ matches the same run read with one.
 
 Once a run has ended with a real `--out` write of its own — `ok`,
 `failed`, or a first-signal `cancelled` (DESIGN.md §2.1 rule 7's
-"ended" outcomes; never a second-signal `aborted`, which never writes
-one) — "planned" stops being a forward-looking estimate and simply
-becomes "done" (issue #620): nothing more will ever run, so an
-untaken `if` branch, an empty loop pass, a chain a failure stopped
-early, or a disabled container's own un-run children all leave the
-planned total the same way, by never having a node to count on either
-side. This reads `N/N` for every shape this engine's own count can
-reach, with one standing exception: an *unnamed* loop with more than
-one pass. Every pass overwrites the same state path (§1.3), so only
-the last one ever survives into the final state — both "planned" and
-"done" undercount by the same, unrecoverable amount, and `osi` still
-reads as fully done, just not against the engine's own literal
-`effects_run`. `osi watch` (no plan at all, §7) gets this guarantee
-too: the override needs nothing from the plan, only the run's own
-ended status and whatever `effects_done` could already tell from
-state.
+"ended" outcomes; never a second-signal `aborted`, nor a pre-execution
+validation failure, neither of which ever writes one) — "planned" and
+"done" both switch to reading `runtime.last_run.totals.effects_run`
+directly (issue #620), the same total `osi` already shows as a token
+(§6.3). That total is recorded live as each effect completes, not by
+walking the final state, so it is exact for every shape, including
+two a state walk alone cannot see: a declared-outputs `use` child,
+whose own effects never land in the final state tree at all even
+though they ran, and an *unnamed* loop with more than one pass, whose
+every pass overwrites the same state path (§1.3) so only the last one
+survives for a walk to find. Counting from state (the walk described
+above) is only the fallback for an ended run whose final write has no
+`effects_run` at all. `osi watch` (no plan at all, §7) gets the same
+guarantee: the override needs nothing from the plan, only the run's
+own ended status and its `--out` state.
 
 **The orchestration pane** (formerly "plan"; `draw_tree` in `tui.rs`).
 Titled ` orchestration <name> `, `<name>` the top-level document's file
