@@ -1,0 +1,13 @@
+name: schema-not-lazy-stops-at-first-failure
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    schema:
+      not:
+        properties:
+          a: {type: string}
+          b: {$ref: "#/missing"}
+    template: "give json"

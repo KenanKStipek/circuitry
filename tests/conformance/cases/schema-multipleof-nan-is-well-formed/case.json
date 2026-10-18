@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #507's own item 3",
+  "description": "A top-level `multipleOf: .nan`: Python's own metaschema entry for `multipleOf` is `{type: number, exclusiveMinimum: 0}`, and `NaN <= 0` is `False`, so this schema is well-formed and a string reply (`multipleOf` never applying to one anyway) validates cleanly.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
