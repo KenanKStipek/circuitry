@@ -93,10 +93,10 @@ fn normalized_log_lines(dir_name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Replaces every `<digits>.<digits>s` duration token (`diff.rs`'s own
-/// `{:.1}s` formatting) with a fixed placeholder -- the only part of
-/// an effect's own log line that two real runs, even of the identical
-/// document, can't be expected to agree on byte for byte.
+/// Replaces every duration token (`duration_token_end`'s own four
+/// `format_duration` shapes) with a fixed placeholder -- the only
+/// part of an effect's own log line that two real runs, even of the
+/// identical document, can't be expected to agree on byte for byte.
 fn normalize_duration(text: &str) -> String {
     // Operates on `char`s, not bytes: every log line here can carry
     // multi-byte glyphs (▶/✓/✗), so indexing by byte offset the way a
