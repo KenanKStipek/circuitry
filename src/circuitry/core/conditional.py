@@ -207,6 +207,7 @@ class ConditionalRuntime:
         from .loop import LoopDefinition, LoopRuntime
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .report import ReportDefinition, ReportRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
         from .yield_effect import YieldDefinition, YieldRuntime
@@ -294,6 +295,7 @@ class ConditionalRuntime:
                 icon, color = _EFFECT_STYLE.get(type_label, ("·", "white"))
                 name = getattr(effect, "name", None) or "?"
                 is_prompt = isinstance(effect, PromptDefinition)
+                is_report = isinstance(effect, ReportDefinition)
 
                 if not is_enabled(effect):
                     _skip_disabled_effect(
@@ -318,7 +320,7 @@ class ConditionalRuntime:
                     and name != "?"
                     and effect_completed_ok(child_store.state.get(name))
                 ):
-                    if self.verbose and not is_prompt:
+                    if self.verbose and not is_prompt and not is_report:
                         _console.print(
                             f"{branch_indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
                             f" {name} [dim](resumed)[/dim]"
@@ -333,7 +335,7 @@ class ConditionalRuntime:
                 effect_resume = resume_active
                 resume_active = False
 
-                if self.verbose and not is_prompt:
+                if self.verbose and not is_prompt and not is_report:
                     _console.print(
                         f"{branch_indent}[info]→[/info] [{color}]{icon}[/{color}]"
                         f" {name}"
@@ -456,10 +458,17 @@ class ConditionalRuntime:
                             ancestors=self._ancestors,
                         ).execute(store=child_store, ctx=ctx)
 
+                    elif isinstance(effect, ReportDefinition):
+                        ReportRuntime(
+                            effect,
+                            runtime_config=self.runtime_config,
+                            dry_run=self.dry_run,
+                        ).execute(store=child_store, ctx=ctx)
+
                     else:
                         raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-                    if self.verbose and not is_prompt:
+                    if self.verbose and not is_prompt and not is_report:
                         elapsed = time.monotonic() - t0
                         _console.print(
                             f"{branch_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
@@ -467,7 +476,7 @@ class ConditionalRuntime:
                         )
 
                 except Exception as _branch_exc:
-                    if self.verbose and not is_prompt:
+                    if self.verbose and not is_prompt and not is_report:
                         elapsed = time.monotonic() - t0
                         _console.print(
                             f"{branch_indent}[err]✗[/err] [{color}]{icon}[/{color}]"

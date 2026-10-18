@@ -302,6 +302,46 @@ def test_an_unexpected_non_oserror_also_disables_further_writes(
     assert lines[0]["ev"] == "run_start"
 
 
+def test_on_report_key_order_and_basic_fields(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_report("prime.summary", "info", "hello", {"x": 1})
+    log.close()
+
+    raw = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    assert list(json.loads(raw).keys()) == [
+        "v", "seq", "ts", "ev", "path", "level", "message", "data",
+    ]
+    event = json.loads(raw)
+    assert event["ev"] == "report"
+    assert event["path"] == "prime.summary"
+    assert event["level"] == "info"
+    assert event["message"] == "hello"
+    assert event["data"] == {"x": 1}
+
+
+def test_on_report_omits_data_when_none(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_report("prime", "info", "hi", None)
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert "data" not in event
+    assert "data_truncated" not in event
+
+
+def test_on_report_truncates_data_over_16kib(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    big = {"blob": "x" * 20_000}
+    log.on_report("prime", "warning", "big", big)
+    log.close()
+
+    event = _lines(tmp_path / "events.jsonl")[0]
+    assert "data" not in event
+    assert event["data_truncated"] == len(
+        json.dumps(big, separators=(",", ":")).encode("utf-8")
+    )
+
+
 def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
 

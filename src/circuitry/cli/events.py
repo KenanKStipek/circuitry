@@ -44,6 +44,12 @@ logger = logging.getLogger(__name__)
 #: before it reaches the stream — the same limit the format documents.
 _ERROR_MAX_CHARS = 500
 
+#: A ``report`` event's compact ``data`` JSON, in bytes, above which it is
+#: replaced by ``"data_truncated": <that byte count>`` instead (#605). A
+#: named report still keeps the full value in the shadow state — only the
+#: event line is capped.
+_REPORT_DATA_MAX_BYTES = 16 * 1024
+
 
 def _now_iso_ms() -> str:
     """Wall-clock UTC, millisecond precision, ``Z`` suffix — e.g.
@@ -233,6 +239,38 @@ class EventLog:
                 self._write_line(payload)
         except Exception as exc:
             self._disable("end", exc)
+
+    def on_report(self, path: str, level: str, message: str, data: Any) -> None:
+        """Write one ``report`` line (#605): ``v``, ``seq``, ``ts``, ``ev``,
+        ``path``, ``level``, ``message``, then ``data`` (omitted when there
+        is none) or ``data_truncated`` (the compact JSON's byte count) when
+        that JSON exceeds 16 KiB -- a named report still keeps the full
+        value in the shadow state, only this line is capped.
+        """
+        if self._disabled:
+            return
+        try:
+            with self._lock:
+                if self._disabled:
+                    return
+                payload: dict[str, Any] = {
+                    "v": 1,
+                    "seq": self._take_seq(),
+                    "ts": _now_iso_ms(),
+                    "ev": "report",
+                    "path": path,
+                    "level": level,
+                    "message": message,
+                }
+                if data is not None:
+                    encoded = json.dumps(data, separators=(",", ":")).encode("utf-8")
+                    if len(encoded) > _REPORT_DATA_MAX_BYTES:
+                        payload["data_truncated"] = len(encoded)
+                    else:
+                        payload["data"] = data
+                self._write_line(payload)
+        except Exception as exc:
+            self._disable("report", exc)
 
     def run_end(self, *, ok: bool, error: str | None, signal: str | None) -> None:
         if self._disabled:

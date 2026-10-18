@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -288,6 +289,27 @@ def _show_loop_progress(*, verbose: bool, quiet: bool, json_out: bool) -> bool:
     ``sys.stdout`` at call time (not a parameter) so it always reflects
     whatever the process's stdout actually is at the moment a run starts."""
     return bool(verbose and not quiet and not json_out and sys.stdout.isatty())
+
+
+def _make_report_console_observer(
+    print_line: Callable[[str], None],
+) -> Callable[[str, str, str, Any], None]:
+    """Build a ``report_observer`` that prints one line per ``report``
+    effect, ``▸ <message>``, a ``level: warning`` one styled the way cof's
+    own warnings are (#605). Rides ``Store.fire_report``, never
+    ``effect_start``/``effect_complete``, so this is the only console line a
+    report ever produces — unlike every other effect's own verbose
+    start/done lines, it prints regardless of ``--verbose``; the caller
+    gates it on ``--quiet``/``--json`` instead, the same way it gates
+    ``--explain-routing``'s own observer.
+    """
+
+    def _observer(path: str, level: str, message: str, data: Any) -> None:
+        del path, data
+        text = f"▸ {message}"
+        print_line(f"[warn]{text}[/warn]" if level == "warning" else text)
+
+    return _observer
 
 
 def _format_seconds(value: float) -> str:
@@ -1290,6 +1312,11 @@ def run_cmd(
         if explain_routing and not (quiet or json_out)
         else None
     )
+    report_observer = (
+        _make_report_console_observer(console.print)
+        if not (quiet or json_out)
+        else None
+    )
 
     show_status = not (quiet or json_out or verbose)
     status_holder: dict[str, Any] = {}
@@ -1315,6 +1342,7 @@ def run_cmd(
         routing_override=routing,
         decompose_override=decompose,
         effect_start_observer=effect_start_observer,
+        report_observer=report_observer,
         decompose_out=decompose_out,
         trust_document=trust_document,
         remote_library_source=remote_library_source,
@@ -1706,6 +1734,11 @@ def run_library_cmd(
         if explain_routing and not (quiet or json_out)
         else None
     )
+    report_observer = (
+        _make_report_console_observer(console.print)
+        if not (quiet or json_out)
+        else None
+    )
 
     show_status = not (quiet or json_out or verbose)
     status_holder: dict[str, Any] = {}
@@ -1731,6 +1764,7 @@ def run_library_cmd(
         routing_override=routing,
         decompose_override=decompose,
         effect_start_observer=effect_start_observer,
+        report_observer=report_observer,
         allow_capabilities=_parse_allow_capabilities(allow_capabilities),
         capability_prompt=(
             _status_pausing_prompt(

@@ -1472,6 +1472,7 @@ Should the loop continue? Answer (yes/no):"""
         from .dynamic import DynamicDefinition, DynamicRuntime, _effect_type_label
         from .prompt import PromptDefinition, PromptRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .report import ReportDefinition, ReportRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
         from .yield_effect import YieldDefinition, YieldRuntime
@@ -1517,6 +1518,7 @@ Should the loop continue? Answer (yes/no):"""
             is_tool = isinstance(effect, ToolDefinition)
             is_use = isinstance(effect, UseDefinition)
             is_yield = isinstance(effect, YieldDefinition)
+            is_report = isinstance(effect, ReportDefinition)
 
             if not is_enabled(effect):
                 _skip_disabled_effect(
@@ -1539,7 +1541,7 @@ Should the loop continue? Answer (yes/no):"""
                 and name != "?"
                 and effect_completed_ok(iter_store.state.get(name))
             ):
-                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                     _console.print(
                         f"{body_indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
                         f" {name} [dim](resumed)[/dim]"
@@ -1552,7 +1554,7 @@ Should the loop continue? Answer (yes/no):"""
             effect_resume = resume_active
             resume_active = False
 
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 _console.print(
                     f"{body_indent}[info]→[/info] [{color}]{icon}[/{color}]"
                     f" {name}"
@@ -1739,10 +1741,17 @@ Should the loop continue? Answer (yes/no):"""
                         ancestors=self._child_ancestors if tracker is None else None,
                     ).execute(store=iter_store, ctx=ctx)
 
+                elif isinstance(effect, ReportDefinition):
+                    ReportRuntime(
+                        effect,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                    ).execute(store=iter_store, ctx=ctx)
+
                 else:
                     raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[ok]✓[/ok] [{color}]{icon}[/{color}]"
@@ -1750,7 +1759,7 @@ Should the loop continue? Answer (yes/no):"""
                     )
 
             except Exception as _body_exc:
-                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                     elapsed = time.monotonic() - t0
                     _console.print(
                         f"{body_indent}[err]✗[/err] [{color}]{icon}[/{color}]"

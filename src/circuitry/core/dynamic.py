@@ -900,6 +900,7 @@ class DynamicRuntime:
         from .conditional import ConditionalDefinition, ConditionalRuntime
         from .loop import LoopDefinition, LoopRuntime
         from .reflector import ReflectorDefinition, ReflectorRuntime
+        from .report import ReportDefinition, ReportRuntime
         from .tool import ToolDefinition, ToolRuntime
         from .use import UseDefinition, UseRuntime
         from .yield_effect import YieldDefinition, YieldRuntime
@@ -912,6 +913,7 @@ class DynamicRuntime:
         is_tool = isinstance(effect, ToolDefinition)
         is_use = isinstance(effect, UseDefinition)
         is_yield = isinstance(effect, YieldDefinition)
+        is_report = isinstance(effect, ReportDefinition)
 
         # If a tracker is provided, derive all callbacks from it
         _cb_running: Callable[[str, int], None] | None = None
@@ -944,7 +946,7 @@ class DynamicRuntime:
             and name != "?"
             and effect_completed_ok(store.state.get(name))
         ):
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 line = (
                     f"{indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
                     f" {name} [dim](resumed)[/dim]"
@@ -955,7 +957,7 @@ class DynamicRuntime:
                     _console.print(line)
             return "resumed"
 
-        if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+        if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
             if cb_start is not None:
                 cb_start()
             else:
@@ -1100,10 +1102,17 @@ class DynamicRuntime:
                     ancestors=self._child_ancestors if tracker is None else None,
                 ).execute(store=store, ctx=ctx)
 
+            elif isinstance(effect, ReportDefinition):
+                ReportRuntime(
+                    effect,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                ).execute(store=store, ctx=ctx)
+
             else:
                 raise TypeError(f"Unsupported effect type: {type(effect)}")
 
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 # A dynamic with on_error: skip/continue absorbs its own
@@ -1141,7 +1150,7 @@ class DynamicRuntime:
             return "ran"
 
         except Exception:
-            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+            if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 elapsed = time.monotonic() - t0
                 suffix = _elapsed_str(elapsed)
                 if isinstance(effect, DynamicDefinition):
@@ -1217,6 +1226,7 @@ def _effect_type_label(effect: Any) -> str:
     from .conditional import ConditionalDefinition
     from .loop import LoopDefinition
     from .reflector import ReflectorDefinition
+    from .report import ReportDefinition
     from .tool import ToolDefinition
     from .use import UseDefinition
     from .yield_effect import YieldDefinition
@@ -1225,6 +1235,8 @@ def _effect_type_label(effect: Any) -> str:
         return "prompt"
     if isinstance(effect, YieldDefinition):
         return "yield"
+    if isinstance(effect, ReportDefinition):
+        return "report"
     if isinstance(effect, DynamicDefinition):
         return f"dynamic:{effect.flow}"
     if isinstance(effect, ConditionalDefinition):
@@ -1253,6 +1265,7 @@ _EFFECT_STYLE: dict[str, tuple[str, str]] = {
     "reflector": ("✺", "green"),
     "tool": ("⚙", "white"),
     "use": ("⊕", "green"),
+    "report": ("▸", "cyan"),
 }
 
 
