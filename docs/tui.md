@@ -244,7 +244,9 @@ the next state write, the runtime unwinds through its ordinary error path, and
 the result is a normal failed `RunResult`. Nothing is left half-torn-down.
 
 The status line carries the run's headline — `Running…`, `Done`, `Failed: …`,
-`Cancelled` — and `RunScreen.last_result` holds the finished `RunResult`.
+`Cancelled` — and adds the latest report's own line underneath once one has
+arrived (see Reports, below). `RunScreen.last_result` holds the finished
+`RunResult`.
 
 Logic that is not a widget lives in `circuitry/tui/launch.py` (discovery, the
 typed form, override options, `RunSession`) and is tested without booting an
@@ -280,7 +282,7 @@ effect's `meta` in state (including effects the tree cannot show, such as a
 sub-orchestration's internals), wall-clock elapsed, and effects finished out of
 those known so far — a number that grows as a loop discovers its iterations.
 
-Two event sources feed it:
+Three event sources feed it:
 
 - **`state_observer`** — full state snapshots. The runtime publishes one as
   each effect lands, which is what fills in statuses, timings and tokens.
@@ -293,6 +295,10 @@ Two event sources feed it:
   their worker threads at their full path, and each state snapshot overlays
   the branches' progress so far, so a parallel sibling is marked off as soon
   as *it* is done rather than when the last sibling finishes.
+- **`report_observer`** — `RunRequest`'s report hook, the same one runtime
+  plugins see as `on_report`, carrying `(path, level, message, data)`. Feeds
+  the run log and the status line (below), not the tree — a report never
+  fires `effect_start`/`effect_complete` and has no row of its own there.
 
 #### The complexity column
 
@@ -353,6 +359,27 @@ mid-run.
 The model behind all of this — plan parsing, the snapshot overlay, the
 aggregates and the rendered rows — lives in `circuitry/tui/execution.py` and
 has no Textual import, so it is tested by feeding it states directly.
+
+#### Reports
+
+A `report` effect (#605) never shows up in the tree — it fires neither
+`effect_start` nor `effect_complete`, so it isn't work the tree can mark
+off — but it still reaches the Run view through its own `report_observer`.
+Below the tree, a run log grows one line per report, `▸ <message>`: the
+message's first line only, capped at 120 characters, the same rule `osi`
+applies. A `level: warning` report's line is styled in the running theme's
+own warning colour, the same lookup the tree's `RUNNING` rows use rather
+than an ANSI name.
+
+The status line tracks the latest report too, on a line of its own under
+whatever headline it already carries (`Running…`, `Done`, ...) — a new
+report updates it immediately, not only on the next state snapshot, and it
+stays visible once the run finishes. A fresh launch, or picking a different
+orchestration, clears both the log and the status line's own report line.
+
+`RunScreen.log_text` is the run log as plain text, for tests and for an
+embedder that outlives the widget, the same role `tree_text`/`footer_text`
+play for the tree and footer.
 
 ## Runs view (`4`) — the state inspector
 
