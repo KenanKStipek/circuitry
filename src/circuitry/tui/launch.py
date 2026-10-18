@@ -438,6 +438,7 @@ def adapter_models(cfg: CircuitryConfig, adapter_name: str | None) -> list[str]:
 Runner = Callable[[RunRequest], RunResult]
 StateCallback = Callable[[dict[str, Any]], None]
 EffectCallback = Callable[[str, dict[str, Any]], None]
+ReportCallback = Callable[[str, str, str, Any], None]
 FinishCallback = Callable[[RunResult], None]
 
 
@@ -462,12 +463,14 @@ class RunSession:
         on_state: StateCallback | None = None,
         on_effect: EffectCallback | None = None,
         on_effect_start: EffectCallback | None = None,
+        on_report: ReportCallback | None = None,
         on_finish: FinishCallback | None = None,
         runner: Runner | None = None,
     ) -> None:
         self._on_state = on_state
         self._on_effect = on_effect
         self._on_effect_start = on_effect_start
+        self._on_report = on_report
         self._on_finish = on_finish
         self._runner: Runner = runner if runner is not None else shim_run
         self._cancelled = threading.Event()
@@ -476,6 +479,7 @@ class RunSession:
             state_observer=self._observe,
             effect_observer=self._observe_effect,
             effect_start_observer=self._observe_effect_start,
+            report_observer=self._observe_report,
         )
         self._thread = threading.Thread(
             target=self._execute, name="circuitry-tui-run", daemon=True
@@ -542,6 +546,13 @@ class RunSession:
         """
         if self._on_effect is not None:
             self._on_effect(path, deepcopy(node))
+
+    def _observe_report(self, path: str, level: str, message: str, data: Any) -> None:
+        """A ``report`` effect published (#615). Deep-copied like everything
+        else; not a cancellation point, the same as :meth:`_observe_effect`.
+        """
+        if self._on_report is not None:
+            self._on_report(path, level, message, deepcopy(data))
 
     def _execute(self) -> None:
         try:

@@ -271,6 +271,43 @@ def test_form_fill_then_launch_reaches_completion(run_app: Any, tmp_path: Path) 
     assert launch_disabled is False  # ready for the next run
 
 
+REPORTING: dict[str, Any] = {
+    "adapter": "echo",
+    "model": "echo-1",
+    "effects": [
+        {"type": "report", "message": "starting widgets"},
+        {
+            "type": "report",
+            "level": "warning",
+            "message": "careful with widgets",
+        },
+        {"type": "prompt", "name": "greet", "template": "hello"},
+    ],
+}
+
+
+def test_a_report_shows_in_the_log_and_the_status_line(
+    run_app: Any, tmp_path: Path
+) -> None:
+    """``cof tui``'s run view shows each report in its log as
+    ``▸ <message>``, a warning styled in the theme's warning colour, and
+    tracks the latest one on the status line (#615)."""
+    path = _write(tmp_path, REPORTING)
+
+    async def scenario(pilot: Pilot[Any]) -> tuple[str, str, RunResult | None]:
+        screen = await _open(pilot, _screen(path))
+        screen.query_one("#run-launch", Button).press()
+        await _settle(pilot, lambda: screen.last_result is not None)
+        return screen.log_text, screen.status_text, screen.last_result
+
+    log_text, status, result = run_app(scenario)
+    assert result is not None and result.ok, result
+    assert log_text == "▸ starting widgets\n▸ careful with widgets"
+    # The status line keeps its own headline and adds the latest report.
+    assert status.startswith(DONE)
+    assert "▸ careful with widgets" in status
+
+
 def test_the_ui_stays_responsive_while_the_run_is_in_flight(
     run_app: Any, tmp_path: Path
 ) -> None:
