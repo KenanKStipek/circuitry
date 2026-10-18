@@ -431,7 +431,7 @@ osi compiles the document with `electricity_compiler::check_for_run(path, &Check
 - Transparent ops add no segment, so their children match in the parent's scope. One concrete path can then match several plan ops: `then`/`else` reusing a name, or an unnamed `if`. osi keeps them as one merged row, with a list of candidate plan ops.
 - `finally` ops share the container's scope.
 - **`use` with `path`:** osi compiles the child file (with a cycle guard) and grafts its root's children under the `use` node, stripping the child's `prime`.
-- **`use` with `inline`, and reflector `generated.iter_N`:** these have no static plan. Their rows are created as paths are first seen. The type is guessed from the shape of `meta`, the same rule the reference's SQL plugins use -- except for `meta.adapter`: both engines also write the scope's effective `adapter`/`model` into a container's own node (the root, `dynamic`, `if`, a loop, `use`), not only a prompt's, so `meta.adapter` only means `Prompt` for a node with no children of its own in the flattened state. A node *with* children is a container, whatever its `meta` says, rechecked for `Loop`/`If` signals first and falling back to the usual no-better-signal kind otherwise (issue #616). `meta.provider` (`Tool`) and `meta.orchestration`/`resolved_path` (`Use`, a leaf that still counts even though it has children of its own) are unaffected -- neither engine writes those to a container.
+- **`use` with `inline`, and reflector `generated.iter_N`:** these have no static plan. Their rows are created as paths are first seen. The type is guessed from the shape of `meta`, the same rule the reference's SQL plugins use -- except for `meta.adapter`: the root and a `dynamic` always write the scope's effective `adapter`/`model` into their own node too, and a model-mode `if`/loop writes them alongside its own `condition_result`/`branch` or `progress_total` as the record of a real model call (a `use` writes neither). So a node's own `progress_total`/`each_in_path` (`Loop`), `branch`/`condition_result` (`If`), or `flow`/`mode` (a bare container) all win over `meta.adapter`, whether or not the node has children of its own in the flattened state -- only once none of those match does `meta.adapter` mean `Prompt` (issue #616). `meta.provider` (`Tool`) and `meta.orchestration`/`resolved_path` (`Use`, a leaf that still counts even though it has children of its own) are unaffected -- neither engine writes those to a container.
 
 **Asks for the M0-G lanes:**
 
@@ -748,16 +748,20 @@ path `flatten_state` returns by splitting it on `.`, synthesising a
 bare container wherever an intermediate segment has no entry of its
 own. A row is labelled with its own key only (never the full path).
 Shows no value or error text at all — the details pane and `v` are
-where those are read — only: the status glyph; the model for a prompt
-or else the provider for a tool, the duration once finished, `retries
-N` when `retries_used > 0`, and `n/total` for a loop, all in dim text
-(`None` for a bare container, which has nothing of its own to
-summarize, *and* for a container that does have a node of its own —
-both engines write the scope's effective `adapter`/`model` into one
-too, so a row with any children of its own never shows a model, issue
-#616); and `↑sent ↓received` on a second line, only when at least
-one is nonzero — a leaf's own tokens, or (for a container, bare or
-not) the sum over its whole subtree (`model::subtree_tokens`).
+where those are read — only: the status glyph; the model for a row
+whose own kind actually ran a prompt (`Prompt`/`Reflector`, the same
+gate the orchestration pane uses) or else the provider for a tool, the
+duration once finished, `retries N` when `retries_used > 0`, and
+`n/total` for a loop, all in dim text (`None` for a bare container,
+which has nothing of its own to summarize, *and* for a container that
+does have a node of its own — the root and a `dynamic` always write
+the scope's effective `adapter`/`model` into their own node too, and a
+model-mode `if`/loop writes them alongside its own condition/progress
+keys, so a row's *kind*, not merely whether it has children, decides
+whether its model shows at all, issue #616); and `↑sent ↓received` on
+a second line, only when at least one is nonzero — a leaf's own
+tokens, or (for a container, bare or not) the sum over its whole
+subtree (`model::subtree_tokens`).
 
 A *named* report's own node (#605/#610) is a row here like any
 other leaf's, unlike the orchestration pane's own exclusion above --

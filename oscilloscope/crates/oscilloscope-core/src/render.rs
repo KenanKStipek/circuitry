@@ -95,27 +95,34 @@ impl RowKind {
     /// path the plan has nothing to say about (an inline `use` child,
     /// a reflector pass, or any run with no plan at all) — the same
     /// shape-based rule DESIGN.md §5's "Joining plan paths..." section
-    /// describes for these. `has_children` (any descendant of its own
-    /// in the flattened state) wins over `meta.adapter`/`meta.model`:
-    /// both engines write the scope's effective adapter/model into a
-    /// container's own node too (the root, `dynamic`, `if`, a loop,
-    /// `use`), so that key alone never tells a container apart from a
-    /// real prompt leaf -- only a node with no children of its own
-    /// ever actually ran one (#616).
+    /// describes for these. The container signals (`progress_total`/
+    /// `each_in_path` for a loop, `branch`/`condition_result` for an
+    /// `if`, `flow`/`mode` for a bare container -- the same keys
+    /// `diff::is_container` checks) all win over `meta.adapter`,
+    /// whether or not the node has children of its own: an `if`/loop
+    /// in model mode writes `adapter`/`model` alongside its own
+    /// condition/progress keys as the record of a real model call, and
+    /// a `dynamic` writes the scope's effective adapter/model onto its
+    /// own node too (as does the root) -- so a childless container
+    /// (an else branch with no `else`, a loop that stopped before its
+    /// first pass, or a live snapshot caught between a container's own
+    /// write and its first child's) must not read as `Prompt` either
+    /// (#616). `has_children` (any descendant of its own in the
+    /// flattened state) still falls back to a bare container when none
+    /// of the condition/progress keys apply -- a container whose kind
+    /// those keys can't name, same as before.
     fn from_meta_shape(node: &NodeMeta, has_children: bool) -> Self {
         let meta = &node.meta;
         if meta.get("provider").is_some() {
             RowKind::Tool
         } else if meta.get("orchestration").is_some() || meta.get("resolved_path").is_some() {
             RowKind::Use
-        } else if has_children {
-            if node.progress_total.is_some() || meta.get("each_in_path").is_some() {
-                RowKind::Loop
-            } else if node.branch.is_some() || meta.get("condition_result").is_some() {
-                RowKind::If
-            } else {
-                RowKind::Unknown
-            }
+        } else if node.progress_total.is_some() || meta.get("each_in_path").is_some() {
+            RowKind::Loop
+        } else if node.branch.is_some() || meta.get("condition_result").is_some() {
+            RowKind::If
+        } else if has_children || meta.get("flow").is_some() || meta.get("mode").is_some() {
+            RowKind::Unknown
         } else if meta.get("adapter").is_some() {
             RowKind::Prompt
         } else {
@@ -422,7 +429,14 @@ pub fn build(
         model,
         header.run_end_ts.as_deref(),
     );
-    let state_rows = build_state_rows(&flat, &statuses, model, header.run_end_ts.as_deref(), now);
+    let state_rows = build_state_rows(
+        plan,
+        &flat,
+        &statuses,
+        model,
+        header.run_end_ts.as_deref(),
+        now,
+    );
     let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
     // A tree-loop pass's prompt, and
     // (on cof) a `use` child's, never appear in `flat` while they run
@@ -540,21 +554,24 @@ fn state_subtree_recency(
 /// The dim meta summary for a row with its own node (issue #535): the
 /// model for a prompt, else the provider for a tool; the duration
 /// once finished; `retries N` when `retries_used > 0`; and `n/total`
-/// for a loop. `None` when there's nothing to show. `has_children`
-/// (#616) hides the model: both engines write the scope's effective
-/// model into a container's own node too, so a row with children of
-/// its own never shows one, whatever its `meta` says -- only a leaf
-/// ever actually ran a prompt.
+/// for a loop. `None` when there's nothing to show. `kind` (#616)
+/// gates the model on `Prompt`/`Reflector`, the same gate
+/// `walk_rows`/`details_for` use for the orchestration pane and the
+/// details pane: both engines write the scope's effective model into
+/// a container's own node too (the root, `dynamic`, a model-mode
+/// `if`/loop), so only a row whose *kind* actually ran a prompt shows
+/// one, whatever its `meta` says -- `has_children` alone missed a
+/// childless container carrying the same keys.
 fn state_row_dim(
     node: &NodeMeta,
-    has_children: bool,
+    kind: RowKind,
     status_kind: StatusKind,
     event_duration_s: Option<f64>,
     run_end_ts: Option<&str>,
     now: &str,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(model) = (!has_children)
+    if let Some(model) = matches!(kind, RowKind::Prompt | RowKind::Reflector)
         .then(|| node.meta.get("model").and_then(Value::as_str))
         .flatten()
     {
@@ -688,6 +705,7 @@ fn aggregate_container_status(node: &StateTreeNode) -> RowStatus {
 /// (ties broken by key) -- a front end collapses a subtree the same
 /// way the orchestration pane does, by skipping its descendants.
 fn build_state_rows(
+    plan: &PlanTree,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
     model: &RunModel,
@@ -697,13 +715,14 @@ fn build_state_rows(
     let tree = build_state_tree(flat);
     let mut out = Vec::new();
     flatten_state_tree(
-        &tree, "prime", 0, flat, statuses, model, run_end_ts, now, &mut out,
+        plan, &tree, "prime", 0, flat, statuses, model, run_end_ts, now, &mut out,
     );
     out
 }
 
 #[allow(clippy::too_many_arguments)]
 fn flatten_state_tree(
+    plan: &PlanTree,
     nodes: &BTreeMap<String, StateTreeNode>,
     parent_path: &str,
     depth: usize,
@@ -732,10 +751,11 @@ fn flatten_state_tree(
         let (sent, received) = subtree_tokens(&full_path, flat);
         let tokens = (sent > 0 || received > 0).then_some((sent, received));
         let has_children = !node.children.is_empty();
+        let kind = row_kind_for_with_has_children(&full_path, plan, flat, has_children);
         let dim = node.own.and_then(|n| {
             state_row_dim(
                 n,
-                has_children,
+                kind,
                 status.kind,
                 model.event_duration_s(&full_path),
                 run_end_ts,
@@ -755,6 +775,7 @@ fn flatten_state_tree(
             tokens,
         });
         flatten_state_tree(
+            plan,
             &node.children,
             &full_path,
             depth + 1,
@@ -933,10 +954,16 @@ pub fn details_for(
         if has_prompt_sent && (key == "tokens_sent" || key == "tokens_received") {
             continue;
         }
-        // #616: `meta.model` only ever names a real model for a kind
-        // that actually runs a prompt -- both engines also write the
-        // scope's effective model into a container's own node.
-        if key == "model" && !matches!(kind, RowKind::Prompt | RowKind::Reflector) {
+        // #616: `meta.model`/`meta.adapter` only ever name a real
+        // prompt call for a kind that actually ran one -- both engines
+        // also write the scope's effective adapter/model into a
+        // container's own node (the root, `dynamic`, a model-mode
+        // `if`/loop), so showing `adapter` alone for such a row would
+        // look like a half-hidden model tag rather than a container
+        // with none.
+        if (key == "model" || key == "adapter")
+            && !matches!(kind, RowKind::Prompt | RowKind::Reflector)
+        {
             continue;
         }
         if let Some(v) = meta.get(key) {
@@ -1449,6 +1476,23 @@ fn leaf_pass_count(
 }
 
 fn row_kind_for(path: &str, plan: &PlanTree, flat: &BTreeMap<String, NodeMeta>) -> RowKind {
+    let has_children = crate::model::subtree_entries(path, flat).any(|(p, _)| p != path);
+    row_kind_for_with_has_children(path, plan, flat, has_children)
+}
+
+/// [`row_kind_for`], given a caller's own already-known `has_children`
+/// instead of recomputing it with [`crate::model::subtree_entries`] --
+/// the state pane already has this cheaply from its own tree walk
+/// (`build_state_tree`), and calling `subtree_entries` again for every
+/// row of a deep state turned the whole pane's build quadratic (the
+/// same scan this file's `redraw_from_a_2000_node_state_...` test
+/// exists to catch).
+fn row_kind_for_with_has_children(
+    path: &str,
+    plan: &PlanTree,
+    flat: &BTreeMap<String, NodeMeta>,
+    has_children: bool,
+) -> RowKind {
     if path == "prime" {
         return RowKind::Root;
     }
@@ -1468,7 +1512,6 @@ fn row_kind_for(path: &str, plan: &PlanTree, flat: &BTreeMap<String, NodeMeta>) 
         return RowKind::Report;
     }
     if let Some(node) = node {
-        let has_children = crate::model::subtree_entries(path, flat).any(|(p, _)| p != path);
         return RowKind::from_meta_shape(node, has_children);
     }
     if path
@@ -1914,9 +1957,11 @@ fn walk_rows(
     });
     // #616: `meta.model` names a row's own model only for a kind that
     // actually runs a prompt (`Prompt`/`Reflector`) -- both engines
-    // write the scope's effective model into a container's own node
-    // too, so showing it for any other kind tagged a `dynamic` or the
-    // root with the default model whenever one happened to be set.
+    // also write the scope's effective adapter/model onto the root's
+    // and a `dynamic`'s own node, and onto a model-mode `if`/loop's
+    // alongside its own condition/progress keys, so showing it for
+    // any other kind would tag a container with the default model
+    // whenever one happened to be set, not a model it ever ran.
     let dim = node.and_then(|n| {
         n.meta
             .get("provider")
@@ -2074,6 +2119,33 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         assert_eq!(row_kind_for("prime.ask", &plan, &flat), RowKind::Prompt);
+    }
+
+    /// Issue #616: a model-mode `if` writes `adapter`/`model`
+    /// alongside its own `condition_result` as the record of a real
+    /// model call -- if it has no child node yet (the else branch
+    /// taken with no `else`, or a condition error with `on_error:
+    /// skip`), the condition signal must still win over `meta.adapter`
+    /// so the row reads `If`, not `Prompt`.
+    #[test]
+    fn from_meta_shape_reads_a_childless_model_mode_if_as_if_not_prompt() {
+        let plan = PlanTree::empty();
+        let state = json!({"prime": {
+            "value": null, "meta": {"completed_at": "t1"},
+            "gate": {
+                "value": null,
+                "meta": {
+                    "completed_at": "t1",
+                    "adapter": "_noop",
+                    "model": "llama3.1:8b",
+                    "condition_result": false,
+                    "branch": "else"
+                }
+            }
+        }});
+        let flat = flatten_state(&state);
+        assert_eq!(row_kind_for("prime.gate", &plan, &flat), RowKind::If);
+        assert_ne!(row_kind_for("prime.gate", &plan, &flat), RowKind::Prompt);
     }
 
     /// Issue #616: with no plan at all (`osi watch`'s own fallback),
@@ -4198,7 +4270,7 @@ mod tests {
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "fan": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
                 "iter_0": {
-                    "ask": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z", "tokens_sent": 5, "tokens_received": 7, "model": "m"}}
+                    "ask": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z", "tokens_sent": 5, "tokens_received": 7, "adapter": "scripted", "model": "m"}}
                 }
             }
         }});

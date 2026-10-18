@@ -809,6 +809,17 @@ impl Differ {
         let mut flat = flatten_state(state);
         let mut lines = Vec::new();
         let mut held_this_poll: Vec<String> = Vec::new();
+        // `drain_until_ended` stops polling at the first tick that
+        // produces no lines, then diffs the final `state.json` once
+        // more -- a hold started on that last diff, or on the last
+        // live tick before it, would never get the follow-up poll
+        // that resolves it, losing the line for good rather than just
+        // delaying it. The final diff runs after events are fully
+        // drained, so a real named report's path is already in
+        // `report_paths` by then; skipping the hold here only ever
+        // lets a true first sighting through immediately, never a
+        // report `report_only` above would otherwise have caught.
+        let run_has_ended = run_ended(state);
 
         for (path, node) in &flat {
             // #610: a named report writes a state node (#605), but a
@@ -846,7 +857,8 @@ impl Differ {
             // above now matches) or, `held_once.remove` now finding it
             // already there, it falls through to the ordinary first-
             // sighting lines below instead of holding a second time.
-            let unconfirmed_reportish = plan.match_path(path).is_none_or(|m| m.entries.is_empty())
+            let unconfirmed_reportish = !run_has_ended
+                && plan.match_path(path).is_none_or(|m| m.entries.is_empty())
                 && !self.last.contains_key(path)
                 && crate::render::is_report_value(&node.value);
             if unconfirmed_reportish && !self.held_once.remove(path) {
@@ -1373,6 +1385,42 @@ mod tests {
                 .iter()
                 .any(|l| l.text.starts_with("✓ prime.looks_like_a_report")),
             "printed as an ordinary first sighting once the hold expires: {lines:?}"
+        );
+    }
+
+    /// The hold exists to delay a line, never to lose one --
+    /// `drain_until_ended` (`oscilloscope`'s `main.rs`) stops polling
+    /// at the first tick with no new lines, then diffs the final
+    /// `state.json` once more, so a hold started on *that* diff would
+    /// never get the follow-up poll that resolves it. Once
+    /// `runtime.last_run.completed_at` is set, a report-shaped node
+    /// with no event must print its step lines on this very diff
+    /// instead of holding.
+    #[test]
+    fn an_unconfirmed_reportish_node_is_not_held_once_the_run_has_ended() {
+        let mut differ = Differ::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1"},
+                "looks_like_a_report": {
+                    "value": {"message": "tool output", "level": "info", "data": null},
+                    "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell", "stdout": "whatever"}
+                }
+            }
+        });
+
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.text.starts_with("▶ prime.looks_like_a_report")),
+            "a run-ended diff must never hold: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.text.starts_with("✓ prime.looks_like_a_report")),
+            "a run-ended diff must never hold: {lines:?}"
         );
     }
 

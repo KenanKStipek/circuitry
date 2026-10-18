@@ -1056,9 +1056,12 @@ fn watch_counts_the_same_effects_as_a_planned_run_with_no_prompts() {
             );
         }
         for row in rendered.state_rows.iter() {
-            assert_ne!(
-                row.dim.as_deref(),
-                Some("llama3.1:8b"),
+            // The state pane's own dim joins the model with the
+            // row's duration (`state_row_dim`), so it's never exactly
+            // the model string alone -- `assert_ne!` on the full
+            // string could never fail here.
+            assert!(
+                !row.dim.as_deref().unwrap_or("").contains("llama3.1:8b"),
                 "state row {} should show no model tag: {:?}",
                 row.path,
                 row.dim
