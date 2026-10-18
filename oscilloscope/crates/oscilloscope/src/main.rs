@@ -3638,7 +3638,8 @@ mod tests {
             &[],
         );
         assert_eq!(render_state.header.status, RunStatus::Ok);
-        assert_eq!(render_state.header.effects_done, 1);
+        // The root counts too (issue #620), alongside `hello`.
+        assert_eq!(render_state.header.effects_done, 2);
     }
 
     #[test]
@@ -3719,7 +3720,8 @@ mod tests {
             &[],
         );
         assert_eq!(render_state.header.status, RunStatus::Failed);
-        assert_eq!(render_state.header.effects_done, 1);
+        // The root counts too (issue #620), alongside `boom`.
+        assert_eq!(render_state.header.effects_done, 2);
 
         let details =
             oscilloscope_core::render::details_for("prime.boom", &plan, &model, Some(&state));
@@ -3858,7 +3860,8 @@ mod tests {
             &[],
         );
         assert_eq!(render_state.header.status, RunStatus::Ok);
-        assert_eq!(render_state.header.effects_done, 1);
+        // The root counts too (issue #620), alongside `hello`.
+        assert_eq!(render_state.header.effects_done, 2);
     }
 
     #[test]

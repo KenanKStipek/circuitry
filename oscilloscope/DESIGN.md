@@ -611,6 +611,38 @@ final state even once it succeeds (§1.2), so without that fallback such
 a `use` would count toward neither side, ever. "Done" never exceeds
 "planned".
 
+Both counts count the document root and every *named* `if`/loop/
+`dynamic`/`finally`-wrapped scope too, not only leaves — a transparent
+(unnamed) `if`/loop is the one exception, since it never fires its own
+start/end hooks and so never writes a node of its own (§1.3/§1.4)
+either. This matches `runtime.last_run.totals.effects_run`, the
+engine's own count: "every completed node, the root and the containers
+included" (§1.2). Under no plan at all (`osi watch`, §7, or an
+`inline:`/`ref:` `use` child's own un-plotted descendants), a node
+`from_meta_shape` can't name from its own `meta` keys but that still
+has real children in state is counted as a container too — only a
+container ever has them — so a bare `dynamic` with no distinguishing
+shape of its own still counts, and a finished run read with no plan
+matches the same run read with one.
+
+Once a run has ended with a real `--out` write of its own — `ok`,
+`failed`, or a first-signal `cancelled` (DESIGN.md §2.1 rule 7's
+"ended" outcomes; never a second-signal `aborted`, nor a pre-execution
+validation failure, neither of which ever writes one) — "planned" and
+"done" both switch to reading `runtime.last_run.totals.effects_run`
+directly (issue #620), the same total `osi` already shows as a token
+(§6.3). That total is recorded live as each effect completes, not by
+walking the final state, so it is exact for every shape, including
+two a state walk alone cannot see: a declared-outputs `use` child,
+whose own effects never land in the final state tree at all even
+though they ran, and an *unnamed* loop with more than one pass, whose
+every pass overwrites the same state path (§1.3) so only the last one
+survives for a walk to find. Counting from state (the walk described
+above) is only the fallback for an ended run whose final write has no
+`effects_run` at all. `osi watch` (no plan at all, §7) gets the same
+guarantee: the override needs nothing from the plan, only the run's
+own ended status and its `--out` state.
+
 **The orchestration pane** (formerly "plan"; `draw_tree` in `tui.rs`).
 Titled ` orchestration <name> `, `<name>` the top-level document's file
 name without its extension (orchestration documents have no `name:` of

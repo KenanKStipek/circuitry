@@ -257,6 +257,20 @@ pub struct PlanTree {
     /// this is recorded directly from each op's own kind, at the same
     /// point `all_paths` itself is.
     leaf_paths: Vec<String>,
+    /// Every path that corresponds to a real, separate `{value, meta}`
+    /// state node once it runs -- every leaf (`leaf_paths`'s own
+    /// entries), plus every *named* `if`/loop, every `dynamic`, and
+    /// every `TryFinally`-shaped op (a dynamic or the document root
+    /// with its own `finally:`), `iter_*` placeholder included. A
+    /// *transparent* (unnamed) `if`/loop contributes no path segment
+    /// and so no node of its own (DESIGN.md §1.3/§1.4: "it does not
+    /// fire for unnamed if or loop containers") and is excluded here
+    /// the same way `is_transparent` excludes it from a real chain
+    /// sibling -- this is what the header's own "effects done out of
+    /// planned" (DESIGN.md §6.3) needs to match `runtime.last_run.
+    /// totals.effects_run`, which counts the root and every named
+    /// container too, not only leaves.
+    countable_paths: Vec<String>,
     /// Every op's display path to the earlier siblings in the same
     /// `Region::Block` call (declaration order) — DESIGN.md §2.1 rule
     /// 1's "every earlier plan sibling is complete", which needs each
@@ -282,6 +296,7 @@ impl PlanTree {
             has_plan: false,
             all_paths: Vec::new(),
             leaf_paths: Vec::new(),
+            countable_paths: Vec::new(),
             earlier_siblings: HashMap::new(),
             branch_alternates: HashMap::new(),
         }
@@ -305,6 +320,13 @@ impl PlanTree {
     /// §6.3's header) needs.
     pub fn leaf_paths(&self) -> &[String] {
         &self.leaf_paths
+    }
+
+    /// [`PlanTree::countable_paths`] field doc comment -- every leaf
+    /// plus every named container, the set the header's own effects
+    /// count needs instead of [`leaf_paths`](Self::leaf_paths) alone.
+    pub fn countable_paths(&self) -> &[String] {
+        &self.countable_paths
     }
 
     /// `path`'s earlier siblings in declaration order within its own
@@ -366,6 +388,7 @@ impl PlanTree {
         let mut trie = TrieNode::default();
         let mut all_paths = Vec::new();
         let mut leaf_paths = Vec::new();
+        let mut countable_paths = Vec::new();
         let base_dir = program
             .document
             .as_ref()
@@ -383,6 +406,7 @@ impl PlanTree {
             cycle_guard: &mut cycle_guard,
             all_paths: &mut all_paths,
             leaf_paths: &mut leaf_paths,
+            countable_paths: &mut countable_paths,
             earlier_siblings: &mut earlier_siblings,
             branch_alternates: &mut branch_alternates,
             loader,
@@ -393,6 +417,7 @@ impl PlanTree {
             has_plan: true,
             all_paths,
             leaf_paths,
+            countable_paths,
             earlier_siblings,
             branch_alternates,
         }
@@ -469,6 +494,7 @@ struct WalkCtx<'a> {
     cycle_guard: &'a mut Vec<PathBuf>,
     all_paths: &'a mut Vec<String>,
     leaf_paths: &'a mut Vec<String>,
+    countable_paths: &'a mut Vec<String>,
     earlier_siblings: &'a mut HashMap<String, Vec<String>>,
     branch_alternates: &'a mut HashMap<String, Vec<String>>,
     loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
@@ -642,6 +668,17 @@ fn record_op_entry(
     let display = display_path(&path);
     if matches!(kind, PlanEntryKind::Leaf(_)) {
         ctx.leaf_paths.push(display.clone());
+    }
+    // Every leaf, and every *named* container -- a transparent
+    // (unnamed) `if`/loop fires no node and no hook of its own
+    // (DESIGN.md §1.3/§1.4), so it's the one non-leaf kind excluded
+    // here; `PlanTree::countable_paths`'s own doc comment has the
+    // reasoning.
+    if !matches!(
+        kind,
+        PlanEntryKind::If { named: false } | PlanEntryKind::Loop { named: false, .. }
+    ) {
+        ctx.countable_paths.push(display.clone());
     }
     ctx.all_paths.push(display);
     insert(
@@ -872,6 +909,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             cycle_guard: ctx.cycle_guard,
             all_paths: ctx.all_paths,
             leaf_paths: ctx.leaf_paths,
+            countable_paths: ctx.countable_paths,
             earlier_siblings: ctx.earlier_siblings,
             branch_alternates: ctx.branch_alternates,
             loader: ctx.loader,
