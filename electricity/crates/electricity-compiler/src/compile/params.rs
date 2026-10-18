@@ -298,6 +298,96 @@ pub(crate) fn build_use_inputs(
     Ok(ParamNode::Map(map))
 }
 
+/// A report effect's `data` leaf's by-reference form (#605): exactly
+/// `{from: <path>}` -- no `default:`/`as:`, since a report never fails
+/// the run on an unresolved path, so there is nothing either would be
+/// for. Ports `core/report.py::report_data_reference`.
+fn report_data_reference(value: &Value) -> Option<String> {
+    let Value::Dict(dict) = value else {
+        return None;
+    };
+    if dict.len() != 1 {
+        return None;
+    }
+    let from_key = Value::Str("from".to_string());
+    let path = dict.get(&from_key)?.as_str()?;
+    Some(path.trim().to_string())
+}
+
+/// Builds the [`ParamNode`] for a report effect's `data:` (#605) --
+/// ports `core/compiler.py::_check_report_data_leaves` plus the
+/// IR-building half, the same pattern [`build_param_node`] follows for
+/// a tool's `params`, but with the narrower reference grammar above and
+/// `Escape::None` for a string leaf (rendered like a prompt template,
+/// unescaped, same as the report's own `message`).
+pub(crate) fn build_report_data(
+    value: &Value,
+    name: Option<&str>,
+    effect_path: &str,
+    field: &str,
+    loop_names: &BTreeSet<String>,
+) -> Result<ParamNode, CompileError> {
+    let label = match name {
+        Some(n) => format!("Report effect '{n}'"),
+        None => "Report effect".to_string(),
+    };
+    if let Some(path) = report_data_reference(value) {
+        validate_reference_path(
+            &path,
+            &format!("{label} data '{field}'"),
+            effect_path,
+            loop_names,
+        )?;
+        return Ok(ParamNode::From {
+            path,
+            default: None,
+            as_json: false,
+        });
+    }
+    match value {
+        Value::Str(s) => {
+            check_templates(value, effect_path, field, true)?;
+            Ok(ParamNode::Template(TemplateText::new(
+                s.clone(),
+                true,
+                Escape::None,
+            )))
+        }
+        Value::Dict(dict) => {
+            let mut map = IndexMap::new();
+            for (key, item) in dict {
+                let key_label = match key {
+                    Value::Str(s) => s.clone(),
+                    other => other.py_str(),
+                };
+                let child = build_report_data(
+                    item,
+                    name,
+                    effect_path,
+                    &format!("{field}.{key_label}"),
+                    loop_names,
+                )?;
+                map.insert(key.clone(), child);
+            }
+            Ok(ParamNode::Map(map))
+        }
+        Value::List(items) => {
+            let mut list = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                list.push(build_report_data(
+                    item,
+                    name,
+                    effect_path,
+                    &format!("{field}[{index}]"),
+                    loop_names,
+                )?);
+            }
+            Ok(ParamNode::List(list))
+        }
+        other => Ok(ParamNode::Literal(other.clone())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

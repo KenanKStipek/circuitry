@@ -13,10 +13,11 @@ list from the real dataclasses rather than hand-copying it once.
 Scope: the eight top-level effect definitions issue #408 names,
 `PromptDefinition`, `ToolDefinition`, `UseDefinition`, `YieldDefinition`,
 `ReflectorDefinition`, `DynamicDefinition`, `ConditionalDefinition` and
-`LoopDefinition` -- plus every dataclass nested inside one of their own
-field types (`MessageDef`, `AssetRefDef`, `RetryPolicyDef`, `ExpectDef`,
-`ConditionDef`, `LoopWhileDef`, `LoopEachDef`), so a new field on one of
-those is caught the same way.
+`LoopDefinition`, plus `ReportDefinition` (issue #605) -- plus every
+dataclass nested inside one of their own field types (`MessageDef`,
+`AssetRefDef`, `RetryPolicyDef`, `ExpectDef`, `ConditionDef`,
+`LoopWhileDef`, `LoopEachDef`), so a new field on one of those is caught
+the same way.
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 3.11 in CI, same as every other `electricity/scripts/generate_*.py`).
@@ -41,6 +42,7 @@ from circuitry.core.prompt import (
     RetryPolicyDef,
 )
 from circuitry.core.reflector import ReflectorDefinition
+from circuitry.core.report import ReportDefinition
 from circuitry.core.tool import ToolDefinition
 from circuitry.core.use import UseDefinition
 from circuitry.core.yield_effect import YieldDefinition
@@ -65,6 +67,7 @@ CLASSES = [
     ExpectDef,
     UseDefinition,
     YieldDefinition,
+    ReportDefinition,
     ReflectorDefinition,
     DynamicDefinition,
     ConditionalDefinition,

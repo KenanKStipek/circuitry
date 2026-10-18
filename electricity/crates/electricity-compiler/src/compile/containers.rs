@@ -375,6 +375,13 @@ fn compile_effect(
                 loop_names,
             )
         }
+        "report" => crate::compile::leaves::compile_report(
+            effect,
+            path,
+            scope_path,
+            effect_path,
+            loop_names,
+        ),
         other => Err(CompileError(format!(
             "Unsupported effect type at '{effect_path}': {}",
             Value::Str(other.to_string()).py_repr()

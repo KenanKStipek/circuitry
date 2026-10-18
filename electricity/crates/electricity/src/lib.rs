@@ -316,7 +316,7 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
                 matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
             }
             LeafKind::Reflector(reflector) => region_has_prompt_effects(&reflector.inner),
-            LeafKind::Yield(_) => false,
+            LeafKind::Yield(_) | LeafKind::Report(_) => false,
         },
         NodeKind::Control(region) => region_has_prompt_effects(region),
     }
@@ -387,7 +387,7 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
                 matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
             }
             LeafKind::Reflector(reflector) => region_calls_default_adapter(&reflector.inner),
-            LeafKind::Yield(_) => false,
+            LeafKind::Yield(_) | LeafKind::Report(_) => false,
         },
         NodeKind::Control(region) => region_calls_default_adapter(region),
     }
@@ -456,7 +456,7 @@ fn profile_provider_unbuildable(
                 }
             }
             LeafKind::Reflector(reflector) => region_find(&reflector.inner, adapters),
-            LeafKind::Tool(_) | LeafKind::Use(_) | LeafKind::Yield(_) => None,
+            LeafKind::Tool(_) | LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Report(_) => None,
         },
         NodeKind::Control(region) => region_find(region, adapters),
     }
@@ -838,6 +838,33 @@ impl RunObserver for Observer<'_> {
     // actually running.
     fn wants_child_snapshots(&self) -> bool {
         self.live_state.is_some()
+    }
+
+    // A report never fires effect_start/effect_complete, so it never
+    // reaches `self.totals` at all (#605) -- only `--events` (through
+    // this hook) and the console line below. `electricity`'s own CLI
+    // has no `--quiet`/`--json` flag to suppress the line under
+    // (unlike `cof run`'s), so it always prints -- the one place this
+    // crate writes to stdout directly rather than handing rendered
+    // text back to `electricity-cli`'s own writer, since `RunRequest`
+    // has no callback seam for a mid-run console line (`out`/`events`/
+    // `live_state` are all file paths, opened and owned entirely
+    // inside `run_orchestration`).
+    fn report(
+        &self,
+        path: &EffectPath,
+        level: electricity_bytecode::ReportLevel,
+        message: &str,
+        data: Option<&Value>,
+    ) {
+        let level_str = match level {
+            electricity_bytecode::ReportLevel::Info => "info",
+            electricity_bytecode::ReportLevel::Warning => "warning",
+        };
+        if let Some(log) = self.events {
+            log.on_report(&path.to_string(), level_str, message, data);
+        }
+        println!("▸ {message}");
     }
 
     fn record_totals(&self, meta: &Value) {

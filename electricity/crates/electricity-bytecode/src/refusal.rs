@@ -454,6 +454,9 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                 refusal(path, RefusalReason::Yield)
             }
         }
+        // A report never calls a model and has no capability of its own
+        // to gate (#605) -- always supported, no flag needed.
+        LeafKind::Report(_) => None,
         LeafKind::Tool(tool) => {
             if !supported.model_expect
                 && matches!(&tool.expect, Some(ExpectCondition::Model { .. }))

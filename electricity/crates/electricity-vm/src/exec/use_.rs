@@ -1509,6 +1509,19 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.warning(message);
     }
 
+    // A report's own path is already namespaced under the `use` node
+    // the same way `dispatch`'s own path is (`Frame::effect_path`) --
+    // no rewriting needed, same as `dispatch`/`warning` above.
+    fn report(
+        &self,
+        path: &EffectPath,
+        level: electricity_bytecode::ReportLevel,
+        message: &str,
+        data: Option<&Value>,
+    ) {
+        self.parent.report(path, level, message, data);
+    }
+
     fn record_totals(&self, meta: &Value) {
         self.parent.record_totals(meta);
     }

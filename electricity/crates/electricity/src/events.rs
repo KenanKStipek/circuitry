@@ -30,6 +30,11 @@ use std::time::Instant;
 /// reaches the stream -- `cli/events.py::_ERROR_MAX_CHARS`.
 const ERROR_MAX_CHARS: usize = 500;
 
+/// A `report` event's compact `data` JSON, in bytes, above which it is
+/// replaced by `"data_truncated": <that byte count>` instead (#605) --
+/// `cli/events.py::_REPORT_DATA_MAX_BYTES`.
+const REPORT_DATA_MAX_BYTES: usize = 16 * 1024;
+
 fn truncate_error(error: &str) -> String {
     error.chars().take(ERROR_MAX_CHARS).collect()
 }
@@ -278,6 +283,58 @@ impl EventLog {
             );
         }
         self.write_line("end", Value::Dict(payload));
+    }
+
+    /// One `report` line (#605): `v`, `seq`, `ts`, `ev`, `path`,
+    /// `level`, `message`, then `data` (omitted when *data* is `None`)
+    /// or `data_truncated` (the compact JSON's byte count) when that
+    /// JSON exceeds 16 KiB -- a named report still keeps the full
+    /// value in the shadow state, only this line is capped. Ports
+    /// `cli/events.py::EventLog.on_report`.
+    pub fn on_report(&self, path: &str, level: &str, message: &str, data: Option<&Value>) {
+        if self.disabled.get() {
+            return;
+        }
+        let mut payload = Dict::new();
+        payload.insert(Value::Str("v".to_string()), Value::from(1i64));
+        payload.insert(
+            Value::Str("seq".to_string()),
+            Value::from(self.take_seq() as i64),
+        );
+        payload.insert(Value::Str("ts".to_string()), Value::Str(now_iso_ms()));
+        payload.insert(
+            Value::Str("ev".to_string()),
+            Value::Str("report".to_string()),
+        );
+        payload.insert(Value::Str("path".to_string()), Value::Str(path.to_string()));
+        payload.insert(
+            Value::Str("level".to_string()),
+            Value::Str(level.to_string()),
+        );
+        payload.insert(
+            Value::Str("message".to_string()),
+            Value::Str(message.to_string()),
+        );
+        if let Some(data) = data {
+            match electricity_json::dumps(data, electricity_json::WriteMode::EVENTS) {
+                Ok(text) => {
+                    let byte_len = text.len();
+                    if byte_len > REPORT_DATA_MAX_BYTES {
+                        payload.insert(
+                            Value::Str("data_truncated".to_string()),
+                            Value::from(byte_len as i64),
+                        );
+                    } else {
+                        payload.insert(Value::Str("data".to_string()), data.clone());
+                    }
+                }
+                Err(err) => {
+                    self.disable_with("report", &err);
+                    return;
+                }
+            }
+        }
+        self.write_line("report", Value::Dict(payload));
     }
 
     pub fn run_end(&self, ok: bool, error: Option<&str>, signal: Option<&str>) {

@@ -16,6 +16,7 @@ pub(crate) mod live_scope;
 pub mod loop_;
 pub mod prompt;
 pub mod reflector;
+pub mod report;
 pub mod tool;
 pub mod use_;
 pub mod yield_;
@@ -444,6 +445,13 @@ pub(crate) fn execute_op<'a>(
                         op, yield_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
                     )
                     .await
+                }
+                LeafKind::Report(report_op) => {
+                    report::execute_report(
+                        op, report_op, store, parent, ctx_chain, frame, run_ctx, observer,
+                    )
+                    .await;
+                    Ok(())
                 }
             },
             NodeKind::Control(region) => match region {

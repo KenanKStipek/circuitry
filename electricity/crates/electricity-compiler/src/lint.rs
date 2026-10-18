@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 /// `core/lint.py::CANONICAL_EFFECT_TYPES`.
-const CANONICAL_EFFECT_TYPES: [&str; 8] = [
+const CANONICAL_EFFECT_TYPES: [&str; 9] = [
     "prompt",
     "dynamic",
     "if",
@@ -23,6 +23,7 @@ const CANONICAL_EFFECT_TYPES: [&str; 8] = [
     "tool",
     "use",
     "yield",
+    "report",
 ];
 
 /// `core/lint.py::DEPRECATED_EFFECT_TYPE_ALIASES`.

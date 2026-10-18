@@ -82,6 +82,14 @@
     "description",
     "enabled"
   ],
+  "ReportDefinition": [
+    "message",
+    "name",
+    "data",
+    "level",
+    "description",
+    "enabled"
+  ],
   "ReflectorDefinition": [
     "name",
     "inner",

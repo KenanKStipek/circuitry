@@ -303,10 +303,14 @@
                     "if": { "properties": { "type": { "const": "yield" } } },
                     "then": { "$ref": "#/$defs/YieldEffect" },
                     "else": {
-                      "properties": {
-                        "type": {
-                          "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use", "yield"],
-                          "description": "Unknown effect type. Must be one of: prompt, dynamic, if, loop, reflector, tool, use, yield. ('conditional' is also accepted as a deprecated alias of 'if'.)"
+                      "if": { "properties": { "type": { "const": "report" } } },
+                      "then": { "$ref": "#/$defs/ReportEffect" },
+                      "else": {
+                        "properties": {
+                          "type": {
+                            "enum": ["prompt", "dynamic", "if", "conditional", "loop", "reflector", "tool", "use", "yield", "report"],
+                            "description": "Unknown effect type. Must be one of: prompt, dynamic, if, loop, reflector, tool, use, yield, report. ('conditional' is also accepted as a deprecated alias of 'if'.)"
+                          }
                         }
                       }
                     }
@@ -397,6 +401,31 @@
         },
         "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+      }
+    },
+
+    "ReportEffect": {
+      "type": "object",
+      "required": ["type", "message"],
+      "description": "Tells watchers (--events, osp) what the run is doing: renders 'message' and publishes it, with optional 'data' from the shadow state. Never fails the run, is never retried and does not count toward runtime.last_run.totals.effects_run (#605).",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "report" },
+        "name": { "$ref": "#/$defs/NamePattern", "description": "When set, the report is also recorded at prime.<name>.value ({message, level, data}). Unnamed reports write no state node." },
+        "description": { "type": "string" },
+        "message": {
+          "type": "string",
+          "description": "Mustache template, rendered in the same scope a prompt template sees: the shadow state plus the bindings of any enclosing loop. {{x}} is never HTML-escaped, like {{{x}}} (#397)."
+        },
+        "data": {
+          "type": "object",
+          "description": "Values attached to the report. A leaf anywhere in 'data' (any depth, objects and lists) may be {from: <path>}, resolved in the same scope as params by reference (see Params by reference); a path that is missing or null resolves to null with a warning, never an error. A string leaf is Mustache-rendered; anything else is kept as written."
+        },
+        "level": {
+          "type": "string",
+          "enum": ["info", "warning"],
+          "description": "How watchers show the report. Defaults to info."
+        }
       }
     },
 
