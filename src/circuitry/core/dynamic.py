@@ -1204,9 +1204,13 @@ def _skip_disabled_effect(
     dispatched. An anonymous effect (transparent conditional/loop) has no
     state node to write, so it is simply not executed.
     """
+    from .report import ReportDefinition
+
     name = getattr(effect, "name", None)
     if isinstance(name, str) and name:
-        write_disabled_node(store=store, name=name)
+        write_disabled_node(
+            store=store, name=name, fire_hooks=not isinstance(effect, ReportDefinition)
+        )
     if verbose:
         label = name or "?"
         line = (
