@@ -116,7 +116,7 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
     {
         changed.push("header:tokens".to_string());
     }
-    // #610, R3: a new report counts as its own header change, never
+    // #610: a new report counts as its own header change, never
     // folded into `header:status` -- the run's own status and the
     // latest report's message are shown in the same slot but change
     // for different reasons, and elapsed time (ticking every
@@ -587,7 +587,7 @@ mod tests {
         assert!(changed.contains(&"header:effects".to_string()));
     }
 
-    /// #610, R3: a new report counts as its own header change, with
+    /// #610: a new report counts as its own header change, with
     /// its own key -- never folded into `header:status`, and elapsed
     /// time (ticking every rebuild regardless) must never highlight.
     #[test]

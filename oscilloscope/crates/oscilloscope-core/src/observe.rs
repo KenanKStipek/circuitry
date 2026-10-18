@@ -219,7 +219,8 @@ pub enum Event {
     /// A `report` effect (#605/#610): never paired with a `start`/
     /// `end` of its own, so there is no `id` here at all. `data` is
     /// `None` either when the report had none, or when the engine
-    /// replaced an oversized one with `data_truncated: true` instead.
+    /// replaced an oversized one with `data_truncated: <size in bytes>`
+    /// instead.
     Report {
         ts: String,
         path: String,
@@ -298,10 +299,10 @@ pub fn parse_event(value: &Value) -> Option<Event> {
             },
             message: value.get("message")?.as_str()?.to_string(),
             data: value.get("data").cloned(),
-            data_truncated: value
-                .get("data_truncated")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            // Both engines write the compact JSON's byte count here
+            // (`"data_truncated": <size in bytes>`), not a boolean --
+            // only presence (and non-null) marks a report as truncated.
+            data_truncated: value.get("data_truncated").is_some_and(|v| !v.is_null()),
         }),
         _ => None,
     }
@@ -598,8 +599,10 @@ mod tests {
 
     #[test]
     fn parse_event_reads_a_report_with_data_truncated() {
+        // Both engines write the compact JSON's byte count here, not a
+        // boolean (electricity/src/events.rs, src/circuitry/cli/events.py).
         let value: Value = serde_json::from_str(
-            r#"{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime","level":"info","message":"big","data_truncated":true}"#,
+            r#"{"v":1,"seq":2,"ts":"t","ev":"report","path":"prime","level":"info","message":"big","data_truncated":20000}"#,
         )
         .unwrap();
         assert_eq!(

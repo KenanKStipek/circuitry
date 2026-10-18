@@ -432,13 +432,16 @@ impl PlanTree {
         })
     }
 
-    /// Whether `path` is a report's own (#605/#610, R4): resolved the
+    /// Whether `path` is a report's own (#605/#610): resolved the
     /// same way `match_path` resolves a `Pass` placeholder against a
     /// concrete `iter_N` segment, so a report inside a named loop's
     /// body or a grafted `use: path:` child resolves correctly too.
     /// `false` for a path the plan has nothing to say about at all --
     /// the caller's own no-plan fallback (`RunModel::
-    /// is_report_event_path`) is what answers then.
+    /// is_report_event_path`) is what answers then. Also `false` when
+    /// some other op shares this exact path (DESIGN.md §5: a
+    /// `then`/`else` reusing a name) and pushed a real `PlanEntry` of
+    /// its own there -- that op's row must still show.
     pub fn is_report_path(&self, path: &str) -> bool {
         let mut node = &self.root;
         for part in path.split('.') {
@@ -457,7 +460,7 @@ impl PlanTree {
             }
             return false;
         }
-        node.report
+        node.report && node.entries.is_empty()
     }
 }
 
@@ -592,19 +595,21 @@ fn record_op_entry(
         // plan row or count toward effects_planned/effects_done. A
         // *named* report still writes a state node (#605), which
         // `RunModel::observe`/`render::all_observed_paths` must also
-        // keep out of the tree (#610, R4) -- `mark_report` records
-        // this path for `PlanTree::is_report_path` to answer that,
-        // covering a grafted `use: path:` child and a named loop's
-        // `iter_*` placeholder the same way `insert` already does,
-        // since it walks the trie exactly the way `insert` does.
+        // keep out of the tree (#610) -- `mark_report` records this
+        // path for `PlanTree::is_report_path` to answer that, covering
+        // a grafted `use: path:` child and a named loop's `iter_*`
+        // placeholder the same way `insert` already does, since it
+        // walks the trie exactly the way `insert` does.
         //
         // Only when it's *named*: an unnamed report's own path is
         // always some real enclosing scope's (the document root, a
         // named loop's own pass container, a named `if`'s own
-        // branch) -- never exclusively its own -- and that scope's
-        // own node is a real row this must not hide. A named report's
-        // path, by contrast, is exclusively its own: nothing else in
-        // a real compiled program ever writes a node there.
+        // branch), and that scope's own node is a real row this must
+        // not hide. A named report's path is usually exclusively its
+        // own too, but not always -- a `then`/`else` reusing a name
+        // (DESIGN.md §5) can give a report and some other op the same
+        // path, so `is_report_path` only answers yes when nothing else
+        // pushed a real `PlanEntry` there either.
         if op.name.is_some() {
             mark_report(trie, &path);
         }
@@ -1010,8 +1015,8 @@ mod tests {
     }
 
     /// A *named* report's own path -- the only kind that ever writes a
-    /// state node (#605) -- is a report path (#610, R4); an unnamed
-    /// one's own path is its container's and must never be, or a real
+    /// state node (#605) -- is a report path (#610); an unnamed one's
+    /// own path is its container's and must never be, or a real
     /// container's row would wrongly disappear too (plan.rs's own
     /// `record_op_entry` doc comment).
     #[test]
@@ -1071,9 +1076,69 @@ mod tests {
         assert!(plan.is_report_path("prime.status"));
     }
 
+    /// A `then`/`else` reusing a name (DESIGN.md §5) can give a report
+    /// and some other op the same concrete path; that other op's row
+    /// must still show, so sharing the path must cost the report its
+    /// own exclusive claim on it (#610).
+    #[test]
+    fn is_report_path_is_false_when_another_op_shares_the_reports_own_path() {
+        let root_path = EffectPath::root();
+        let named_path = root_path.clone().push_name("status");
+
+        fn report_op(path: EffectPath, name: &str) -> Op {
+            Op {
+                path,
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Report(electricity_bytecode::ReportOp {
+                    message: electricity_bytecode::TemplateText::new(
+                        "m",
+                        true,
+                        electricity_bytecode::Escape::None,
+                    ),
+                    data: None,
+                    level: electricity_bytecode::ReportLevel::Info,
+                    description: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }
+        }
+
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    report_op(named_path.clone(), "status"),
+                    tool_op(named_path, "status"),
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        assert!(
+            !plan.is_report_path("prime.status"),
+            "a tool sharing the report's own path keeps its row; the path isn't exclusively the report's"
+        );
+    }
+
     /// A named report inside a *named* loop's own pass resolves
     /// through the same `Pass` placeholder `match_path` itself does
-    /// (#610, R4's "loop placeholders (iter_*)").
+    /// (#610's "loop placeholders (iter_*)").
     #[test]
     fn is_report_path_resolves_a_named_report_inside_a_named_loops_pass() {
         let root_path = EffectPath::root();
@@ -1153,7 +1218,7 @@ mod tests {
     }
 
     /// A named report inside a grafted `use: path:` child resolves
-    /// too (#610, R4) -- the same graft walk that lets `match_path`
+    /// too (#610) -- the same graft walk that lets `match_path`
     /// find the child's own real leaves under `prime.first.*` also
     /// marks a report under there as report-only.
     #[test]

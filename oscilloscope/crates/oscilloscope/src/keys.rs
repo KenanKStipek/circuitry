@@ -117,6 +117,17 @@ pub struct App {
     /// asked ⏎ to expand in place -- the existing collapse key (`←`)
     /// removes a path from here, folding that group again.
     pub expanded_quick_steps: std::collections::BTreeSet<String>,
+    /// Which of the two independent selections (`selected_path`,
+    /// `state_selected_path`) the details pane shows (#610): whichever
+    /// one last actually changed, not whatever `pane` happens to be
+    /// right now. `Tab`'s own cycle (`Tree` → `Details` → `State` →
+    /// `Tree`) passes through `Details` with neither of the other two
+    /// focused, so a selection made in the state pane must still be
+    /// what `Details` (and its own scrolling, which only `Pane::
+    /// Details` focus allows) shows once the user tabs there --
+    /// `pane == Pane::State` is only true while that pane itself has
+    /// focus, never while scrolling its own selection's details.
+    pub details_source: Pane,
 }
 
 impl App {
@@ -142,6 +153,7 @@ impl App {
             details_viewport: 0,
             fold_enabled: true,
             expanded_quick_steps: std::collections::BTreeSet::new(),
+            details_source: Pane::Tree,
         }
     }
 
@@ -155,6 +167,7 @@ impl App {
         if self.selected_path != path {
             self.selected_path = path;
             self.details_scroll = 0;
+            self.details_source = Pane::Tree;
         }
     }
 
@@ -426,7 +439,7 @@ impl App {
                     } else {
                         state_rows[state_rows.len() - 1]
                     };
-                    self.state_selected_path = Some(target.path.clone());
+                    self.select_state_path(Some(target.path.clone()));
                 }
             }
             Pane::Details => {
@@ -477,7 +490,20 @@ impl App {
             None if delta >= 0 => 0,
             None => rows.len() - 1,
         };
-        self.state_selected_path = Some(rows[next].path.clone());
+        self.select_state_path(Some(rows[next].path.clone()));
+    }
+
+    /// The state pane's own selection, resetting the details pane
+    /// back to its top and marking it as what `Details` should now
+    /// show (#610) whenever it actually changes -- the same rule
+    /// `select_tree_path` already applies for the orchestration
+    /// pane's own selection.
+    fn select_state_path(&mut self, path: Option<String>) {
+        if self.state_selected_path != path {
+            self.state_selected_path = path;
+            self.details_scroll = 0;
+            self.details_source = Pane::State;
+        }
     }
 
     /// `f`'s own target (§6.3): the innermost row osi considers

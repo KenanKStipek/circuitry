@@ -49,7 +49,7 @@ pub enum RowKind {
     /// this to ever match. Never a row in the orchestration tree
     /// (`RunModel::observe` already left it out of `statuses`
     /// entirely), but still a real row in the *state* pane, where
-    /// R5's details apply.
+    /// its own details apply.
     Report,
 }
 
@@ -126,7 +126,7 @@ impl RowKind {
 /// `Store::fire_report`/`exec::report`'s own named-report branch --
 /// distinctive enough that nothing else this codebase writes to a
 /// node's own `value` could ever be mistaken for one.
-fn is_report_value(value: &Value) -> bool {
+pub(crate) fn is_report_value(value: &Value) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
     };
@@ -204,8 +204,8 @@ pub struct Header {
     /// innermost loop's ETA is shown as a clock time"). `None`
     /// exactly when `innermost_loop_eta_s` is.
     pub innermost_loop_eta_ts: Option<String>,
-    /// The latest report seen, once at least one has arrived (#610,
-    /// R3) -- a front end shows this in the header's own status-line
+    /// The latest report seen, once at least one has arrived (#610)
+    /// -- a front end shows this in the header's own status-line
     /// slot, in place of `run_id`, for the rest of the run. `None`
     /// before any report at all, in which case the header reads
     /// exactly as it did before #610.
@@ -219,6 +219,13 @@ pub struct Header {
 pub struct HeaderReport {
     pub level: crate::observe::ReportLevel,
     pub message: String,
+    /// The sighting's own `ts` (#610): carried only so two sightings
+    /// with the same level and message still compare unequal --
+    /// `changes::header_changes` blames a new report for its own
+    /// highlight key purely by `latest_report` changing, and a repeat
+    /// report (the same "chain pass" message on every loop pass, for
+    /// instance) must still flash every time it actually arrives.
+    pub ts: String,
 }
 
 /// The selected row's own details (§6.3's right pane). `prompt_sent`
@@ -227,7 +234,7 @@ pub struct HeaderReport {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Details {
     pub path: String,
-    /// The row's own kind (#610, R5): used to be a separate parameter
+    /// The row's own kind (#610): used to be a separate parameter
     /// every caller of `details_lines`/`draw_details` had to thread
     /// through on its own, kept in sync with whichever row happened
     /// to be selected by hand -- now computed once, here, from the
@@ -826,7 +833,7 @@ fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanT
 /// The selected row's details, from the same inputs `build` used for
 /// this frame — a front end calls this only for the one row currently
 /// highlighted, not for every row on every redraw. `model` is only
-/// needed for #610's R3/R5 additions (the root's own `run_id`, and a
+/// needed for #610's own additions (the root's own `run_id`, and a
 /// named report's latest event sighting) -- every other field here
 /// comes from `plan`/`state` exactly as before.
 pub fn details_for(
@@ -976,7 +983,7 @@ pub fn details_for(
     }
 }
 
-/// #610's R3: the root row's own `run_id`, from `--events`' own
+/// #610: the root row's own `run_id`, from `--events`' own
 /// `run_start` (DESIGN.md §3) -- the header no longer shows it once a
 /// report has arrived, so this is the only place left to see it,
 /// aside from `--log`'s own `■ run started` line. Empty for every
@@ -993,7 +1000,7 @@ fn root_run_id_summary(path: &str, model: &RunModel) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// A named report's own details (#610, R5): `type report`, its
+/// A named report's own details (#610): `type report`, its
 /// `level`, the latest `message` and the clock time it arrived, and
 /// `data` as pretty JSON. The latest `--events` sighting for this
 /// exact path wins over the state node's own copy wherever it has an
@@ -1022,11 +1029,15 @@ fn report_details(path: &str, node: &NodeMeta, model: &RunModel, title: Option<S
         .map(|e| e.ts.clone())
         .or_else(|| node.completed_at.clone())
         .or_else(|| node.created_at.clone());
-    let data_truncated = event.is_some_and(|e| e.data_truncated);
+    // A named report keeps its full `data` in the shadow state even
+    // when the matching event sighting was truncated (the state write
+    // and the `--events` line are independent; only the line has a
+    // size cap), so the state value is the fallback, not a dead end.
     let data = event
         .and_then(|e| e.data.clone())
         .or_else(|| node.value.get("data").cloned())
         .filter(|d| !d.is_null());
+    let data_truncated = data.is_none() && event.is_some_and(|e| e.data_truncated);
 
     let mut meta_summary = vec![
         ("level".to_string(), level.to_string()),
@@ -1326,6 +1337,7 @@ fn build_header(
     let latest_report = model.latest_report().map(|r| HeaderReport {
         level: r.level,
         message: r.message.clone(),
+        ts: r.ts.clone(),
     });
 
     Header {
@@ -1414,15 +1426,19 @@ fn row_kind_for(path: &str, plan: &PlanTree, node: Option<&NodeMeta>) -> RowKind
     if path == "prime" {
         return RowKind::Root;
     }
-    // #610/R5: checked ahead of the plan -- a report never has a
-    // plan entry of its own at all (`plan::record_op_entry`'s own
-    // early return), so the plan branch below would otherwise fall
-    // through to the generic meta-shape guess for one every time.
-    if node.is_some_and(|n| is_report_value(&n.value)) {
-        return RowKind::Report;
-    }
+    // The plan wins first: a report never has a plan entry of its
+    // own at all (`plan::record_op_entry`'s own early return), so
+    // checking it ahead of the report-shape guess below only ever
+    // skips paths a report could never be at anyway -- but a planned
+    // tool or prompt whose own output happens to match the report
+    // shape (`{message: str, level: info|warning, data}`) must still
+    // read as its real plan kind, not get misclassified as `Report`
+    // (#610).
     if let Some(entry) = plan.match_path(path).and_then(|m| m.entries.first()) {
         return RowKind::from_plan_entry(&entry.kind);
+    }
+    if node.is_some_and(|n| is_report_value(&n.value)) {
+        return RowKind::Report;
     }
     if let Some(node) = node {
         return RowKind::from_meta_shape(node);
@@ -1671,18 +1687,21 @@ fn all_observed_paths(
     model: &RunModel,
 ) -> BTreeMap<String, ()> {
     let mut all_paths: BTreeMap<String, ()> = BTreeMap::new();
-    // #610/R4: `statuses` (`RunModel::observe`) already left a report
+    // #610: `statuses` (`RunModel::observe`) already left a report
     // path out, but `flat` (every `{value, meta}` node, report state
     // nodes included) hasn't -- without the same exclusion here, a
     // named report's own node would still seed a row for `walk_rows`
     // to walk, just with a `Pending` status instead of the `Done` it
     // used to show.
     for path in statuses.keys().chain(flat.keys()) {
-        // See `RunModel::observe`'s own matching guard: the no-plan
-        // fallback can't tell an unnamed report's shared path from a
-        // named one's exclusive one, so `prime` itself is never
-        // treated as report-only.
-        if plan.is_report_path(path) || (path != "prime" && model.is_report_event_path(path)) {
+        // See `RunModel::observe`'s own matching guard: `prime` is
+        // never treated as report-only, and the no-plan fallback only
+        // trusts `--events`' own report paths where the plan has no
+        // real entry there and the node's value has the report shape.
+        let fallback_report = flat
+            .get(path)
+            .is_some_and(|node| model.is_report_event_path(path, plan, &node.value));
+        if plan.is_report_path(path) || (path != "prime" && fallback_report) {
             continue;
         }
         all_paths.insert(path.clone(), ());
@@ -2056,7 +2075,7 @@ mod tests {
         // A report fires no `effect_start`/`effect_complete`, so it
         // never becomes a plan row (`plan.rs`'s own exclusion). Its
         // state node is still a plain `{value, meta}` node (#605),
-        // but #610/R4 keeps it out of the orchestration tree too --
+        // but #610 keeps it out of the orchestration tree too --
         // `PlanTree::is_report_path` marks a *named* report's own
         // path, which `RunModel::observe` then skips entirely, so
         // there is no row for it at all, not merely an uncounted one.
@@ -2088,6 +2107,68 @@ mod tests {
         // Only `step1` counts.
         assert_eq!(rendered.header.effects_planned, Some(1));
         assert_eq!(rendered.header.effects_done, 1);
+    }
+
+    /// #610: a planned tool's own output can coincidentally have the
+    /// exact shape a report's state value does (`{message: str,
+    /// level: info|warning, data}`) -- `row_kind_for` must still read
+    /// it as the tool it really is, from the plan, rather than
+    /// guessing `Report` from the value shape alone.
+    #[test]
+    fn a_tool_whose_output_looks_like_a_report_still_reads_as_a_tool() {
+        use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError, Op, Region, ToolOp};
+
+        let root_path = EffectPath::root();
+        let tool_path = root_path.clone().push_name("status");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: tool_path,
+                        name: Some("status".to_string()),
+                        kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                            provider: "json".to_string(),
+                            params: electricity_bytecode::ParamNode::Literal(
+                                electricity_value::Value::None,
+                            ),
+                            params_json: None,
+                            prompt: None,
+                            model: None,
+                            timeout_ms: None,
+                            retries: Default::default(),
+                            expect: None,
+                            description: None,
+                            group: None,
+                            prompt_file: None,
+                        }))),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "status": {"value": {"message": "ok", "level": "info", "data": null},
+                "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+        }});
+        let details = details_for("prime.status", &plan, &model, Some(&state));
+        assert_eq!(details.kind, RowKind::Tool);
     }
 
     #[test]
@@ -2179,8 +2260,64 @@ mod tests {
             Some(HeaderReport {
                 level: crate::observe::ReportLevel::Warning,
                 message: "second".to_string(),
+                ts: "t1".to_string(),
             })
         );
+    }
+
+    /// #610: a repeated report (the same level and message as the
+    /// one before it, e.g. the same "chain pass" message on every
+    /// loop pass) must still change `HeaderReport` -- its own `ts`
+    /// makes a genuinely new sighting compare unequal to the last
+    /// one even when the text is identical, so the header still
+    /// highlights (`changes::diff`'s own `header:report` key) on
+    /// every repeat, not just the first.
+    #[test]
+    fn a_repeated_report_still_changes_the_header_report() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        model.observe_event(&Event::Report {
+            ts: "t0".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "chain pass".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let first = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            1.0,
+            "t0",
+            &[],
+        );
+        model.observe_event(&Event::Report {
+            ts: "t1".to_string(),
+            path: "prime".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "chain pass".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let second = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            2.0,
+            "t1",
+            &[],
+        );
+        assert_ne!(first.header.latest_report, second.header.latest_report);
+        let changed = crate::changes::diff(Some(&first), &second);
+        assert!(changed.contains(&"header:report".to_string()));
     }
 
     #[test]
@@ -2728,7 +2865,7 @@ mod tests {
         assert_eq!(rendered_without.header.effects_done, 2);
     }
 
-    /// #610, R4's own acceptance line: "a loop pass holding a named
+    /// #610's own acceptance line: "a loop pass holding a named
     /// report plus one step folds exactly like a pass without the
     /// report" -- `fold_rows`' breadcrumb fold (`fold.rs`) only
     /// applies to a container with exactly *one* child, so a named
@@ -3439,7 +3576,7 @@ mod tests {
         assert_eq!(full, Some(long_prompt));
     }
 
-    /// #610, R5: a named report's details show its type, level, the
+    /// #610: a named report's details show its type, level, the
     /// latest message and clock time, and `data` as pretty JSON --
     /// falling back to the state node's own copy when no `--events`
     /// sighting for the path exists at all.
@@ -3505,7 +3642,7 @@ mod tests {
         assert!(value.contains("\"n\": 9"), "{value}");
     }
 
-    /// #610, R3: the root row's own details carry `run_id`, now that
+    /// #610: the root row's own details carry `run_id`, now that
     /// the header shows a report there instead once one arrives.
     #[test]
     fn details_for_the_root_row_shows_the_run_id() {

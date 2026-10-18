@@ -115,7 +115,7 @@ pub struct Theme {
     pub status_cancelled: Color,
     pub status_aborted: Color,
     pub error: Color,
-    /// A warning-level report's own colour (#610, R2): shared with
+    /// A warning-level report's own colour (#610): shared with
     /// no `StatusKind` -- `status_running` happens to share its own
     /// yellow in most of these palettes, but a report's own level
     /// is not a row status at all, so it gets a role of its own

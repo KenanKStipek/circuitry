@@ -129,6 +129,10 @@ fn a_documents_reports_show_up_in_the_log_and_the_run_still_ends_ok() {
         2,
         "one per tree pass; stdout:\n{stdout}"
     );
+    // A named report (`summary`) writes a state node (#605), but it
+    // must never also grow its own step line.
+    assert!(!stdout.contains("▶ prime.summary"), "stdout:\n{stdout}");
+    assert!(!stdout.contains("✓ prime.summary"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }

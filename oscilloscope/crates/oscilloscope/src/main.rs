@@ -1062,18 +1062,20 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
     rx
 }
 
-/// Which row's own details the details pane shows next redraw (#610,
-/// R5): the state pane's own selection, when it is the focused pane
-/// and has one (joined back onto `prime.`, since `StateRow::path` is
-/// relative to it) -- the orchestration tree's otherwise, exactly as
-/// before #610. The two selections are deliberately independent
+/// Which row's own details the details pane shows next redraw
+/// (#610): the state pane's own selection, when it was the one that
+/// last actually changed (`App::details_source`, joined back onto
+/// `prime.`, since `StateRow::path` is relative to it) -- the
+/// orchestration tree's otherwise, exactly as before #610. The two
+/// selections are deliberately independent
 /// (`keys::tests::the_state_panes_own_selection_never_moves_the_
-/// orchestration_selection`); this is what lets the details pane
-/// follow whichever one the user is actually looking at, including a
-/// named report's own row, which never has an orchestration-tree row
-/// of its own at all to select instead.
+/// orchestration_selection`); `details_source`, not `app.pane`, is
+/// what lets the details pane keep following whichever one the user
+/// is actually looking at once they tab onto `Pane::Details` itself
+/// to scroll it -- including a named report's own row, which never
+/// has an orchestration-tree row of its own at all to select instead.
 fn details_selection_path(app: &App) -> Option<String> {
-    if app.pane == keys::Pane::State {
+    if app.details_source == keys::Pane::State {
         if let Some(p) = &app.state_selected_path {
             return Some(format!("prime.{p}"));
         }
@@ -2805,6 +2807,72 @@ mod tests {
         std::iter::once("osi".to_string())
             .chain(words.iter().map(|w| w.to_string()))
             .collect()
+    }
+
+    /// #610: a state-pane selection must stay what `Details` shows
+    /// even once the user tabs away from `Pane::State` onto `Pane::
+    /// Details` itself to scroll it -- the only way to ever actually
+    /// scroll a state selection's own details at all, since `Pane::
+    /// State` has no scroll-details key of its own.
+    #[test]
+    fn details_selection_path_follows_whichever_selection_changed_last() {
+        let mut app = App::new(false);
+        assert_eq!(details_selection_path(&app), None);
+
+        app.select_tree_path(Some("prime.a".to_string()));
+        assert_eq!(details_selection_path(&app).as_deref(), Some("prime.a"));
+
+        // Tab to `Details`: the tree selection is still the source.
+        app.pane = keys::Pane::Details;
+        assert_eq!(details_selection_path(&app).as_deref(), Some("prime.a"));
+
+        // Tab to `State` and pick a row there -- `pane` is `State`
+        // now, not `Details`, but this is the only state the test can
+        // reach through real key handling before tabbing onward.
+        app.pane = keys::Pane::State;
+        let status_row = oscilloscope_core::render::StateRow {
+            path: "status".to_string(),
+            depth: 0,
+            key: "status".to_string(),
+            has_children: false,
+            status: oscilloscope_core::model::RowStatus {
+                kind: oscilloscope_core::model::StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            dim: None,
+            tokens: None,
+        };
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &[],
+            &[&status_row],
+            true,
+            false,
+        );
+        assert_eq!(
+            details_selection_path(&app).as_deref(),
+            Some("prime.status"),
+            "a state selection must win over a stale tree selection"
+        );
+
+        // Tab away to `Tree`, then to `Details`: the state selection
+        // is still the source, because the tree selection never
+        // changed again in between.
+        app.pane = keys::Pane::Tree;
+        app.pane = keys::Pane::Details;
+        assert_eq!(
+            details_selection_path(&app).as_deref(),
+            Some("prime.status"),
+            "tabbing through other panes must not reset the details source on its own"
+        );
+
+        // A fresh tree selection wins back.
+        app.select_tree_path(Some("prime.b".to_string()));
+        assert_eq!(details_selection_path(&app).as_deref(), Some("prime.b"));
     }
 
     /// Issue #535's own `--no-animation` acceptance item: a unit test

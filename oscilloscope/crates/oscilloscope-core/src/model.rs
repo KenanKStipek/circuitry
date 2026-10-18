@@ -479,8 +479,8 @@ pub struct RunModel {
     /// caller ever looks it up by it.
     reports_by_path: BTreeMap<String, ReportSighting>,
     /// Every path a report event has ever named (#610's "no plan"
-    /// fallback, R4): `osi watch` and a `use: inline:`/`ref:` child
-    /// have no compiled plan to resolve a report's own path from, so
+    /// fallback): `osi watch` and a `use: inline:`/`ref:` child have
+    /// no compiled plan to resolve a report's own path from, so
     /// filtering a report's state node out of the tree falls back to
     /// this set instead of `PlanTree::is_report_path`.
     report_event_paths: BTreeSet<String>,
@@ -670,13 +670,20 @@ impl RunModel {
         self.reports_by_path.get(path)
     }
 
-    /// Whether any report event has ever named `path` (#610's "no
-    /// plan" fallback, R4) -- `osi watch` and a `use: inline:`/`ref:`
-    /// child have no compiled plan, so a named report's state node is
-    /// filtered from the tree by this instead of `PlanTree::
-    /// is_report_path`.
-    pub fn is_report_event_path(&self, path: &str) -> bool {
+    /// Whether `path` is report-only by the "no plan" fallback:
+    /// `osi watch` and a `use: inline:`/`ref:` child have no compiled
+    /// plan to resolve a report's own path from, so the paths seen on
+    /// `--events` stand in for `PlanTree::is_report_path` there. Only
+    /// when the plan genuinely has nothing to say about `path` at
+    /// all (`plan.match_path` finds no entries) and the node's own
+    /// value has the report shape -- a path with a plan entry (a
+    /// named `if`, `dynamic` or `use` child whose first thing is an
+    /// unnamed report) is a real row this must never hide, even
+    /// though the unnamed report's own event also named that path.
+    pub fn is_report_event_path(&self, path: &str, plan: &PlanTree, value: &Value) -> bool {
         self.report_event_paths.contains(path)
+            && plan.match_path(path).is_none_or(|m| m.entries.is_empty())
+            && crate::render::is_report_value(value)
     }
 
     /// Whether a `run_end` line has arrived yet (DESIGN.md §3: when it
@@ -855,8 +862,8 @@ impl RunModel {
         let mut rows = BTreeMap::new();
 
         for (path, node) in &flat {
-            // #610/R4: a named report writes a state node (#605), but
-            // a report never fires start/end and so never becomes a
+            // #610: a named report writes a state node (#605), but a
+            // report never fires start/end and so never becomes a
             // plan row or counts toward effects_planned/effects_done
             // (`plan::record_op_entry`) -- its state node must not
             // become a tree row either, or it reads like a step and
@@ -864,18 +871,18 @@ impl RunModel {
             // resolves this exactly, `iter_*`/grafted `use` children
             // included; with none (`osi watch`, a `use: inline:`/
             // `ref:` child), `--events`' own report paths are the
-            // only source of truth there is.
-            // The no-plan fallback (`report_event_paths`) can't
-            // tell a *named* report's own exclusive path from an
-            // *unnamed* one's, which reuses its container's -- the
-            // root included (DESIGN.md §8.7: "prime at the top
-            // level"). `prime` itself is excluded here so an unnamed
-            // top-level report never hides the root's own real row;
-            // the same ambiguity for an unnamed report directly
-            // inside some other *named* container with no plan at
-            // all is a narrower, accepted gap (#610).
+            // only source of truth there is -- `is_report_event_path`
+            // only trusts them where the plan has no real entry at
+            // that path and the node's own value has the report
+            // shape, so a named `if`/`dynamic`/`use` whose first
+            // thing is an unnamed report keeps its own row.
+            // `prime` itself is excluded here so an unnamed top-level
+            // report never hides the root's own real row; the same
+            // ambiguity for an unnamed report directly inside some
+            // other *named* container with no plan at all is a
+            // narrower, accepted gap (#610).
             if plan.is_report_path(path)
-                || (path != "prime" && self.report_event_paths.contains(path))
+                || (path != "prime" && self.is_report_event_path(path, plan, &node.value))
             {
                 continue;
             }
@@ -1486,6 +1493,101 @@ mod tests {
         let rows = model.observe(&state, &plan, ProcessState::Running);
         assert_eq!(rows["prime.fan.b"].kind, StatusKind::RunningOrQueued);
         assert_eq!(rows["prime.fan.a"].kind, StatusKind::Done);
+    }
+
+    /// #610: an unnamed report shares its own path with its enclosing
+    /// container (here, a named `if`) -- the `--events` fallback for
+    /// a report with no plan entry must not also swallow that
+    /// container's own real row just because it has seen a report
+    /// event at the exact same path.
+    #[test]
+    fn a_named_ifs_own_row_survives_an_unnamed_report_sharing_its_path() {
+        use electricity_bytecode::{
+            Condition, EffectPath, LeafKind, NodeKind, OnError, Op, Region, ReportLevel, ReportOp,
+            TemplateText,
+        };
+
+        let root_path = EffectPath::root();
+        let if_path = root_path.clone().push_name("gate");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: if_path.clone(),
+                        name: Some("gate".to_string()),
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "true".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![],
+                                overlay: true,
+                            }),
+                            else_: Some(Box::new(Region::Block {
+                                // An unnamed report writes into its
+                                // enclosing scope's own path -- here,
+                                // the named `if`'s own "prime.gate".
+                                ops: vec![Op {
+                                    path: if_path.clone(),
+                                    name: None,
+                                    kind: NodeKind::Leaf(Box::new(LeafKind::Report(ReportOp {
+                                        message: TemplateText::new(
+                                            "nothing to do",
+                                            true,
+                                            electricity_bytecode::Escape::None,
+                                        ),
+                                        data: None,
+                                        level: ReportLevel::Info,
+                                        description: None,
+                                    }))),
+                                    on_error: OnError::Fail,
+                                    labels: None,
+                                    enabled: true,
+                                }],
+                                overlay: true,
+                            })),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Report {
+            ts: "t0".to_string(),
+            path: "prime.gate".to_string(),
+            level: crate::observe::ReportLevel::Info,
+            message: "nothing to do".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t0"},
+            "gate": {"value": null, "meta": {"completed_at": "t0", "branch": "else"}}
+        }});
+        let rows = model.observe(&state, &plan, ProcessState::Running);
+        assert!(
+            rows.contains_key("prime.gate"),
+            "the named if's own row must survive an unnamed report sharing its path: {rows:?}"
+        );
     }
 
     #[test]

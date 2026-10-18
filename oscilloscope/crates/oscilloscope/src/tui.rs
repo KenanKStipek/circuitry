@@ -345,19 +345,12 @@ fn draw_header(
     // document path able to push `effects`/the token counts past the
     // header's own right edge with nothing left to draw them at all
     // -- `Paragraph` clips a line that doesn't fit rather than
-    // wrapping it. The fixed-width part of the line is measured
-    // first, so the document path truncates itself (keeping its own
-    // tail, where the filename is) instead.
-    // The icon widening by one column (issue #535) left a long
-    // document path able to push `effects`/the token counts past the
-    // header's own right edge with nothing left to draw them at all
-    // -- `Paragraph` clips a line that doesn't fit rather than
     // wrapping it. The fixed part of the line (everything but the
-    // document path and the trailing run-id/report slot, #610's R3:
+    // document path and the trailing run-id/report slot, #610:
     // "status, elapsed, effects and tokens are kept") is measured
     // first, so the document path truncates itself (keeping its own
     // tail, where the filename is) before anything else does.
-    let fixed_len = 2
+    let mut fixed_len = 2
         + header.engine.chars().count()
         + 2
         + status_text.chars().count()
@@ -378,7 +371,6 @@ fn draw_header(
         .as_deref()
         .and_then(|ts| oscilloscope_core::format::format_clock_time(ts, ctx.zone))
         .map(|hhmmss| hhmmss[..5].to_string());
-    let mut fixed_len = fixed_len;
     if let Some(eta) = &eta_clock {
         fixed_len += 2 + "ETA ~".len() + eta.chars().count();
     }
@@ -388,7 +380,7 @@ fn draw_header(
     let available = area.width.saturating_sub(2) as usize;
     let leftover = available.saturating_sub(fixed_len);
 
-    // #610's R3: once a report has arrived, it takes the run id's own
+    // #610: once a report has arrived, it takes the run id's own
     // slot at the end of the line (`report_text`, `None` means "show
     // `run_id` there instead, exactly as before any report"). The
     // document path always truncates before the report message does
@@ -422,13 +414,28 @@ fn draw_header(
                 oscilloscope_core::observe::ReportLevel::Warning => "warning: ",
                 oscilloscope_core::observe::ReportLevel::Info => "",
             };
-            let full_text = format!("▸ {prefix}{}", report.message);
+            // A Mustache-rendered message can contain a newline,
+            // which `Paragraph` would otherwise render literally
+            // inside this single-line header (#610) -- only the
+            // first line is ever shown here, the same rule `--log`'s
+            // own `report_line` applies.
+            let message = report.message.split('\n').next().unwrap_or("");
+            let full_text = format!("▸ {prefix}{message}");
             let full_len = 2 + full_text.chars().count();
             if leftover > full_len {
                 (leftover - full_len, None, Some(full_text), style)
             } else {
                 let doc_budget = 1;
-                let remaining = leftover.saturating_sub(2 + doc_budget);
+                // `leftover` already counts the document's own
+                // trailing "  " separator (`fixed_len`'s very first
+                // `2 +`), so only `doc_budget` itself -- the
+                // document's own character count -- comes out here;
+                // the report text's own leading "  " separator is
+                // subtracted next, on its own (#610, a budget-off-by-
+                // two review finding: this used to subtract that
+                // separator twice, leaving two unused columns before
+                // the border on every truncated report line).
+                let remaining = leftover.saturating_sub(doc_budget);
                 let report_budget = remaining.saturating_sub(2);
                 let text = if report_budget < 8 {
                     "▸".to_string()
@@ -775,7 +782,7 @@ fn draw_details(
 const LOG_CLOCK_PREFIX_LEN: usize = 9;
 
 /// Whether `line` (already clock-prefixed) is a report's own line
-/// (#610, R2): the leading `▸` right after the clock prefix, written
+/// (#610): the leading `▸` right after the clock prefix, written
 /// only by `diff::report_line` -- no other line this crate ever
 /// builds starts with it, so a front end can tell the two apart from
 /// the line's own text alone, with no separate field needed.
@@ -2163,7 +2170,7 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// #610, R2/R3: once a report has arrived, the header shows it
+    /// #610: once a report has arrived, the header shows it
     /// (warning-styled) in place of the run id, and the log pane
     /// carries the report's own `▸`/`▸ warning:` line, data preview
     /// included.
@@ -2201,7 +2208,163 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// #610, R4: a named report writes a state node (#605), but it
+    fn header_line_with_a_report(width: u16) -> String {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Report {
+            ts: "t".to_string(),
+            path: "prime".to_string(),
+            level: oscilloscope_core::observe::ReportLevel::Warning,
+            message: "running behind schedule".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let text = snapshot_at(
+            width,
+            24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &[],
+        );
+        text.lines().nth(1).unwrap().to_string()
+    }
+
+    /// #610: fewer than about 8 columns left for the report's own
+    /// text collapses it to a bare `▸`, rather than a truncated
+    /// message too short to read at all.
+    #[test]
+    fn header_report_collapses_to_a_bare_mark_when_almost_no_room_is_left() {
+        let line = header_line_with_a_report(54);
+        assert!(line.contains("▸"), "{line}");
+        assert!(!line.contains("running behind"), "{line}");
+        assert!(!line.contains("warning:"), "{line}");
+    }
+
+    /// #610: the document path truncates before the report's own
+    /// message does -- wide enough for the full message to fit, the
+    /// document still gives way first rather than truncating evenly
+    /// alongside it.
+    #[test]
+    fn header_report_shows_in_full_while_the_document_path_still_truncates() {
+        let line = header_line_with_a_report(102);
+        assert!(
+            line.contains("▸ warning: running behind schedule"),
+            "{line}"
+        );
+        assert!(line.contains("…l  cof"), "{line}");
+        assert!(!line.contains("do-thing.yml"), "{line}");
+    }
+
+    /// #610: a warning-level report is styled in the theme's own
+    /// warning colour, both in the header's own status-line slot and
+    /// in its `--log`/log-pane line -- an info-level one gets neither.
+    #[test]
+    fn a_warning_report_is_styled_in_the_themes_warning_colour_in_the_header_and_the_log() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Report {
+            ts: "t".to_string(),
+            path: "prime".to_string(),
+            level: oscilloscope_core::observe::ReportLevel::Warning,
+            message: "behind".to_string(),
+            data: None,
+            data_truncated: false,
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            5.0,
+            "2026-01-01T00:00:05Z",
+            &[],
+        );
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let tracker = Tracker::new();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+        };
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.follow = false;
+        let log_lines = vec!["11:04:58 ▸ warning: behind".to_string()];
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &log_lines,
+                    log_lines.len() as u64,
+                    &mut app,
+                    Some(&state),
+                    &ctx,
+                    0,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        fn find_cell(buffer: &ratatui::buffer::Buffer, needle: char) -> (u16, u16) {
+            for y in 0..buffer.area.height {
+                for x in 0..buffer.area.width {
+                    if buffer[(x, y)].symbol() == needle.to_string() {
+                        return (x, y);
+                    }
+                }
+            }
+            panic!("{needle:?} not found in the buffer");
+        }
+
+        let (hx, hy) = find_cell(buffer, '▸');
+        assert_eq!(
+            buffer[(hx, hy)].fg,
+            theme.warning,
+            "the header's own report mark must use the theme's warning colour"
+        );
+        // The second `▸` in the buffer, reading left to right then
+        // top to bottom, is the log pane's own -- the header's own row
+        // comes first.
+        let mut found = 0;
+        let mut log_cell = None;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                if buffer[(x, y)].symbol() == "▸" {
+                    found += 1;
+                    if found == 2 {
+                        log_cell = Some((x, y));
+                    }
+                }
+            }
+        }
+        let (lx, ly) = log_cell.expect("a second ▸ for the log pane's own line");
+        assert_eq!(
+            buffer[(lx, ly)].fg,
+            theme.warning,
+            "the log pane's own warning report line must use the theme's warning colour"
+        );
+    }
+
+    /// #610: a named report writes a state node (#605), but it
     /// must never be a row in the orchestration tree, even once
     /// selected elsewhere brings up its own details.
     #[test]
@@ -2212,7 +2375,7 @@ mod golden_tests {
         // `prime.status` through `PlanTree::is_report_path` -- the
         // same `--events` `report` line a real engine would also
         // emit for it is what `RunModel::observe` falls back to
-        // instead (R4's "no plan" rule), exactly as `osi watch` or a
+        // instead (the "no plan" rule), exactly as `osi watch` or a
         // `use: inline:`/`ref:` child would have to rely on it too.
         model.observe_event(&Event::Report {
             ts: "t0".to_string(),
@@ -2236,7 +2399,7 @@ mod golden_tests {
             "prime.a",
         );
         // The report's own state node still appears in the *state*
-        // pane (R5's own details apply there) -- only the
+        // pane (its own details apply there) -- only the
         // orchestration pane itself must never show a `status` row.
         let orchestration_pane = text
             .split_once("orchestration do-thing")

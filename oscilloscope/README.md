@@ -124,7 +124,7 @@ bar never disappear:
 2. below 90×24: the state pane too (the right column becomes the log pane alone);
 3. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked); the scope icon stops being drawn at this width too.
 
-A `report` effect's own events (DESIGN.md §8.7) show up in three places.
+A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in three places.
 Once the run's first report arrives, the header shows its message in
 place of the run id (a warning styled in the theme's own warning colour);
 document path and message both truncate before status, elapsed, effects
