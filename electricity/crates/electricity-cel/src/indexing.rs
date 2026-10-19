@@ -301,6 +301,19 @@ mod tests {
     }
 
     #[test]
+    fn out_of_range_index_raises_with_a_pinned_error_text() {
+        // The exact operand rendering this crate's own error text
+        // carries, not just whether it raised -- this is a Rust
+        // ExecutionError's own Debug-based Display, not celpy's,
+        // which the differential corpus never pins the text of either
+        // (DESIGN.md §1/§12, the third-party-library carve-out).
+        assert_eq!(
+            eval("[1][5]"),
+            Err("Cannot use value Int(5) to index List([Int(1)])".to_string())
+        );
+    }
+
+    #[test]
     fn has_over_a_negative_index_matches_the_plain_lookup() {
         assert_eq!(eval("has([{'x': 1}][-1].x)"), Ok(Value::Bool(true)));
     }

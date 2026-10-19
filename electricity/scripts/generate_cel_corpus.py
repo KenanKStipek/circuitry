@@ -183,8 +183,8 @@ def divergent_condition(
     definition, one where Circuitry itself never raises). Also asserts
     *python_result* actually differs from *electricity_result* -- a
     case where both engines agree, written with this helper by mistake,
-    would otherwise pass silently rather than failing loudly (issue
-    #400 review): that shape belongs to `condition()`, not this one.
+    would otherwise pass silently rather than failing loudly: that
+    shape belongs to `condition()`, not this one.
     """
     python_result = evaluate_cel(expr, state, strict=strict)
     if python_result == electricity_result:
@@ -690,14 +690,14 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- issue #400 review: a `map`/`exists`/`all`/`filter`
-    # comprehension's own loop variable, iterating the collapsed
-    # `None`/bare-`date` key slot, is bound to Circuitry's real `None`
-    # in Python but to electricity's own internal sentinel string (not
-    # `null`) here -- `k == null` is `true` in Python, `false` here, a
-    # divergence the `in`/`size()` fix above does not reach, since
-    # that is `cel`'s own map-comprehension machinery iterating its
-    # keys, not this crate's own code.
+    # --- issue #400: a `map`/`exists`/`all`/`filter` comprehension's
+    # own loop variable, iterating the collapsed `None`/bare-`date` key
+    # slot, is bound to Circuitry's real `None` in Python but to
+    # electricity's own internal sentinel string (not `null`) here --
+    # `k == null` is `true` in Python, `false` here, a divergence the
+    # `in`/`size()` fix above does not reach, since that is `cel`'s own
+    # map-comprehension machinery iterating its keys, not this crate's
+    # own code.
     cases += [
         divergent_condition(
             "state.m.exists(k, k == null)",
@@ -1031,6 +1031,77 @@ def build_corpus() -> list[dict]:
         # beyond 1 on a type mismatch, not a recursion limit.
         condition("size(state)", [1, 2, 3]),
         condition("size(size(state))", [1, 2, 3]),
+    ]
+
+    # --- issue #400: the `==`/`!=` short-circuit for a container
+    # against a scalar, `null`, or a container of the other kind, and
+    # ordering raising for the same shapes -- celpy's own top-level
+    # override never crosses a container with anything but its own
+    # kind, and never orders one at all.
+    cases += [
+        condition("state.l == 1", {"l": [1]}),
+        condition("1 == state.l", {"l": [1]}),
+        condition("state.l == null", {"l": []}),
+        condition("state.m != null", {"m": {}}),
+        condition("state.l == state.m", {"l": [], "m": {}}),
+        condition("[1.0] == 1", {}),
+        condition("state.l < 1", {"l": [1]}),
+        condition("state.m <= state.m", {"m": {}}),
+        condition("[1] < [2]", {}),
+    ]
+
+    # --- issue #400: a representative subset of `in`'s remaining gaps
+    # against a non-container, mixed-numeric and bool/int map keys, and
+    # a `null` probe against a map that holds no None/bare-date key
+    # slot for it to match (the sentinel case is pinned above).
+    cases += [
+        condition("1 in state.n", {"n": 1}),
+        condition("1u in state.m", {"m": {1: "a"}}),
+        condition("1 in state.m", {"m": {True: "a"}}),
+        condition("true in state.m", {"m": {1: "a"}}),
+        condition("null in state.l", {"l": [None]}),
+        condition("null in state.m", {"m": {"a": 1}}),
+        condition("null in state.m", {"m": {1: "a"}}),
+        condition("[1] in state.l", {"l": [[1]]}),
+    ]
+
+    # --- issue #400: a representative subset of indexing's remaining
+    # gaps -- out of range, a uint index (in range and absurdly out of
+    # it), a wrong index type, a non-container operand, a missing map
+    # key outside `has()`, a non-ASCII string index, bytes out of
+    # range, and indexing a comprehension's own result.
+    cases += [
+        condition("state.l[5] == 1", {"l": [1]}),
+        condition("state.l[18446744073709551615u] == 1", {"l": [1]}),
+        condition("state.l[0u] == 1", {"l": [1]}),
+        condition("state.l['a'] == 1", {"l": [1]}),
+        condition("state.m[1.0] == 'a'", {"m": {"a": "a"}}),
+        condition("state.n[0] == 1", {"n": 1}),
+        condition("state.m['missing'] == 1", {"m": {"a": 1}}),
+        condition("state.s[1] == '\u00e9'", {"s": "h\u00e9llo"}),
+        condition("state.b[-4] == 97", {"b": b"abc"}),
+        condition("state.l.map(x, x)[0] == 1", {"l": [1]}),
+    ]
+
+    # --- issue #400: ordering's remaining gaps -- string/string
+    # (bytes/bytes is already pinned above), a computed duration
+    # against another (celpy's own `DurationType` has no state-side
+    # tagged encoding of its own, so both sides are built inside the
+    # expression itself, the same way the existing duration-truthiness
+    # cases already do), `-0.0`, and `inf` against a large int.
+    inf_base = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+    cases += [
+        condition("state.a < state.b", {"a": "abc", "b": "abd"}),
+        condition(
+            "(state.b - state.a) < (state.c - state.b)",
+            {
+                "a": inf_base,
+                "b": inf_base + datetime.timedelta(seconds=5),
+                "c": inf_base + datetime.timedelta(seconds=25),
+            },
+        ),
+        condition("state.f <= 0.0", {"f": -0.0}),
+        condition("state.f > state.n", {"f": float("inf"), "n": 2**62}),
     ]
 
     return cases

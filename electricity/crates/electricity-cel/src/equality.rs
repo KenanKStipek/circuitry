@@ -479,6 +479,19 @@ mod tests {
     }
 
     #[test]
+    fn in_raises_with_a_pinned_error_text() {
+        // The exact operand rendering this crate's own error text
+        // carries, not just whether it raised -- this is a Rust
+        // ExecutionError's own Debug-based Display, not celpy's,
+        // which the differential corpus never pins the text of either
+        // (DESIGN.md §1/§12, the third-party-library carve-out).
+        assert_eq!(
+            eval("1 in [1.0]"),
+            Err("Int(1) can not be compared to List([Float(1.0)])".to_string())
+        );
+    }
+
+    #[test]
     fn in_over_bytes_iterates_ints() {
         assert_eq!(eval("97 in b'abc'"), Ok(Value::Bool(true)));
         assert_eq!(eval("200 in b'abc'"), Ok(Value::Bool(false)));
