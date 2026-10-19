@@ -21,6 +21,7 @@ from ..adapters._retry import (
 from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
+from ..plugins.agent import AgentPlugin
 from ..plugins.base import ToolResult
 from ..plugins.cel import CelPlugin
 from ..plugins.http import HttpPlugin
@@ -840,7 +841,16 @@ class ToolRuntime:
             meta.pop("stdout_chars", None)
             meta.pop("stdout_sha256", None)
             meta.pop("template_files", None)
+            # An agent effect's live summary (#636): fresh per attempt,
+            # removed again once this attempt ends (success or failure)
+            # below, so it never lingers once nothing is running.
+            meta.pop("live", None)
             meta["waiting_for"] = None
+            # fire_effect_start already republished once, before created_at
+            # and completed_at existed on this node -- each attempt's own
+            # meta (set above) needs its own publish, or a tool's --live-state
+            # node sits as {"value": null, "meta": {}} for its whole run (#634).
+            store.publish_or_finalize(self.defn.name, node)
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
             result: ToolResult | None = None
@@ -1030,6 +1040,17 @@ class ToolRuntime:
                     else:
                         live_cm = nullcontext()
 
+                    def _on_live(snapshot: dict[str, Any]) -> None:
+                        # meta.live never carries anything the secrets
+                        # scrubber would need to touch (numbers, times, ids,
+                        # the model name and tool names only), but it goes
+                        # through the same scrub as any other tool result
+                        # regardless (#598).
+                        store.set(
+                            f"{self.defn.name}.meta.live",
+                            dispatch_secrets.scrub(snapshot) if dispatch_secrets else snapshot,
+                        )
+
                     with live_cm:
                         if isinstance(plugin, CelPlugin):
                             result = plugin.evaluate(params=plugin_params, ctx=ctx)
@@ -1041,6 +1062,18 @@ class ToolRuntime:
                                     header.lower() for header in secret_headers
                                 ),
                                 scrub_secrets=dispatch_secrets.scrub,
+                            )
+                        elif isinstance(plugin, AgentPlugin):
+                            result = plugin.execute(
+                                params=plugin_params,
+                                timeout_seconds=timeout_seconds,
+                                on_live=_on_live,
+                                attempt=attempt_index + 1,
+                                earlier_attempts=(
+                                    (total_tokens_sent, total_tokens_received)
+                                    if attempt_index > 0
+                                    else None
+                                ),
                             )
                         else:
                             result = plugin.execute(
@@ -1066,6 +1099,8 @@ class ToolRuntime:
             if failure is not None:
                 meta["error"] = str(failure)
                 meta["completed_at"] = _now_iso()
+                # This attempt is no longer running (#636).
+                meta.pop("live", None)
                 # An earlier attempt's usage was popped at the top of this
                 # attempt's loop, and this attempt never reached a
                 # ToolResult to write it back on its own — without this, it
@@ -1175,6 +1210,9 @@ class ToolRuntime:
                             retryable = True
 
             meta["completed_at"] = _now_iso()
+            # This attempt is no longer running, whether it just succeeded
+            # or failed below (#636).
+            meta.pop("live", None)
 
             if failure is not None:
                 meta["error"] = str(failure)

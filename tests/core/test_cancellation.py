@@ -11,6 +11,7 @@ shape without a real sleep or a real signal.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import os
 import signal
@@ -880,6 +881,154 @@ def test_communicate_promptly_cancellation_while_writing_kills_without_hanging(
 
     assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- it hung on the write"
     assert result.returncode != 0, "the child was killed; it cannot have exited 0"
+
+
+def test_run_tracked_on_line_sees_every_line_streamed_before_a_mid_call_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_line`` (#636) changes nothing else about ``run_tracked``'s own
+    cancellation handling: the poll cadence, the repeat process-group kill
+    and the fact that ``run_tracked`` itself returns rather than raising are
+    all unchanged. Cancellation requested from inside ``on_line`` -- the
+    reader thread, not the main thread -- kills the process the same way
+    ``request()`` called from anywhere else does, and every line the child
+    printed before that already reached ``on_line``.
+    """
+    token = CancellationToken()
+    token.arm()
+    monkeypatch.setattr(cancellation, "_token", token)
+    lines: list[str] = []
+
+    def _on_line(line: str) -> None:
+        lines.append(line)
+        if len(lines) == 2:
+            token.request()
+
+    script = (
+        "import sys, time\n"
+        "for i in range(2):\n"
+        "    print(f'line-{i}', flush=True)\n"
+        "    time.sleep(0.1)\n"
+        "time.sleep(30)\n"
+    )
+    t0 = time.monotonic()
+    result = run_tracked(
+        [sys.executable, "-c", script], on_line=_on_line, new_session=True, timeout=None
+    )
+    elapsed = time.monotonic() - t0
+
+    assert lines == ["line-0", "line-1"]
+    assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- the kill didn't land promptly"
+    assert result.returncode != 0, "the child was killed; it cannot have exited 0"
+    assert result.stdout == "line-0\nline-1\n"
+
+
+def test_run_tracked_on_line_failure_does_not_stop_draining_stdout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing on_line (a disk-full transcript append, say) must never
+    corrupt the call it's attached to: the reader keeps draining every
+    remaining line into `lines` exactly as if on_line were never passed,
+    so the end-of-turn parse still gets the full output rather than
+    EPIPE/SIGPIPE from an undrained pipe (#636 follow-up).
+    """
+    calls = 0
+
+    def _on_line(line: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("boom")
+
+    script = "for i in range(5): print('line-%d' % i)"
+    with caplog.at_level(logging.ERROR, logger="circuitry.core.cancellation"):
+        result = run_tracked([sys.executable, "-c", script], on_line=_on_line, timeout=5.0)
+
+    assert result.returncode == 0
+    assert result.stdout == "line-0\nline-1\nline-2\nline-3\nline-4\n"
+    # Only the first line's failure is ever logged -- on_line is never
+    # called again for the rest of this stream, so `calls` stays 1.
+    assert calls == 1
+    assert any("on_line" in record.message for record in caplog.records)
+
+
+def test_run_tracked_decode_error_mid_stream_drains_to_eof_then_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Invalid UTF-8 mid-stream with `text=True` (a `UnicodeDecodeError`, a
+    `ValueError`) must fail this call loudly, the same as a plain
+    `communicate()` always has for the same bytes -- not end the reader
+    silently, close stdout while the child is still writing to it, and
+    return truncated output with no error at all (#636 review). The child
+    here writes several megabytes after the bad bytes -- more than any
+    pipe buffer holds -- so if the reader stopped draining instead of
+    falling back to the raw byte stream underneath, the child would block
+    on a full pipe until this call's own timeout instead of exiting on its
+    own well before it.
+    """
+    lines: list[str] = []
+    script = (
+        "import sys, time\n"
+        "buf = sys.stdout.buffer\n"
+        "buf.write(b'line-0\\n'); buf.flush()\n"
+        "time.sleep(0.3)\n"
+        "buf.write(b'\\xff\\xfe\\n'); buf.flush()\n"
+        "time.sleep(0.3)\n"
+        "chunk = b'x' * 65536 + b'\\n'\n"
+        "for _ in range(64):\n"
+        "    buf.write(chunk)\n"
+        "    buf.flush()\n"
+    )
+    t0 = time.monotonic()
+    with caplog.at_level(logging.ERROR, logger="circuitry.core.cancellation"):
+        with pytest.raises(UnicodeDecodeError):
+            run_tracked(
+                [sys.executable, "-c", script], on_line=lines.append, timeout=20.0
+            )
+    elapsed = time.monotonic() - t0
+
+    assert lines == ["line-0"]
+    assert elapsed < 15.0, (
+        f"run_tracked took {elapsed:.1f}s -- stdout wasn't drained past the decode "
+        "error, so the child blocked on a full pipe until the timeout"
+    )
+
+
+def test_run_tracked_reader_thread_start_failure_does_not_leave_a_zombie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reader thread is started inside `with proc, token.track(proc):`'s
+    own `try:` (#636 review), not before it -- so a failed `Thread.start()`
+    there still reaches this `with` block's own cleanup (`Popen.__exit__`
+    calls `self.wait()`), reaping the child instead of leaving it a zombie
+    nothing ever waits on.
+    """
+    marker = f"run-tracked-thread-start-fail-{uuid.uuid4()}"
+
+    def _failing_start(self: threading.Thread) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(threading.Thread, "start", _failing_start)
+    script = f"print({marker!r})"
+    with pytest.raises(RuntimeError, match="boom"):
+        run_tracked(
+            [sys.executable, "-c", script], on_line=lambda _line: None, timeout=5.0
+        )
+
+    deadline = time.monotonic() + 3.0
+    zombie = True
+    while time.monotonic() < deadline:
+        out = subprocess.run(
+            ["ps", "-ww", "-eo", "stat,command"], capture_output=True, text=True, check=False
+        ).stdout
+        zombie = any(
+            line.split(None, 1)[0].startswith("Z") and marker in line
+            for line in out.splitlines()
+        )
+        if not zombie:
+            break
+        time.sleep(0.1)
+    assert not zombie, "the child was never reaped -- Thread.start() failing orphaned it"
 
 
 def test_communicate_promptly_step_timeout_while_writing_does_not_hang(

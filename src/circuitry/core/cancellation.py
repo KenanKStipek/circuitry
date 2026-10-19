@@ -47,6 +47,7 @@ add on top.
 from __future__ import annotations
 
 import contextvars
+import logging
 import os
 import queue
 import signal
@@ -58,6 +59,8 @@ from concurrent.futures import Executor, Future
 from contextlib import contextmanager
 from multiprocessing.process import BaseProcess
 from typing import Any, TypeVar
+
+logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
@@ -978,6 +981,81 @@ def _feed_stdin(stdin: Any, data: bytes) -> None:
             pass
 
 
+def _read_lines_promptly(
+    stdout: Any,
+    on_line: Callable[[str], None],
+    lines: list[str],
+    decode_errors: list[BaseException],
+) -> None:
+    """Read *stdout* line by line, append each raw line to *lines* and call
+    *on_line* with it (trailing newline stripped), until EOF (#636 follow-up
+    to the stdin-feeder thread below).
+
+    Runs on a thread of its own, started right after ``Popen`` and joined
+    once the tracked process has been waited on, so it never changes
+    ``run_tracked``'s own poll cadence or timeout/cancellation behaviour --
+    it only gives a caller (today, the ``agent`` tool) each line as it
+    arrives instead of only once the whole call finishes. EOF arrives on
+    its own once the child's write end closes, whether that is because the
+    child exited normally or because its process group was killed -- the
+    same reasoning :func:`_feed_stdin` already relies on for the opposite
+    direction.
+
+    *on_line* itself is never allowed to stop this loop: a failure inside
+    it (a disk-full transcript append, say) would otherwise leave stdout
+    undrained and unclosed, so the child either blocks on a full pipe
+    until its own timeout or sees EPIPE/SIGPIPE mid-session -- either way
+    corrupting the output ``run_tracked``'s own end-of-call parse still
+    needs to be authoritative. So any exception it raises is logged once
+    and *on_line* is never called again for the rest of this stream, while
+    reading into *lines* continues exactly as if ``on_line`` were never
+    passed at all (#636 follow-up).
+
+    With ``text=True``, invalid bytes mid-stream raise a
+    ``UnicodeDecodeError`` (a ``ValueError``) out of the ``for`` loop below
+    instead of just skipping the bad line -- ``communicate()`` itself raises
+    exactly the same error, loudly, which is what a step that hits one must
+    still do (#636 follow-up). Stopping here instead, the way a bare
+    ``except (ValueError, OSError): pass`` once did, closed ``stdout`` while
+    the child could still be writing to it, so the child saw EPIPE/SIGPIPE
+    mid-session and ``run_tracked`` returned truncated output with no error
+    at all. Instead, the decode error is recorded into *decode_errors* for
+    ``run_tracked`` to re-raise once this thread is joined, and the rest of
+    the child's output is drained from the raw byte stream underneath --
+    ``errors="replace"``, since by then nothing reads these lines for
+    anything but keeping the pipe open to EOF.
+    """
+    on_line_failed = False
+    decode_error: BaseException | None = None
+    try:
+        for raw_line in stdout:
+            lines.append(raw_line)
+            if on_line_failed:
+                continue
+            try:
+                on_line(raw_line.rstrip("\n"))
+            except Exception:
+                on_line_failed = True
+                logger.exception("run_tracked on_line callback failed; no longer calling it")
+    except ValueError as exc:
+        decode_error = exc
+        buffer = getattr(stdout, "buffer", None)
+        if buffer is not None:
+            try:
+                lines.extend(raw_bytes.decode(stdout.encoding, errors="replace") for raw_bytes in buffer)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    finally:
+        try:
+            stdout.close()
+        except OSError:
+            pass
+        if decode_error is not None:
+            decode_errors.append(decode_error)
+
+
 def _communicate_promptly(
     proc: subprocess.Popen[Any],
     *,
@@ -1145,6 +1223,7 @@ def run_tracked(
     env: dict[str, str] | None = None,
     pass_fds: Sequence[int] = (),
     new_session: bool = False,
+    on_line: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[Any]:
     """``subprocess.run``, but tracked by :func:`get_token` for the whole
     time the child can block (#356).
@@ -1170,6 +1249,17 @@ def run_tracked(
     when the token is not armed, so a timeout or a cancellation kills
     everything the child started — for a headless child that never needs
     the controlling terminal (``agent_cli``'s coding-agent CLIs).
+
+    ``on_line``, when given, is called with each line of stdout (trailing
+    newline stripped) as it arrives, from a reader thread of its own — the
+    poll cadence above, the stdin feeder thread, the repeat group kill and
+    this function's timeout/cancellation behaviour are all unchanged either
+    way (#636). The returned ``CompletedProcess.stdout`` is unaffected: the
+    reader thread only observes the bytes, it doesn't consume them instead
+    of ``communicate()``. Invalid bytes mid-stream (a ``UnicodeDecodeError``
+    with ``text=True``) still fail this call once the child has fully exited
+    and the reader thread has drained the rest of its output, the same as a
+    plain ``communicate()`` always has for the same bytes (#636 follow-up).
     """
     token = get_token()
     token.check()
@@ -1200,32 +1290,75 @@ def run_tracked(
     # tells the `except` blocks below not to repeat a `killpg` against a
     # pgid it already confirmed empty (#411 follow-up).
     pgid_seen_gone: list[bool] = []
+    # `on_line`'s reader thread owns `proc.stdout` from here on -- the same
+    # steal-the-attribute trick `_communicate_promptly` already plays with
+    # `proc.stdin`, so `communicate()` below never touches it and `with
+    # proc:`'s own `__exit__` never double-closes it.
+    stdout_lines: list[str] | None = None
+    reader_thread: threading.Thread | None = None
+    reader_started = False
+    decode_errors: list[BaseException] = []
+    if on_line is not None and proc.stdout is not None:
+        stdout_lines = []
+        raw_stdout = proc.stdout
+        proc.stdout = None
+        reader_thread = threading.Thread(
+            target=_read_lines_promptly,
+            args=(raw_stdout, on_line, stdout_lines, decode_errors),
+            daemon=True,
+        )
     with proc, token.track(proc):
         try:
-            stdout, stderr = _communicate_promptly(
-                proc, input=input, timeout=timeout, pgid=pgid,
-                pgid_seen_gone=pgid_seen_gone,
-            )
-        except subprocess.TimeoutExpired:
-            kill_process_group(proc)
-            proc.wait()
-            # One more, after the process we were tracking has actually
-            # exited: a child it forked at the exact instant of the kill
-            # above must not be left running past a timed-out step
-            # either -- unless `_communicate_promptly` already confirmed
-            # the group empty, in which case the pgid may already be
-            # free for the kernel to reuse, and this would risk reaching
-            # an unrelated process instead of this one's own.
-            if not pgid_seen_gone:
-                _repeat_group_kill(pgid)
-            raise
-        except BaseException:
-            # Cancellation already killed this process's group from the
-            # signal handler; this is the fallback for anything else
-            # that unwinds through here, the same as ``run_binary``.
-            kill_process_group(proc)
-            proc.wait()
-            if not pgid_seen_gone:
-                _repeat_group_kill(pgid)
-            raise
+            # Started only once *proc* is already tracked -- not right
+            # after `Popen` -- so a signal delivered between stealing
+            # `proc.stdout` above and getting here, or a failed
+            # `Thread.start()` itself, can't orphan the CLI: either way
+            # `proc` is already inside `token.track(proc)` and this `with`
+            # block's own cleanup below still runs (#636 follow-up).
+            if reader_thread is not None:
+                reader_thread.start()
+                reader_started = True
+            try:
+                stdout, stderr = _communicate_promptly(
+                    proc, input=input, timeout=timeout, pgid=pgid,
+                    pgid_seen_gone=pgid_seen_gone,
+                )
+            except subprocess.TimeoutExpired:
+                kill_process_group(proc)
+                proc.wait()
+                # One more, after the process we were tracking has actually
+                # exited: a child it forked at the exact instant of the kill
+                # above must not be left running past a timed-out step
+                # either -- unless `_communicate_promptly` already confirmed
+                # the group empty, in which case the pgid may already be
+                # free for the kernel to reuse, and this would risk reaching
+                # an unrelated process instead of this one's own.
+                if not pgid_seen_gone:
+                    _repeat_group_kill(pgid)
+                raise
+            except BaseException:
+                # Cancellation already killed this process's group from the
+                # signal handler; this is the fallback for anything else
+                # that unwinds through here, the same as ``run_binary``.
+                kill_process_group(proc)
+                proc.wait()
+                if not pgid_seen_gone:
+                    _repeat_group_kill(pgid)
+                raise
+        finally:
+            # The process has been waited on by now on every path above
+            # (normally inside `communicate()`, or by the `except` blocks'
+            # own `proc.wait()`), so the child's stdout write end is closed
+            # and this thread is at or near EOF already -- bounded anyway,
+            # so a bug here can never join forever.
+            if reader_thread is not None and reader_started:
+                reader_thread.join(timeout=5)
+
+    if stdout_lines is not None:
+        stdout = "".join(stdout_lines)
+    if decode_errors:
+        # Re-raised loudly, the same as a plain `communicate()` always has
+        # for the same bytes -- a decode error must fail this step, not
+        # return it truncated with no error at all (#636 follow-up).
+        raise decode_errors[0]
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

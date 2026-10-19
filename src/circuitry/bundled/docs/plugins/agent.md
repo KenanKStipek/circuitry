@@ -134,7 +134,7 @@ reads the repository's `AGENTS.md` itself, as it does in any session.
 | `unset_env` | list of strings | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` | Variables removed from it; replaces the default list. |
 | `result_file` | string | none | A JSON file the agent must write, relative to `cwd` (an absolute path, or one with `..`, may point anywhere). |
 | `result_schema` | JSON Schema object | none | Validates `result_file`'s contents; needs `result_file`. |
-| `transcript` | string | none | Where the compact transcript is written, relative to `cwd` (an absolute path may point anywhere). The parent directory is created; the file is appended to across the session's turns, including the repair turn. Without it, the transcript goes to a temporary directory nothing removes (see [What lands in state](#what-lands-in-state)). |
+| `transcript` | string | none | Where the compact transcript (JSONL) is written, relative to `cwd` (an absolute path may point anywhere). The parent directory is created; the file is appended to across the session's turns, including the repair turn, as the session goes. Without it, the transcript goes to a temporary directory nothing removes (see [What lands in state](#what-lands-in-state)). |
 
 The session's environment is yours, minus the variables that would make the
 CLI think it runs inside a parent pi or Claude Code session (`PI_SESSION_ID`,
@@ -256,7 +256,12 @@ branch on.
 | `tokens` | `{sent, received}`: input tokens (cache reads and writes included) and output tokens; `null` when the CLI reported none |
 | `cost` | The CLI's own cost figure in USD — present only when it reports one |
 | `repair_turn` | Whether the repair turn ran |
-| `transcript` | Path of a compact log: one line per tool call and per reply, a header per turn; `null` when no turn has completed yet to write one |
+| `transcript` | Path of a compact JSONL log: a header per turn, a line per tool call and per reply, written as the session goes; `null` until a turn completes — the file itself can already exist and hold real content before that (a turn that fails before completing one leaves it in place only when `params['transcript']` named its own path; otherwise it's removed with the rest of the session's scratch files) |
+| `context_tokens` | Input tokens of the session's last model request (input, cache reads and cache writes), or `null` |
+| `context_window` | The model's context window, when the CLI reported one at the end, else `null` |
+| `tool_counts` | Per tool name: `{calls, ms}` (calls made, total time spent in that tool) |
+| `turn_tokens` | Input tokens per model request over the whole session, oldest first, at most the last 512 |
+| `files_changed`, `lines_added`, `lines_removed` | Counted from edit/write tool calls' own arguments (line counts only, never file content); `null` until a recognised call makes one |
 | `permission_mode` | Claude Code only: the `--permission-mode` passed (`dontAsk` by default when `tools` is set), or `null` when none was passed |
 | `project_settings` | Claude Code only: `isolated` (the default) or `trusted` (`trust_project_settings: true`) |
 | `project_instructions` | Claude Code only: the path of the repository's `CLAUDE.md` appended to the prompt, or `null` |
@@ -272,6 +277,67 @@ including a repair turn — under the fields a `prompt` effect uses, so
 `runtime.last_run.totals` and the live token counts a running orchestration
 shows count this effect like any other.
 
+## Live progress while the session runs
+
+While the CLI streams its output, the effect's node gains `meta.live` — a
+summary written the same way `meta.waiting_for` already is (through
+`Store.set`), so it reaches `--live-state` with no new event type, and
+goes through the same secret scrubbing a tool's result does. It holds
+only numbers, times, ids, the model name and tool names:
+
+| Field | Meaning |
+|---|---|
+| `v` | `1` |
+| `engine`, `model`, `session_id`, `transcript` | As in `meta.raw` — `transcript` is set from the first moment, before the CLI has even printed anything |
+| `attempt`, `phase` | The tool attempt (1, 2, …) and `"turn"` or `"repair"` |
+| `started_at`, `updated_at` | ISO times; `updated_at` also serves as a heartbeat |
+| `turns`, `tool_calls` | So far |
+| `tools` | Per tool name: `{calls, ms}` |
+| `current_tool` | `{name, started_at}` while a tool runs, else `null` |
+| `tokens_sent`, `tokens_received`, `cost_usd` | So far; `null` where the CLI doesn't report them live (Claude Code: `tokens_received` and `cost_usd`) |
+| `tokens_cached_in`, `tokens_cache_write` | Cache reads and writes so far |
+| `context_tokens`, `context_window`, `turn_tokens` | As in `meta.raw`, but `turn_tokens` only covers turns so far |
+| `files_changed`, `lines_added`, `lines_removed` | As in `meta.raw` |
+| `earlier_attempts` | `{tokens_sent, tokens_received}` from attempts before this one, present from the second attempt on |
+
+Published at most once a second; a change inside that second still goes
+out within about a second of it, even without a further change — a long
+tool call's own start is never more than about a second stale. Tool names
+are kept as the CLI reports them (MCP tools included), capped at 64
+characters and 32 distinct names; the rest count under `other`.
+
+**Never in `meta.live`, `meta.raw` or `--events`:** the prompt text, reply
+or thinking text, tool arguments, tool output, file contents, the
+environment, or error text from inside the session.
+
+A retried attempt gets a fresh `meta.live` (removed at the start of the
+attempt, with the other per-attempt keys) carrying `earlier_attempts` from
+attempts before it. The repair turn continues the same `meta.live`
+(`phase: "repair"`). `meta.live` is removed once the attempt ends,
+success or failure — except when the run itself is interrupted (Ctrl-C,
+SIGTERM, SIGHUP): it is then left in place, the only record of that
+attempt's session id and transcript, and a watcher shows it as stopped.
+`cof run --resume` reuses a finished node, which has no `meta.live`; it
+reruns an unfinished one, which first removes any stale `meta.live` left
+from before the interruption.
+
+### The transcript's JSONL lines
+
+Each line is one JSON object with a time (`t`) and a `type`:
+
+- `turn` — `label` (`"turn"` or `"repair turn"`) and `session_id`, written
+  before that turn's CLI call starts;
+- `tool_start` — `id`, `tool`, and a short, content-free `target` (the
+  path for a read/edit/write call, the first 120 characters of a command,
+  or the pattern — and path, when given — for a search);
+- `tool_end` — `id`, `ok`, `ms`, and `lines_added`/`lines_removed` for an
+  edit/write/multiedit call whose target was recognised;
+- `reply` — the first 300 characters of a reply's text.
+
+It is written as the session goes: the file already exists, with its
+first `turn` line, before that turn's CLI call even starts — not only
+once each turn finishes.
+
 ## Timeouts and cancellation
 
 The session runs in its own process group. The effect's `timeout_ms`
@@ -282,19 +348,26 @@ SIGHUP), the whole group is stopped: the CLI and everything the agent
 started.
 
 When a turn times out or the CLI fails after the session has an id (a
-`session` param, or an earlier successful turn in this same effect) or a
-transcript exists, the effect ends as an error (`ok: false`, so `on_error`
-and retries behave exactly as for any other tool failure) whose `meta.raw`
-still carries the keys a success has — `session_id` so a later effect can
-resume it with `session`, `transcript` so it can be inspected — plus
-`timed_out: true` when it was a timeout. `meta.error`'s text is unchanged: it
-still names the session and the transcript. Usage already spent before the
-failure is still counted, the same split a retried `prompt` effect's own
-tokens record uses: under `meta.tokens_sent_total`/`meta.tokens_received_total`,
-not `meta.tokens_sent`/`meta.tokens_received` (those hold the attempt that
+`session` param, or an earlier successful turn in this same effect) or an
+earlier turn in this effect has completed, the effect ends as an error
+(`ok: false`, so `on_error` and retries behave exactly as for any other
+tool failure) whose `meta.raw` still carries the keys a success has —
+`session_id` so a later effect can resume it with `session`, `transcript`
+so it can be inspected — plus `timed_out: true` when it was a timeout.
+`meta.error`'s text is unchanged: it still names the session and the
+transcript. Usage already spent before the failure is still counted, the
+same split a retried `prompt` effect's own tokens record uses: under
+`meta.tokens_sent_total`/`meta.tokens_received_total`, not
+`meta.tokens_sent`/`meta.tokens_received` (those hold the attempt that
 decided the outcome, so they are absent on a failure); `meta.cost_usd` isn't
-set on a failure either. A turn that fails before either exists (nothing yet
-worth reporting) raises instead, as it always has.
+set on a failure either. A turn that fails before either (nothing yet
+worth reporting) raises instead. What decides "nothing yet worth
+reporting" is whether a turn has ever completed, not whether
+`params['transcript']`'s file already exists: that file now exists, with
+a `turn` header line, from the moment the first turn's CLI call starts, so
+a `params['transcript']` path left over from an earlier, unrelated run no
+longer turns a true first-turn failure into an `ok: false` result the way
+it did before — it always raises.
 
 ## Configuration
 

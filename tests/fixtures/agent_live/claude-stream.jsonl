@@ -1,0 +1,12 @@
+{"type": "system", "subtype": "init", "session_id": "fx-claude-session", "model": "claude-x"}
+{"sleep": 0.02}
+{"type": "assistant", "message": {"id": "msg_1", "usage": {"input_tokens": 100, "output_tokens": 0, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 0}, "content": [{"type": "text", "text": "Looking at the plan."}]}}
+{"type": "assistant", "message": {"id": "msg_1", "usage": {"input_tokens": 100, "output_tokens": 0, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 0}, "content": [{"type": "tool_use", "id": "call_1", "name": "Read", "input": {"file_path": "PLAN.md"}}]}}
+{"wait_for": "gate1"}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "ok", "is_error": false}]}}
+{"sleep": 0.02}
+{"type": "assistant", "message": {"id": "msg_2", "usage": {"input_tokens": 150, "output_tokens": 0, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}, "content": [{"type": "tool_use", "id": "call_2", "name": "Write", "input": {"file_path": "out.txt", "content": "line one\nline two\n"}}]}}
+{"wait_for": "gate2"}
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "call_2", "content": "ok", "is_error": false}]}}
+{"type": "assistant", "message": {"id": "msg_3", "usage": {"input_tokens": 160, "output_tokens": 12, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}, "content": [{"type": "text", "text": "Wrote the output file."}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "Wrote the output file.", "session_id": "fx-claude-session", "num_turns": 3, "total_cost_usd": 0.03, "usage": {"input_tokens": 160, "output_tokens": 12, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}, "modelUsage": {"claude-x": {"contextWindow": 200000, "maxOutputTokens": 8192}}}

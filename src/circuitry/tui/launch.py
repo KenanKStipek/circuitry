@@ -533,6 +533,15 @@ class RunSession:
         model, the rendered prompt, and the complexity score when scoring is
         on. Not a cancellation point: the run stops at the next state write,
         which keeps the unwind out of the lifecycle hooks.
+
+        `Store.fire_effect_start` (#634) always calls this hook before its
+        own republish, precisely so that still holds -- the publish right
+        after it is a state write like any other, and can be where
+        `_observe` raises instead. When it does, `Store` itself closes the
+        pair it just opened (the effect's own `meta.completed_at`/`error`,
+        and the matching `fire_effect_complete`) before the cancellation
+        reaches here, so a pass cancelled at exactly its own start is never
+        left looking like it's still running.
         """
         if self._on_effect_start is not None:
             self._on_effect_start(path, deepcopy(node))

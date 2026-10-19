@@ -810,8 +810,14 @@ def _child_on_write(
     root_state = parent_store.root_state
 
     def _publish(child_snapshot: dict[str, Any]) -> None:
+        # Deep-copied before grafting, the same protection
+        # Store.parallel_branches gives a tree-flow pass's own snapshot:
+        # this can fire while the generated plan's own thread is still
+        # mutating its state underneath it (#634).
         parent_on_write(
-            _grafted_snapshot(root_state, node_path, node, child_snapshot)
+            _grafted_snapshot(
+                root_state, node_path, node, copy.deepcopy(child_snapshot)
+            )
         )
 
     return _publish
