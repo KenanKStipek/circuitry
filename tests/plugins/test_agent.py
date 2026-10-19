@@ -26,6 +26,7 @@ from agent_cli_test_support import (
 from circuitry.agent_cli import AgentCliError, AgentCliTimeout
 from circuitry.core import cancellation
 from circuitry.core.cancellation import CancellationToken, RunCancelledBySignal
+from circuitry.plugins import agent as agent_module
 from circuitry.plugins.agent import (
     AgentPlugin,
     AgentTurn,
@@ -875,6 +876,30 @@ def test_transcript_param_is_none_when_the_first_turn_fails_before_writing_it(
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
+def test_transcript_param_naming_a_stale_file_still_raises_on_a_true_first_turn_failure(
+    tmp_path: Path, workdir: Path
+) -> None:
+    """A first turn that fails before the session has an id or an earlier
+    turn has completed -- nothing yet worth reporting -- raises, even when
+    ``params['transcript']`` names a file that already exists on disk from
+    an earlier, unrelated run. Whether that file already exists is no
+    longer the signal this decides on: since the transcript now exists,
+    with its own ``turn`` header, from the moment *this* session's own
+    first turn starts (#636), only whether a turn of *this* session has
+    ever completed can tell "nothing yet worth reporting" apart from
+    something worth an ``ok: false`` result instead (documented behaviour
+    change).
+    """
+    plugin = _plugin(tmp_path, "pi", body="sys.exit(3)")
+    stale = workdir / "t.log"
+    stale.write_text('{"t": "2020-01-01T00:00:00Z", "type": "turn", "label": "turn"}\n', encoding="utf-8")
+    with pytest.raises(AgentCliError):
+        plugin.execute(
+            params={"prompt": "x", "cwd": str(workdir), "transcript": "t.log"},
+            timeout_seconds=30,
+        )
+
+
 @pytest.mark.parametrize(
     ("engine", "sent", "received"), [("pi", 220, 10), ("claude_code", 7, 3)]
 )
@@ -990,6 +1015,29 @@ def test_cli_error_with_nothing_to_resume_leaves_no_scratch_dir(
     with pytest.raises(AgentCliError) as caught:
         plugin.execute(params={"prompt": "x", "cwd": str(workdir)}, timeout_seconds=30)
     assert "can be resumed" not in str(caught.value)
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+def test_live_tracker_construction_failure_still_removes_scratch_dir(
+    tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``LiveTracker`` is constructed inside the same try/finally that
+    removes ``scratch_dir`` (#636 review) -- its constructor starting a
+    background thread (``LivePublisher``) failing must not leak that
+    directory the way it would if ``LiveTracker`` were built before ever
+    entering that scope.
+    """
+    plugin = _plugin(tmp_path, "pi")
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent_module, "LiveTracker", _boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        plugin.execute(
+            params={"prompt": "x", "cwd": str(workdir), "env": _env(tmp_path, workdir)},
+            timeout_seconds=30,
+        )
     assert list((tmp_path / "scratch").iterdir()) == []
 
 

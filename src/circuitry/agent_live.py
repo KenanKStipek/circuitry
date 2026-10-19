@@ -28,6 +28,7 @@ only numbers, times, ids, the model name and tool names. See
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -67,6 +68,8 @@ _TARGET_COMMAND_CHARS = 120
 #: check, cheaper than a full ``json.loads`` on every one of them, and safe
 #: because pi's own lines always put ``"type"`` first (#636).
 _PI_MESSAGE_UPDATE_RE = re.compile(r'^\{\s*"type"\s*:\s*"message_update"')
+
+logger = logging.getLogger(__name__)
 
 #: Argument keys this module reads to describe a tool call without ever
 #: storing its arguments verbatim -- never any other key, and never the
@@ -260,7 +263,14 @@ class LivePublisher:
                 snapshot = self._pending
                 self._pending = None
             self._next_due = self._now() + self._interval
-            self._publish(snapshot)
+            # A failing *publish* (the running node already gone, a
+            # cof instance that no longer owns the store, ...) must not
+            # kill this thread -- the same as `LiveStateMirror._write_loop`
+            # already does for its own writer thread (#636 review).
+            try:
+                self._publish(snapshot)
+            except Exception:
+                logger.warning("agent live publish failed", exc_info=True)
 
     def close(self) -> None:
         """Stop the writer thread. Any snapshot still pending is published
@@ -284,6 +294,7 @@ class _PendingTool:
     raw_name: str
     args: Any
     started: float
+    started_at: str
 
 
 class LiveTracker:
@@ -481,21 +492,47 @@ class LiveTracker:
     def _start_tool(self, name: Any, args: Any, *, call_id: str | None = None) -> None:
         raw_name = name if isinstance(name, str) else "?"
         target = tool_target(args)
+        started_at = _now_iso()
         with self._lock:
             self._tool_calls += 1
             bucket = self._bucket_tool_name(raw_name)
             entry = self._tools.setdefault(bucket, {"calls": 0, "ms": 0.0})
             entry["calls"] += 1
-            self._current_tool = {"name": bucket, "started_at": _now_iso()}
             self._tool_seq += 1
             seq = self._tool_seq
-            pending = _PendingTool(seq=seq, bucket=bucket, raw_name=raw_name, args=args, started=time.monotonic())
+            pending = _PendingTool(
+                seq=seq,
+                bucket=bucket,
+                raw_name=raw_name,
+                args=args,
+                started=time.monotonic(),
+                started_at=started_at,
+            )
             if call_id:
                 self._pending_by_id[call_id] = pending
             else:
                 self._pending_fifo.append(pending)
+            # The tool just started is always the highest-seq pending one,
+            # so it becomes `current_tool` outright -- no need to recompute
+            # it from the rest of `_pending_by_id`/`_pending_fifo` (#636
+            # review).
+            self._current_tool = {"name": bucket, "started_at": started_at}
         self._write_transcript("tool_start", id=seq, tool=bucket, target=target)
         self._publish_now()
+
+    def _latest_pending_tool(self) -> dict[str, Any] | None:
+        """The still-pending tool call with the highest sequence number, as
+        a ``current_tool`` dict, or ``None`` when nothing is pending --
+        called with ``self._lock`` already held, right after popping
+        whichever call just ended, so a Claude Task's own ``current_tool``
+        doesn't go blank just because its subagent's tool call ended first
+        (#636 review).
+        """
+        candidates = list(self._pending_by_id.values()) + list(self._pending_fifo)
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda pending: pending.seq)
+        return {"name": latest.bucket, "started_at": latest.started_at}
 
     def _end_tool(
         self, *, ok: bool, duration_ms: float | None = None, call_id: str | None = None
@@ -512,12 +549,10 @@ class LiveTracker:
                 pending = self._pending_fifo.popleft()
             else:
                 pending = None
-            if pending is None:
-                self._current_tool = None
-            else:
+            if pending is not None:
                 ms = duration_ms if duration_ms is not None else (time.monotonic() - pending.started) * 1000
                 self._tools.setdefault(pending.bucket, {"calls": 0, "ms": 0.0})["ms"] += ms
-                self._current_tool = None
+            self._current_tool = self._latest_pending_tool()
         if pending is None:
             self._publish_now()
             return
@@ -665,14 +700,16 @@ class LiveTracker:
                     first_for_message = message_id not in self._seen_message_ids
                     self._seen_message_ids.add(message_id)
             # A subagent (Task tool) message carries its own
-            # ``parent_tool_use_id``; its usage is its own session's spend,
-            # not the main session's context, so it's left out of
-            # tokens/context here -- its tool calls are still counted below
-            # like any other.
+            # ``parent_tool_use_id``; it's its own session's own API call,
+            # not one of this session's own turns, and its usage is its own
+            # session's spend, not the main session's context -- so it's
+            # left out of ``turns`` and tokens/context here (#636 review).
+            # Its tool calls are still counted below like any other.
             is_subagent = event.get("parent_tool_use_id") is not None
             if first_for_message:
-                with self._lock:
-                    self._turns += 1
+                if not is_subagent:
+                    with self._lock:
+                        self._turns += 1
                 usage = message.get("usage")
                 if isinstance(usage, dict) and not is_subagent:
                     # Per-message output_tokens is a placeholder mid-turn

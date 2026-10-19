@@ -86,6 +86,34 @@ def test_live_publisher_never_publishes_more_than_once_per_interval() -> None:
         publisher.close()
 
 
+def test_live_publisher_survives_a_failing_publish_call(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing *publish* call (the running node already gone, say) must
+    not kill the writer thread -- it logs once and keeps looping, the
+    same as ``LiveStateMirror._write_loop`` already does for its own
+    writer thread (#636 review)."""
+    clock = _FakeClock()
+    calls: list[dict[str, Any]] = []
+
+    def _publish(snapshot: dict[str, Any]) -> None:
+        calls.append(snapshot)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+
+    publisher = LivePublisher(_publish, interval=1.0, now=clock)
+    try:
+        publisher.update({"n": 1})
+        _wait_until(lambda: len(calls) == 1)
+        clock.advance(1.5)
+        publisher.update({"n": 2})
+        _wait_until(lambda: len(calls) == 2)
+    finally:
+        publisher.close()
+    assert calls == [{"n": 1}, {"n": 2}]
+    assert any("publish" in record.message for record in caplog.records)
+
+
 def _settle() -> None:
     import time
 
@@ -338,8 +366,9 @@ def test_live_tracker_dedupes_claude_message_id_and_skips_subagent_usage(
             },
         }))
         after_subagent = tracker._snapshot()
-        # The subagent's own tool call is still counted...
-        assert after_subagent["turns"] == 2
+        # Its own message never counts as one of this session's own turns
+        # (#636 review) -- its tool call is still counted...
+        assert after_subagent["turns"] == 1
         assert after_subagent["tool_calls"] == 2
         # ...but none of its usage reached tokens, context or turn_tokens.
         assert after_subagent["tokens_sent"] == 110
@@ -361,7 +390,7 @@ def test_live_tracker_dedupes_claude_message_id_and_skips_subagent_usage(
             },
         }))
         final = tracker._snapshot()
-        assert final["turns"] == 3
+        assert final["turns"] == 2
         assert final["tool_calls"] == 2
         assert final["tokens_sent"] == 170
         assert final["context_tokens"] == 60
@@ -443,6 +472,103 @@ def test_live_tracker_matches_tool_ends_by_id_not_fifo_pi(tmp_path: Path) -> Non
             '"isError": false, "durationMs": 5}'
         )
         assert tracker.raw_extra()["lines_added"] == 2
+    finally:
+        tracker.close()
+
+
+def test_live_tracker_claude_task_subagent_current_tool_and_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Claude Task sequence (#636 review): a ``Task`` tool call, a
+    subagent's own tool call under it (``parent_tool_use_id`` set), the
+    subagent's own tool result, then the Task's own tool result.
+    ``current_tool`` must track whichever tool is actually still running
+    at each step -- not go blank just because the subagent's own tool
+    ended first -- and a subagent's own message must never count as one
+    of this session's own ``turns``, though its tool call still counts.
+    """
+    clock = [100.0]
+
+    def _monotonic() -> float:
+        return clock[0]
+
+    monkeypatch.setattr("circuitry.agent_live.time.monotonic", _monotonic)
+    tracker = LiveTracker(
+        engine="claude_code",
+        model="",
+        attempt=1,
+        transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        # The Task call starts.
+        tracker.handle_line(json.dumps({
+            "type": "assistant",
+            "message": {
+                "id": "m1",
+                "content": [
+                    {"type": "tool_use", "id": "call_task", "name": "Task",
+                     "input": {"description": "do a thing"}},
+                ],
+            },
+        }))
+        snapshot = tracker._snapshot()
+        assert snapshot["turns"] == 1
+        assert snapshot["current_tool"] is not None
+        assert snapshot["current_tool"]["name"] == "Task"
+
+        clock[0] += 0.5
+        # The subagent's own tool call starts under it.
+        tracker.handle_line(json.dumps({
+            "type": "assistant",
+            "parent_tool_use_id": "call_task",
+            "message": {
+                "id": "m2",
+                "content": [
+                    {"type": "tool_use", "id": "call_sub", "name": "Bash",
+                     "input": {"command": "echo hi"}},
+                ],
+            },
+        }))
+        snapshot = tracker._snapshot()
+        # A subagent's own message never counts as one of this session's
+        # own turns (#636 review) -- still 1, not 2 (exact mid-stream
+        # assertion).
+        assert snapshot["turns"] == 1
+        assert snapshot["tool_calls"] == 2
+        assert snapshot["current_tool"] is not None
+        assert snapshot["current_tool"]["name"] == "Bash"
+
+        clock[0] += 0.5
+        # The subagent's own tool call ends.
+        tracker.handle_line(json.dumps({
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_sub", "is_error": False},
+                ],
+            },
+        }))
+        snapshot = tracker._snapshot()
+        # current_tool must fall back to the still-running Task call, not
+        # go blank just because the subagent's own tool ended first (#636
+        # review).
+        assert snapshot["current_tool"] is not None
+        assert snapshot["current_tool"]["name"] == "Task"
+
+        clock[0] += 1.0
+        # The Task call itself ends.
+        tracker.handle_line(json.dumps({
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_task", "is_error": False},
+                ],
+            },
+        }))
+        snapshot = tracker._snapshot()
+        assert snapshot["current_tool"] is None
+        assert snapshot["tools"]["Task"]["ms"] == 2000
     finally:
         tracker.close()
 

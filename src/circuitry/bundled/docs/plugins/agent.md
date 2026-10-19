@@ -361,7 +361,13 @@ same split a retried `prompt` effect's own tokens record uses: under
 `meta.tokens_sent`/`meta.tokens_received` (those hold the attempt that
 decided the outcome, so they are absent on a failure); `meta.cost_usd` isn't
 set on a failure either. A turn that fails before either (nothing yet
-worth reporting) raises instead, as it always has.
+worth reporting) raises instead. What decides "nothing yet worth
+reporting" is whether a turn has ever completed, not whether
+`params['transcript']`'s file already exists: that file now exists, with
+a `turn` header line, from the moment the first turn's CLI call starts, so
+a `params['transcript']` path left over from an earlier, unrelated run no
+longer turns a true first-turn failure into an `ok: false` result the way
+it did before — it always raises.
 
 ## Configuration
 

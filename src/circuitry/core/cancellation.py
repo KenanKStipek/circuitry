@@ -982,7 +982,10 @@ def _feed_stdin(stdin: Any, data: bytes) -> None:
 
 
 def _read_lines_promptly(
-    stdout: Any, on_line: Callable[[str], None], lines: list[str]
+    stdout: Any,
+    on_line: Callable[[str], None],
+    lines: list[str],
+    decode_errors: list[BaseException],
 ) -> None:
     """Read *stdout* line by line, append each raw line to *lines* and call
     *on_line* with it (trailing newline stripped), until EOF (#636 follow-up
@@ -1007,8 +1010,23 @@ def _read_lines_promptly(
     and *on_line* is never called again for the rest of this stream, while
     reading into *lines* continues exactly as if ``on_line`` were never
     passed at all (#636 follow-up).
+
+    With ``text=True``, invalid bytes mid-stream raise a
+    ``UnicodeDecodeError`` (a ``ValueError``) out of the ``for`` loop below
+    instead of just skipping the bad line -- ``communicate()`` itself raises
+    exactly the same error, loudly, which is what a step that hits one must
+    still do (#636 follow-up). Stopping here instead, the way a bare
+    ``except (ValueError, OSError): pass`` once did, closed ``stdout`` while
+    the child could still be writing to it, so the child saw EPIPE/SIGPIPE
+    mid-session and ``run_tracked`` returned truncated output with no error
+    at all. Instead, the decode error is recorded into *decode_errors* for
+    ``run_tracked`` to re-raise once this thread is joined, and the rest of
+    the child's output is drained from the raw byte stream underneath --
+    ``errors="replace"``, since by then nothing reads these lines for
+    anything but keeping the pipe open to EOF.
     """
     on_line_failed = False
+    decode_error: BaseException | None = None
     try:
         for raw_line in stdout:
             lines.append(raw_line)
@@ -1019,13 +1037,23 @@ def _read_lines_promptly(
             except Exception:
                 on_line_failed = True
                 logger.exception("run_tracked on_line callback failed; no longer calling it")
-    except (ValueError, OSError):
+    except ValueError as exc:
+        decode_error = exc
+        buffer = getattr(stdout, "buffer", None)
+        if buffer is not None:
+            try:
+                lines.extend(raw_bytes.decode(stdout.encoding, errors="replace") for raw_bytes in buffer)
+            except OSError:
+                pass
+    except OSError:
         pass
     finally:
         try:
             stdout.close()
         except OSError:
             pass
+        if decode_error is not None:
+            decode_errors.append(decode_error)
 
 
 def _communicate_promptly(
@@ -1228,7 +1256,10 @@ def run_tracked(
     this function's timeout/cancellation behaviour are all unchanged either
     way (#636). The returned ``CompletedProcess.stdout`` is unaffected: the
     reader thread only observes the bytes, it doesn't consume them instead
-    of ``communicate()``.
+    of ``communicate()``. Invalid bytes mid-stream (a ``UnicodeDecodeError``
+    with ``text=True``) still fail this call once the child has fully exited
+    and the reader thread has drained the rest of its output, the same as a
+    plain ``communicate()`` always has for the same bytes (#636 follow-up).
     """
     token = get_token()
     token.check()
@@ -1265,18 +1296,28 @@ def run_tracked(
     # proc:`'s own `__exit__` never double-closes it.
     stdout_lines: list[str] | None = None
     reader_thread: threading.Thread | None = None
+    reader_started = False
+    decode_errors: list[BaseException] = []
     if on_line is not None and proc.stdout is not None:
         stdout_lines = []
         raw_stdout = proc.stdout
         proc.stdout = None
         reader_thread = threading.Thread(
             target=_read_lines_promptly,
-            args=(raw_stdout, on_line, stdout_lines),
+            args=(raw_stdout, on_line, stdout_lines, decode_errors),
             daemon=True,
         )
-        reader_thread.start()
     with proc, token.track(proc):
         try:
+            # Started only once *proc* is already tracked -- not right
+            # after `Popen` -- so a signal delivered between stealing
+            # `proc.stdout` above and getting here, or a failed
+            # `Thread.start()` itself, can't orphan the CLI: either way
+            # `proc` is already inside `token.track(proc)` and this `with`
+            # block's own cleanup below still runs (#636 follow-up).
+            if reader_thread is not None:
+                reader_thread.start()
+                reader_started = True
             try:
                 stdout, stderr = _communicate_promptly(
                     proc, input=input, timeout=timeout, pgid=pgid,
@@ -1310,9 +1351,14 @@ def run_tracked(
             # own `proc.wait()`), so the child's stdout write end is closed
             # and this thread is at or near EOF already -- bounded anyway,
             # so a bug here can never join forever.
-            if reader_thread is not None:
+            if reader_thread is not None and reader_started:
                 reader_thread.join(timeout=5)
 
     if stdout_lines is not None:
         stdout = "".join(stdout_lines)
+    if decode_errors:
+        # Re-raised loudly, the same as a plain `communicate()` always has
+        # for the same bytes -- a decode error must fail this step, not
+        # return it truncated with no error at all (#636 follow-up).
+        raise decode_errors[0]
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

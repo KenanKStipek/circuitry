@@ -903,20 +903,25 @@ class AgentPlugin:
         # Holds the prompt files while a turn runs, and — without
         # params['transcript'] — the transcript after.
         scratch_dir = Path(tempfile.mkdtemp(prefix=f"cof-agent-{engine_name}-"))
-        live = LiveTracker(
-            engine=engine_name,
-            model=options.model,
-            attempt=attempt,
-            transcript_path=transcript_path or (scratch_dir / TRANSCRIPT_NAME),
-            publish=on_live or (lambda _snapshot: None),
-            earlier_attempts=earlier_attempts,
-        )
         # Only set once run_agent_session has returned (not raised) — every
         # exception path (nothing yet to resume or inspect; a genuinely
         # unexpected error) removes scratch_dir unconditionally.
         keep_scratch_dir = False
+        # `None` until constructed below -- its own constructor starts a
+        # background thread (`LivePublisher`) and must not be built before
+        # the try/finally that removes scratch_dir, or a failure there
+        # leaks it (#636 review).
+        live: LiveTracker | None = None
         try:
             try:
+                live = LiveTracker(
+                    engine=engine_name,
+                    model=options.model,
+                    attempt=attempt,
+                    transcript_path=transcript_path or (scratch_dir / TRANSCRIPT_NAME),
+                    publish=on_live or (lambda _snapshot: None),
+                    earlier_attempts=earlier_attempts,
+                )
                 result = run_agent_session(
                     engine,
                     prompt,
@@ -932,9 +937,12 @@ class AgentPlugin:
                 # scratch_dir (it goes straight to transcript_path), so nothing
                 # in it is worth keeping (#392). Without it, a turn that failed
                 # before any turn completed leaves scratch_dir/TRANSCRIPT_NAME
-                # with nothing but a content-free turn header (#636), not
-                # worth keeping either (#391) — ``result.raw["transcript"]``
-                # is ``None`` in exactly that case (``_Session.raw``).
+                # with a ``turn`` header line and, now that the transcript is
+                # written as the session goes rather than only at the end of a
+                # turn (#636), possibly some ``tool_start``/``reply`` lines
+                # too -- still not worth keeping (#391), since there's no
+                # ``result.raw["transcript"]`` pointing at it for anyone to
+                # read it back by (``_Session.raw``).
                 keep_scratch_dir = transcript_path is None and (
                     result.raw.get("transcript") is not None
                 )
@@ -942,7 +950,8 @@ class AgentPlugin:
                 if not keep_scratch_dir:
                     shutil.rmtree(scratch_dir, ignore_errors=True)
         finally:
-            live.close()
+            if live is not None:
+                live.close()
         return replace(result, raw={**result.raw, **claude_raw})
 
     def _resolve_binary(self, engine_name: str) -> str:

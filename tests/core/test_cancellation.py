@@ -952,6 +952,85 @@ def test_run_tracked_on_line_failure_does_not_stop_draining_stdout(
     assert any("on_line" in record.message for record in caplog.records)
 
 
+def test_run_tracked_decode_error_mid_stream_drains_to_eof_then_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Invalid UTF-8 mid-stream with `text=True` (a `UnicodeDecodeError`, a
+    `ValueError`) must fail this call loudly, the same as a plain
+    `communicate()` always has for the same bytes -- not end the reader
+    silently, close stdout while the child is still writing to it, and
+    return truncated output with no error at all (#636 review). The child
+    here writes several megabytes after the bad bytes -- more than any
+    pipe buffer holds -- so if the reader stopped draining instead of
+    falling back to the raw byte stream underneath, the child would block
+    on a full pipe until this call's own timeout instead of exiting on its
+    own well before it.
+    """
+    lines: list[str] = []
+    script = (
+        "import sys, time\n"
+        "buf = sys.stdout.buffer\n"
+        "buf.write(b'line-0\\n'); buf.flush()\n"
+        "time.sleep(0.3)\n"
+        "buf.write(b'\\xff\\xfe\\n'); buf.flush()\n"
+        "time.sleep(0.3)\n"
+        "chunk = b'x' * 65536 + b'\\n'\n"
+        "for _ in range(64):\n"
+        "    buf.write(chunk)\n"
+        "    buf.flush()\n"
+    )
+    t0 = time.monotonic()
+    with caplog.at_level(logging.ERROR, logger="circuitry.core.cancellation"):
+        with pytest.raises(UnicodeDecodeError):
+            run_tracked(
+                [sys.executable, "-c", script], on_line=lines.append, timeout=20.0
+            )
+    elapsed = time.monotonic() - t0
+
+    assert lines == ["line-0"]
+    assert elapsed < 15.0, (
+        f"run_tracked took {elapsed:.1f}s -- stdout wasn't drained past the decode "
+        "error, so the child blocked on a full pipe until the timeout"
+    )
+
+
+def test_run_tracked_reader_thread_start_failure_does_not_leave_a_zombie(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reader thread is started inside `with proc, token.track(proc):`'s
+    own `try:` (#636 review), not before it -- so a failed `Thread.start()`
+    there still reaches this `with` block's own cleanup (`Popen.__exit__`
+    calls `self.wait()`), reaping the child instead of leaving it a zombie
+    nothing ever waits on.
+    """
+    marker = f"run-tracked-thread-start-fail-{uuid.uuid4()}"
+
+    def _failing_start(self: threading.Thread) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(threading.Thread, "start", _failing_start)
+    script = f"print({marker!r})"
+    with pytest.raises(RuntimeError, match="boom"):
+        run_tracked(
+            [sys.executable, "-c", script], on_line=lambda _line: None, timeout=5.0
+        )
+
+    deadline = time.monotonic() + 3.0
+    zombie = True
+    while time.monotonic() < deadline:
+        out = subprocess.run(
+            ["ps", "-ww", "-eo", "stat,command"], capture_output=True, text=True, check=False
+        ).stdout
+        zombie = any(
+            line.split(None, 1)[0].startswith("Z") and marker in line
+            for line in out.splitlines()
+        )
+        if not zombie:
+            break
+        time.sleep(0.1)
+    assert not zombie, "the child was never reaped -- Thread.start() failing orphaned it"
+
+
 def test_communicate_promptly_step_timeout_while_writing_does_not_hang(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
