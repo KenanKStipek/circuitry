@@ -1,0 +1,12 @@
+{"type": "session", "id": "fx-pi-session", "cwd": "."}
+{"sleep": 0.02}
+{"type": "tool_execution_start", "toolName": "read", "args": {"path": "PLAN.md"}}
+{"wait_for": "gate1"}
+{"type": "tool_execution_end", "toolName": "read", "isError": false, "durationMs": 25}
+{"type": "message_end", "message": {"role": "assistant", "usage": {"input": 100, "output": 20, "cacheRead": 10, "cacheWrite": 0, "cost": {"total": 0.01}}, "content": [{"type": "text", "text": "Reading the plan now."}], "stopReason": "stop"}}
+{"sleep": 0.02}
+{"type": "tool_execution_start", "toolName": "write", "args": {"path": "out.txt", "content": "line one\nline two\n"}}
+{"wait_for": "gate2"}
+{"type": "tool_execution_end", "toolName": "write", "isError": false, "durationMs": 15}
+{"type": "message_end", "message": {"role": "assistant", "usage": {"input": 150, "output": 15, "cacheRead": 10, "cacheWrite": 5, "cost": {"total": 0.015}}, "content": [{"type": "text", "text": "Wrote the output file."}], "stopReason": "stop"}}
+{"type": "agent_end"}

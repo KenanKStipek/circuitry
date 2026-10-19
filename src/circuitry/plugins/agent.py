@@ -15,21 +15,29 @@ this module adds the session's contract on top:
   ``result_file``, ``value`` is the final assistant text.
 * ``raw``: ``engine``, ``session_id``, ``turns``, ``tool_calls``,
   ``tokens`` (``sent``/``received``), ``cost`` when the CLI reports one,
-  ``repair_turn``, and ``transcript`` — the path of a compact log this
-  plugin writes (one line per tool call and per reply; ``params['transcript']``
+  ``repair_turn``, ``context_tokens``, ``context_window``, ``tool_counts``,
+  ``turn_tokens``, ``files_changed``, ``lines_added``, ``lines_removed``,
+  and ``transcript`` — the path of a compact log this plugin writes, one
+  JSON line per turn header, tool call and reply (``params['transcript']``
   says where, see below). The transcript itself never goes into state.
   Claude Code adds ``permission_mode``, ``project_settings`` and
   ``project_instructions``. ``meta.tokens_sent``, ``meta.tokens_received``
   and ``meta.cost_usd`` hold the same totals as ``raw.tokens``/``raw.cost``
   (the session's usage over every turn, including a repair turn), so the
   run's totals and the ``dynamic`` tree's token sums count this effect.
+* ``meta.live``: a summary of the session published while it runs, through
+  :mod:`circuitry.agent_live` (#636) — numbers, times, ids, the model name
+  and tool names only, never prompt/reply/thinking text, tool arguments,
+  tool output, file contents or the environment. See
+  ``docs/plugins/agent.md``.
 * A turn that fails (the CLI errors, or times out) after the session has an
-  id or a transcript exists ends the effect as an error (``ok: false``, so
-  ``on_error`` and retries behave as for any other tool failure) whose
-  ``raw`` still carries the keys above — ``session_id`` to resume with
-  ``params['session']``, ``transcript`` to inspect what happened — plus
-  ``timed_out: true`` on a timeout. ``meta.error`` is unchanged. A turn that
-  fails before either exists (nothing yet to carry) raises as it always has.
+  id or an earlier turn has completed ends the effect as an error (``ok:
+  false``, so ``on_error`` and retries behave as for any other tool
+  failure) whose ``raw`` still carries the keys above — ``session_id`` to
+  resume with ``params['session']``, ``transcript`` to inspect what
+  happened — plus ``timed_out: true`` on a timeout. ``meta.error`` is
+  unchanged. A turn that fails before either (nothing yet to carry) raises
+  as it always has.
 
 The agent runs with the user's own permissions and is not sandboxed; the
 engine's tool lists are the way to narrow it. For pi, ``tools`` is an
@@ -83,7 +91,7 @@ import os
 import shutil
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -101,6 +109,7 @@ from ..agent_cli import (
     pi_command,
     run_agent_cli,
 )
+from ..agent_live import LiveTracker
 from ..core.prompt_files import is_dispatch_file
 from ..preflight import CheckResult
 from ._subprocess import _expand_and_validate, resolve_binary
@@ -128,13 +137,14 @@ _MAX_QUOTED_ERRORS = 20
 #: The compact transcript's file name inside the effect's scratch directory.
 TRANSCRIPT_NAME = "transcript.log"
 
-#: How much of a reply or a tool call's arguments one transcript line keeps.
-_TRANSCRIPT_LINE_CHARS = 300
-
 
 @dataclass(frozen=True)
 class AgentTurn:
-    """One CLI call of a session: its final text and what it did."""
+    """One CLI call of a session: its final text and what it did.
+
+    Tool-call and reply detail is in the transcript file itself (written
+    live, as the call streams, by the ``on_line`` callback), not here.
+    """
 
     text: str
     session_id: str | None
@@ -143,8 +153,6 @@ class AgentTurn:
     tokens_sent: int | None = None
     tokens_received: int | None = None
     cost_usd: float | None = None
-    #: Compact transcript lines: one per tool call and per reply.
-    transcript: tuple[str, ...] = ()
 
 
 class AgentEngine(Protocol):
@@ -160,6 +168,7 @@ class AgentEngine(Protocol):
         session_id: str | None,
         timeout_seconds: float,
         scratch_dir: Path,
+        on_line: Callable[[str], None] | None = None,
     ) -> AgentTurn: ...
 
 
@@ -191,6 +200,7 @@ class PiEngine:
         session_id: str | None,
         timeout_seconds: float,
         scratch_dir: Path,
+        on_line: Callable[[str], None] | None = None,
     ) -> AgentTurn:
         prompt_file = _write_prompt_file(scratch_dir, prompt)
         try:
@@ -210,19 +220,21 @@ class PiEngine:
                 extra_args=[*args, *self.options.extra_args],
             )
             proc = run_agent_cli(
-                cmd, env=self.options.env, timeout_seconds=timeout_seconds, cwd=self.options.cwd
+                cmd,
+                env=self.options.env,
+                timeout_seconds=timeout_seconds,
+                cwd=self.options.cwd,
+                on_line=on_line,
             )
         finally:
             prompt_file.unlink(missing_ok=True)
         result = parse_pi_output(proc)
         turns = 0
         tool_calls = 0
-        transcript: list[str] = []
         for event in result.raw.get("events", []):
             kind = event.get("type")
             if kind == "tool_execution_start":
                 tool_calls += 1
-                transcript.append(_tool_line(event.get("toolName"), event.get("args")))
                 continue
             message = event.get("message")
             if kind != "message_end" or not isinstance(message, dict):
@@ -230,9 +242,6 @@ class PiEngine:
             if message.get("role") != "assistant":
                 continue
             turns += 1
-            text = _content_text(message.get("content"))
-            if text:
-                transcript.append(_reply_line(text))
         return AgentTurn(
             text=result.text,
             session_id=result.session_id or session_id,
@@ -241,7 +250,6 @@ class PiEngine:
             tokens_sent=result.tokens_sent,
             tokens_received=result.tokens_received,
             cost_usd=result.cost_usd,
-            transcript=tuple(transcript),
         )
 
 
@@ -262,6 +270,7 @@ class ClaudeCodeEngine:
         session_id: str | None,
         timeout_seconds: float,
         scratch_dir: Path,
+        on_line: Callable[[str], None] | None = None,
     ) -> AgentTurn:
         del scratch_dir  # the prompt goes on stdin
         args: list[str] = []
@@ -291,13 +300,13 @@ class ClaudeCodeEngine:
             timeout_seconds=timeout_seconds,
             input=prompt,
             cwd=self.options.cwd,
+            on_line=on_line,
         )
         # The stream's last line is the same result object
         # ``--output-format json`` prints, so the shared parser reads it.
         result = parse_claude_output(proc)
         turns = 0
         tool_calls = 0
-        transcript: list[str] = []
         for line in (proc.stdout or "").splitlines():
             try:
                 event = json.loads(line)
@@ -315,10 +324,6 @@ class ClaudeCodeEngine:
                     continue
                 if item.get("type") == "tool_use":
                     tool_calls += 1
-                    transcript.append(_tool_line(item.get("name"), item.get("input")))
-                elif item.get("type") == "text" and isinstance(item.get("text"), str):
-                    if item["text"].strip():
-                        transcript.append(_reply_line(item["text"]))
         num_turns = result.raw.get("num_turns")
         if isinstance(num_turns, int) and not isinstance(num_turns, bool):
             turns = num_turns
@@ -330,7 +335,6 @@ class ClaudeCodeEngine:
             tokens_sent=result.tokens_sent,
             tokens_received=result.tokens_received,
             cost_usd=result.cost_usd,
-            transcript=tuple(transcript),
         )
 
 
@@ -358,6 +362,7 @@ class _Session:
     engine: AgentEngine
     session_id: str | None
     transcript_path: Path
+    live: LiveTracker
     turns: int = 0
     tool_calls: int = 0
     tokens_sent: int | None = None
@@ -365,8 +370,16 @@ class _Session:
     cost_usd: float | None = None
     repair_turn: bool = False
     texts: list[str] = field(default_factory=list)
+    #: Whether a turn has ever completed (``add`` was called at least
+    #: once). The transcript *file* now exists from the first moment any
+    #: turn starts (#636's ``live.start_turn``, called before the CLI even
+    #: runs) — ``transcript_path.exists()`` is no longer a reliable signal
+    #: that there's anything in it worth resuming or inspecting, so
+    #: ``raw()`` and ``_run_turn``'s own "nothing yet to report" check both
+    #: use this instead.
+    turn_completed: bool = False
 
-    def add(self, turn: AgentTurn, *, label: str) -> None:
+    def add(self, turn: AgentTurn) -> None:
         self.session_id = turn.session_id or self.session_id
         self.turns += turn.turns
         self.tool_calls += turn.tool_calls
@@ -377,10 +390,17 @@ class _Session:
         if turn.cost_usd is not None:
             self.cost_usd = (self.cost_usd or 0.0) + turn.cost_usd
         self.texts.append(turn.text)
-        with self.transcript_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"== {label}: {self.engine.name} session {self.session_id or '?'}\n")
-            for line in turn.transcript:
-                handle.write(line + "\n")
+        self.turn_completed = True
+        # The authoritative, cumulative totals this turn's end-of-turn parse
+        # just computed replace whatever the live tracker estimated on its
+        # own while the turn was streaming (#636).
+        self.live.sync_turn_totals(
+            turns=self.turns,
+            tool_calls=self.tool_calls,
+            tokens_sent=self.tokens_sent,
+            tokens_received=self.tokens_received,
+            cost_usd=self.cost_usd,
+        )
 
     def raw(self) -> dict[str, Any]:
         raw: dict[str, Any] = {
@@ -391,12 +411,12 @@ class _Session:
             "tokens": {"sent": self.tokens_sent, "received": self.tokens_received},
             "repair_turn": self.repair_turn,
             # None when no turn has completed yet to write one (a turn
-            # that fails before the session has an id or a transcript
-            # exists raises instead of reaching here; one that fails after
-            # either exists can still get here before any turn finished).
-            "transcript": (
-                str(self.transcript_path) if self.transcript_path.exists() else None
-            ),
+            # that fails before the session has an id or a turn has
+            # completed raises instead of reaching here; one that fails
+            # after either exists can still get here before a later turn
+            # finished).
+            "transcript": (str(self.transcript_path) if self.turn_completed else None),
+            **self.live.raw_extra(),
         }
         if self.cost_usd is not None:
             raw["cost"] = self.cost_usd
@@ -419,8 +439,9 @@ class _Session:
 
 class _TurnFailed(Exception):
     """A turn's ``AgentCliError``/``AgentCliTimeout`` after the session
-    already has an id or a transcript exists — enough context that the
-    effect can end as an ``ok=False`` result instead of raising (#391),
+    already has an id or an earlier turn has completed — enough context
+    that the effect can end as an ``ok=False`` result instead of raising
+    (#391),
     carrying it so the caller doesn't have to re-derive ``timed_out`` from
     the (now-discarded) exception's class."""
 
@@ -439,6 +460,7 @@ def run_agent_session(
     timeout_seconds: float,
     scratch_dir: Path,
     transcript_path: Path | None = None,
+    live: LiveTracker | None = None,
 ) -> ToolResult:
     """Run the session's turn, then — with ``result_file`` — read and
     validate the result and give a missing or invalid one exactly one
@@ -446,68 +468,87 @@ def run_agent_session(
     together. A result still invalid after the repair is an ``ok=False``
     result whose ``stderr`` carries the errors (``raw`` keeps the session
     id and transcript so the session can be inspected or resumed); so is a
-    turn that fails after the session has an id or a transcript exists —
-    ``raw`` carries the same keys, plus ``timed_out`` on a timeout. A turn
-    that fails before either exists raises, as it always has.
+    turn that fails after the session has an id or an earlier turn has
+    completed — ``raw`` carries the same keys, plus ``timed_out`` on a
+    timeout. A turn that fails before either raises, as it always has.
 
     ``transcript_path`` is the compact log's destination, appended to
     across every turn; ``scratch_dir / TRANSCRIPT_NAME`` when ``None``.
+    ``live`` publishes ``meta.live`` and writes the transcript as the
+    session goes (#636); a caller that doesn't need that (today, only this
+    module's own tests) can leave it unset and gets a tracker that
+    publishes nowhere, closed automatically once this call returns.
     """
     deadline = time.monotonic() + timeout_seconds
-    session = _Session(
-        engine=engine,
-        session_id=session_id,
-        transcript_path=transcript_path or (scratch_dir / TRANSCRIPT_NAME),
-    )
-    first_prompt = prompt if result_file is None else _with_result_contract(
-        prompt, result_file, result_schema
-    )
-    try:
-        session.add(
-            _run_turn(
-                session,
-                first_prompt,
-                session_id=session_id,
-                timeout_seconds=timeout_seconds,
-                scratch_dir=scratch_dir,
-            ),
-            label="turn",
+    resolved_transcript_path = transcript_path or (scratch_dir / TRANSCRIPT_NAME)
+    owns_live = live is None
+    if live is None:
+        live = LiveTracker(
+            engine=engine.name,
+            model="",
+            attempt=1,
+            transcript_path=resolved_transcript_path,
+            publish=lambda _snapshot: None,
         )
-    except _TurnFailed as exc:
-        return _turn_failure_result(session, exc)
-    if result_file is None:
-        return session.result(value=session.texts[-1])
+    try:
+        session = _Session(
+            engine=engine,
+            session_id=session_id,
+            transcript_path=resolved_transcript_path,
+            live=live,
+        )
+        first_prompt = prompt if result_file is None else _with_result_contract(
+            prompt, result_file, result_schema
+        )
+        try:
+            session.add(
+                _run_turn(
+                    session,
+                    first_prompt,
+                    session_id=session_id,
+                    timeout_seconds=timeout_seconds,
+                    scratch_dir=scratch_dir,
+                    label="turn",
+                )
+            )
+        except _TurnFailed as exc:
+            return _turn_failure_result(session, exc)
+        if result_file is None:
+            return session.result(value=session.texts[-1])
 
-    value, errors = _read_result(result_file, result_schema)
-    if not errors:
+        value, errors = _read_result(result_file, result_schema)
+        if not errors:
+            return session.result(value=value)
+        if not session.session_id:
+            return _invalid_result(
+                session, result_file, errors, why="the CLI reported no session id to resume"
+            )
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            return _invalid_result(
+                session, result_file, errors, why="no time was left for a repair turn"
+            )
+        session.repair_turn = True
+        try:
+            session.add(
+                _run_turn(
+                    session,
+                    _repair_prompt(result_file, errors),
+                    session_id=session.session_id,
+                    timeout_seconds=remaining,
+                    scratch_dir=scratch_dir,
+                    label="repair turn",
+                )
+            )
+        except _TurnFailed as exc:
+            return _turn_failure_result(session, exc)
+        value, errors = _read_result(result_file, result_schema)
+        if errors:
+            return _invalid_result(session, result_file, errors, why="after one repair turn")
         return session.result(value=value)
-    if not session.session_id:
-        return _invalid_result(
-            session, result_file, errors, why="the CLI reported no session id to resume"
-        )
-    remaining = deadline - time.monotonic()
-    if remaining < 1:
-        return _invalid_result(
-            session, result_file, errors, why="no time was left for a repair turn"
-        )
-    session.repair_turn = True
-    try:
-        session.add(
-            _run_turn(
-                session,
-                _repair_prompt(result_file, errors),
-                session_id=session.session_id,
-                timeout_seconds=remaining,
-                scratch_dir=scratch_dir,
-            ),
-            label="repair turn",
-        )
-    except _TurnFailed as exc:
-        return _turn_failure_result(session, exc)
-    value, errors = _read_result(result_file, result_schema)
-    if errors:
-        return _invalid_result(session, result_file, errors, why="after one repair turn")
-    return session.result(value=value)
+    finally:
+        if owns_live:
+            live.close()
 
 
 def _turn_failure_result(session: _Session, exc: _TurnFailed) -> ToolResult:
@@ -524,18 +565,31 @@ def _run_turn(
     session_id: str | None,
     timeout_seconds: float,
     scratch_dir: Path,
+    label: str,
 ) -> AgentTurn:
     """One turn of ``session``'s engine. A CLI failure or timeout, once the
-    session has an id or a transcript exists, becomes a ``_TurnFailed``
-    naming the session id and the transcript (so a long session can still
-    be inspected or resumed) for the caller to turn into an ``ok=False``
-    result; with neither to report, it is re-raised unchanged."""
+    session has an id or an earlier turn has completed, becomes a
+    ``_TurnFailed`` naming the session id and the transcript (so a long
+    session can still be inspected or resumed) for the caller to turn into
+    an ``ok=False`` result; with neither to report, it is re-raised
+    unchanged.
+
+    ``label`` (``"turn"`` or ``"repair turn"``) becomes the transcript's
+    own ``turn`` line, written before the CLI starts; ``meta.live.phase``
+    gets the shorter ``"turn"``/``"repair"`` the issue's own contract names
+    (#636)."""
+    session.live.start_turn(
+        phase="repair" if label == "repair turn" else "turn",
+        label=label,
+        session_id=session_id,
+    )
     try:
         return session.engine.run_turn(
             prompt,
             session_id=session_id,
             timeout_seconds=timeout_seconds,
             scratch_dir=scratch_dir,
+            on_line=session.live.handle_line,
         )
     except AgentCliError as exc:
         notes: list[str] = []
@@ -543,7 +597,7 @@ def _run_turn(
             notes.append(
                 f"session {session.session_id} can be resumed with params['session']"
             )
-        if session.transcript_path.exists():
+        if session.turn_completed:
             notes.append(f"transcript: {session.transcript_path}")
         if not notes:
             raise
@@ -615,37 +669,6 @@ def _write_prompt_file(scratch_dir: Path, prompt: str) -> Path:
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
         stream.write(prompt)
     return Path(name)
-
-
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if not isinstance(content, list):
-        return ""
-    return "".join(
-        item["text"]
-        for item in content
-        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
-    ).strip()
-
-
-def _one_line(text: str) -> str:
-    flat = " ".join(text.split())
-    if len(flat) > _TRANSCRIPT_LINE_CHARS:
-        flat = flat[: _TRANSCRIPT_LINE_CHARS - 3] + "..."
-    return flat
-
-
-def _tool_line(name: Any, args: Any) -> str:
-    try:
-        rendered = json.dumps(args, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        rendered = str(args)
-    return _one_line(f"tool {name or '?'} {rendered}")
-
-
-def _reply_line(text: str) -> str:
-    return _one_line(f"reply {text}")
 
 
 # ---------- params ----------
@@ -766,7 +789,15 @@ class AgentPlugin:
     #: ``runtime.plugins.agent.<engine>.binary``: replaces the PATH search.
     binaries: Mapping[str, str] = field(default_factory=dict)
 
-    def execute(self, *, params: dict[str, Any], timeout_seconds: int = 300) -> ToolResult:
+    def execute(
+        self,
+        *,
+        params: dict[str, Any],
+        timeout_seconds: int = 300,
+        on_live: Callable[[dict[str, Any]], None] | None = None,
+        attempt: int = 1,
+        earlier_attempts: tuple[int | None, int | None] | None = None,
+    ) -> ToolResult:
         prompt = params.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("agent requires params['prompt'] as a non-empty string.")
@@ -876,28 +907,51 @@ class AgentPlugin:
         # exception path (nothing yet to resume or inspect; a genuinely
         # unexpected error) removes scratch_dir unconditionally.
         keep_scratch_dir = False
+        # `None` until constructed below -- its own constructor starts a
+        # background thread (`LivePublisher`) and must not be built before
+        # the try/finally that removes scratch_dir, or a failure there
+        # leaks it (#636 review).
+        live: LiveTracker | None = None
         try:
-            result = run_agent_session(
-                engine,
-                prompt,
-                session_id=_optional_str(params, "session") or None,
-                result_file=result_file,
-                result_schema=result_schema,
-                timeout_seconds=float(timeout_seconds),
-                scratch_dir=scratch_dir,
-                transcript_path=transcript_path,
-            )
-            # With params['transcript'], the transcript never lives under
-            # scratch_dir (it goes straight to transcript_path), so nothing
-            # in it is worth keeping (#392). Without it, a turn that failed
-            # before any turn completed never wrote scratch_dir/TRANSCRIPT_NAME
-            # either, so there is nothing in it worth keeping (#391).
-            keep_scratch_dir = transcript_path is None and (
-                scratch_dir / TRANSCRIPT_NAME
-            ).exists()
+            try:
+                live = LiveTracker(
+                    engine=engine_name,
+                    model=options.model,
+                    attempt=attempt,
+                    transcript_path=transcript_path or (scratch_dir / TRANSCRIPT_NAME),
+                    publish=on_live or (lambda _snapshot: None),
+                    earlier_attempts=earlier_attempts,
+                )
+                result = run_agent_session(
+                    engine,
+                    prompt,
+                    session_id=_optional_str(params, "session") or None,
+                    result_file=result_file,
+                    result_schema=result_schema,
+                    timeout_seconds=float(timeout_seconds),
+                    scratch_dir=scratch_dir,
+                    transcript_path=transcript_path,
+                    live=live,
+                )
+                # With params['transcript'], the transcript never lives under
+                # scratch_dir (it goes straight to transcript_path), so nothing
+                # in it is worth keeping (#392). Without it, a turn that failed
+                # before any turn completed leaves scratch_dir/TRANSCRIPT_NAME
+                # with a ``turn`` header line and, now that the transcript is
+                # written as the session goes rather than only at the end of a
+                # turn (#636), possibly some ``tool_start``/``reply`` lines
+                # too -- still not worth keeping (#391), since there's no
+                # ``result.raw["transcript"]`` pointing at it for anyone to
+                # read it back by (``_Session.raw``).
+                keep_scratch_dir = transcript_path is None and (
+                    result.raw.get("transcript") is not None
+                )
+            finally:
+                if not keep_scratch_dir:
+                    shutil.rmtree(scratch_dir, ignore_errors=True)
         finally:
-            if not keep_scratch_dir:
-                shutil.rmtree(scratch_dir, ignore_errors=True)
+            if live is not None:
+                live.close()
         return replace(result, raw={**result.raw, **claude_raw})
 
     def _resolve_binary(self, engine_name: str) -> str:

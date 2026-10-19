@@ -26,6 +26,7 @@ from agent_cli_test_support import (
 from circuitry.agent_cli import AgentCliError, AgentCliTimeout
 from circuitry.core import cancellation
 from circuitry.core.cancellation import CancellationToken, RunCancelledBySignal
+from circuitry.plugins import agent as agent_module
 from circuitry.plugins.agent import (
     AgentPlugin,
     AgentTurn,
@@ -147,6 +148,11 @@ def _calls(tmp_path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
+def _transcript_entries(path: Path) -> list[dict[str, Any]]:
+    """The compact transcript's JSONL lines, parsed (#636)."""
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def _run_claude(
     tmp_path: Path,
     workdir: Path,
@@ -210,9 +216,12 @@ def test_pi_valid_result_file_is_the_value_with_session_turns_and_tokens(
     assert result.cost_usd == pytest.approx(0.02)
     assert Path(raw["transcript"]).parent.parent == tmp_path / "scratch"
     assert [p.name for p in Path(raw["transcript"]).parent.iterdir()] == ["transcript.log"]
-    transcript = Path(raw["transcript"]).read_text(encoding="utf-8")
-    assert 'tool write {"path": "out.json"}' in transcript
-    assert "reply all done" in transcript
+    entries = _transcript_entries(Path(raw["transcript"]))
+    assert any(
+        e["type"] == "tool_start" and e["tool"] == "write" and e["target"] == "out.json"
+        for e in entries
+    )
+    assert any(e["type"] == "reply" and e["text"] == "all done" for e in entries)
     assert "Line one" not in json.dumps(raw)
 
     (call,) = _calls(tmp_path)
@@ -265,7 +274,35 @@ def test_pi_missing_result_file_gets_one_repair_turn_in_the_same_session(
     assert "the file was not written" in repair_prompt
     assert result.raw["repair_turn"] is True
     assert (result.raw["turns"], result.raw["tool_calls"]) == (4, 2)
-    assert "== repair turn: pi session sess-abc" in Path(result.raw["transcript"]).read_text()
+    entries = _transcript_entries(Path(result.raw["transcript"]))
+    assert any(
+        e["type"] == "turn" and e["label"] == "repair turn" and e["session_id"] == "sess-abc"
+        for e in entries
+    )
+
+
+def test_pi_repair_turn_publishes_meta_live_phase_repair(tmp_path: Path, workdir: Path) -> None:
+    """``meta.live.phase`` is the short ``"repair"`` the issue's own
+    contract names, not the transcript's own ``"repair turn"`` label
+    (#636)."""
+    plugin = _plugin(tmp_path, "pi")
+    phases: list[Any] = []
+    plugin.execute(
+        params={
+            "prompt": "do it",
+            "cwd": str(workdir),
+            "env": _env(
+                tmp_path, workdir, FAKE_RESULT_REPAIR=json.dumps({"summary": "ok", "files": 1})
+            ),
+            "result_file": "result.json",
+            "result_schema": SCHEMA,
+        },
+        timeout_seconds=30,
+        on_live=lambda snapshot: phases.append(snapshot["phase"]),
+    )
+    assert "turn" in phases
+    assert "repair" in phases
+    assert "repair turn" not in phases
 
 
 def test_pi_result_still_invalid_after_repair_fails_with_the_schema_errors(
@@ -668,7 +705,13 @@ class _FakeEngine:
         self.prompts: list[str] = []
 
     def run_turn(
-        self, prompt: str, *, session_id: str | None, timeout_seconds: float, scratch_dir: Path
+        self,
+        prompt: str,
+        *,
+        session_id: str | None,
+        timeout_seconds: float,
+        scratch_dir: Path,
+        on_line: Any = None,
     ) -> AgentTurn:
         self.prompts.append(prompt)
         return AgentTurn(text="done", session_id=self.session_id, turns=1, tool_calls=0)
@@ -738,11 +781,14 @@ def test_transcript_param_is_written_at_the_given_path_including_the_repair_turn
     )
     assert result.ok, result.stderr
     assert result.raw["transcript"] == str(transcript.resolve())
-    text = transcript.read_text(encoding="utf-8")
-    assert f"== turn: {engine} session sess-abc" in text
-    assert f"== repair turn: {engine} session sess-abc" in text
-    assert "reply all done" in text
-    assert "reply repaired" in text
+    entries = _transcript_entries(transcript)
+    turns_by_label = {e["label"]: e["session_id"] for e in entries if e["type"] == "turn"}
+    # The first turn's own header is written before the CLI has reported a
+    # session id at all; only the repair turn resumes a known one (#636).
+    assert set(turns_by_label) == {"turn", "repair turn"}
+    assert turns_by_label["repair turn"] == "sess-abc"
+    replies = {e["text"] for e in entries if e["type"] == "reply"}
+    assert replies == {"all done", "repaired"}
     # Nothing is left in the scratch dir used for prompt files (#392).
     assert list((tmp_path / "scratch").iterdir()) == []
 
@@ -801,7 +847,8 @@ def test_transcript_param_appends_to_an_already_existing_file(
     assert result.ok, result.stderr
     text = transcript.read_text(encoding="utf-8")
     assert text.startswith("earlier run\n")
-    assert "reply all done" in text
+    entries = [json.loads(line) for line in text.splitlines()[1:] if line.strip()]
+    assert any(e["type"] == "reply" and e["text"] == "all done" for e in entries)
 
 
 @pytest.mark.parametrize("engine", ["pi", "claude_code"])
@@ -809,8 +856,9 @@ def test_transcript_param_is_none_when_the_first_turn_fails_before_writing_it(
     tmp_path: Path, workdir: Path, engine: str
 ) -> None:
     """The resumed session's first turn fails before any turn reaches
-    ``_Session.add`` (which is what actually creates the file), so there is
-    nothing at ``params['transcript']`` to point at (#391, #392)."""
+    ``_Session.add``, so there is nothing at ``params['transcript']`` to
+    point at (#391, #392) — even though the file itself already exists by
+    then, with nothing but its ``turn`` header line (#636)."""
     plugin = _plugin(tmp_path, engine, body="sys.exit(3)")
     result = plugin.execute(
         params={
@@ -823,8 +871,33 @@ def test_transcript_param_is_none_when_the_first_turn_fails_before_writing_it(
     )
     assert not result.ok
     assert result.raw["transcript"] is None
-    assert not (workdir / "t.log").exists()
+    entries = _transcript_entries(workdir / "t.log")
+    assert [e["type"] for e in entries] == ["turn"]
     assert list((tmp_path / "scratch").iterdir()) == []
+
+
+def test_transcript_param_naming_a_stale_file_still_raises_on_a_true_first_turn_failure(
+    tmp_path: Path, workdir: Path
+) -> None:
+    """A first turn that fails before the session has an id or an earlier
+    turn has completed -- nothing yet worth reporting -- raises, even when
+    ``params['transcript']`` names a file that already exists on disk from
+    an earlier, unrelated run. Whether that file already exists is no
+    longer the signal this decides on: since the transcript now exists,
+    with its own ``turn`` header, from the moment *this* session's own
+    first turn starts (#636), only whether a turn of *this* session has
+    ever completed can tell "nothing yet worth reporting" apart from
+    something worth an ``ok: false`` result instead (documented behaviour
+    change).
+    """
+    plugin = _plugin(tmp_path, "pi", body="sys.exit(3)")
+    stale = workdir / "t.log"
+    stale.write_text('{"t": "2020-01-01T00:00:00Z", "type": "turn", "label": "turn"}\n', encoding="utf-8")
+    with pytest.raises(AgentCliError):
+        plugin.execute(
+            params={"prompt": "x", "cwd": str(workdir), "transcript": "t.log"},
+            timeout_seconds=30,
+        )
 
 
 @pytest.mark.parametrize(
@@ -852,7 +925,8 @@ def test_transcript_param_still_points_at_the_file_when_a_later_turn_fails(
     assert result.raw["transcript"] == str(transcript.resolve())
     assert result.tokens_sent == sent
     assert result.tokens_received == received
-    assert "reply all done" in transcript.read_text(encoding="utf-8")
+    entries = _transcript_entries(transcript)
+    assert any(e["type"] == "reply" and e["text"] == "all done" for e in entries)
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
@@ -930,7 +1004,8 @@ def test_repair_turn_timeout_ends_as_an_error_carrying_the_session_and_transcrip
     transcript = scratch / "transcript.log"
     assert result.raw["transcript"] == str(transcript)
     assert f"transcript: {transcript}" in result.stderr
-    assert "reply all done" in transcript.read_text(encoding="utf-8")
+    entries = _transcript_entries(transcript)
+    assert any(e["type"] == "reply" and e["text"] == "all done" for e in entries)
 
 
 def test_cli_error_with_nothing_to_resume_leaves_no_scratch_dir(
@@ -940,6 +1015,29 @@ def test_cli_error_with_nothing_to_resume_leaves_no_scratch_dir(
     with pytest.raises(AgentCliError) as caught:
         plugin.execute(params={"prompt": "x", "cwd": str(workdir)}, timeout_seconds=30)
     assert "can be resumed" not in str(caught.value)
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+def test_live_tracker_construction_failure_still_removes_scratch_dir(
+    tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``LiveTracker`` is constructed inside the same try/finally that
+    removes ``scratch_dir`` (#636 review) -- its constructor starting a
+    background thread (``LivePublisher``) failing must not leak that
+    directory the way it would if ``LiveTracker`` were built before ever
+    entering that scope.
+    """
+    plugin = _plugin(tmp_path, "pi")
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent_module, "LiveTracker", _boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        plugin.execute(
+            params={"prompt": "x", "cwd": str(workdir), "env": _env(tmp_path, workdir)},
+            timeout_seconds=30,
+        )
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
@@ -1285,4 +1383,5 @@ def test_tool_effect_lands_value_and_raw_in_state_without_the_transcript(
     assert node["meta"]["raw"]["tool_calls"] == 1
     assert "Task: rename the module" in _calls(tmp_path)[0]["attachments"][0]
     assert "reply all done" not in json.dumps(store.state["prime"], default=str)
-    assert "reply all done" in Path(node["meta"]["raw"]["transcript"]).read_text()
+    entries = _transcript_entries(Path(node["meta"]["raw"]["transcript"]))
+    assert any(e["type"] == "reply" and e["text"] == "all done" for e in entries)

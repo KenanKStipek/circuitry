@@ -180,3 +180,64 @@ def claude_result(**fields: Any) -> str:
     }
     result.update(fields)
     return json.dumps(result)
+
+
+#: A ``body`` for :func:`write_fake_cli` that replays ``FAKE_STREAM`` (a
+#: JSONL file) to stdout, one line at a time, flushing immediately -- so a
+#: test watching ``--live-state``/the transcript while this runs sees each
+#: line arrive on its own, not only once the whole call finishes. Two
+#: pseudo-lines never reach stdout: ``{"sleep": s}`` pauses for *s* seconds;
+#: ``{"wait_for": path}`` blocks until *path* exists, so a test can gate the
+#: stream with a file instead of sleeping and guessing a timing margin.
+#: Every other line is a real recorded CLI line, printed as-is.
+REPLAY_BODY = """\
+import time as _time
+with open(os.environ["FAKE_STREAM"], encoding="utf-8") as _stream:
+    for _raw in _stream:
+        _raw = _raw.rstrip("\\n")
+        if not _raw.strip():
+            continue
+        try:
+            _pseudo = json.loads(_raw)
+        except json.JSONDecodeError:
+            _pseudo = None
+        if isinstance(_pseudo, dict) and set(_pseudo) == {"sleep"}:
+            _time.sleep(_pseudo["sleep"])
+            continue
+        if isinstance(_pseudo, dict) and set(_pseudo) == {"wait_for"}:
+            while not os.path.exists(_pseudo["wait_for"]):
+                _time.sleep(0.01)
+            continue
+        sys.stdout.write(_raw + "\\n")
+        sys.stdout.flush()
+"""
+
+
+def write_replay_stream(path: Path, lines: list[Any]) -> Path:
+    """Write *lines* (dicts, including ``{"sleep": s}``/``{"wait_for": p}``
+    pseudo-lines, or already-JSON strings) as JSONL to *path*, for
+    :data:`REPLAY_BODY` to replay."""
+    with path.open("w", encoding="utf-8") as handle:
+        for line in lines:
+            handle.write((line if isinstance(line, str) else json.dumps(line)) + "\n")
+    return path
+
+
+def write_replay_cli(directory: Path, name: str, *, exit_code: int = 0) -> Path:
+    """A fake CLI (see :func:`write_fake_cli`) that replays whatever JSONL
+    file the ``FAKE_STREAM`` env var names, through :data:`REPLAY_BODY` --
+    not baked in, so one fake binary can replay a different stream per
+    call."""
+    return write_fake_cli(directory, name, body=REPLAY_BODY, exit_code=exit_code)
+
+
+#: Small recorded streams (scrubbed of any real path, id or text) replayed
+#: by the tests that gate a fake CLI mid-stream with ``wait_for`` (#636).
+#: Both pause at ``gate1``/``gate2``, relative to the agent effect's own
+#: ``cwd`` -- a test releases them by creating that file there.
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "agent_live"
+
+
+def read_fixture_stream(name: str) -> str:
+    """The raw JSONL text of ``tests/fixtures/agent_live/<name>``."""
+    return (FIXTURES_DIR / name).read_text(encoding="utf-8")
