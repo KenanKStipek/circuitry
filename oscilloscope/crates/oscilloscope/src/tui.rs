@@ -1682,7 +1682,23 @@ fn draw_cost_treemap(
     let level = app.cost_level(&screen.tree).to_vec();
     let mut title = format!(" tokens by store · {} ", screen.measure.label());
     if !app.cost_zoom.is_empty() {
-        title = format!(" tokens by store · {} ", app.cost_zoom.join(" › "));
+        // The zoomed store's own name at each level, not its full
+        // dotted path -- `app.cost_zoom` stacks a *path* per level,
+        // and every deeper one already contains every shallower one
+        // as a prefix, so joining the raw paths themselves would
+        // read `prime.fan › prime.fan.iter_0` instead of `fan ›
+        // iter_0`. The measure stays in the title too, so zooming
+        // never hides which measure is on screen.
+        let breadcrumb: Vec<&str> = app
+            .cost_zoom
+            .iter()
+            .map(|p| p.rsplit('.').next().unwrap_or(p.as_str()))
+            .collect();
+        title = format!(
+            " tokens by store · {} · {} ",
+            screen.measure.label(),
+            breadcrumb.join(" › ")
+        );
     }
     if screen.stores_without_measure > 0 {
         let noun = if screen.stores_without_measure == 1 {
@@ -1691,7 +1707,7 @@ fn draw_cost_treemap(
             "stores"
         };
         title = format!(
-            "{}· {} {noun} without {} ",
+            "{} · {} {noun} without {} ",
             title.trim_end(),
             screen.stores_without_measure,
             screen.measure.label()
@@ -1728,12 +1744,19 @@ fn draw_cost_treemap(
         // "tokens when done" until it finishes, never a number --
         // true for every still-running leaf-like tile regardless of
         // whether a previous attempt already left it a nonzero
-        // placeholder weight.
-        let running_leaf = !cell.has_children && cell.status == Some(StatusKind::Running);
-        let value_text = if running_leaf {
-            "tokens when done".to_string()
-        } else {
-            format_measure_value(cell.total, screen.measure)
+        // placeholder weight. A run that ended (aborted or
+        // cancelled) while a leaf was still in flight leaves it in
+        // the exact same state -- no `completed_at` ever written --
+        // but it will never reach "done" either, so it reads "no
+        // tokens reported" instead, rather than the placeholder
+        // weight's own number read back as if it were a real one.
+        let value_text = match cell.status {
+            _ if cell.has_children => format_measure_value(cell.total, screen.measure),
+            Some(StatusKind::Running) => "tokens when done".to_string(),
+            Some(StatusKind::Aborted) | Some(StatusKind::Cancelled) => {
+                "no tokens reported".to_string()
+            }
+            _ => format_measure_value(cell.total, screen.measure),
         };
         let labelled = format!("{} {value_text}", cell.label);
         if cell.has_children {
@@ -5189,6 +5212,57 @@ mod golden_tests {
             tinted_rows.len() >= 2,
             "both the tokens line and the in-flight line must tint: {tinted_rows:?}"
         );
+    }
+
+    /// A leaf that never got `completed_at` because the run itself
+    /// ended first (aborted or cancelled) is in the exact same data
+    /// shape as a still-running one -- only its own status tells the
+    /// two apart, and it must never read as a real (if tiny) token
+    /// count.
+    #[test]
+    fn an_aborted_leafs_placeholder_weight_never_reads_as_a_real_number() {
+        // A weight comparable to its sibling's -- this test pins the
+        // *display text* decision alone, which `draw_cost_treemap`
+        // makes from `status`, never `total` (the boosting a real
+        // placeholder weight gets happens earlier, while the tree is
+        // built, covered separately in `treemap`'s own tests).
+        let tree = vec![
+            TreemapNode::leaf("big", 1_000_000, Some(StatusKind::Done)),
+            TreemapNode::leaf("cut_off", 900_000, Some(StatusKind::Aborted)),
+        ];
+        let screen = oscilloscope_core::screens::CostScreen {
+            measure: Measure::Total,
+            tree,
+            stores_without_measure: 0,
+            stores: oscilloscope_core::cost::LargestStores::default(),
+            tokens_over_time: Vec::new(),
+            chart_start_ts: None,
+            chart_end_ts: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let mut app = App::new(false);
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut cost_layout = CostLayoutCache::default();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_cost_treemap(f, area, &screen, &mut app, &mut cost_layout, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("no tokens reported"), "{text}");
+        assert!(!text.contains("cut_off 900"), "{text}");
     }
 }
 

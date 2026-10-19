@@ -50,24 +50,27 @@ pub struct StoresFooter {
     /// but never landing in the final state tree for the table to see
     /// at all, DESIGN.md §1.2), never exceed them.
     pub gap_tokens: u64,
-    /// How many of the table's own stores actually reported a cost
+    /// How many *finished* stores actually reported a cost
     /// (DESIGN.md's Cost section: "when only some effects report a
     /// cost, the figure is marked as partial") -- `cost_reporting ==
-    /// cost_stores` means every store did, never more.
+    /// cost_stores` means every one of them did, never more. A
+    /// still-running store is never counted in either figure: it
+    /// hasn't failed to report a cost, it simply hasn't finished yet.
     pub cost_reporting: u64,
     pub cost_stores: u64,
 }
 
 impl StoresFooter {
-    /// `$4.20`, or `$4.20 (from 3 of 9 stores)` once some stores
-    /// never reported a cost at all -- `None` when nothing has
-    /// reported one yet, same as [`crate::screens::effective_cost_
-    /// usd`]'s own "never shown as $0.00" rule.
+    /// `$4.20`, or `$4.20 (from 3 of 9 prompts)` once some finished
+    /// stores never reported a cost at all (DESIGN.md's own example
+    /// wording) -- `None` when nothing has reported one yet, same as
+    /// [`crate::screens::effective_cost_usd`]'s own "never shown as
+    /// $0.00" rule.
     pub fn cost_label(&self) -> Option<String> {
         let cost = self.run_cost_usd?;
         if self.cost_reporting < self.cost_stores {
             Some(format!(
-                "${cost:.2} (from {} of {} stores)",
+                "${cost:.2} (from {} of {} prompts)",
                 self.cost_reporting, self.cost_stores
             ))
         } else {
@@ -142,8 +145,14 @@ pub fn largest_stores(
             (sent, received, (cost > 0.0).then_some(cost))
         });
     let gap_tokens = (run_sent + run_received).saturating_sub(table_tokens);
-    let cost_reporting = rows.iter().filter(|r| r.cost_usd.is_some()).count() as u64;
-    let cost_stores = rows.len() as u64;
+    let finished_rows = rows
+        .iter()
+        .filter(|r| r.status != Some(StatusKind::Running));
+    let cost_reporting = finished_rows
+        .clone()
+        .filter(|r| r.cost_usd.is_some())
+        .count() as u64;
+    let cost_stores = finished_rows.count() as u64;
 
     LargestStores {
         rows,
@@ -456,8 +465,40 @@ mod tests {
         assert_eq!(result.footer.cost_stores, 3);
         assert_eq!(
             result.footer.cost_label(),
-            Some("$2.70 (from 2 of 3 stores)".to_string())
+            Some("$2.70 (from 2 of 3 prompts)".to_string())
         );
+    }
+
+    #[test]
+    fn a_running_prompt_is_not_counted_against_the_cost_labels_own_coverage() {
+        let state = json!({
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "plan": prompt(100, 50, Some(1.5), "t1"),
+                "review": {"value": "y", "meta": {
+                    "created_at": "t0", "completed_at": null, "adapter": "scripted"
+                }}
+            },
+            "runtime": {"last_run": {"totals": {"tokens_sent": 100, "tokens_received": 50, "cost_usd": 1.5}}}
+        });
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.review".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
+        assert_eq!(result.rows.len(), 2, "the running store still gets a row");
+        assert_eq!(
+            result.footer.cost_stores, 1,
+            "the running store is not counted, finished or not"
+        );
+        assert_eq!(result.footer.cost_reporting, 1);
+        assert_eq!(result.footer.cost_label(), Some("$1.50".to_string()));
     }
 
     #[test]
