@@ -71,6 +71,33 @@ def _wait_for_live_meta(live: Path, *, tool_calls: int, timeout: float = 15.0) -
     return _wait_for(_check, timeout=timeout)
 
 
+#: Exact mid-stream values each fixture must produce at gate1/gate2, keyed
+#: by engine (#636 follow-up -- a loose `> 0`/`is not None` check can't
+#: catch Claude Code's per-message.id usage duplication, since any wrong,
+#: nonzero number still passes it). Hand-computed from each fixture file:
+#: pi's own stream has one assistant message per gate; Claude Code's
+#: fixture gives msg_1 two lines (a text block, then a tool_use block)
+#: sharing one message.id, so its usage (input 100 + cache_read 10) must
+#: count once, not twice, by gate1.
+GATE_EXPECTATIONS: dict[str, dict[str, dict[str, Any]]] = {
+    "pi": {
+        "gate1": {"turns": 0, "tool_calls": 1, "tokens_sent": None, "context_tokens": None},
+        "gate2": {"turns": 1, "tool_calls": 2, "tokens_sent": 110, "context_tokens": 110},
+    },
+    "claude_code": {
+        "gate1": {"turns": 1, "tool_calls": 1, "tokens_sent": 110, "context_tokens": 110},
+        "gate2": {"turns": 2, "tool_calls": 2, "tokens_sent": 275, "context_tokens": 165},
+    },
+}
+
+#: The final, authoritative turn count each engine's own end-of-turn parse
+#: reports for its fixture (`num_turns` for Claude Code; one per
+#: `message_end` for pi) -- unaffected by this gate's own dedup fix, since
+#: it comes from the parser these tests don't touch, but still worth
+#: pinning down exactly rather than a loose `>= 2`.
+FINAL_TURNS = {"pi": 2, "claude_code": 3}
+
+
 @pytest.mark.parametrize(
     ("engine", "binary_name", "fixture", "fixture_engine_key"),
     [
@@ -118,25 +145,47 @@ def test_live_state_tracks_the_running_summary_while_gated(
             )
         )
 
+    expect = GATE_EXPECTATIONS[engine]
+
     thread = threading.Thread(target=_run)
     thread.start()
     try:
         # Gated at gate1: the first tool call has started, the second
         # hasn't. The engines' own tool names differ (pi: lowercase;
-        # Claude Code: capitalised), so only the counts are checked here.
+        # Claude Code: capitalised), so the tool name itself isn't checked
+        # here, but every number is, exactly -- a loose `> 0`/`is not None`
+        # check can't catch Claude Code's own message.id usage duplication,
+        # since a wrong, nonzero number still passes it (#636 follow-up).
         first = _wait_for_live_meta(live, tool_calls=1)
         assert first["engine"] == engine
         assert first["phase"] == "turn"
         assert first["current_tool"] is not None
+        assert first["turns"] == expect["gate1"]["turns"]
+        assert first["tokens_sent"] == expect["gate1"]["tokens_sent"]
+        assert first["context_tokens"] == expect["gate1"]["context_tokens"]
+
+        # The transcript is written as the session goes, not only once it
+        # finishes -- already readable, with a timed tool_start line in it,
+        # while the CLI is still gated mid-stream (#636).
+        transcript_mid_run = Path(first["transcript"])
+        assert transcript_mid_run.exists()
+        mid_run_lines = [
+            json.loads(line)
+            for line in transcript_mid_run.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert mid_run_lines, "the transcript has nothing in it yet, mid-stream"
+        tool_start_mid_run = next(line for line in mid_run_lines if line["type"] == "tool_start")
+        assert isinstance(tool_start_mid_run["t"], str) and tool_start_mid_run["t"]
 
         (work / "gate1").touch()
 
         # Gated at gate2: the first tool has ended (one assistant message
         # recorded), the second tool call has started.
         second = _wait_for_live_meta(live, tool_calls=2)
-        assert second["turns"] >= 1
-        assert second["tokens_sent"] is not None and second["tokens_sent"] > 0
-        assert second["context_tokens"] is not None
+        assert second["turns"] == expect["gate2"]["turns"]
+        assert second["tokens_sent"] == expect["gate2"]["tokens_sent"]
+        assert second["context_tokens"] == expect["gate2"]["context_tokens"]
 
         (work / "gate2").touch()
         thread.join(timeout=20)
@@ -150,7 +199,7 @@ def test_live_state_tracks_the_running_summary_while_gated(
     final_state = json.loads(out.read_text(encoding="utf-8"))
     node = final_state["prime"]["implement"]
     assert "live" not in node["meta"]
-    assert node["meta"]["raw"]["turns"] >= 2
+    assert node["meta"]["raw"]["turns"] == FINAL_TURNS[engine]
     assert node["meta"]["raw"]["tool_calls"] == 2
     assert node["meta"]["raw"]["tool_counts"]
     assert node["meta"]["raw"]["files_changed"] == 1

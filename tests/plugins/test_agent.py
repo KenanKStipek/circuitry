@@ -280,6 +280,30 @@ def test_pi_missing_result_file_gets_one_repair_turn_in_the_same_session(
     )
 
 
+def test_pi_repair_turn_publishes_meta_live_phase_repair(tmp_path: Path, workdir: Path) -> None:
+    """``meta.live.phase`` is the short ``"repair"`` the issue's own
+    contract names, not the transcript's own ``"repair turn"`` label
+    (#636)."""
+    plugin = _plugin(tmp_path, "pi")
+    phases: list[Any] = []
+    plugin.execute(
+        params={
+            "prompt": "do it",
+            "cwd": str(workdir),
+            "env": _env(
+                tmp_path, workdir, FAKE_RESULT_REPAIR=json.dumps({"summary": "ok", "files": 1})
+            ),
+            "result_file": "result.json",
+            "result_schema": SCHEMA,
+        },
+        timeout_seconds=30,
+        on_live=lambda snapshot: phases.append(snapshot["phase"]),
+    )
+    assert "turn" in phases
+    assert "repair" in phases
+    assert "repair turn" not in phases
+
+
 def test_pi_result_still_invalid_after_repair_fails_with_the_schema_errors(
     tmp_path: Path, workdir: Path
 ) -> None:

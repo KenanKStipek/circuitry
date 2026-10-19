@@ -47,6 +47,7 @@ add on top.
 from __future__ import annotations
 
 import contextvars
+import logging
 import os
 import queue
 import signal
@@ -58,6 +59,8 @@ from concurrent.futures import Executor, Future
 from contextlib import contextmanager
 from multiprocessing.process import BaseProcess
 from typing import Any, TypeVar
+
+logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
@@ -994,11 +997,28 @@ def _read_lines_promptly(
     child exited normally or because its process group was killed -- the
     same reasoning :func:`_feed_stdin` already relies on for the opposite
     direction.
+
+    *on_line* itself is never allowed to stop this loop: a failure inside
+    it (a disk-full transcript append, say) would otherwise leave stdout
+    undrained and unclosed, so the child either blocks on a full pipe
+    until its own timeout or sees EPIPE/SIGPIPE mid-session -- either way
+    corrupting the output ``run_tracked``'s own end-of-call parse still
+    needs to be authoritative. So any exception it raises is logged once
+    and *on_line* is never called again for the rest of this stream, while
+    reading into *lines* continues exactly as if ``on_line`` were never
+    passed at all (#636 follow-up).
     """
+    on_line_failed = False
     try:
         for raw_line in stdout:
             lines.append(raw_line)
-            on_line(raw_line.rstrip("\n"))
+            if on_line_failed:
+                continue
+            try:
+                on_line(raw_line.rstrip("\n"))
+            except Exception:
+                on_line_failed = True
+                logger.exception("run_tracked on_line callback failed; no longer calling it")
     except (ValueError, OSError):
         pass
     finally:

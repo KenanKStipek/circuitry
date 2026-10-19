@@ -38,6 +38,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .core.cancellation import deferred_signal_region
+
 #: ``meta.live``'s schema version.
 LIVE_SUMMARY_VERSION = 1
 
@@ -68,13 +70,15 @@ _PI_MESSAGE_UPDATE_RE = re.compile(r'^\{\s*"type"\s*:\s*"message_update"')
 
 #: Argument keys this module reads to describe a tool call without ever
 #: storing its arguments verbatim -- never any other key, and never the
-#: values of keys it doesn't recognise. pi's own argument names are not
-#: documented, so this is a best-effort reading of common shapes shared
-#: with Claude Code's own tools.
+#: values of keys it doesn't recognise. pi's own ``write`` carries
+#: ``path``/``content``; its own ``edit`` carries ``path`` and an
+#: ``edits`` list of ``{oldText, newText}`` (the same shape Claude Code's
+#: ``MultiEdit`` uses under its own key names), or occasionally a single
+#: top-level ``oldText``/``newText`` pair instead of a list.
 _PATH_ARG_KEYS = ("file_path", "path", "filepath", "notebook_path")
 _PATTERN_ARG_KEYS = ("pattern",)
-_OLD_TEXT_KEYS = ("old_string", "old_text", "before")
-_NEW_TEXT_KEYS = ("new_string", "new_text", "after")
+_OLD_TEXT_KEYS = ("old_string", "old_text", "before", "oldText")
+_NEW_TEXT_KEYS = ("new_string", "new_text", "after", "newText")
 _CONTENT_KEYS = ("content", "new_content", "text")
 
 #: Tool names (lowercased) this module can read diff stats from.
@@ -159,27 +163,42 @@ def diff_stats(name: str, args: Any) -> tuple[str | None, int | None, int | None
         added = _line_count(_first_str(args, _CONTENT_KEYS))
         return path, added, (0 if added is not None else None)
     if lowered in _EDIT_TOOL_NAMES:
+        edits = args.get("edits")
+        if isinstance(edits, list):
+            # pi's own ``edit`` call carries a list of edits under this
+            # same key, the same shape Claude Code's ``MultiEdit`` uses
+            # (#636 follow-up) -- its own single old/new keys, checked
+            # below, don't apply here.
+            added, removed = _edits_list_stats(edits)
+            return path, added, removed
         added = _line_count(_first_str(args, _NEW_TEXT_KEYS))
         removed = _line_count(_first_str(args, _OLD_TEXT_KEYS))
         return path, added, removed
     if lowered in _MULTI_EDIT_TOOL_NAMES:
-        edits = args.get("edits")
-        added = removed = 0
-        seen = False
-        if isinstance(edits, list):
-            for edit in edits:
-                if not isinstance(edit, dict):
-                    continue
-                a = _line_count(_first_str(edit, _NEW_TEXT_KEYS))
-                r = _line_count(_first_str(edit, _OLD_TEXT_KEYS))
-                if a is not None:
-                    added += a
-                    seen = True
-                if r is not None:
-                    removed += r
-                    seen = True
-        return path, (added if seen else None), (removed if seen else None)
+        added, removed = _edits_list_stats(args.get("edits"))
+        return path, added, removed
     return None, None, None
+
+
+def _edits_list_stats(edits: Any) -> tuple[int | None, int | None]:
+    """Summed ``(lines_added, lines_removed)`` over an ``edits`` list (the
+    shape both Claude Code's ``MultiEdit`` and pi's own ``edit`` use);
+    ``(None, None)`` when nothing in it was recognised."""
+    added = removed = 0
+    seen = False
+    if isinstance(edits, list):
+        for edit in edits:
+            if not isinstance(edit, dict):
+                continue
+            a = _line_count(_first_str(edit, _NEW_TEXT_KEYS))
+            r = _line_count(_first_str(edit, _OLD_TEXT_KEYS))
+            if a is not None:
+                added += a
+                seen = True
+            if r is not None:
+                removed += r
+                seen = True
+    return (added if seen else None), (removed if seen else None)
 
 
 class LivePublisher:
@@ -216,7 +235,12 @@ class LivePublisher:
         self._thread.start()
 
     def update(self, snapshot: dict[str, Any]) -> None:
-        with self._wake:
+        # `threading.Condition.__exit__` is pure Python (#555's deadlock
+        # class): a signal landing mid-release on the main thread -- the
+        # thread a sequential chain's own effect runs on -- would leak
+        # this lock to it forever, and `_loop` (a different thread) would
+        # then block on it for good.
+        with deferred_signal_region(), self._wake:
             if self._closed:
                 return
             self._pending = snapshot
@@ -242,10 +266,15 @@ class LivePublisher:
         """Stop the writer thread. Any snapshot still pending is published
         first -- harmless, since the caller clears ``meta.live`` right
         after this returns."""
-        with self._wake:
+        with deferred_signal_region(), self._wake:
             self._closed = True
             self._wake.notify()
-        self._thread.join()
+        # Bounded, for the same #555 reason `update` above is now guarded:
+        # a hung `_loop` (its own publish callback stuck on something)
+        # must not leave this call -- reached from an interrupt's own
+        # unwind, inside `plugins/agent.py`'s `finally:` -- blocking the
+        # whole run until a second Ctrl-C.
+        self._thread.join(timeout=5)
 
 
 @dataclass
@@ -297,8 +326,20 @@ class LiveTracker:
         self._files_touched: set[str] = set()
         self._lines_added: int | None = None
         self._lines_removed: int | None = None
-        self._pending: deque[_PendingTool] = deque()
+        # Tools with a call id (Claude Code's ``tool_use.id``/
+        # ``tool_result.tool_use_id``, pi's own ``toolCallId``) are matched
+        # to their end by that id, keyed here, rather than FIFO -- a Task
+        # subagent's own first tool result must not pop its parent
+        # ``Task`` call off a plain queue (#636 follow-up). A call whose
+        # event carries no id at all still queues FIFO in
+        # ``_pending_fifo``.
+        self._pending_by_id: dict[str, _PendingTool] = {}
+        self._pending_fifo: deque[_PendingTool] = deque()
         self._tool_seq = 0
+        # Claude Code prints one line per content block; several lines can
+        # share one ``message.id`` (one API call). Turns and usage are
+        # counted once per id, never once per line (#636 follow-up).
+        self._seen_message_ids: set[str] = set()
         self._publisher = LivePublisher(publish, interval=interval, now=now)
         self._publish_now()
 
@@ -318,7 +359,10 @@ class LiveTracker:
                 "updated_at": _now_iso(),
                 "turns": self._turns,
                 "tool_calls": self._tool_calls,
-                "tools": {name: dict(stats) for name, stats in self._tools.items()},
+                "tools": {
+                    name: {"calls": stats["calls"], "ms": round(stats["ms"])}
+                    for name, stats in self._tools.items()
+                },
                 "current_tool": (
                     dict(self._current_tool) if self._current_tool is not None else None
                 ),
@@ -359,18 +403,26 @@ class LiveTracker:
 
     # ---- turn boundaries ----
 
-    def start_turn(self, *, phase: str, session_id: str | None) -> None:
+    def start_turn(self, *, phase: str, session_id: str | None, label: str | None = None) -> None:
         """Called once, synchronously, right before the CLI for this turn
         (the main one or the repair turn) starts -- so the transcript
         carries a ``turn`` line and ``meta.live.phase`` updates even before
         the CLI has printed anything of its own.
+
+        *phase* becomes ``meta.live.phase`` -- ``"turn"`` or ``"repair"``,
+        the two values the issue's own contract names. *label*, defaulting
+        to *phase*, is the transcript's own ``turn`` line value, which
+        stays the caller's more readable ``"repair turn"`` even while
+        ``phase`` is just ``"repair"`` (#636).
         """
         with self._lock:
             self._phase = phase
             if session_id:
                 self._session_id = session_id
             self._current_tool = None
-        self._write_transcript("turn", label=phase, session_id=self._session_id)
+        self._write_transcript(
+            "turn", label=(label if label is not None else phase), session_id=self._session_id
+        )
         self._publish_now()
 
     def sync_turn_totals(
@@ -426,7 +478,7 @@ class LiveTracker:
 
     # ---- shared tool start/end ----
 
-    def _start_tool(self, name: Any, args: Any) -> None:
+    def _start_tool(self, name: Any, args: Any, *, call_id: str | None = None) -> None:
         raw_name = name if isinstance(name, str) else "?"
         target = tool_target(args)
         with self._lock:
@@ -437,19 +489,32 @@ class LiveTracker:
             self._current_tool = {"name": bucket, "started_at": _now_iso()}
             self._tool_seq += 1
             seq = self._tool_seq
-            self._pending.append(
-                _PendingTool(seq=seq, bucket=bucket, raw_name=raw_name, args=args, started=time.monotonic())
-            )
+            pending = _PendingTool(seq=seq, bucket=bucket, raw_name=raw_name, args=args, started=time.monotonic())
+            if call_id:
+                self._pending_by_id[call_id] = pending
+            else:
+                self._pending_fifo.append(pending)
         self._write_transcript("tool_start", id=seq, tool=bucket, target=target)
         self._publish_now()
 
-    def _end_tool(self, *, ok: bool, duration_ms: float | None = None) -> None:
+    def _end_tool(
+        self, *, ok: bool, duration_ms: float | None = None, call_id: str | None = None
+    ) -> None:
         with self._lock:
-            if not self._pending:
-                self._current_tool = None
-                pending = None
+            pending: _PendingTool | None
+            if call_id is not None:
+                # Matched by the CLI's own call id -- never FIFO here: a
+                # Task subagent's first result must pop *its own* pending
+                # tool, not whatever else happens to be oldest (its parent
+                # ``Task`` call, still running) (#636 follow-up).
+                pending = self._pending_by_id.pop(call_id, None)
+            elif self._pending_fifo:
+                pending = self._pending_fifo.popleft()
             else:
-                pending = self._pending.popleft()
+                pending = None
+            if pending is None:
+                self._current_tool = None
+            else:
                 ms = duration_ms if duration_ms is not None else (time.monotonic() - pending.started) * 1000
                 self._tools.setdefault(pending.bucket, {"calls": 0, "ms": 0.0})["ms"] += ms
                 self._current_tool = None
@@ -532,12 +597,19 @@ class LiveTracker:
                 self._publish_now()
             return
         if kind == "tool_execution_start":
-            self._start_tool(event.get("toolName"), event.get("args"))
+            call_id = event.get("toolCallId")
+            self._start_tool(
+                event.get("toolName"),
+                event.get("args"),
+                call_id=call_id if isinstance(call_id, str) else None,
+            )
             return
         if kind == "tool_execution_end":
+            call_id = event.get("toolCallId")
             self._end_tool(
                 ok=not bool(event.get("isError")),
                 duration_ms=_as_float(event.get("durationMs")),
+                call_id=call_id if isinstance(call_id, str) else None,
             )
             return
         if kind == "message_end":
@@ -581,24 +653,42 @@ class LiveTracker:
             message = event.get("message")
             if not isinstance(message, dict):
                 return
-            with self._lock:
-                self._turns += 1
-            usage = message.get("usage")
-            if isinstance(usage, dict):
-                # Per-message output_tokens is a placeholder mid-turn
-                # (#636 decision): received/cost stay null here and are
-                # filled in only from the final ``result`` line below.
-                self._apply_usage(
-                    sent_parts=(
-                        usage.get("input_tokens"),
-                        usage.get("cache_read_input_tokens"),
-                        usage.get("cache_creation_input_tokens"),
-                    ),
-                    received=None,
-                    cost=None,
-                    cache_read=usage.get("cache_read_input_tokens"),
-                    cache_write=usage.get("cache_creation_input_tokens"),
-                )
+            # Claude Code prints one line per content block; lines from
+            # the same API call share ``message.id`` (and repeat the same
+            # ``usage``) -- counted here only the first time that id is
+            # seen, so a turn with several blocks isn't counted, nor its
+            # usage summed, once per block (#636 follow-up).
+            message_id = message.get("id")
+            first_for_message = True
+            if isinstance(message_id, str):
+                with self._lock:
+                    first_for_message = message_id not in self._seen_message_ids
+                    self._seen_message_ids.add(message_id)
+            # A subagent (Task tool) message carries its own
+            # ``parent_tool_use_id``; its usage is its own session's spend,
+            # not the main session's context, so it's left out of
+            # tokens/context here -- its tool calls are still counted below
+            # like any other.
+            is_subagent = event.get("parent_tool_use_id") is not None
+            if first_for_message:
+                with self._lock:
+                    self._turns += 1
+                usage = message.get("usage")
+                if isinstance(usage, dict) and not is_subagent:
+                    # Per-message output_tokens is a placeholder mid-turn
+                    # (#636 decision): received/cost stay null here and are
+                    # filled in only from the final ``result`` line below.
+                    self._apply_usage(
+                        sent_parts=(
+                            usage.get("input_tokens"),
+                            usage.get("cache_read_input_tokens"),
+                            usage.get("cache_creation_input_tokens"),
+                        ),
+                        received=None,
+                        cost=None,
+                        cache_read=usage.get("cache_read_input_tokens"),
+                        cache_write=usage.get("cache_creation_input_tokens"),
+                    )
             content = message.get("content")
             texts: list[str] = []
             if isinstance(content, list):
@@ -606,7 +696,12 @@ class LiveTracker:
                     if not isinstance(item, dict):
                         continue
                     if item.get("type") == "tool_use":
-                        self._start_tool(item.get("name"), item.get("input"))
+                        call_id = item.get("id")
+                        self._start_tool(
+                            item.get("name"),
+                            item.get("input"),
+                            call_id=call_id if isinstance(call_id, str) else None,
+                        )
                     elif (
                         item.get("type") == "text"
                         and isinstance(item.get("text"), str)
@@ -623,7 +718,11 @@ class LiveTracker:
             if isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "tool_result":
-                        self._end_tool(ok=not bool(item.get("is_error")))
+                        call_id = item.get("tool_use_id")
+                        self._end_tool(
+                            ok=not bool(item.get("is_error")),
+                            call_id=call_id if isinstance(call_id, str) else None,
+                        )
             return
         if kind == "result":
             session_id = event.get("session_id")

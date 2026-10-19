@@ -1,23 +1,31 @@
 """``meta.live``'s lifecycle across a retry, the repair turn and
 ``--resume`` (#636): fresh per attempt, carrying ``earlier_attempts``;
-continuing through the repair turn under ``phase: repair turn``; and
-removed before an unfinished node reruns under ``--resume``.
+continuing through the repair turn under ``phase: repair``; and removed
+before an unfinished node reruns under ``--resume``.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_cli_test_support import write_fake_cli
+from agent_cli_test_support import wait_until_dead, write_fake_cli
 
 pytest.importorskip("typer")
 from typer.testing import CliRunner
 
 from circuitry.cli.app import app
-from circuitry.core.cancellation import get_token
+from circuitry.core import cancellation
+from circuitry.core.cancellation import (
+    CancellationToken,
+    RunCancelledBySignal,
+    get_token,
+)
 from circuitry.core.prompt import RetryPolicyDef
 from circuitry.core.store import Store
 from circuitry.core.tool import ToolDefinition, ToolRuntime
@@ -86,6 +94,79 @@ def test_retried_attempt_gets_a_fresh_meta_live_carrying_earlier_attempts(
     assert second_attempt["earlier_attempts"] == {"tokens_sent": None, "tokens_received": None}
     assert store.state["x"]["meta"]["raw"]["session_id"] == "sess-ok"
     assert "live" not in store.state["x"]["meta"]
+
+
+#: Streams one line (so meta.live gets a session id), then spawns a child
+#: and hangs like SPAWN_CHILD_AND_HANG -- enough to be cancelled mid-stream.
+FAKE_PI_STREAM_THEN_HANG = """\
+import subprocess, time
+sys.stdout.write(json.dumps({"type": "session", "id": "hang-session", "cwd": os.getcwd()}) + "\\n")
+sys.stdout.flush()
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+with open(os.environ["FAKE_CLI_CHILD_PID"], "w", encoding="utf-8") as handle:
+    handle.write(str(child.pid))
+time.sleep(60)
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+def test_a_real_interrupt_leaves_meta_live_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``RunCancelledBySignal`` is a ``BaseException``, so ``ToolRuntime``'s
+    own ``except Exception`` never catches it and never reaches the
+    ``meta.pop("live", None)`` on its failure path -- an interrupted
+    attempt leaves ``meta.live`` exactly as it last published it, the only
+    record of that attempt's session id and transcript (#636).
+    """
+    from circuitry.plugins.agent import AgentPlugin
+
+    token = CancellationToken()
+    monkeypatch.setattr(cancellation, "_token", token)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = write_fake_cli(bin_dir, "pi", body=FAKE_PI_STREAM_THEN_HANG)
+    plugin = AgentPlugin(default_engine="pi", binaries={"pi": str(fake)})
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)
+
+    pid_file = tmp_path / "child.pid"
+    defn = ToolDefinition(
+        name="x",
+        provider="agent",
+        params={"prompt": "hang", "env": {"FAKE_CLI_CHILD_PID": str(pid_file)}},
+    )
+    store = Store({})
+    outcome: list[BaseException] = []
+
+    def _call() -> None:
+        try:
+            ToolRuntime(defn).execute(store=store, ctx={})
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=_call)
+    thread.start()
+    deadline = time.monotonic() + 20
+
+    def _live_session_id() -> str | None:
+        node = store.state.get("x", {})
+        live = node.get("meta", {}).get("live")
+        return live.get("session_id") if isinstance(live, dict) else None
+
+    while _live_session_id() != "hang-session" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert _live_session_id() == "hang-session", "meta.live never reached the running session"
+    assert pid_file.exists() and pid_file.read_text()
+    child_pid = int(pid_file.read_text())
+
+    token.request()
+    thread.join(timeout=20)
+    assert not thread.is_alive()
+    assert len(outcome) == 1 and isinstance(outcome[0], RunCancelledBySignal)
+    assert wait_until_dead(child_pid), "the agent's own child survived the cancellation"
+
+    live_after = store.state["x"]["meta"]["live"]
+    assert live_after["session_id"] == "hang-session"
 
 
 DOCUMENT = """\

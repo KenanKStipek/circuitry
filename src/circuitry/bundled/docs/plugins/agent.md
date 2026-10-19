@@ -256,7 +256,7 @@ branch on.
 | `tokens` | `{sent, received}`: input tokens (cache reads and writes included) and output tokens; `null` when the CLI reported none |
 | `cost` | The CLI's own cost figure in USD — present only when it reports one |
 | `repair_turn` | Whether the repair turn ran |
-| `transcript` | Path of a compact JSONL log: a header per turn, a line per tool call and per reply; `null` when no turn has completed yet to write one |
+| `transcript` | Path of a compact JSONL log: a header per turn, a line per tool call and per reply, written as the session goes; `null` until a turn completes — the file itself can already exist and hold real content before that (a turn that fails before completing one leaves it in place only when `params['transcript']` named its own path; otherwise it's removed with the rest of the session's scratch files) |
 | `context_tokens` | Input tokens of the session's last model request (input, cache reads and cache writes), or `null` |
 | `context_window` | The model's context window, when the CLI reported one at the end, else `null` |
 | `tool_counts` | Per tool name: `{calls, ms}` (calls made, total time spent in that tool) |
@@ -289,7 +289,7 @@ only numbers, times, ids, the model name and tool names:
 |---|---|
 | `v` | `1` |
 | `engine`, `model`, `session_id`, `transcript` | As in `meta.raw` — `transcript` is set from the first moment, before the CLI has even printed anything |
-| `attempt`, `phase` | The tool attempt (1, 2, …) and `"turn"` or `"repair turn"` |
+| `attempt`, `phase` | The tool attempt (1, 2, …) and `"turn"` or `"repair"` |
 | `started_at`, `updated_at` | ISO times; `updated_at` also serves as a heartbeat |
 | `turns`, `tool_calls` | So far |
 | `tools` | Per tool name: `{calls, ms}` |
@@ -313,7 +313,7 @@ environment, or error text from inside the session.
 A retried attempt gets a fresh `meta.live` (removed at the start of the
 attempt, with the other per-attempt keys) carrying `earlier_attempts` from
 attempts before it. The repair turn continues the same `meta.live`
-(`phase: "repair turn"`). `meta.live` is removed once the attempt ends,
+(`phase: "repair"`). `meta.live` is removed once the attempt ends,
 success or failure — except when the run itself is interrupted (Ctrl-C,
 SIGTERM, SIGHUP): it is then left in place, the only record of that
 attempt's session id and transcript, and a watcher shows it as stopped.

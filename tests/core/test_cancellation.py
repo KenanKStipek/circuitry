@@ -11,6 +11,7 @@ shape without a real sleep or a real signal.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import os
 import signal
@@ -920,6 +921,35 @@ def test_run_tracked_on_line_sees_every_line_streamed_before_a_mid_call_cancella
     assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- the kill didn't land promptly"
     assert result.returncode != 0, "the child was killed; it cannot have exited 0"
     assert result.stdout == "line-0\nline-1\n"
+
+
+def test_run_tracked_on_line_failure_does_not_stop_draining_stdout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing on_line (a disk-full transcript append, say) must never
+    corrupt the call it's attached to: the reader keeps draining every
+    remaining line into `lines` exactly as if on_line were never passed,
+    so the end-of-turn parse still gets the full output rather than
+    EPIPE/SIGPIPE from an undrained pipe (#636 follow-up).
+    """
+    calls = 0
+
+    def _on_line(line: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("boom")
+
+    script = "for i in range(5): print('line-%d' % i)"
+    with caplog.at_level(logging.ERROR, logger="circuitry.core.cancellation"):
+        result = run_tracked([sys.executable, "-c", script], on_line=_on_line, timeout=5.0)
+
+    assert result.returncode == 0
+    assert result.stdout == "line-0\nline-1\nline-2\nline-3\nline-4\n"
+    # Only the first line's failure is ever logged -- on_line is never
+    # called again for the rest of this stream, so `calls` stays 1.
+    assert calls == 1
+    assert any("on_line" in record.message for record in caplog.records)
 
 
 def test_communicate_promptly_step_timeout_while_writing_does_not_hang(

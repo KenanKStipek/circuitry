@@ -114,7 +114,13 @@ def _pi_stream(tmp_path: Path) -> Path:
             "toolName": "write",
             "args": {"path": "out.txt", "content": f"{MARKER_FILE}\nline2\n"},
         },
-        {"type": "tool_execution_end", "toolName": "write", "isError": False, "durationMs": 5},
+        {
+            "type": "tool_execution_end",
+            "toolName": "write",
+            "isError": False,
+            "durationMs": 5,
+            "result": f"{MARKER_OUTPUT} from the tool",
+        },
         {
             "type": "message_end",
             "message": {
@@ -149,7 +155,9 @@ def test_marker_leaks_nowhere_but_the_transcript_pi(tmp_path: Path) -> None:
     known_value = f"{MARKER_REPLY}: done."
     for name, path in paths.items():
         text = path.read_text(encoding="utf-8").replace(known_value, "")
-        for marker in (MARKER_REPLY, MARKER_THINKING, MARKER_ARGS, MARKER_FILE, MARKER_PROMPT):
+        for marker in (
+            MARKER_REPLY, MARKER_THINKING, MARKER_ARGS, MARKER_FILE, MARKER_PROMPT, MARKER_OUTPUT,
+        ):
             assert marker not in text, f"{marker} leaked into {name}"
 
     out = json.loads(paths["out"].read_text(encoding="utf-8"))
@@ -159,9 +167,11 @@ def test_marker_leaks_nowhere_but_the_transcript_pi(tmp_path: Path) -> None:
     # The tool target and the first part of a reply are expected there.
     assert MARKER_ARGS in transcript
     assert MARKER_REPLY in transcript
-    # Thinking and file content never reach even the local transcript.
+    # Thinking, file content and tool output never reach even the local
+    # transcript.
     assert MARKER_THINKING not in transcript
     assert MARKER_FILE not in transcript
+    assert MARKER_OUTPUT not in transcript
 
 
 def test_marker_in_a_tool_result_never_leaks_claude_code(tmp_path: Path) -> None:

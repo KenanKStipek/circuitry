@@ -8,8 +8,11 @@ authoritative end-of-turn parse. ``--live-state`` end-to-end tests are in
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from circuitry.agent_live import LivePublisher, LiveTracker, diff_stats, tool_target
 
@@ -132,6 +135,25 @@ def test_diff_stats_counts_lines_only_for_recognised_tools() -> None:
             ],
         },
     ) == ("a.txt", 3, 3)
+    # pi's own `write`: {path, content}.
+    assert diff_stats("write", {"path": "a.txt", "content": "x\ny\nz"}) == ("a.txt", 3, 0)
+    # pi's own `edit`: {path, edits: [{oldText, newText}, ...]}, two edits.
+    assert diff_stats(
+        "edit",
+        {
+            "path": "a.txt",
+            "edits": [
+                {"oldText": "a", "newText": "a\nb"},
+                {"oldText": "x\ny", "newText": "z"},
+            ],
+        },
+    ) == ("a.txt", 3, 3)
+    # A single top-level oldText/newText pair instead of an edits list.
+    assert diff_stats("edit", {"path": "a.txt", "oldText": "a\nb", "newText": "a\nb\nc"}) == (
+        "a.txt",
+        3,
+        2,
+    )
     # Nothing recognised in the arguments: stays null, not zero.
     assert diff_stats("write", {"path": "a.txt"}) == ("a.txt", None, None)
     assert diff_stats("bash", {"command": "rm a.txt"}) == (None, None, None)
@@ -161,8 +183,22 @@ def test_live_tracker_pi_stream_matches_sync_turn_totals_at_the_end(tmp_path: Pa
             ),
         ):
             tracker.handle_line(line)
+        # Before any sync -- the running totals this module computed on its
+        # own from the stream, not merely values a later call will hand
+        # back (#636 follow-up). Read via `_snapshot()` directly, not the
+        # throttled `published` list, which may not have caught up yet.
+        mid_stream = tracker._snapshot()
+        assert (mid_stream["turns"], mid_stream["tool_calls"]) == (1, 1)
+        assert (mid_stream["tokens_sent"], mid_stream["tokens_received"]) == (12, 5)
+        assert mid_stream["session_id"] == "sess-x"
+        assert mid_stream["tools"] == {"read": {"calls": 1, "ms": 12}}
+
+        # The authoritative end-of-turn parse can disagree (a repair turn
+        # folding in an earlier turn's own count, say) -- `sync_turn_totals`
+        # must actually overwrite, not just echo back what it was handed,
+        # so these numbers are deliberately different from the stream's own.
         tracker.sync_turn_totals(
-            turns=1, tool_calls=1, tokens_sent=12, tokens_received=5, cost_usd=0.01
+            turns=2, tool_calls=3, tokens_sent=99, tokens_received=40, cost_usd=0.5
         )
         extra = tracker.raw_extra()
     finally:
@@ -170,18 +206,29 @@ def test_live_tracker_pi_stream_matches_sync_turn_totals_at_the_end(tmp_path: Pa
 
     assert published, "the first update should have published immediately"
     last = published[-1]
-    assert (last["turns"], last["tool_calls"]) == (1, 1)
-    assert (last["tokens_sent"], last["tokens_received"]) == (12, 5)
-    assert last["session_id"] == "sess-x"
+    assert (last["turns"], last["tool_calls"]) == (2, 3)
+    assert (last["tokens_sent"], last["tokens_received"]) == (99, 40)
+    assert last["cost_usd"] == 0.5
+    # The sync overwrites only turns/tool_calls/tokens/cost -- the tool
+    # breakdown and context figures stay whatever the stream itself showed.
     assert last["tools"] == {"read": {"calls": 1, "ms": 12}}
     assert extra["tool_counts"] == {"read": {"calls": 1, "ms": 12}}
     assert extra["context_tokens"] == 12
 
 
-def test_live_tracker_skips_message_update_lines_before_json_loads(tmp_path: Path) -> None:
+def test_live_tracker_skips_message_update_lines_before_json_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """pi's ``message_update`` deltas are prefiltered without a full parse
-    (#636) -- a malformed one (invalid JSON past the prefix) would raise if
-    it ever reached ``json.loads``."""
+    (#636): ``json.loads`` is patched to fail the test if it's ever called
+    at all, so this can't pass merely because ``handle_line`` already
+    catches ``JSONDecodeError`` -- only the prefilter, not that catch,
+    keeps this line from ever reaching ``json.loads``."""
+
+    def _must_not_be_called(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("json.loads should not be called for a message_update line")
+
+    monkeypatch.setattr("circuitry.agent_live.json.loads", _must_not_be_called)
     tracker = LiveTracker(
         engine="pi",
         model="",
@@ -221,3 +268,206 @@ def test_live_tracker_tool_names_cap_at_64_chars_and_32_distinct_names(tmp_path:
     # 33rd distinct name (tool-31) is bucketed under "other" instead.
     assert len(snapshot["tools"]) == 33
     assert "other" in snapshot["tools"]
+
+
+def test_live_tracker_dedupes_claude_message_id_and_skips_subagent_usage(
+    tmp_path: Path,
+) -> None:
+    """Claude Code prints one line per content block; lines from the same
+    API call share ``message.id`` and repeat the same ``usage``. Each id
+    must count once, for both turns and usage, and a subagent message
+    (``parent_tool_use_id`` set) must never contribute to usage, tokens or
+    context -- though its own tool call is still counted (#636)."""
+    tracker = LiveTracker(
+        engine="claude_code",
+        model="claude-x",
+        attempt=1,
+        transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    usage_a = {
+        "input_tokens": 100, "output_tokens": 0,
+        "cache_read_input_tokens": 10, "cache_creation_input_tokens": 0,
+    }
+    try:
+        # Two lines, same message.id and the same usage repeated -- one API
+        # call that emitted a text block and a tool call.
+        tracker.handle_line(json.dumps({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1", "usage": usage_a,
+                "content": [{"type": "text", "text": "Checking."}],
+            },
+        }))
+        tracker.handle_line(json.dumps({
+            "type": "assistant",
+            "message": {
+                "id": "msg_1", "usage": usage_a,
+                "content": [
+                    {"type": "tool_use", "id": "call_1", "name": "Read",
+                     "input": {"path": "a.py"}},
+                ],
+            },
+        }))
+        after_dedupe = tracker._snapshot()
+        assert after_dedupe["turns"] == 1
+        assert after_dedupe["tool_calls"] == 1
+        assert after_dedupe["tokens_sent"] == 110
+        assert after_dedupe["context_tokens"] == 110
+        assert after_dedupe["turn_tokens"] == [110]
+        assert after_dedupe["tokens_cached_in"] == 10
+        assert after_dedupe["tokens_cache_write"] == 0
+
+        # A Task subagent message: its own id, its own tool call, but
+        # parent_tool_use_id names the Task call it's running under. Its
+        # usage is deliberately huge, so any leak into the totals below is
+        # unmistakable.
+        usage_sub = {
+            "input_tokens": 999999, "output_tokens": 0,
+            "cache_read_input_tokens": 999999, "cache_creation_input_tokens": 999999,
+        }
+        tracker.handle_line(json.dumps({
+            "type": "assistant",
+            "parent_tool_use_id": "call_1",
+            "message": {
+                "id": "msg_sub", "usage": usage_sub,
+                "content": [
+                    {"type": "tool_use", "id": "call_sub", "name": "Bash",
+                     "input": {"command": "echo hi"}},
+                ],
+            },
+        }))
+        after_subagent = tracker._snapshot()
+        # The subagent's own tool call is still counted...
+        assert after_subagent["turns"] == 2
+        assert after_subagent["tool_calls"] == 2
+        # ...but none of its usage reached tokens, context or turn_tokens.
+        assert after_subagent["tokens_sent"] == 110
+        assert after_subagent["context_tokens"] == 110
+        assert after_subagent["turn_tokens"] == [110]
+        assert after_subagent["tokens_cached_in"] == 10
+        assert after_subagent["tokens_cache_write"] == 0
+
+        # A later, genuinely new message id resumes contributing normally.
+        usage_c = {
+            "input_tokens": 50, "output_tokens": 0,
+            "cache_read_input_tokens": 5, "cache_creation_input_tokens": 5,
+        }
+        tracker.handle_line(json.dumps({
+            "type": "assistant",
+            "message": {
+                "id": "msg_2", "usage": usage_c,
+                "content": [{"type": "text", "text": "done"}],
+            },
+        }))
+        final = tracker._snapshot()
+        assert final["turns"] == 3
+        assert final["tool_calls"] == 2
+        assert final["tokens_sent"] == 170
+        assert final["context_tokens"] == 60
+        assert final["turn_tokens"] == [110, 60]
+        assert final["tokens_cached_in"] == 15
+        assert final["tokens_cache_write"] == 5
+    finally:
+        tracker.close()
+
+
+def test_live_tracker_matches_tool_ends_by_id_not_fifo_claude(tmp_path: Path) -> None:
+    """Two overlapping Claude tool calls (started before either ends) are
+    matched to their own end by ``tool_use.id``/``tool_result.tool_use_id``,
+    never by queue order -- a Task subagent's own first result must not pop
+    its still-running parent off a FIFO queue (#636)."""
+    tracker = LiveTracker(
+        engine="claude_code",
+        model="",
+        attempt=1,
+        transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        # call_a (Write, has a diff) starts first; call_b (Read, no diff)
+        # starts second, while call_a is still pending.
+        tracker.handle_line(
+            '{"type": "assistant", "message": {"id": "m1", "content": ['
+            '{"type": "tool_use", "id": "call_a", "name": "Write", '
+            '"input": {"path": "a.txt", "content": "line1\\nline2"}}]}}'
+        )
+        tracker.handle_line(
+            '{"type": "assistant", "message": {"id": "m2", "content": ['
+            '{"type": "tool_use", "id": "call_b", "name": "Read", '
+            '"input": {"path": "b.txt"}}]}}'
+        )
+        # call_b (the newer one) ends first. FIFO would wrongly pop call_a
+        # (Write) here instead, crediting its diff stats to the wrong call.
+        tracker.handle_line(
+            '{"type": "user", "message": {"content": ['
+            '{"type": "tool_result", "tool_use_id": "call_b", "is_error": false}]}}'
+        )
+        assert tracker.raw_extra()["lines_added"] is None
+
+        # call_a ends next -- only now does its own diff stat land.
+        tracker.handle_line(
+            '{"type": "user", "message": {"content": ['
+            '{"type": "tool_result", "tool_use_id": "call_a", "is_error": false}]}}'
+        )
+        assert tracker.raw_extra()["lines_added"] == 2
+    finally:
+        tracker.close()
+
+
+def test_live_tracker_matches_tool_ends_by_id_not_fifo_pi(tmp_path: Path) -> None:
+    """The same matching, for pi's own ``toolCallId`` (#636)."""
+    tracker = LiveTracker(
+        engine="pi",
+        model="",
+        attempt=1,
+        transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        tracker.handle_line(
+            '{"type": "tool_execution_start", "toolCallId": "call_a", "toolName": "write", '
+            '"args": {"path": "a.txt", "content": "line1\\nline2"}}'
+        )
+        tracker.handle_line(
+            '{"type": "tool_execution_start", "toolCallId": "call_b", "toolName": "read", '
+            '"args": {"path": "b.txt"}}'
+        )
+        tracker.handle_line(
+            '{"type": "tool_execution_end", "toolCallId": "call_b", "toolName": "read", '
+            '"isError": false, "durationMs": 5}'
+        )
+        assert tracker.raw_extra()["lines_added"] is None
+        tracker.handle_line(
+            '{"type": "tool_execution_end", "toolCallId": "call_a", "toolName": "write", '
+            '"isError": false, "durationMs": 5}'
+        )
+        assert tracker.raw_extra()["lines_added"] == 2
+    finally:
+        tracker.close()
+
+
+def test_live_tracker_repair_phase_differs_from_transcript_label(tmp_path: Path) -> None:
+    """``meta.live.phase`` is the short ``\"turn\"``/``\"repair\"`` the
+    issue's own contract names; the transcript's ``turn`` line keeps the
+    more readable ``\"repair turn\"`` label (#636)."""
+    tracker = LiveTracker(
+        engine="pi",
+        model="",
+        attempt=1,
+        transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        tracker.start_turn(phase="turn", session_id="sess-1")
+        assert tracker._snapshot()["phase"] == "turn"
+        tracker.start_turn(phase="repair", label="repair turn", session_id="sess-1")
+        assert tracker._snapshot()["phase"] == "repair"
+    finally:
+        tracker.close()
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "t.log").read_text(encoding="utf-8").splitlines()
+    ]
+    turn_lines = [line for line in lines if line["type"] == "turn"]
+    assert [line["label"] for line in turn_lines] == ["turn", "repair turn"]

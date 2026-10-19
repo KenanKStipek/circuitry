@@ -574,10 +574,15 @@ def _run_turn(
     an ``ok=False`` result; with neither to report, it is re-raised
     unchanged.
 
-    ``label`` (``"turn"`` or ``"repair turn"``) becomes ``meta.live.phase``
-    and the transcript's own ``turn`` line, written before the CLI starts
+    ``label`` (``"turn"`` or ``"repair turn"``) becomes the transcript's
+    own ``turn`` line, written before the CLI starts; ``meta.live.phase``
+    gets the shorter ``"turn"``/``"repair"`` the issue's own contract names
     (#636)."""
-    session.live.start_turn(phase=label, session_id=session_id)
+    session.live.start_turn(
+        phase="repair" if label == "repair turn" else "turn",
+        label=label,
+        session_id=session_id,
+    )
     try:
         return session.engine.run_turn(
             prompt,
