@@ -4752,6 +4752,109 @@ mod golden_tests {
         );
         insta::assert_snapshot!(text);
     }
+
+    /// Issue #631: the flow card's own effects line reads "1 quick
+    /// step" for exactly one, not "1 quick steps".
+    #[test]
+    fn flow_card_quick_steps_is_singular_for_exactly_one() {
+        let card = oscilloscope_core::screens::FlowCard {
+            quick_steps: Some((1, 0.3)),
+            ..Default::default()
+        };
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_flow_card(f, area, &card, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("1 quick step"), "{text}");
+        assert!(!text.contains("1 quick steps"), "{text}");
+    }
+
+    /// Issue #631: two or more still read the plural.
+    #[test]
+    fn flow_card_quick_steps_is_plural_for_more_than_one() {
+        let card = oscilloscope_core::screens::FlowCard {
+            quick_steps: Some((3, 0.9)),
+            ..Default::default()
+        };
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_flow_card(f, area, &card, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("3 quick steps"), "{text}");
+    }
+
+    /// Issue #631: `header:effects`, computed in `changes::diff` but
+    /// never drawn since the effects count left the header (#626),
+    /// now highlights the flow card's own effects line.
+    #[test]
+    fn header_effects_highlight_tints_the_flow_cards_effects_line() {
+        let card = oscilloscope_core::screens::FlowCard {
+            effects_done: 3,
+            effects_planned: Some(8),
+            ..Default::default()
+        };
+        let theme = Theme::for_name(crate::theme::ThemeName::Dracula);
+        let mut tracker = Tracker::new();
+        let now = std::time::Instant::now();
+        tracker.mark("header:effects", now);
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now,
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_flow_card(f, area, &card, &ctx);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let tinted = (0..buffer.area.height).any(|y| {
+            (0..buffer.area.width).any(|x| buffer[(x, y)].bg != theme.background.unwrap())
+        });
+        assert!(
+            tinted,
+            "header:effects must tint the flow card's own effects line"
+        );
+    }
 }
 
 /// Issue #535's own "buffer test" acceptance item: pins a highlighted

@@ -1341,6 +1341,153 @@ mod tests {
         crate::model::flatten_state(&json)
     }
 
+    /// A named tree loop (`fan`, `max_concurrency: 2`) with one
+    /// prompt body (`ask`) -- issue #631's own now-pane fix needs a
+    /// step that is confirmed running by `--events` alone, before it
+    /// ever gets a state node of its own (DESIGN.md §1.4), which only
+    /// a tree-loop pass's prompt can be.
+    fn tree_loop_with_prompt_plan() -> PlanTree {
+        use electricity_bytecode::{
+            EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op,
+            Program, PromptContent, PromptOp, PromptType, Region, TemplateText,
+        };
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let ask_path = pass_path.push_name("ask");
+        let ask = Op {
+            path: ask_path,
+            name: Some("ask".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Prompt(PromptOp {
+                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
+                prompt_type: PromptType::Text,
+                schema: None,
+                model: Some("scripted-model".to_string()),
+                provider: Some("scripted".to_string()),
+                provider_fallbacks: Vec::new(),
+                routing_override: None,
+                model_params: None,
+                timeout_ms: None,
+                deterministic: false,
+                inputs: None,
+                assets: Vec::new(),
+                retries: None,
+                description: None,
+                group: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path,
+                    name: Some("fan".to_string()),
+                    kind: NodeKind::Control(Region::Loop {
+                        name: Some("fan".to_string()),
+                        spec: LoopSpec::Each {
+                            in_path: "prime.items".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![ask],
+                            overlay: true,
+                        }),
+                        flow: LoopFlow::Tree,
+                        max_concurrency: Some(2),
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    /// Issue #631: a step known only from `--events` (a tree-loop
+    /// pass's prompt, confirmed running before it ever gets a state
+    /// node of its own) shows `since`/elapsed from its own `start`
+    /// event, and the model from the compiled plan's own prompt op --
+    /// neither of which a state-only read could ever answer.
+    #[test]
+    fn now_pane_for_an_event_only_step_shows_since_and_model_from_the_plan() {
+        let plan = tree_loop_with_prompt_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Dispatch {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            path: "prime.fan".to_string(),
+            branches: 2,
+            concurrency: Some(2),
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.fan.iter_0.ask".to_string(),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let flat = flat_from(state.clone());
+        let statuses = model.observe(&state, &plan, ProcessState::Running);
+        // The same "every path either side has heard of" view
+        // `render::all_observed_paths` builds -- an event-only path
+        // (confirmed running by `statuses` alone) never has a `flat`
+        // entry of its own, so `flat.keys()` alone would miss it.
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-01-01T00:06:12Z",
+            &model,
+            None,
+        );
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &base_header(),
+            &[],
+            None,
+            "2026-01-01T00:06:12Z",
+        );
+        match pane.focus {
+            NowFocus::Running(step, _) => {
+                assert_eq!(step.since_ts.as_deref(), Some("2026-01-01T00:00:00Z"));
+                assert!((step.elapsed_s.unwrap() - 372.0).abs() < 1e-9);
+                assert_eq!(step.provider_or_model.as_deref(), Some("scripted-model"));
+            }
+            other => panic!("expected Running, got {other:?}"),
+        }
+    }
+
     #[test]
     fn phase_strip_folds_single_child_wrappers_and_counts_depth_one() {
         let plan = PlanTree::from_program(&program_with_ifs());
