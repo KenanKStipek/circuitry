@@ -398,6 +398,94 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #626: `0`/`2` switch screens during a live run, and the
+/// screen each one draws actually changes on screen -- the overview
+/// (its own `now`/`time`/`flow`/`cost` panes) on `0`, screen 2's own
+/// orchestration pane on `2`.
+#[test]
+fn screen_keys_switch_screens_during_a_live_run() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    // Default is the overview; this run is still live.
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("now") && rendered.contains("time") && rendered.contains("cost"),
+            "expected the overview's own panes on screen; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"2");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("orchestration"),
+            "expected screen 2's own orchestration pane after pressing 2; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"0");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("flow") && rendered.contains("cost"),
+            "expected the overview's own cards back after pressing 0; got:\n{rendered:?}"
+        );
+    }
+
+    // `q` while still running asks first; confirming both cancels
+    // and leaves once the engine actually exits (K1).
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
 /// Issue #535: `--no-animation` still gives a real, running TUI (the
 /// same alternate-screen entry/exit and clean exit the plain run
 /// above gets) -- the flag only ever stops the highlight fade and
