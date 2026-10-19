@@ -817,17 +817,20 @@ def main() -> int:
             )
 
     # COST_FIXTURE_CASES (issue #632): same both-engines pairing as
-    # PARITY_CASES, for `cost_fixtures.rs` rather than `engine_parity.rs`.
-    for case in COST_FIXTURE_CASES:
-        record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")
-        if electricity_bin is not None:
-            record_one(case, electricity_bin, engine="electricity", out_name=f"{case.name}_electricity")
-        else:
-            print(
-                f"record_fixtures.py: 'electricity' not found on PATH; "
-                f"skipping the electricity half of {case.name}",
-                file=sys.stderr,
-            )
+    # PARITY_CASES, for `cost_fixtures.rs` rather than `engine_parity.rs`
+    # -- skipped under `--parity-only` too, same as `CASES` above: that
+    # flag's own promise is every other committed fixture untouched.
+    if "--parity-only" not in sys.argv:
+        for case in COST_FIXTURE_CASES:
+            record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")
+            if electricity_bin is not None:
+                record_one(case, electricity_bin, engine="electricity", out_name=f"{case.name}_electricity")
+            else:
+                print(
+                    f"record_fixtures.py: 'electricity' not found on PATH; "
+                    f"skipping the electricity half of {case.name}",
+                    file=sys.stderr,
+                )
 
     return check_no_leaked_paths()
 
