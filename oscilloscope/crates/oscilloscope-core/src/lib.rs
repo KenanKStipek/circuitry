@@ -10,6 +10,7 @@
 
 pub mod changes;
 pub mod config_discovery;
+pub mod cost;
 pub mod diff;
 pub mod engine;
 pub mod fold;

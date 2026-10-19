@@ -17,7 +17,6 @@ use crate::model::{
 };
 use crate::observe::duration_seconds;
 use crate::plan::{LeafEffectKind, PlanEntryKind, PlanTree};
-use crate::treemap::TreemapNode;
 
 /// A row's own effect type (§6.3's dim provider/model column, and the
 /// details pane's "type"): a leaf's own kind when the plan or the
@@ -400,12 +399,15 @@ pub fn token_bar_in_flight_line(bar: &TokenBar) -> String {
     if bar.prompts_running == 0 {
         return in_flight;
     }
+    // Issue #631: while prompts are in flight but no estimate is
+    // available at all yet (not even a lower bound), say only what's
+    // actually known ("3 prompts in flight"), not "now in ?" --
+    // the estimate is added back in once one actually exists.
+    if bar.estimated_input_is_lower_bound && bar.estimated_input == 0 {
+        return in_flight;
+    }
     let estimate = if bar.estimated_input_is_lower_bound {
-        if bar.estimated_input == 0 {
-            "?".to_string()
-        } else {
-            format!("≈{}+", crate::format::format_tokens(bar.estimated_input))
-        }
+        format!("≈{}+", crate::format::format_tokens(bar.estimated_input))
     } else {
         format!("≈{}", crate::format::format_tokens(bar.estimated_input))
     };
@@ -414,13 +416,16 @@ pub fn token_bar_in_flight_line(bar: &TokenBar) -> String {
 
 /// Everything one redraw needs (§6.3): the header, the plan tree
 /// (flattened to depth-first order, a front end collapses a subtree
-/// by skipping its descendants), the state pane's rows, the `tokens
-/// by key` treemap's own tree (laid out into rectangles only once a
-/// front end knows the pane's real size — DESIGN.md §6.1, `crate::
-/// treemap::layout`), the token bar, and the log pane's lines so far.
-/// `details_for` builds the right pane for whichever row is currently
-/// selected — kept separate from `rows` so selecting a different row
-/// never needs a fresh `RunModel::observe` call.
+/// by skipping its descendants), the state pane's rows, the token
+/// bar, and the log pane's lines so far. `details_for` builds the
+/// right pane for whichever row is currently selected — kept separate
+/// from `rows` so selecting a different row never needs a fresh
+/// `RunModel::observe` call. The Cost screen's own by-store treemap
+/// (issue #632) is deliberately not part of this: it is built only
+/// while that screen is actually on display (`main.rs`'s own
+/// `build_cost_screen_if_active`), not on every redraw regardless of
+/// which screen is showing, the way the old `tokens by key` treemap
+/// screen 2 drew was.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderState {
     pub header: Header,
@@ -434,7 +439,6 @@ pub struct RenderState {
     /// having changed -- never highlights anything by itself.
     pub unfolded_rows: Vec<Row>,
     pub state_rows: Vec<StateRow>,
-    pub treemap: Vec<TreemapNode>,
     pub token_bar: TokenBar,
     pub log: Vec<LogLine>,
 }
@@ -499,7 +503,6 @@ pub fn build(
         header.run_end_ts.as_deref(),
         now,
     );
-    let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
     // A tree-loop pass's prompt, and
     // (on cof) a `use` child's, never appear in `flat` while they run
     // at all (DESIGN.md §1.4) -- only `rows` (built from `statuses`,
@@ -513,7 +516,6 @@ pub fn build(
         unfolded_rows: rows.clone(),
         rows,
         state_rows,
-        treemap,
         token_bar,
         log: log.to_vec(),
     }

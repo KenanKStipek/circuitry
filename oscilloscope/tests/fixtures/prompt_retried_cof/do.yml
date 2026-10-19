@@ -1,0 +1,10 @@
+effects:
+  - name: ask
+    type: prompt
+    template: "Ask something."
+    prompt_type: json
+    schema: {type: object, required: ["ans"]}
+    retries: {max_attempts: 2, backoff_ms: 1}
+  - name: thank
+    type: prompt
+    template: "Say thank you!"

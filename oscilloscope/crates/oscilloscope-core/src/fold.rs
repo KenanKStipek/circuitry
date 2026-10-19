@@ -126,10 +126,19 @@ fn fold_node(node: RowTree, expanded_quick_steps: &BTreeSet<String>) -> RowTree 
 /// into the breadcrumb label. A *pass* (one iteration of that loop)
 /// still can.
 fn breadcrumb_eligible(row: &Row) -> bool {
-    row.kind != RowKind::Root
-        && row.kind != RowKind::QuickSteps
-        && row.kind != RowKind::Loop
-        && row.status.kind != StatusKind::Pending
+    kind_breadcrumb_eligible(row.kind, row.status.kind)
+}
+
+/// [`breadcrumb_eligible`]'s own rule, decomposed to its two actual
+/// inputs (a [`RowKind`] and a [`StatusKind`]) -- shared with
+/// `treemap`'s own by-store chain folding (issue #632), which folds
+/// [`crate::treemap::TreemapNode`]s rather than [`Row`]s and so has
+/// no whole `Row` of its own to pass in.
+pub(crate) fn kind_breadcrumb_eligible(kind: RowKind, status: StatusKind) -> bool {
+    kind != RowKind::Root
+        && kind != RowKind::QuickSteps
+        && kind != RowKind::Loop
+        && status != StatusKind::Pending
 }
 
 /// A finished tool step under a second (issue #613: "two or more
