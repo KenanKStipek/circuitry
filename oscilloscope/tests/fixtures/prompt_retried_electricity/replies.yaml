@@ -1,0 +1,11 @@
+prime.ask:
+  - text: "not valid json"
+    tokens_sent: 5
+    tokens_received: 7
+  - text: '{"ans": "ok"}'
+    tokens_sent: 11
+    tokens_received: 22
+prime.thank:
+  - text: "you're welcome"
+    tokens_sent: 4
+    tokens_received: 3

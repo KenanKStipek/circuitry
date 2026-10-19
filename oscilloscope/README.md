@@ -98,10 +98,11 @@ On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
 osi has four screens, switched with `0`-`3`: the overview (`0`, the
-default for both `osi <doc>` and `osi watch`) and flow (`2`, today's
-layout, below); time (`1`) and cost (`3`) arrive in their own issues, so
-their keys do nothing yet and they have no tab. Selection, follow,
-folding, filters and collapsed rows are shared across every screen.
+default for both `osi <doc>` and `osi watch`), flow (`2`, today's
+layout, below) and cost (`3`, below); time (`1`) arrives in its own
+issue, so its key does nothing yet and it has no tab. Selection,
+follow, folding, filters and collapsed rows are shared across every
+screen.
 
 Every screen shares one header line: the scope icon's own animated
 trace (a static `◉` with `--no-animation`), the document, `♥` while
@@ -129,10 +130,10 @@ time (start/end, elapsed, ETA, a bar of the top-level steps' own
 durations, the slowest finished one), flow (effects done out of
 planned, failures, the latest decisions or reports, loop progress, the
 next pending step, quick steps) and cost (tokens in/out, cost once any
-effect reports one, the store with the most tokens, what's in flight).
-The effects count and tokens that used to be in the header live in the
-flow and cost cards now; screen 2's own orchestration pane title and
-token bar keep them too.
+effect reports one, the store with the most tokens -- the same store
+the Cost screen's own table ranks first, what's in flight). The
+effects count that used to be in the header lives in the flow card
+now; screen 2's own orchestration pane title keeps it too.
 
 ### `--glance`
 
@@ -154,24 +155,18 @@ over the orchestration pane (the plan tree, a status glyph, duration, loop
 `n/total` and the provider/model in a dim colour), the column split and
 the left column's own row split both at the golden section — the larger
 share always going to whichever side grows with the run (the left column
-over the right, the orchestration pane over the details pane, the state
-pane over the treemap and the log pane); a right column
-of a nested `tokens by key` treemap (cell area proportional to tokens,
-coloured by status, squarified and laid out as pure integer geometry in
-`oscilloscope-core`), the state pane as a tree (every effect node nested
-by depth, latest-or-current first, with its status, a dim model/provider/
+over the right, the orchestration pane over the details pane); a right
+column of the state pane as a tree (every effect node nested by depth,
+latest-or-current first, with its status, a dim model/provider/
 duration/retries/loop-progress summary and its own or its subtree's
-tokens — no value or error text, read those in the details pane), and the
-log pane (the same lines `--log` prints, plus the engine's stderr); and a
-token bar across the full bottom width (the `↑`/`↓` totals as bars, and
-what's in flight — an estimated input for every prompt currently running,
-from `ceil(chars(prompt_sent) / 4)`, and how many). On a smaller terminal,
-panes drop in this order until the rest fits — the header and the token
-bar never disappear:
+tokens — no value or error text, read those in the details pane) over the
+log pane (the same lines `--log` prints, plus the engine's stderr). The
+`tokens by key` treemap and the token bar that used to live here moved to
+the Cost screen (`3`, below). On a smaller terminal, panes drop in this
+order until the rest fits — the header never disappears:
 
-1. below 100×30: the treemap;
-2. below 90×24: the state pane too (the right column becomes the log pane alone);
-3. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked).
+1. below 90×24: the state pane (the right column becomes the log pane alone);
+2. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked).
 
 A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in three places.
 Once the run's first report arrives, the header shows its message
@@ -197,8 +192,8 @@ state), and the state pane's own selection (and its own collapsed set) is
 independent of the orchestration pane's.
 
 Whatever just changed gets a soft background tint that fades out over about
-a second, so the eye goes to it: a row's status, a state row, a treemap
-cell, a new log line or the token totals. The first observation never
+a second, so the eye goes to it: a row's status, a state row, a new log
+line or the token totals. The first observation never
 highlights anything (so `osi watch` attaching to a finished run opens on a
 calm screen), and neither does elapsed time, selection, scrolling, the
 filter or a resize. `--theme <name>` (or `OSI_THEME`) paints the whole
@@ -211,7 +206,8 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | Key | Action |
 |---|---|
 | `0` | the overview |
-| `2` | flow (today's layout); `1`/`3` (time, cost) do nothing yet |
+| `2` | flow (today's layout) |
+| `3` | cost (below); `1` (time) does nothing yet |
 | `↑↓` / `j`/`k` | move (the focused pane's own selection, or the details pane's scroll) |
 | `PgUp`/`PgDn` | move a page |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
@@ -230,7 +226,7 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | `?` | help |
 
 The token rule is the same everywhere a count shows up (the header, the
-token bar, the state pane, details and the treemap): a node's own
+state pane, details and the Cost screen's treemap and table): a node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to
 `tokens_sent`/`tokens_received` otherwise — the same pair both `cof`'s and
 electricity's own `runtime.last_run.totals` are built from, so a retried
@@ -249,9 +245,9 @@ row (`review › fix › agent`) and two or more consecutive, finished,
 sub-second tool steps into one `N quick steps` row — `z` turns folding off
 to see the full tree, and `⏎` expands a quick-steps row in place. A loop
 pass is labelled `pass N of M` there (the state pane keeps the real
-`iter_N` key). A running `agent` tool step counts in the token bar's
-in-flight line next to running prompts (`2 prompts · 1 agent in flight`),
-with no token estimate of its own.
+`iter_N` key). A running `agent` tool step counts in the overview's cost
+card's own in-flight line next to running prompts (`2 prompts · 1 agent
+in flight`), with no token estimate of its own.
 
 The engine exiting does not, on its own, end the TUI: the header, every
 row's final status and the details pane stay live on whatever the run
@@ -264,29 +260,28 @@ A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
 golden tests) at 120×40, every pane populated:
 
 ```
-⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:05   0 overview  [2 flow]                                                
-┌ details ───────────────────────────────────────────────────────────────┐┌ tokens by key ─────────────────────────────┐
-│path   prime.a                                                          ││┌prime 580 t───────────────────────────────┐│
-│type   tool                                                             │││a 460 t                          ┌fan 12…┐││
-│plan   tool "a"                                                         │││                                 │iter_0…│││
-│adapter  scripted                                                       │││                                 │       │││
-│                                                                        │││                                 │       │││
-│value (v for full):                                                     │││                                 │       │││
-│the summary text                                                        │││                                 │       │││
-│                                                                        │││                                 │       │││
-│                                                                        │││                                 │       │││
-│                                                                        │││                                 └───────┘││
-│                                                                        ││└──────────────────────────────────────────┘│
-└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
-┌ orchestration do-thing ────────────────────────────────────────────────┐┌ state ─────────────────────────────────────┐
-│◐ prime                                                                 ││◐ fan  1/4                                  │
-│✓ a                                                                     ││  ↑50 t ↓70 t                               │
-│✓ b  shell                                                              ││  ◐ iter_0                                  │
-│◐ fan  1/4                                                              ││    ↑50 t ↓70 t                             │
-│  ◐ pass 1 of 4                                                         ││✓ a                                         │
-│                                                                        ││  ↑120 t ↓340 t                             │
+⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:00   0 overview  [2 flow]  3 cost                                        
+┌ details ───────────────────────────────────────────────────────────────┐┌ state ─────────────────────────────────────┐
+│path   prime.a                                                          ││◐ fan  1/4                                  │
+│type   tool                                                             ││  ↑50 t ↓70 t                               │
+│plan   tool "a"                                                         ││  ◐ iter_0                                  │
+│                                                                        ││    ↑50 t ↓70 t                             │
+│value (v for full):                                                     ││✓ a                                         │
+│the summary text                                                        ││  ↑120 t ↓340 t                             │
 │                                                                        ││✓ b  shell                                  │
 │                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+└────────────────────────────────────────────────────────────────────────┘│                                            │
+┌ orchestration do-thing (2/8) ──────────────────────────────────────────┐│                                            │
+│◐ prime                                                                 ││                                            │
+│✓ a                                                                     ││                                            │
+│✓ b  shell                                                              ││                                            │
+│◐ fan  1/4                                                              ││                                            │
+│  ◐ pass 1 of 4                                                         ││                                            │
 │                                                                        ││                                            │
 │                                                                        ││                                            │
 │                                                                        │└────────────────────────────────────────────┘
@@ -297,11 +292,97 @@ golden tests) at 120×40, every pane populated:
 │                                                                        ││                                            │
 │                                                                        ││                                            │
 │                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
+│                                                                        ││                                            │
 └────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
-┌ tokens ──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│in  █████████████████ 170 t   out  ████████████████████████████████████████ 410 t                                     │
-│now in ≈6 t   (1 prompt in flight)                                                                                    │
+```
+
+### Screen 3 (`cost`): where the tokens and money went
+
+A treemap of the current run's state stores (one tile per store, area
+proportional to its tokens), a stacked "tokens over time" chart (one band
+per top-level step, on a clock axis from the run's start to now) and a
+table of the largest stores, laid out at three sizes:
+
+1. 100×30 and up: the treemap (62% of the height) above the chart and the
+   table, side by side at 62/38;
+2. 80×20 to just under that: the treemap above the table alone (no chart);
+3. below 80×20: the table alone, where `⏎` still zooms it.
+
+The treemap's default measure is total tokens (in + out); `i`/`o`/`$`
+switch it to input tokens, output tokens or cost, and the same key again
+returns to total. A single-child chain folds into one tile (`plan ›
+agent`), by the exact same breadcrumb-eligibility rule the orchestration
+pane's own breadcrumbs use (a loop, the document root and a quick-steps
+summary never fold away, and neither side folds while its own status is
+still pending). `↑`/`↓` select a tile in size order, `⏎` zooms into the
+selected store's own children, and `esc` zooms back out; the zoomed
+store's own name at each level (never its full dotted path) is shown
+alongside the measure in the treemap's title. A store with no value for
+the chosen measure is left out, and the title counts how many were
+(`N stores without cost`); a store still running shows "tokens when
+done" instead of a number, however small its placeholder weight is, and
+one that never finished because the run itself ended first (aborted or
+cancelled) reads "no tokens reported" instead, rather than its own
+placeholder weight read back as if it were real. A `while: mode: model`
+loop's own tokens (written onto the loop's own meta alongside its
+passes) get a leaf of their own next to them, rather than being dropped.
+The treemap's own squarify layout accounts for the terminal's own tall
+character cells (about 2:1), so a tile that is actually square in
+character cells (and so visibly tall and narrow on screen) is never what
+"the worst aspect ratio" means — a visually square tile is. The largest-
+stores table always ranks by total tokens, regardless of the treemap's
+own measure, filters to the zoomed store below the treemap (so `⏎` still
+has a visible effect even where the treemap itself doesn't fit), and its
+footer gives the run's own totals (`runtime.last_run.totals`) and any gap
+between them and the table (a declared-outputs `use` child's effects, for
+one, never reach the final state tree at all even though the run's own
+totals counted them as they completed). `meta.cost_usd` shows wherever an
+effect reports it; when only some finished stores do, the figure is
+marked with its own coverage (`$4.20 (from 3 of 9 prompts)`) -- a store
+still running is never counted either way.
+
+| Key | Action |
+|---|---|
+| `↑↓` / `j`/`k` | select a store, in size order |
+| `⏎` | zoom into the selected store |
+| `esc` | zoom back out |
+| `i` | switch the treemap's measure to input tokens (again: total) |
+| `o` | switch the treemap's measure to output tokens (again: total) |
+| `$` | switch the treemap's measure to cost (again: total) |
+
+A `TestBackend` capture at 120×40 (blank rows trimmed here; the full
+capture is `crates/oscilloscope/src/snapshots/osi__tui__golden_tests__
+cost_running_at_120x40.snap`):
+
+```
+⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 overview  2 flow  [3 cost]                                       
+┌ tokens by store · tokens ────────────────────────────────────────────────────────────────────────────────────────────┐
+│a 1.3 kt                                          ┌fan tokens when done─────────────────────────────┐b 450 t          │
+│                                                  │iter_0 › nap tokens when done                    │                 │
+│                                                  │                                                 │                 │
+│                                                  └─────────────────────────────────────────────────┘                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tokens over time ──────────────────────────────────────────────────────┐┌ largest stores ────────────────────────────┐
+│            ███                                                         ││a  ↑900 t ↓400 t  $1.20  74%                │
+│            ███                                                         ││b  ↑300 t ↓150 t  26%                       │
+│            ███                                                         ││fan › iter_0 › nap  tokens when done        │
+│            ███                                                         ││                                            │
+│            ███                                                         ││total ↑1.2 kt ↓550 t                        │
+│            ███                                                         ││$1.20 (from 1 of 2 prompts)                 │
+│            ███                                                         ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│00:00:00                        00:02:30                        00:05:00││                                            │
+│█ a ▓ b ▒ fan                                                           ││                                            │
+└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
 ```
 
 Raw mode and the alternate screen are entered once and restored on every
@@ -337,7 +418,7 @@ cargo test --workspace
 oscilloscope/
   Cargo.toml                 # workspace; path deps on ../electricity/crates/{electricity-compiler,electricity-bytecode}
   crates/
-    oscilloscope-core/       # no terminal code, so a future GUI can reuse it (render.rs: the TUI's own render model, treemap.rs: the `tokens by key` layout)
+    oscilloscope-core/       # no terminal code, so a future GUI can reuse it (render.rs: the TUI's own render model, treemap.rs: the Cost screen's by-store treemap layout, cost.rs: its largest-stores table and tokens-over-time chart)
     oscilloscope/            # the `osi` binary: clap CLI, the plain stream, and the ratatui/crossterm TUI (tui.rs, keys.rs, terminal.rs)
 ```
 
