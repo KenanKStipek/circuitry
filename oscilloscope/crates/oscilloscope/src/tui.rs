@@ -5264,6 +5264,162 @@ mod golden_tests {
         assert!(text.contains("no tokens reported"), "{text}");
         assert!(!text.contains("cut_off 900"), "{text}");
     }
+
+    /// DESIGN.md's own performance rule, directly, rather than only
+    /// through the timing bound [`drawing_a_2000_node_state_stays_
+    /// well_under_the_redraw_interval`] checks indirectly -- corrupts
+    /// the cache's own stored cells after the first call, then calls
+    /// again with the identical nodes and area: a cache *hit* must
+    /// return that untouched corruption, not a freshly squarified
+    /// (and so no longer corrupt) set of cells.
+    #[test]
+    fn cost_layout_cache_skips_squarify_when_neither_the_tree_nor_the_area_changed() {
+        let nodes = vec![
+            TreemapNode::leaf("a", 2000, Some(StatusKind::Done)),
+            TreemapNode::leaf("b", 1000, Some(StatusKind::Done)),
+        ];
+        let area = Rect::new(0, 0, 30, 10);
+        let mut cache = CostLayoutCache::default();
+        let first = cache.cells(&nodes, area).to_vec();
+        assert!(!first.is_empty());
+        cache.cells.clear();
+        let second = cache.cells(&nodes, area);
+        assert!(
+            second.is_empty(),
+            "a cache hit must skip squarify entirely, not recompute and overwrite the corruption"
+        );
+        // Changing the area is what must actually invalidate it.
+        let third = cache.cells(&nodes, Rect::new(0, 0, 40, 12));
+        assert!(
+            !third.is_empty(),
+            "a changed area must trigger a fresh layout"
+        );
+    }
+
+    #[test]
+    fn the_treemap_says_no_stores_yet_rather_than_drawing_an_empty_grid() {
+        let screen = oscilloscope_core::screens::CostScreen {
+            measure: Measure::Total,
+            tree: Vec::new(),
+            stores_without_measure: 0,
+            stores: oscilloscope_core::cost::LargestStores::default(),
+            tokens_over_time: Vec::new(),
+            chart_start_ts: None,
+            chart_end_ts: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let mut app = App::new(false);
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut cost_layout = CostLayoutCache::default();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_cost_treemap(f, area, &screen, &mut app, &mut cost_layout, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("no stores yet"), "{text}");
+    }
+
+    /// A zoomed treemap (DESIGN.md: "the zoomed store's own name at
+    /// each level ... shown alongside the measure"): zooming into
+    /// `fan` must show only its own children, title the pane with
+    /// `fan`'s own name (not `prime.fan`) next to the measure, and
+    /// leave `a`/`b` off screen entirely.
+    #[test]
+    fn zoomed_into_fan_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+            300.0,
+            "2026-01-01T00:05:00Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let statuses: std::collections::BTreeMap<_, _> = rendered
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.status.clone()))
+            .collect();
+        let kinds: std::collections::BTreeMap<_, _> = rendered
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.kind))
+            .collect();
+        let cost_screen = oscilloscope_core::screens::build_cost_screen(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &statuses,
+            &kinds,
+            Some(&state),
+            Measure::Total,
+            "2026-01-01T00:05:00Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Cost;
+        app.cost_zoom = vec!["prime.fan".to_string()];
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut cost_layout = CostLayoutCache::default();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:05:00Z",
+                    None,
+                    Some(&cost_screen),
+                    &mut cost_layout,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("tokens by store · tokens · fan"), "{text}");
+        assert!(text.contains("iter_0"), "{text}");
+        assert!(
+            !text.contains("a 900"),
+            "a must be off screen while zoomed: {text}"
+        );
+    }
 }
 
 /// Issue #535's own "buffer test" acceptance item: pins a highlighted
