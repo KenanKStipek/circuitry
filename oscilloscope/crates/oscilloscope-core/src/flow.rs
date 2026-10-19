@@ -246,18 +246,26 @@ fn named_decision(node: Option<&NodeMeta>) -> (Option<String>, Option<String>) {
 /// though there is no *named* decision there at all -- that one is
 /// inferred instead, through `PlanTree::unnamed_if_decisions`.
 fn is_named_if_path(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> bool {
-    let from_plan = plan.match_path(&row.path).is_some_and(|m| {
-        m.entries
+    match plan.match_path(&row.path) {
+        // A known plan entry always wins, named or not -- an
+        // unnamed `if`'s own row carries `RowKind::If` too
+        // (`render::row_kind_for` reads the plan ahead of the node's
+        // own shape, and never looks at `named` to decide the row's
+        // *kind*), so this must never fall through to the no-plan
+        // guess below just because `row.kind == RowKind::If`.
+        Some(m) => m
+            .entries
             .iter()
-            .any(|e| matches!(&e.kind, crate::plan::PlanEntryKind::If { named: true, .. }))
-    });
-    // `osi watch` without `--plan` (issue #635): `PlanTree::empty()`
-    // has no entries at all, so a named `if`'s own row is told apart
-    // from an ordinary one by its own observed shape instead --
-    // `render::row_kind_for` already guesses `RowKind::If` from the
-    // node's own meta shape once there's no plan entry to read, and
-    // `meta.branch` is exact regardless of whether the plan is known.
-    from_plan || row.kind == RowKind::If || flat.get(&row.path).is_some_and(|n| n.branch.is_some())
+            .any(|e| matches!(&e.kind, crate::plan::PlanEntryKind::If { named: true, .. })),
+        // `osi watch` without `--plan` (issue #635): `PlanTree::
+        // empty()` has no entries at all, so a named `if`'s own row
+        // is told apart from an ordinary one by its own observed
+        // shape instead -- `render::row_kind_for` already guesses
+        // `RowKind::If` from the node's own meta shape once there's
+        // no plan entry to read, and `meta.branch` is exact
+        // regardless of whether the plan is known.
+        None => row.kind == RowKind::If || flat.get(&row.path).is_some_and(|n| n.branch.is_some()),
+    }
 }
 
 fn condition_for_path(plan: &PlanTree, path: &str) -> Option<ConditionInfo> {

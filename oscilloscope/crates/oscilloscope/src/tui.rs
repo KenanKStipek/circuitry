@@ -2864,9 +2864,10 @@ fn draw_flow_screen(
 mod golden_tests {
     use super::*;
     use electricity_bytecode::{
-        EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
-        Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
+        Condition, EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op,
+        ParamNode, Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
     };
+    use oscilloscope_core::diff::{LogKind, LogLine};
     use oscilloscope_core::model::{ProcessState, RunModel};
     use oscilloscope_core::observe::Event;
     use oscilloscope_core::plan::PlanTree;
@@ -6085,6 +6086,433 @@ mod golden_tests {
             !text.contains("fan ›"),
             "zoomed into fan, no table row may still carry fan's own name as a prefix: {text}"
         );
+    }
+    /// One plan exercising every acceptance-list glyph at once
+    /// (issue #635): two quick tool steps (`a`/`b`) that fold into
+    /// one row, a named `if` (`gate`, taken `then` into `chosen`), an
+    /// unnamed `if` (inferred from its own `u_then`/`u_else`
+    /// branches), and a named loop (`fan`) whose single observed
+    /// pass merges into one row.
+    fn flow_matrix_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let b_path = root_path.clone().push_name("b");
+        let gate_path = root_path.clone().push_name("gate");
+        let chosen_path = gate_path.clone().push_name("chosen");
+        let other_path = gate_path.clone().push_name("other");
+        let u_then_path = root_path.clone().push_name("u_then");
+        let u_else_path = root_path.clone().push_name("u_else");
+        let fan_path = root_path.clone().push_name("fan");
+        let pass_path = fan_path.clone().push_pass(LoopId(0));
+        let nap_path = pass_path.push_name("nap");
+        // A transparent (unnamed) `if`'s own `PlanEntry` is recorded
+        // at its *enclosing* scope's own path, never a fresh one of
+        // its own (`PlanTree::unnamed_if_decisions`' own doc comment)
+        // -- here, that's the top-level chain's own path, `prime`
+        // itself, same as `flow.rs`'s own `unnamed_if_plan` test
+        // fixture.
+        let unnamed_if_path = root_path.clone();
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool(a_path, "a", OnError::Fail),
+                    tool(b_path, "b", OnError::Fail),
+                    Op {
+                        path: gate_path,
+                        name: Some("gate".to_string()),
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "x > 1".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool(chosen_path, "chosen", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            else_: Some(Box::new(Region::Block {
+                                ops: vec![tool(other_path, "other", OnError::Fail)],
+                                overlay: true,
+                            })),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    Op {
+                        path: unnamed_if_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "y > 1".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool(u_then_path, "u_then", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            else_: Some(Box::new(Region::Block {
+                                ops: vec![tool(u_else_path, "u_else", OnError::Fail)],
+                                overlay: true,
+                            })),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    Op {
+                        path: fan_path,
+                        name: Some("fan".to_string()),
+                        kind: NodeKind::Control(Region::Loop {
+                            name: Some("fan".to_string()),
+                            spec: LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![tool(nap_path, "nap", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            flow: LoopFlow::Tree,
+                            max_concurrency: Some(2),
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    /// [`flow_matrix_plan`]'s own state, running (`finished: false`)
+    /// or finished (`finished: true`): `gate` has taken `then`, the
+    /// unnamed `if`'s own `u_then` branch has started (inferred), and
+    /// `fan`'s single pass is either still running or done.
+    fn flow_matrix_state(finished: bool) -> Value {
+        let nap = if finished {
+            json!({"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": "2026-01-01T00:00:01.400Z",
+                "provider": "shell"
+            }})
+        } else {
+            json!({"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "shell"
+            }})
+        };
+        let fan_completed = if finished {
+            json!("2026-01-01T00:00:01.400Z")
+        } else {
+            Value::Null
+        };
+        let prime_completed = if finished {
+            json!("2026-01-01T00:00:02Z")
+        } else {
+            Value::Null
+        };
+        let prime_error = if finished { json!(null) } else { Value::Null };
+        let runtime = if finished {
+            json!({"last_run": {"completed_at": "2026-01-01T00:00:02Z"}})
+        } else {
+            Value::Null
+        };
+        json!({"runtime": runtime, "prime": {
+            "value": null,
+            "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": prime_completed,
+                "error": prime_error
+            },
+            "a": {"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.200Z",
+                "provider": "shell"
+            }},
+            "b": {"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:00.200Z", "completed_at": "2026-01-01T00:00:00.400Z",
+                "provider": "shell"
+            }},
+            "gate": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00.400Z", "completed_at": "2026-01-01T00:00:00.400Z",
+                "branch": "then"
+            },
+                "chosen": {"value": "ok\n", "meta": {
+                    "created_at": "2026-01-01T00:00:00.400Z", "completed_at": "2026-01-01T00:00:00.700Z",
+                    "provider": "shell"
+                }}
+            },
+            "u_then": {"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:00.700Z", "completed_at": "2026-01-01T00:00:00.900Z",
+                "provider": "shell"
+            }},
+            "fan": {"value": null, "meta": {
+                "completed_at": fan_completed,
+                "progress": {"done": if finished { 1 } else { 0 }, "total": 1}
+            },
+                "iter_0": nap
+            }
+        }})
+    }
+
+    fn flow_matrix_story() -> Vec<LogLine> {
+        vec![
+            LogLine {
+                ts: Some("2026-01-01T00:00:00Z".to_string()),
+                text: "■ run started  abc".to_string(),
+                kind: LogKind::RunStart,
+                path: None,
+            },
+            LogLine {
+                ts: Some("2026-01-01T00:00:00.400Z".to_string()),
+                text: "◆ prime.gate → then".to_string(),
+                kind: LogKind::Decision,
+                path: Some("prime.gate".to_string()),
+            },
+        ]
+    }
+
+    /// [`snapshot_at`], with a non-empty story (DESIGN.md's own
+    /// right/bottom pane) -- every other golden here passes `&[]`
+    /// for it, since none needed one until this matrix did.
+    #[allow(clippy::too_many_arguments)]
+    fn flow_matrix_snapshot_at(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: &Value,
+        process: ProcessState,
+        selected: &str,
+        story: &[LogLine],
+    ) -> String {
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            plan,
+            model,
+            Some(state),
+            process,
+            2.0,
+            "2026-01-01T00:00:02Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let details = render::details_for(selected, plan, model, Some(state));
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(state),
+            plan,
+            model,
+            Some(state),
+            story,
+            Some(selected),
+            &test_zone(),
+            "2026-01-01T00:00:02Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some(selected.to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:02Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn flow_matrix_running_at_120x40() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_120x40() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_running_at_100x30() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_100x30() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_running_at_80x24() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_80x24() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_running_at_70x20() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            70,
+            20,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_70x20() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            70,
+            20,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
     }
 }
 
