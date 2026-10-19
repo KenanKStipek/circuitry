@@ -882,6 +882,46 @@ def test_communicate_promptly_cancellation_while_writing_kills_without_hanging(
     assert result.returncode != 0, "the child was killed; it cannot have exited 0"
 
 
+def test_run_tracked_on_line_sees_every_line_streamed_before_a_mid_call_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_line`` (#636) changes nothing else about ``run_tracked``'s own
+    cancellation handling: the poll cadence, the repeat process-group kill
+    and the fact that ``run_tracked`` itself returns rather than raising are
+    all unchanged. Cancellation requested from inside ``on_line`` -- the
+    reader thread, not the main thread -- kills the process the same way
+    ``request()`` called from anywhere else does, and every line the child
+    printed before that already reached ``on_line``.
+    """
+    token = CancellationToken()
+    token.arm()
+    monkeypatch.setattr(cancellation, "_token", token)
+    lines: list[str] = []
+
+    def _on_line(line: str) -> None:
+        lines.append(line)
+        if len(lines) == 2:
+            token.request()
+
+    script = (
+        "import sys, time\n"
+        "for i in range(2):\n"
+        "    print(f'line-{i}', flush=True)\n"
+        "    time.sleep(0.1)\n"
+        "time.sleep(30)\n"
+    )
+    t0 = time.monotonic()
+    result = run_tracked(
+        [sys.executable, "-c", script], on_line=_on_line, new_session=True, timeout=None
+    )
+    elapsed = time.monotonic() - t0
+
+    assert lines == ["line-0", "line-1"]
+    assert elapsed < 5.0, f"run_tracked took {elapsed:.1f}s -- the kill didn't land promptly"
+    assert result.returncode != 0, "the child was killed; it cannot have exited 0"
+    assert result.stdout == "line-0\nline-1\n"
+
+
 def test_communicate_promptly_step_timeout_while_writing_does_not_hang(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
