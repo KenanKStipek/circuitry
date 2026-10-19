@@ -210,6 +210,9 @@ fn never_orders(kind: Kind) -> bool {
 /// `list`/`map` — even though [`never_orders`] already decides a
 /// container operand without looking at it at all.
 fn strict_cmp_from_context(ftx: &FunctionContext) -> Result<Option<Ordering>, ExecutionError> {
+    if ftx.args.len() != 2 {
+        return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
+    }
     let a_ref = ftx.args[0].as_ref();
     let b_ref = ftx.args[1].as_ref();
     if never_orders(a_ref.get_type().kind()) || never_orders(b_ref.get_type().kind()) {

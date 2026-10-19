@@ -265,6 +265,9 @@ fn is_expensive_kind(kind: Kind) -> bool {
 /// types) stays cheap regardless, so it converts both sides and
 /// defers to the existing, value-level [`spec_eq`].
 fn spec_eq_from_context(ftx: &FunctionContext) -> Result<bool, ExecutionError> {
+    if ftx.args.len() != 2 {
+        return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
+    }
     let a_ref = ftx.args[0].as_ref();
     let b_ref = ftx.args[1].as_ref();
     let a_kind = a_ref.get_type().kind();
@@ -295,6 +298,9 @@ fn strict_ne_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
 /// docs, fourth review finding 1) — `'lo' in 'hello'` is `false` (no
 /// single character equals the two-character item), not an error.
 fn strict_in_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
+    if ftx.args.len() != 2 {
+        return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
+    }
     let item_ref = ftx.args[0].as_ref();
     let container_ref = ftx.args[1].as_ref();
     let item = Value::try_from(item_ref)?;

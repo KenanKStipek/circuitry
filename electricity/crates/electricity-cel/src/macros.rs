@@ -69,9 +69,8 @@
 //! them.
 
 use cel::common::ast::{CallExpr, ComprehensionExpr, Expr, IdedExpr, ListExpr, operators};
-use cel::extractors::Arguments;
 use cel::parser::{Macro, MacroExprHelper, ParseError};
-use cel::{Context, Env, ExecutionError, Value};
+use cel::{Context, Env, ExecutionError, FunctionContext, Value};
 
 /// The function `has(X)` expands into a call to, wrapping `X` so a
 /// registered function's eager argument evaluation is what decides
@@ -139,9 +138,12 @@ pub fn register(ctx: &mut Context) {
 
 /// Always `false`, once called — which, since a registered function's
 /// arguments are evaluated eagerly before it runs, only happens once
-/// its one argument has evaluated without raising (module docs).
-fn electricity_false_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
-    debug_assert_eq!(args.len(), 1);
+/// its one argument has evaluated without raising (module docs). Takes
+/// *ftx* directly rather than `cel`'s own `Arguments` extractor, which
+/// would convert that one argument through `Value::try_from` only to
+/// throw the result away unused -- expensive for a `list`/`map`
+/// (issue #400).
+fn electricity_false_fn(_ftx: &FunctionContext) -> Result<Value, ExecutionError> {
     Ok(Value::Bool(false))
 }
 

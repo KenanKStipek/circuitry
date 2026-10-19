@@ -451,12 +451,28 @@ fn check_parity_nesting(expr: &str) -> Result<(), CelError> {
 }
 
 fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
-    env.compile(expr).map_err(|e| {
+    let program = env.compile(expr).map_err(|e| {
         CelError::new(
             expr,
             format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
         )
-    })
+    })?;
+    // A direct user call to one of this crate's own reserved
+    // `__electricity_*` names (issue #400) -- fails the same way `cel`'s
+    // own evaluator fails any other undeclared function, rather than
+    // reaching one of `equality`/`ordering`/`indexing`'s own registered
+    // handlers, which assume only `paths::rewrite`'s own substitutions
+    // and `has()`'s own macro expansion ever call them.
+    if let Some(name) = paths::reserved_call_name(program.expression()) {
+        return Err(CelError::new(
+            expr,
+            format!(
+                "CEL evaluation failed for {}: Undeclared reference to '{name}'",
+                py_repr(expr)
+            ),
+        ));
+    }
+    Ok(program)
 }
 
 /// `core/cel_eval.py`'s `ValueError("overflow")` for a `Value::Int` too
