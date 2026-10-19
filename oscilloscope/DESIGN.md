@@ -503,37 +503,70 @@ geometry, computed in `oscilloscope-core` and only ever drawn, never
 computed, by `tui.rs`) only while that screen is actually on display,
 not on every redraw regardless of which screen is showing.
 
-**Layout** (screen 2, `Flow` — §6.3a below covers the screens this
-language switches between and the one-line header every one of them
-shares; the `tokens by key` treemap and the token bar that used to live
-on this screen moved to the Cost screen, §6.3b, in issue #632). Below
-the header line: a left column of the details pane over the
-orchestration pane; a right column of the state pane over the log pane.
-Every split, at every level, is the golden section, 62/38
-(`oscilloscope_core::layout::golden_section`/`golden_major_section`/
-`left_column_width`) — and at each split, the larger share always goes
-to whichever side grows with the run, never to a fixed side: the left
-column (`golden_major_section(W)` of the body's own width `W`, floored
-at `LEFT_MIN` (30) — the golden section already clears that floor at
-the two-column threshold itself, 80 columns gives 49, so the floor only
-guards a later threshold change) over the right column, because the
-orchestration tree inside it only grows as the run goes deeper; within
-the left column, the orchestration pane (`H - golden_section(H)` of the
-left column's own height `H`) over the details pane, for the same
-reason. On a terminal at least 100×24, every pane shows useful content.
-Below that, panes drop in this order until the rest fits — the header
-never disappears:
+**Layout** (screen 2, `Flow`, issue #635 — §6.3a below covers the
+screens this language switches between and the one-line header every
+one of them shares). Below the header line: the flow pane on the left
+(today's orchestration pane, read as control flow — each `if`'s own
+decision, loop passes, quick steps, below); the selected pane over the
+story pane on the right. Every split is the golden section, 62/38
+(`oscilloscope_core::layout::golden_section`/`left_column_width`).
+Three sizes (`tui.rs`'s own `thresholds::FLOW_THREE_PANE_MIN_WIDTH`/
+`_MIN_HEIGHT`, `FLOW_TWO_PANE_MIN_WIDTH`/`_MIN_HEIGHT`):
 
-1. below 90 columns or 24 rows (`thresholds::STATE_PANE_MIN_WIDTH`/
-   `_MIN_HEIGHT` in `tui.rs`): the state pane, leaving the right column
-   as the log pane alone;
-2. below 80 columns or 20 rows (`TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`): the
-   two-column split itself, down to one column stacking the details
-   pane, the orchestration pane and the log pane, still golden-ratio
-   nested top to bottom (the details-plus-tree block takes the larger
-   share over the log pane, then splits again into details, the
-   smaller share, over the orchestration pane) — details still sits
-   above the orchestration pane here too.
+1. 100×30 and larger: flow pane | (selected pane over story pane), both
+   splits 62/38;
+2. 80×20 up to that: flow pane | selected pane — the story pane is
+   dropped, and `l` shows the log in the selected pane's own place
+   instead;
+3. below 80×20: one column, the selected pane over the flow pane
+   (today's order), with no story pane and the flow pane's own columns
+   (start/tokens/cost) dropped to duration alone.
+
+**The flow pane** is `crate::flow::build_flow_rows`'s own output
+(`oscilloscope-core/src/flow.rs`), built from the already-folded
+orchestration rows (`render::build_folded`) plus `PlanTree`'s own
+decision index (below): a named `if`'s real row gains its condition
+(the compiled `Condition`'s text) and an untaken-branch summary row
+read from `meta.branch`/`meta.answer`; an unnamed `if` writes no node
+at all, so its own decision is synthesised and spliced in at its
+branches' own position, inferred from whether any row under either
+branch has actually started (never `Pending`/`Skipped`) — `PlanTree::
+unnamed_if_decisions` records, in document order, every unnamed `if`'s
+own host path, condition and both branches' direct paths, covering the
+three places today's branch inference (`branch_alternates`) doesn't
+reach: a top-level unnamed `if`, one directly under a tree `dynamic`'s
+`Parallel` branches, and one inside a named loop's own pass body (its
+`iter_*` placeholder resolved against the real pass paths the rows
+actually have). Two branches that would read as the same step names
+read `◆ if → ?` rather than guessing. A named loop with exactly one
+observed pass merges its own container row with that one pass row into
+a single `⟳ <name>  pass N of M` line; more than one pass keeps one
+row per pass, as the orchestration pane already did. The pane's own
+footer totals every quick step in the run (from `unfolded_rows`, the
+same way the overview's own flow card already counts them) and a
+health line (failed/retrying/warning counts, read off the already-
+folded rows' own status). A named `if`'s own row is no longer
+breadcrumb-eligible (`fold::kind_breadcrumb_eligible`), so it never
+folds away into a single-child breadcrumb — shared with the Cost
+screen's own by-store chain folding (§6.3b), whose `gate › chosen`
+tile for a named `if` with one child now splits into two tiles too.
+
+**The selected pane** reads the same `FocusedStep`/`FocusDetail` model
+the overview's own now pane already builds (`screens::build_focused_
+step`) for an ordinary row, or a `SelectedDecision` (its condition,
+mode, branch and, for a model-mode condition, `meta.answer`) for a
+decision row. `s` swaps it for today's state tree instead (`App::
+flow_selected_shows_state`), so a named report (#610) stays selectable.
+
+**The story pane** is `crate::flow::build_story`'s own merge of the
+TUI's own bounded story buffer (`main.rs`'s `story: Vec<diff::LogLine>`,
+capped at 2,000 lines, filtered to `LogKind::{RunStart, RunEnd,
+Decision, Report, Failure}` — every other kind, such as a plain `Start`/
+`End`, is pushed to `--log`/the log pane same as ever but never enters
+the story) and every unnamed `if`'s own inferred decision this same
+build resolved, sorted by each entry's own raw timestamp (RFC-3339
+sorts correctly as a plain string within one run). `l` swaps it for
+the full log instead (`App::flow_story_shows_log`).
 
 **The header line (issue #626).** One line, shared by every screen,
 replacing the three-row header above: the scope icon's own trace (one
@@ -551,7 +584,7 @@ line, so the two can never disagree about what it says. The run ID
 moves to the root row's own details (and to `--log`'s `■ run started`
 line, §2.4); it never appears in the header line at all. The effects
 count and tokens that used to live here moved to the overview's own
-flow and cost cards, and to screen 2's own orchestration pane title
+flow and cost cards, and to the Flow screen's own flow pane title
 (effects); tokens moved to the Cost screen (§6.3b) in issue #632,
 screen 2's own token bar having moved there with them — below.
 
@@ -1172,7 +1205,7 @@ still reads from glyphs and modifiers, never colour alone.
 `oscilloscope_core::screens::Screen` names the four screens osi
 switches between with `0`-`3`: `Overview` (`0`, the default for both
 `osi <doc>` and `osi watch`), `Time` (`1`), `Flow` (`2`, §6.3's own
-layout above, unchanged apart from the header) and `Cost` (`3`, §6.3b
+layout above, issue #635) and `Cost` (`3`, §6.3b
 below). `Time` has no screen built yet — `Screen::is_available` says
 so, `Screen::from_key` refuses `1` on that basis alone, and it gets no
 tab in the header line. Selection, follow, folding, filters and
@@ -1539,7 +1572,7 @@ failed to report a cost, it simply hasn't finished yet.
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osi watch` — at 100×24 (two-column: the right side is the state pane over the log pane, no treemap), since that is what most of these actually want to show (the previous blanket 70×20 lost the details pane's own type/plan/provider lines and the state pane entirely). `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_state_pane` and `two_column_layout_at_100x30_shows_the_state_pane` cover the threshold boundary-adjacent to those: 80×24 is two-column with the state pane dropped, and 100×30 shows it (issue #632 removed screen 2's own treemap threshold entirely, so 100×30 no longer sits on a boundary of its own there). `full_layout_with_state_pane_following`, at 120×40, is the most comfortable size, with every pane populated. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position.
+- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527; the Flow screen, issue #635).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osi watch` — at 100×24 (the two-pane layout: flow pane | selected pane, no story pane), since that is what most of these actually want to show. `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_state_pane` and `two_column_layout_at_100x30_shows_the_state_pane` cover the Flow screen's own three-size boundary: 80×24 is still two-pane (the story pane stays dropped), and 100×30 is the first size with all three panes, flow pane | (selected pane over story pane). `full_layout_with_state_pane_following`, at 120×40, is the most comfortable size, with every pane populated. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position. `folding_breadcrumbs_and_quick_steps` additionally covers a decision row's own breadcrumb-ineligibility and the quick-steps footer total.
 - **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle (including skipping straight past the state pane when it isn't drawn at all, `state_viewport == 0`), the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal. `tui.rs`'s own `scroll_tests` module unit-tests `clamp_scroll`/`scroll_indicator` and the state pane's line-aware `clamp_state_scroll` directly, beyond what the rendered goldens already exercise indirectly.
 - **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
 - **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-weight key gets no cell (including a zero-total tree, which is empty, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout), and two equal-weight tiles in a rect wider than it is tall split by stacking rather than by columns once the terminal's own ~2:1 cell aspect is accounted for; `tile_aspect_ratios_stay_within_bound_across_distributions_and_pane_sizes` checks that bound itself holds across several weight distributions (equal, one dominant, a long tail) and several pane sizes at once, rather than one example at a time. Issue #632's own Cost screen additions: `build_tree_for_measure` reads `i`/`o`/`$`/total separately from the same node (`measure_switching_reads_in_out_and_cost_separately`), the same key toggling back to total (`measure_from_key_toggles_back_to_total_on_the_same_key`), a single-child chain folding into one breadcrumb tile when both ends are breadcrumb-eligible and their status agrees, staying unfolded when either isn't (including a loop container, which must survive zoomed-out even with a single pass, `chain_folding_follows_the_breadcrumb_eligibility_rule_not_status_agreement_alone`), a running store getting a placeholder cell instead of vanishing (and a running plain tool never getting one at all), a finished store with no value under the chosen measure being excluded and counted, a `while: mode: model` loop's own tokens getting a `check` leaf alongside its passes rather than being dropped, and a running leaf next to real-sized siblings still getting a drawable (non-merged) cell once boosted. `oscilloscope-core/src/cost.rs` covers the largest-stores table ranking by total tokens with a zero-gap footer, a gap when the run's own totals exceed the table (a declared-outputs `use` child's effects), the partial-cost label marking its own coverage once some but not all *finished* stores reported one (and having none at all once none have, no coverage note once every one has, and a still-running store never counted either way), the overview's own top store matching the table's first row, the tokens-over-time chart's own per-phase bucketing, and the stores' totals matching the run's totals on both engines' own recorded final state for a retried prompt (the same fixture `model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity` use). `oscilloscope-core/tests/cost_fixtures.rs` covers the same acceptance item against every recorded fixture with a `prompt` effect, loaded from its own `snapshots.jsonl` rather than hand-copied JSON, including that the retried-prompt fixtures' own `prime.ask` actually carries `retries_used == 1`, on both engines. `oscilloscope-core/src/format.rs` covers `midpoint_clock_time`'s own halving and its rejection of an unparseable timestamp. `oscilloscope/src/keys.rs` covers the Cost screen's own keys: `i`/`o`/`$` switching the measure and the same key returning to total, `↑`/`↓` selecting tiles in size order, `⏎` zooming into a store with children (and doing nothing on a leaf), `esc` zooming back out (and doing nothing at the top level), a stale zoom path that no longer resolves being dropped rather than sticking, and every Cost key being inert on any other screen. `tui.rs`'s own golden tests cover the Cost screen at 120×40, 100×30, 80×24 and 70×20, both running and finished, and the 2,000-node timing measurement (both building and drawing it, and that redrawing with nothing changed skips `squarify` by way of `CostLayoutCache`) covers it alongside the overview's own; further unit-level `tui.rs` tests cover the help overlay still fitting at 80×24, `header:tokens`/`tokenbar` tinting the cost card's own lines, the table alone (below the treemap's own minimum size) still reflecting a zoom and a selection already in effect, and an aborted leaf's own placeholder weight never reading back as a real token count.
