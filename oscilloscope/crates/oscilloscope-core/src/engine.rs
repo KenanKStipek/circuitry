@@ -721,12 +721,24 @@ mod tests {
         // `--events` support assumed.
         let dir = tempfile::tempdir().unwrap();
         let fake_cof = dir.path().join("cof");
-        std::fs::write(&fake_cof, "#!/bin/sh\nsleep 30\n").unwrap();
-        std::fs::set_permissions(
-            &fake_cof,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        // Written by a short-lived child process, never held open for
+        // writing by this test process: a fork from another test thread
+        // would keep such a handle until its own exec, and starting the
+        // script meanwhile fails with ETXTBSY on Linux (#623).
+        let mut writer = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("cat > \"$1\" && chmod 755 \"$1\"")
+            .arg("sh")
+            .arg(&fake_cof)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut writer.stdin.take().unwrap(), b"#!/bin/sh\nsleep 30\n")
+            .unwrap();
+        assert!(
+            writer.wait().unwrap().success(),
+            "writing the fake cof failed"
+        );
         let started = Instant::now();
         let engine = CofEngine::detect_with_timeout(
             fake_cof.to_str().unwrap(),
