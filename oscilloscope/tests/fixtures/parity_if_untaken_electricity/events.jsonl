@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-19T20:13:16.426Z","ev":"run_start","run_id":"24c38115-c8f8-4b14-b165-e7e05918b8d0","orchestration":"do.yml","engine":"electricity 0.1.0","pid":63462}
+{"v":1,"seq":1,"ts":"2026-10-19T20:13:16.427Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-19T20:13:16.427Z","ev":"start","id":1,"path":"prime.gate"}
+{"v":1,"seq":3,"ts":"2026-10-19T20:13:16.427Z","ev":"start","id":2,"path":"prime.gate.chosen"}
+{"v":1,"seq":4,"ts":"2026-10-19T20:13:16.427Z","ev":"end","id":2,"path":"prime.gate.chosen","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-19T20:13:16.428Z","ev":"end","id":1,"path":"prime.gate","ok":true,"ms":1}
+{"v":1,"seq":6,"ts":"2026-10-19T20:13:16.428Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":7,"ts":"2026-10-19T20:13:16.434Z","ev":"run_end","ok":true}
