@@ -1473,6 +1473,607 @@ mod tests {
         assert_eq!(footer.quick_steps_folded, 2);
     }
 
+    #[test]
+    fn the_footer_counts_retries_and_warnings() {
+        let rows = vec![Row {
+            path: "prime.a".to_string(),
+            depth: 1,
+            label: "a".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: true,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }];
+        let flat = BTreeMap::new();
+        let plan = PlanTree::empty();
+        let story = vec![
+            LogLine {
+                ts: Some("t0".to_string()),
+                text: "▸ warning: slow".to_string(),
+                kind: crate::diff::LogKind::Report,
+                path: Some("prime.a".to_string()),
+            },
+            LogLine {
+                ts: Some("t0".to_string()),
+                text: "▸ info: on track, no warning: here".to_string(),
+                kind: crate::diff::LogKind::Report,
+                path: Some("prime.a".to_string()),
+            },
+        ];
+        let (_, footer) = build_flow_rows(&rows, &rows, &flat, &plan, &story);
+        assert_eq!(footer.retries, 1);
+        // Only the line that actually starts with the warning glyph
+        // counts -- a report that merely quotes the word elsewhere
+        // must not count twice as loosely as a substring match would.
+        assert_eq!(footer.warnings, 1);
+    }
+
+    fn unnamed_if_anchored_in_quick_steps_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let b_path = root_path.clone().push_name("b");
+        let if_path = root_path.clone();
+        let c_path = if_path.clone().push_name("c");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![
+                tool_op(a_path, "a"),
+                tool_op(b_path, "b"),
+                Op {
+                    path: if_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::If {
+                        cond: cel("true"),
+                        then_: Box::new(block(vec![tool_op(c_path, "c")])),
+                        else_: None,
+                        threshold: 0.5,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                },
+            ])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&program(root))
+    }
+
+    /// Issue #635, follow-up 2: `a, b, if: then: [c]` -- the real
+    /// rows (`a`, `b`, `c`) all fold into one `3 quick steps` summary
+    /// row keyed by `a`'s own path, with `c` (the unnamed if's own
+    /// anchor) folded in at a position that isn't the run's own
+    /// first step. The decision must still appear, at the quick-steps
+    /// row's own position, rather than vanishing.
+    #[test]
+    fn an_unnamed_if_anchored_in_a_quick_steps_run_keeps_its_decision_row() {
+        let plan = unnamed_if_anchored_in_quick_steps_plan();
+        let state = json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+            "a": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z", "completed_at": "2026-01-01T00:00:00.300Z", "provider": "shell"}},
+            "b": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00.300Z", "completed_at": "2026-01-01T00:00:00.600Z", "provider": "shell"}},
+            "c": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00.600Z", "completed_at": "2026-01-01T00:00:00.900Z", "provider": "shell"}}
+        }});
+        let (rows, flat) = rows_for(&plan, &state, "2026-01-01T00:00:01Z");
+        let folded = crate::fold::fold_rows(rows.clone(), true, &BTreeSet::new());
+        assert_eq!(
+            folded.len(),
+            2,
+            "a, b and c must all fold into one quick-steps row: {folded:?}"
+        );
+        let (flow_rows, _) = build_flow_rows(&folded, &rows, &flat, &plan, &[]);
+        let decision = flow_rows
+            .iter()
+            .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
+            .unwrap_or_else(|| panic!("the decision must not vanish: {flow_rows:?}"));
+        match &decision.kind {
+            FlowRowKind::Decision { branch, .. } => assert_eq!(branch.as_deref(), Some("then")),
+            other => panic!("expected Decision, got {other:?}"),
+        }
+    }
+
+    fn unnamed_if_with_later_sibling_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let w_path = root_path.clone().push_name("w");
+        let if_path = root_path.clone();
+        let x_path = if_path.clone().push_name("x");
+        let y_path = root_path.clone().push_name("y");
+        let z_path = root_path.clone().push_name("z");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![
+                // `w` comes before the `if` so `x` (inside its own
+                // `then` branch) has a real, unfinished earlier
+                // sibling of its own -- otherwise `x`'s own empty
+                // `earlier_siblings` list would vacuously satisfy
+                // the "every earlier plan sibling is complete" rule
+                // and read `LikelyRunning` regardless of whether the
+                // `if` ever took `then` at all, defeating this
+                // test's own point.
+                tool_op(w_path, "w"),
+                Op {
+                    path: if_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::If {
+                        cond: cel("true"),
+                        then_: Box::new(block(vec![tool_op(x_path, "x")])),
+                        else_: None,
+                        threshold: 0.5,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                },
+                tool_op(y_path, "y"),
+                tool_op(z_path, "z"),
+            ])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&program(root))
+    }
+
+    /// Issue #635: an unnamed `if` with no `else`, whose own host
+    /// scope is still running, reads "nothing ran" once a *later*
+    /// step in the same chain (`y`) has started -- never waiting for
+    /// the whole chain (`z` still pending) to finish first.
+    #[test]
+    fn an_unnamed_if_with_no_else_reads_nothing_ran_once_a_later_sibling_starts() {
+        let plan = unnamed_if_with_later_sibling_plan();
+        let state = json!({"prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+            "y": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+        }});
+        let (rows, flat) = rows_for(&plan, &state, "t2");
+        let host = rows.iter().find(|r| r.path == "prime").expect("root row");
+        assert_ne!(
+            host.status.kind,
+            StatusKind::Done,
+            "the host must still be running for this to test the new rule"
+        );
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
+        let decision = flow_rows
+            .iter()
+            .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
+            .expect("an inferred decision row");
+        match &decision.kind {
+            FlowRowKind::Decision {
+                branch,
+                nothing_ran,
+                ..
+            } => {
+                assert_eq!(branch.as_deref(), Some("else"));
+                assert!(*nothing_ran);
+            }
+            other => panic!("expected Decision, got {other:?}"),
+        }
+    }
+
+    /// Issue #635: `osi watch` without `--plan` (`PlanTree::empty()`)
+    /// must never draw a false `· else: nothing` line for a named
+    /// `if` -- its own branch is still read from the observed node's
+    /// `meta.branch`, but with no plan to say what the untaken side
+    /// even is, there must be no untaken line at all.
+    #[test]
+    fn osi_watch_without_a_plan_shows_no_untaken_line_for_a_named_if() {
+        let plan = PlanTree::empty();
+        let state = json!({"prime": {"value": null, "meta": {"created_at": "t0", "completed_at": "t2"},
+            "gate": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "branch": "then"},
+                "chosen": {"value": "ok", "meta": {"created_at": "t1", "completed_at": "t2"}}
+            }
+        }});
+        let (rows, flat) = rows_for(&plan, &state, "t3");
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
+        let decision = flow_rows
+            .iter()
+            .find(|r| r.path == "prime.gate")
+            .expect("the gate row, guessed as an If from its own meta shape");
+        match &decision.kind {
+            FlowRowKind::Decision { branch, .. } => assert_eq!(branch.as_deref(), Some("then")),
+            other => panic!("expected Decision, got {other:?}"),
+        }
+        assert!(
+            !flow_rows
+                .iter()
+                .any(|r| matches!(r.kind, FlowRowKind::UntakenBranch { .. })),
+            "no plan means no known untaken side: {flow_rows:?}"
+        );
+    }
+
+    fn unnamed_if_in_loop_pass_plan_with_else() -> PlanTree {
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let nap_path = pass_path.clone().push_name("nap");
+        let rest_path = pass_path.clone().push_name("rest");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: loop_path,
+                name: Some("fan".to_string()),
+                kind: NodeKind::Control(Region::Loop {
+                    name: Some("fan".to_string()),
+                    spec: LoopSpec::Each {
+                        in_path: "prime.items".to_string(),
+                        as_name: "item".to_string(),
+                        truncate: false,
+                    },
+                    body: Box::new(block(vec![Op {
+                        path: pass_path.clone(),
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: cel("true"),
+                            then_: Box::new(block(vec![tool_op(nap_path, "nap")])),
+                            else_: Some(Box::new(block(vec![tool_op(rest_path, "rest")]))),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }])),
+                    flow: LoopFlow::Chain,
+                    max_concurrency: None,
+                    max_iterations: None,
+                    min_iterations: 0,
+                    collect: None,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&program(root))
+    }
+
+    #[test]
+    fn an_unnamed_if_with_else_inside_a_named_loops_pass_gets_an_untaken_summary() {
+        let plan = unnamed_if_in_loop_pass_plan_with_else();
+        let state = json!({"prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+            "fan": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "mode": "each"},
+                "iter_0": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                    "nap": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+                }
+            }
+        }});
+        let (rows, flat) = rows_for(&plan, &state, "t2");
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
+        let decision_idx = flow_rows
+            .iter()
+            .position(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
+            .expect("a decision row resolved against the real pass");
+        match &flow_rows[decision_idx].kind {
+            FlowRowKind::Decision { branch, .. } => assert_eq!(branch.as_deref(), Some("then")),
+            other => panic!("expected Decision, got {other:?}"),
+        }
+        let untaken = &flow_rows[decision_idx + 1];
+        assert!(matches!(untaken.kind, FlowRowKind::UntakenBranch { .. }));
+        assert!(untaken.label.contains("rest"), "{}", untaken.label);
+        assert!(
+            !flow_rows.iter().any(|r| r.path == "prime.fan.iter_0.rest"),
+            "the untaken 'rest' row must stay hidden: {flow_rows:?}"
+        );
+    }
+
+    fn unnamed_if_under_parallel_plan_with_else() -> PlanTree {
+        let root_path = EffectPath::root();
+        let fan_path = root_path.clone().push_name("fan");
+        let a_path = fan_path.clone().push_name("a");
+        let then_child = fan_path.clone().push_name("then_branch");
+        let else_child = fan_path.clone().push_name("else_branch");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: fan_path.clone(),
+                name: Some("fan".to_string()),
+                kind: NodeKind::Control(Region::Parallel {
+                    branches: vec![
+                        tool_op(a_path, "a"),
+                        Op {
+                            path: fan_path,
+                            name: None,
+                            kind: NodeKind::Control(Region::If {
+                                cond: cel("true"),
+                                then_: Box::new(block(vec![tool_op(then_child, "then_branch")])),
+                                else_: Some(Box::new(block(vec![tool_op(
+                                    else_child,
+                                    "else_branch",
+                                )]))),
+                                threshold: 0.5,
+                            }),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                    ],
+                    max_concurrency: None,
+                    stop_on_error: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&program(root))
+    }
+
+    /// Hand-built rows, bypassing the usual plan/state/model
+    /// pipeline (issue #635): the tree-`Parallel` branches this test
+    /// exercises are walked fresh of any `earlier`-sibling context
+    /// (`walk_block`'s own threading never reaches a direct
+    /// `Parallel` branch), so with nothing in state at all, even a
+    /// genuinely untaken, never-observed step there can still read
+    /// `LikelyRunning` -- "no blocking predecessor" is read the same
+    /// way regardless of which side of an `if` a step happens to sit
+    /// on. Simply never giving the untaken side's own steps a row at
+    /// all (as they would in reality: nothing ever reports a path
+    /// that was never reached) sidesteps that heuristic entirely
+    /// without pretending to fix it here.
+    #[test]
+    fn an_unnamed_if_with_else_under_a_tree_dynamic_gets_an_untaken_summary() {
+        let plan = unnamed_if_under_parallel_plan_with_else();
+        let make_row = |path: &str, kind: RowKind, status: StatusKind| Row {
+            path: path.to_string(),
+            depth: path.matches('.').count(),
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind,
+            status: RowStatus {
+                kind: status,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        let rows = vec![
+            make_row("prime", RowKind::Root, StatusKind::Running),
+            make_row("prime.fan", RowKind::Dynamic, StatusKind::Running),
+            make_row("prime.fan.a", RowKind::Tool, StatusKind::Running),
+            make_row("prime.fan.then_branch", RowKind::Tool, StatusKind::Done),
+        ];
+        let flat = BTreeMap::new();
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
+        let decision_idx = flow_rows
+            .iter()
+            .position(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
+            .expect("a decision row under the tree dynamic");
+        match &flow_rows[decision_idx].kind {
+            FlowRowKind::Decision { branch, .. } => assert_eq!(branch.as_deref(), Some("then")),
+            other => panic!("expected Decision, got {other:?}"),
+        }
+        let untaken = &flow_rows[decision_idx + 1];
+        assert!(matches!(untaken.kind, FlowRowKind::UntakenBranch { .. }));
+        assert!(untaken.label.contains("else_branch"), "{}", untaken.label);
+        assert!(
+            !flow_rows.iter().any(|r| r.path == "prime.fan.else_branch"),
+            "the untaken 'else_branch' row must stay hidden: {flow_rows:?}"
+        );
+    }
+
+    fn merge_test_row(
+        path: &str,
+        depth: usize,
+        kind: FlowRowKind,
+        status: StatusKind,
+        loop_progress: Option<LoopProgress>,
+    ) -> FlowRow {
+        FlowRow {
+            path: path.to_string(),
+            depth,
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind,
+            status: RowStatus {
+                kind: status,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress,
+            has_children: false,
+            merged_pass: false,
+        }
+    }
+
+    #[test]
+    fn merge_single_pass_loops_merges_a_known_total_of_one() {
+        let mut rows = vec![
+            merge_test_row(
+                "prime",
+                0,
+                FlowRowKind::Row(RowKind::Root),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan",
+                1,
+                FlowRowKind::Row(RowKind::Loop),
+                StatusKind::Done,
+                Some(LoopProgress {
+                    done: 1,
+                    total: Some(1),
+                    eta_s: None,
+                }),
+            ),
+            merge_test_row(
+                "prime.fan.iter_0",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Done,
+                None,
+            ),
+        ];
+        merge_single_pass_loops(&mut rows);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[1].merged_pass);
+    }
+
+    #[test]
+    fn merge_single_pass_loops_leaves_a_known_total_above_one_alone() {
+        let mut rows = vec![
+            merge_test_row(
+                "prime",
+                0,
+                FlowRowKind::Row(RowKind::Root),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan",
+                1,
+                FlowRowKind::Row(RowKind::Loop),
+                StatusKind::Done,
+                Some(LoopProgress {
+                    done: 2,
+                    total: Some(2),
+                    eta_s: None,
+                }),
+            ),
+            merge_test_row(
+                "prime.fan.iter_0",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan.iter_1",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Done,
+                None,
+            ),
+        ];
+        merge_single_pass_loops(&mut rows);
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert!(!rows[1].merged_pass);
+    }
+
+    #[test]
+    fn merge_single_pass_loops_waits_for_a_dynamic_loop_to_settle() {
+        let mut rows = vec![
+            merge_test_row(
+                "prime",
+                0,
+                FlowRowKind::Row(RowKind::Root),
+                StatusKind::Running,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan",
+                1,
+                FlowRowKind::Row(RowKind::Loop),
+                StatusKind::Running,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan.iter_0",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Running,
+                None,
+            ),
+        ];
+        merge_single_pass_loops(&mut rows);
+        assert_eq!(
+            rows.len(),
+            3,
+            "an unknown total still running might yet get a second pass: {rows:?}"
+        );
+        assert!(!rows[1].merged_pass);
+    }
+
+    #[test]
+    fn merge_single_pass_loops_merges_a_dynamic_loop_once_finished_with_one_pass() {
+        let mut rows = vec![
+            merge_test_row(
+                "prime",
+                0,
+                FlowRowKind::Row(RowKind::Root),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan",
+                1,
+                FlowRowKind::Row(RowKind::Loop),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan.iter_0",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Done,
+                None,
+            ),
+        ];
+        merge_single_pass_loops(&mut rows);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[1].merged_pass);
+    }
+
+    #[test]
+    fn merge_single_pass_loops_leaves_a_dynamic_loop_with_two_observed_passes_alone() {
+        let mut rows = vec![
+            merge_test_row(
+                "prime",
+                0,
+                FlowRowKind::Row(RowKind::Root),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan",
+                1,
+                FlowRowKind::Row(RowKind::Loop),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan.iter_0",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Done,
+                None,
+            ),
+            merge_test_row(
+                "prime.fan.iter_1",
+                2,
+                FlowRowKind::Row(RowKind::Pass),
+                StatusKind::Done,
+                None,
+            ),
+        ];
+        merge_single_pass_loops(&mut rows);
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert!(!rows[1].merged_pass);
+    }
+
     struct FixedZone;
     impl crate::format::ClockZone for FixedZone {
         fn local(
