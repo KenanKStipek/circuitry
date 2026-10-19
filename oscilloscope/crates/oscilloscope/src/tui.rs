@@ -2044,12 +2044,16 @@ fn draw_overlay(
 const HELP_TEXT: &[&str] = &[
     "0            overview",
     "2            flow (today's layout)",
-    "↑↓ / j k     move (the focused pane)",
+    "3            cost",
+    "↑↓ / j k     move (the focused pane, or cost: select a store)",
     "PgUp PgDn    move a page",
     "Home End     jump to the first / last row",
     "g G          same as Home / End",
     "← →          collapse / expand (orchestration or state)",
-    "⏎            overview: open flow; flow: expand quick steps",
+    "⏎            overview: open flow; flow: expand quick steps;",
+    "             cost: zoom into the selected store",
+    "esc          cost: zoom back out",
+    "i o $        cost: switch measure (same key again: total)",
     "z            fold on/off (breadcrumbs, quick steps)",
     "tab          orchestration → details → state",
     "f            follow the running row (on by default)",
@@ -2066,10 +2070,10 @@ const HELP_TEXT: &[&str] = &[
 ];
 
 /// Wide enough for every [`HELP_TEXT`] line with none of them
-/// wrapping (finding F7) — the longest (issue #626's own ⏎ line) is
-/// 58 columns; 4 columns of margin plus the 2-column border leaves
+/// wrapping (finding F7) — the longest (issue #632's own ↑↓ line) is
+/// 61 columns; 4 columns of margin plus the 2-column border leaves
 /// room to spare.
-const HELP_OVERLAY_WIDTH: u16 = 64;
+const HELP_OVERLAY_WIDTH: u16 = 68;
 
 /// One redraw's whole layout (issue #626): a one-line header, shared
 /// by every screen (replacing the old three-row one), then the
@@ -3034,6 +3038,224 @@ mod golden_tests {
         snapshot_at(
             120, 40, plan, model, state, process, engine, selected, log_lines,
         )
+    }
+
+    /// [`snapshot_at`], for screen 3 (the Cost screen, issue #632):
+    /// builds the Cost screen's own model (the by-store treemap,
+    /// the largest-stores table, the tokens-over-time chart) the
+    /// same way `main.rs`'s own `build_cost_screen_if_active` does,
+    /// only while that screen is on display.
+    fn cost_snapshot_at(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+    ) -> String {
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            plan,
+            model,
+            state,
+            process,
+            300.0,
+            "2026-01-01T00:05:00Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let empty = Value::Null;
+        let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+        let statuses: std::collections::BTreeMap<_, _> = rendered
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.status.clone()))
+            .collect();
+        let cost_screen = oscilloscope_core::screens::build_cost_screen(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &statuses,
+            state,
+            Measure::Total,
+            "2026-01-01T00:05:00Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Cost;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut cost_layout = CostLayoutCache::default();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    state,
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:05:00Z",
+                    None,
+                    Some(&cost_screen),
+                    &mut cost_layout,
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// Three stores with real tokens/cost (`a`, `b`, and `fan`'s own
+    /// running pass `nap`, with no tokens yet -- DESIGN.md's "a tile
+    /// for a step that is still running reads tokens when done"),
+    /// plenty for the treemap, the chart and the table to all show
+    /// something real.
+    fn cost_running_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "adapter": "scripted", "tokens_sent_total": 900, "tokens_received_total": 400, "cost_usd": 1.2}},
+            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": "2026-01-01T00:02:00Z", "adapter": "scripted", "tokens_sent_total": 300, "tokens_received_total": 150}},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 0, "total": 2}},
+                "iter_0": {"value": null, "meta": {"completed_at": null},
+                    "nap": {"value": null, "meta": {"created_at": "2026-01-01T00:02:00Z", "completed_at": null, "adapter": "scripted"}}
+                }
+            }
+        }})
+    }
+
+    fn cost_finished_state() -> Value {
+        json!({
+            "runtime": {"last_run": {"completed_at": "2026-01-01T00:05:00Z", "totals": {"wall_time_s": 300.0, "effects_run": 3, "tokens_sent": 1300, "tokens_received": 600, "cost_usd": 1.2}}},
+            "prime": {"value": true, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:05:00Z", "error": null},
+            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "adapter": "scripted", "tokens_sent_total": 900, "tokens_received_total": 400, "cost_usd": 1.2}},
+            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": "2026-01-01T00:02:00Z", "adapter": "scripted", "tokens_sent_total": 300, "tokens_received_total": 150}},
+            "fan": {"value": null, "meta": {"completed_at": "2026-01-01T00:05:00Z", "progress": {"done": 2, "total": 2}},
+                "iter_0": {"value": null, "meta": {"completed_at": "2026-01-01T00:03:00Z"},
+                    "nap": {"value": "ok", "meta": {"created_at": "2026-01-01T00:02:00Z", "completed_at": "2026-01-01T00:03:00Z", "adapter": "scripted", "tokens_sent_total": 50, "tokens_received_total": 50}}
+                },
+                "iter_1": {"value": null, "meta": {"completed_at": "2026-01-01T00:05:00Z"},
+                    "nap": {"value": "ok", "meta": {"created_at": "2026-01-01T00:04:00Z", "completed_at": "2026-01-01T00:05:00Z", "adapter": "scripted", "tokens_sent_total": 50, "tokens_received_total": 50}}
+                }
+            }
+        }})
+    }
+
+    #[test]
+    fn cost_running_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_running_state();
+        let text = cost_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_finished_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let process = ProcessState::exited(true);
+        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_running_at_100x30() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_running_state();
+        let text = cost_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_finished_at_100x30() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let process = ProcessState::exited(true);
+        let text = cost_snapshot_at(100, 30, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_running_at_80x24() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_running_state();
+        let text = cost_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_finished_at_80x24() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let process = ProcessState::exited(true);
+        let text = cost_snapshot_at(80, 24, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_running_at_70x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_running_state();
+        let text = cost_snapshot_at(
+            70,
+            20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_finished_at_70x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let process = ProcessState::exited(true);
+        let text = cost_snapshot_at(70, 20, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
     }
 
     #[test]
@@ -4225,6 +4447,11 @@ mod golden_tests {
                 Value::String(format!("t{}", i + 1)),
             );
             meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            // Issue #632: also token-bearing by the Cost screen's own
+            // rule (`adapter` present), so this same 2,000-node state
+            // doubles as that screen's own timing coverage below --
+            // every node here is a real store for it to build.
+            meta.insert("adapter".to_string(), Value::String("scripted".to_string()));
             meta.insert("tokens_sent_total".to_string(), Value::from(1));
             meta.insert("tokens_received_total".to_string(), Value::from(2));
             let mut node = serde_json::Map::new();
@@ -4338,6 +4565,87 @@ mod golden_tests {
         assert!(
             overview_elapsed < std::time::Duration::from_millis(500),
             "building and drawing the overview for a 2000-node state took {overview_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
+
+        // Issue #632: the Cost screen's own by-store tree is built (and
+        // laid out) only while it is actually on display, same
+        // performance rule as the overview's above -- on the same
+        // 2,000-node state (every node a real store, see the loop
+        // above), not a smaller one of its own.
+        let statuses: std::collections::BTreeMap<_, _> = rendered
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.status.clone()))
+            .collect();
+        let cost_start = std::time::Instant::now();
+        let cost_screen = oscilloscope_core::screens::build_cost_screen(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &statuses,
+            Some(&state),
+            Measure::Total,
+            "t2001",
+        );
+        let mut cost_app = App::new(false);
+        cost_app.screen = oscilloscope_core::screens::Screen::Cost;
+        let cost_backend = TestBackend::new(120, 40);
+        let mut cost_terminal = Terminal::new(cost_backend).unwrap();
+        let mut cost_layout = CostLayoutCache::default();
+        cost_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut cost_app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                    Some(&cost_screen),
+                    &mut cost_layout,
+                )
+            })
+            .unwrap();
+        let cost_elapsed = cost_start.elapsed();
+        assert!(
+            cost_elapsed < std::time::Duration::from_millis(500),
+            "building and drawing the Cost screen for a 2000-node state took {cost_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
+
+        // Re-laying out the identical tree at the identical area must
+        // be effectively free -- `CostLayoutCache` skips `squarify`
+        // entirely when neither has changed (DESIGN.md's performance
+        // rule: "laid out again only when the tree or the area
+        // changes").
+        let cached_start = std::time::Instant::now();
+        cost_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut cost_app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                    Some(&cost_screen),
+                    &mut cost_layout,
+                )
+            })
+            .unwrap();
+        let cached_elapsed = cached_start.elapsed();
+        assert!(
+            cached_elapsed < std::time::Duration::from_millis(100),
+            "redrawing the Cost screen with nothing changed took {cached_elapsed:?} -- the layout cache should have skipped squarify entirely"
         );
     }
 

@@ -88,6 +88,17 @@ pub struct TreemapCell {
 /// the border itself, one cell on every side).
 const MIN_BORDER_RECT: (u16, u16) = (3, 3);
 
+/// A typical terminal character cell's own height-to-width ratio
+/// (issue #632, DESIGN.md: "tiles are squarified for the terminal's
+/// tall cells (about 2:1), so they look square on screen") --
+/// `layout_into` stretches the y-axis by this factor before running
+/// `squarify`'s own aspect-ratio comparisons, then divides every
+/// resulting rect's `y`/`h` back down by it, so a tile that is
+/// actually square in *character cells* (and so visibly tall and
+/// narrow on screen) is not what "the worst aspect ratio" means any
+/// more -- a visually square tile is.
+const CELL_ASPECT: f64 = 2.0;
+
 /// A rect this small is "too small to draw at all" (issue #527) and
 /// gets folded into its parent's merged `…` bucket instead.
 fn too_small(w: u16, h: u16) -> bool {
@@ -152,8 +163,28 @@ fn layout_into(
                 .then_with(|| sort_key(*a_node).cmp(sort_key(*b_node)))
         });
         let weight_values: Vec<f64> = weights.iter().map(|(_, t)| *t as f64).collect();
-        let rects = squarify(&weight_values, x as f64, y as f64, w as f64, h as f64);
-        let int_rects: Vec<Rect> = rects.into_iter().map(round_rect).collect();
+        // Issue #632: the squarify decisions below (`worst_ratio`,
+        // which side a row grows along) are run in a "visual" space
+        // where the y-axis is stretched by `CELL_ASPECT` first --
+        // without this, "worst aspect ratio" means closest to a
+        // *character-cell* square, which on a terminal (whose cells
+        // are themselves about `CELL_ASPECT` times taller than wide)
+        // draws tiles that look visibly tall and narrow rather than
+        // square. Every output rect is converted straight back to
+        // real character-cell units (`ry / CELL_ASPECT`, `rh /
+        // CELL_ASPECT`) before rounding, so nothing downstream of
+        // this ever sees the stretched space at all.
+        let rects = squarify(
+            &weight_values,
+            x as f64,
+            y as f64 * CELL_ASPECT,
+            w as f64,
+            h as f64 * CELL_ASPECT,
+        );
+        let int_rects: Vec<Rect> = rects
+            .into_iter()
+            .map(|(rx, ry, rw, rh)| round_rect((rx, ry / CELL_ASPECT, rw, rh / CELL_ASPECT)))
+            .collect();
 
         let mut newly_too_small: u64 = 0;
         let mut next_survivors: Vec<(&TreemapNode, u64)> = Vec::new();
@@ -670,6 +701,25 @@ mod tests {
         let from_shuffled = layout(&shuffled, 0, 0, 60, 20);
         assert_eq!(first, second);
         assert_eq!(first, from_shuffled);
+    }
+
+    #[test]
+    fn tiles_are_squarified_for_the_terminals_tall_cells_not_square_characters() {
+        // Two equal-weight leaves in a 10x8 character-cell rect: a
+        // *character*-square split would place them side by side (two
+        // 5x8 columns, each visually 5 wide but 16 "tall" once the
+        // terminal's own ~2:1 cell aspect is accounted for -- about as
+        // far from square as two tiles can be). The aspect-corrected
+        // split instead stacks them (two 10x4 rows, each a visually
+        // near-square 10x8), which this pins by checking the two
+        // cells share an `x`, not a `y`.
+        let children = vec![leaf("a", 1), leaf("b", 1)];
+        let cells = layout(&children, 0, 0, 10, 8);
+        assert_eq!(cells.len(), 2);
+        let a = cells.iter().find(|c| c.label == "a").unwrap();
+        let b = cells.iter().find(|c| c.label == "b").unwrap();
+        assert_eq!(a.rect.x, b.rect.x, "cells were {cells:#?}");
+        assert_ne!(a.rect.y, b.rect.y, "cells were {cells:#?}");
     }
 
     #[test]

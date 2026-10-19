@@ -1592,4 +1592,104 @@ mod tests {
         let visible = visible_state_rows(&rows, &app);
         assert_eq!(visible.len(), 2);
     }
+
+    fn cost_leaf(key: &str, total: u64) -> TreemapNode {
+        TreemapNode::leaf(key, total, Some(oscilloscope_core::model::StatusKind::Done))
+    }
+
+    fn cost_app() -> App {
+        let mut app = App::new(false);
+        app.screen = Screen::Cost;
+        app
+    }
+
+    #[test]
+    fn i_o_dollar_switch_the_cost_measure_and_the_same_key_returns_to_total() {
+        let mut app = cost_app();
+        assert_eq!(app.cost_measure, Measure::Total);
+        app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &[]);
+        assert_eq!(app.cost_measure, Measure::In);
+        app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &[]);
+        assert_eq!(app.cost_measure, Measure::Total);
+        app.handle_key(key(KeyCode::Char('o')), &[], &[], true, false, &[]);
+        assert_eq!(app.cost_measure, Measure::Out);
+        app.handle_key(key(KeyCode::Char('$')), &[], &[], true, false, &[]);
+        assert_eq!(app.cost_measure, Measure::Cost);
+        app.handle_key(key(KeyCode::Char('$')), &[], &[], true, false, &[]);
+        assert_eq!(app.cost_measure, Measure::Total);
+    }
+
+    #[test]
+    fn up_down_select_cost_tiles_in_size_order() {
+        let mut app = cost_app();
+        let tree = vec![cost_leaf("small", 10), cost_leaf("big", 100)];
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_selected.as_deref(), Some("big"));
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_selected.as_deref(), Some("small"));
+        app.handle_key(key(KeyCode::Up), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_selected.as_deref(), Some("big"));
+    }
+
+    #[test]
+    fn enter_zooms_into_the_selected_store_and_esc_zooms_back_out() {
+        let mut app = cost_app();
+        let tree = vec![TreemapNode {
+            key: "review".to_string(),
+            path: "prime.review".to_string(),
+            total: 100,
+            status: Some(oscilloscope_core::model::StatusKind::Done),
+            children: vec![cost_leaf("agent", 60), cost_leaf("fix", 40)],
+        }];
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_selected.as_deref(), Some("prime.review"));
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_zoom, vec!["prime.review".to_string()]);
+        // Zoomed in: selection now moves among `review`'s own children.
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_selected.as_deref(), Some("agent"));
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &tree);
+        assert!(app.cost_zoom.is_empty());
+    }
+
+    #[test]
+    fn enter_does_nothing_on_a_leaf_with_no_children() {
+        let mut app = cost_app();
+        let tree = vec![cost_leaf("agent", 60)];
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &tree);
+        assert!(app.cost_zoom.is_empty(), "a leaf has nothing to zoom into");
+    }
+
+    #[test]
+    fn esc_at_the_top_level_is_a_no_op() {
+        let mut app = cost_app();
+        let tree = vec![cost_leaf("agent", 60)];
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &tree);
+        assert!(app.cost_zoom.is_empty());
+    }
+
+    #[test]
+    fn a_stale_zoom_path_that_no_longer_resolves_is_dropped() {
+        let mut app = cost_app();
+        app.cost_zoom = vec!["prime.gone".to_string()];
+        let tree = vec![cost_leaf("agent", 60)];
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        assert!(
+            app.cost_zoom.is_empty(),
+            "a zoom path the current tree no longer has must be dropped, not leave the screen stuck"
+        );
+        assert_eq!(app.cost_selected.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn cost_keys_do_nothing_outside_the_cost_screen() {
+        let mut app = App::new(false);
+        assert_eq!(app.screen, Screen::Overview);
+        let tree = vec![cost_leaf("agent", 60)];
+        app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_measure, Measure::Total);
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
+        assert_eq!(app.cost_selected, None);
+    }
 }

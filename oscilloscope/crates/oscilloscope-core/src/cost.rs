@@ -347,4 +347,53 @@ mod tests {
         assert_eq!(series.len(), 1);
         assert!(series[0].1.iter().all(|&v| v == 0));
     }
+
+    /// Both engines' own real final state (not hand-written, see
+    /// `model::tests::subtree_tokens_matches_run_totals_for_a_
+    /// retried_prompt_on_cof`/`_on_electricity`) for a retried
+    /// `prompt_type: json` prompt: the winning attempt alone
+    /// (`tokens_sent: 11`/`tokens_received: 22`) does not match
+    /// `runtime.last_run.totals`, only the `_total` pair the retry
+    /// also accumulated into does -- the table's own footer must
+    /// agree, not merely the per-node token rule.
+    fn retried_prompt_state() -> Value {
+        json!({
+            "runtime": {"last_run": {"totals": {"tokens_sent": 16, "tokens_received": 29}}},
+            "prime": {"value": true, "meta": {
+                "completed_at": "t1", "error": null, "tokens_sent": null, "tokens_received": null
+            },
+            "ask": {"value": {"ans": "ok"}, "meta": {
+                "created_at": "t0", "completed_at": "t1", "error": null,
+                "prompt_type": "json",
+                "retries_used": 1,
+                "tokens_sent": 11, "tokens_received": 22,
+                "tokens_sent_total": 16, "tokens_received_total": 29,
+                "fallback_attempts": [
+                    {"adapter": "scripted", "model": "scripted-model", "status": "succeeded",
+                     "error": null, "tokens_sent": 11, "tokens_received": 22}
+                ]
+            }}}
+        })
+    }
+
+    #[test]
+    fn the_stores_totals_equal_the_runs_totals_for_a_retried_prompt_on_cof_and_electricity() {
+        // cof and electricity wrote byte-identical `_total` fields and
+        // `runtime.last_run.totals` for this scenario (confirmed by
+        // running both with the scripted adapter) -- one fixture
+        // covers both engines.
+        let state = retried_prompt_state();
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].tokens_sent, 16);
+        assert_eq!(result.rows[0].tokens_received, 29);
+        assert_eq!(result.footer.run_tokens_sent, 16);
+        assert_eq!(result.footer.run_tokens_received, 29);
+        assert_eq!(
+            result.footer.gap_tokens, 0,
+            "the table's own total must equal the run's, using the _total pair, not the winning attempt alone"
+        );
+    }
 }

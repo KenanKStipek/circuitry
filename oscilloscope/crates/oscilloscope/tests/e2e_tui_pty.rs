@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    e2e_enabled, wait_for_step_start, wait_with_timeout, write_doc,
+    e2e_enabled, scripted_config, wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
@@ -477,6 +477,86 @@ fn screen_keys_switch_screens_during_a_live_run() {
         assert!(
             rendered.contains("flow") && rendered.contains("cost"),
             "expected the overview's own cards back after pressing 0; got:\n{rendered:?}"
+        );
+    }
+
+    // `q` while still running asks first; confirming both cancels
+    // and leaves once the engine actually exits (K1).
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #632: `3` opens the Cost screen during a live run, and its
+/// own treemap and largest-stores table actually show the prompt
+/// that already finished.
+#[test]
+fn pressing_3_during_a_live_run_opens_the_cost_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let before_3 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"3");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_3..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("tokens by store"),
+            "expected the Cost screen's own treemap after pressing 3; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("largest stores"),
+            "expected the Cost screen's own table after pressing 3; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("ask"),
+            "expected the finished prompt's own store to show somewhere on the Cost screen; got:\n{rendered:?}"
         );
     }
 
