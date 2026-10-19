@@ -580,6 +580,7 @@ fn build_now_pane(
     state: Option<&Value>,
     header: &crate::render::Header,
     log: &[crate::diff::LogLine],
+    selected_path: Option<&str>,
     now: &str,
 ) -> NowPane {
     const LOG_TAIL: usize = 20;
@@ -603,11 +604,24 @@ fn build_now_pane(
                 .and_then(|t| t.get("cost_usd").and_then(Value::as_f64)),
         })
     } else {
+        // The document root is "running" for the whole run, which
+        // would otherwise inflate "+N more running" by one for the
+        // entire run's duration even with nothing else going on --
+        // it's never a real step to surface here.
         let running: Vec<&Row> = rows
             .iter()
-            .filter(|r| r.status.kind == StatusKind::Running)
+            .filter(|r| r.status.kind == StatusKind::Running && r.kind != RowKind::Root)
             .collect();
-        if let Some(&target) = running.first() {
+        // The step follow selects (DESIGN.md): whichever running row
+        // is the shared selection, same as the orchestration pane's
+        // own follow target -- falling back to the deepest running
+        // row (the same tie-break `keys::App::follow_target` uses)
+        // when the selection isn't actually one of the running rows
+        // right now (follow off, or mid-transition between rebuilds).
+        let target = selected_path
+            .and_then(|p| running.iter().find(|r| r.path == p).copied())
+            .or_else(|| running.iter().max_by_key(|r| r.depth).copied());
+        if let Some(target) = target {
             let step = build_focused_step(target, flat, plan, model, state, now);
             NowFocus::Running(step, running.len() - 1)
         } else {
@@ -805,11 +819,22 @@ pub fn build_overview(
     token_bar: &TokenBar,
     treemap: &[TreemapNode],
     log: &[crate::diff::LogLine],
+    selected_path: Option<&str>,
     now: &str,
 ) -> Overview {
     let mut phase_strip = build_phase_strip(rows);
     fill_phase_start_times(&mut phase_strip, flat);
-    let now_pane = build_now_pane(rows, flat, plan, model, state, header, log, now);
+    let now_pane = build_now_pane(
+        rows,
+        flat,
+        plan,
+        model,
+        state,
+        header,
+        log,
+        selected_path,
+        now,
+    );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
     let cost_card = build_cost_card(header, state, treemap, token_bar);
@@ -1133,10 +1158,52 @@ mod tests {
             None,
             &header,
             &[],
+            None,
             "2026-10-08T11:00:00Z",
         );
         match pane.focus {
             NowFocus::Running(_, more) => assert_eq!(more, 1),
+            other => panic!("expected Running, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_running_focus_prefers_the_deepest_row_over_the_root() {
+        fn running_row(path: &str, depth: usize) -> Row {
+            Row {
+                path: path.to_string(),
+                depth,
+                label: path.to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: Some(1.0),
+                loop_progress: None,
+                dim: Some("shell".to_string()),
+                has_children: false,
+            }
+        }
+        let rows = vec![running_row("prime", 0), running_row("prime.a.b", 2)];
+        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let header = base_header();
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            None,
+            &header,
+            &[],
+            None,
+            "2026-10-08T11:00:00Z",
+        );
+        match pane.focus {
+            NowFocus::Running(step, _) => assert_eq!(step.path, "prime.a.b"),
             other => panic!("expected Running, got {other:?}"),
         }
     }
@@ -1242,6 +1309,7 @@ mod tests {
             None,
             &header,
             &[],
+            None,
             "2026-10-08T11:58:00Z",
         );
         match pane.focus {
@@ -1267,6 +1335,7 @@ mod tests {
             None,
             &header,
             &[],
+            None,
             "2026-10-08T11:58:00Z",
         );
         match pane.focus {
