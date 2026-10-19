@@ -481,7 +481,7 @@ fn screen_keys_switch_screens_during_a_live_run() {
     }
 
     // `q` while still running asks first; confirming both cancels
-    // and leaves once the engine actually exits (K1).
+    // and leaves once the engine actually exits.
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
     send_bytes(&mut master, b"y");
@@ -561,7 +561,7 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
     }
 
     // `q` while still running asks first; confirming both cancels
-    // and leaves once the engine actually exits (K1).
+    // and leaves once the engine actually exits.
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
     send_bytes(&mut master, b"y");
