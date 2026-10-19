@@ -629,10 +629,10 @@ fn focus_step_lines(
             }
             FocusDetail::Plain => {}
         }
-        if let Some(more) = more_running
-            && more > 0
-        {
-            lines.push(Line::from(format!("+{more} more running")));
+        if let Some(more) = more_running {
+            if more > 0 {
+                lines.push(Line::from(format!("+{more} more running")));
+            }
         }
         lines
     }

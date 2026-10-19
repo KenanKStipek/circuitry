@@ -720,13 +720,13 @@ fn build_flow_card(
         .take(2)
         .map(|(name, branch, ts)| FlowEvent::Decision { name, branch, ts })
         .collect();
-    if recent.len() < 2
-        && let Some(report) = model.latest_report()
-    {
-        recent.push(FlowEvent::Report {
-            message: report.message.clone(),
-            ts: Some(report.ts.clone()),
-        });
+    if recent.len() < 2 {
+        if let Some(report) = model.latest_report() {
+            recent.push(FlowEvent::Report {
+                message: report.message.clone(),
+                ts: Some(report.ts.clone()),
+            });
+        }
     }
 
     let loops: Vec<(String, u64, Option<u64>)> = rows
@@ -778,10 +778,10 @@ fn build_cost_card(
             {
                 best = Some((node.path.clone(), node.total));
             }
-            if let Some(child_best) = top(&node.children)
-                && best.as_ref().is_none_or(|(_, total)| child_best.1 > *total)
-            {
-                best = Some(child_best);
+            if let Some(child_best) = top(&node.children) {
+                if best.as_ref().is_none_or(|(_, total)| child_best.1 > *total) {
+                    best = Some(child_best);
+                }
             }
         }
         best
