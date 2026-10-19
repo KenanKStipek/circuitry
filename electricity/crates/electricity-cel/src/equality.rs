@@ -268,11 +268,10 @@ fn strict_in_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
     // crate's own module docs on `convert::NULL_KEY_SENTINEL` already
     // call out as a (vanishingly unlikely) risk rather than something
     // this check also needs to special-case.
-    if matches!(item, Value::Null)
-        && let Value::Map(map) = container
-        && map.map.keys().any(crate::convert::is_null_key_sentinel)
-    {
-        return Ok(Value::Bool(true));
+    if let (Value::Null, Value::Map(map)) = (item, container) {
+        if map.map.keys().any(crate::convert::is_null_key_sentinel) {
+            return Ok(Value::Bool(true));
+        }
     }
     // Scans *container*'s own elements by reference -- never collecting
     // them into a fresh `Vec<Value>` first (issue #400): `cel` itself
