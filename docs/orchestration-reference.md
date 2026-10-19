@@ -2193,10 +2193,11 @@ outer binding of the same name.
 `cof run --events <file>` (also on `cof run-library`) writes a JSONL stream of
 effect starts and ends as the run goes — one complete JSON line per event,
 created or truncated before the first effect. `--live-state` shows a running
-effect anywhere — a tree branch, a `use` child or a chain leaf — only once a
-coalesced write happens to land while it runs (writes are at least 0.5 s
-apart). `--events` reports every one of them the instant it starts, from
-whichever worker thread runs it:
+effect anywhere — a tree branch, a `use` child or a chain leaf — within its
+own 0.5 s mirror interval of it starting: every effect republishes the live
+state the moment it starts, not only when something it writes happens to
+coincide with a coalesced write. `--events` reports every one of them the
+instant it starts, from whichever worker thread runs it:
 
 ```json
 {"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}

@@ -259,6 +259,48 @@ def test_tree_flow_two_branches(mgr: RunManager, tmp_path: Path) -> None:
     assert {iter0, iter1} == {f"R-{pids[0][:4]}", f"R-{pids[1][:4]}"}
 
 
+def test_get_state_shows_a_tree_flow_branch_still_running(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """`RunManager.get_state` goes through the same `state_observer` path as
+    `--live-state`'s mirror (#634) -- a tree-flow branch still pending its
+    prompt response shows up there too, not only once it completes.
+    """
+    p = _write_yml(tmp_path, "tree2-running.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: loop
+            name: parallel
+            flow: tree
+            each:
+              in: input.items
+              as: it
+            body:
+              - type: prompt
+                name: ask
+                template: "Q: {{it}}"
+    """)
+    run = mgr.start_run(
+        orchestration_path=p, initial_state={"items": ["alpha", "beta"]},
+    )
+
+    assert _wait_until(
+        lambda: run.status == RunStatus.PAUSED and len(run.pending_prompts) == 2
+    )
+
+    snapshot = mgr.get_state(run.run_id)
+    parallel = snapshot["prime"]["parallel"]
+    for key in ("iter_0", "iter_1"):
+        meta = parallel[key]["ask"]["meta"]
+        assert meta["created_at"] is not None
+        assert meta["completed_at"] is None
+
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text="ok")
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED)
+
+
 # ---------------------------------------------------------------------------
 # 5. Parallel loop with 4 iterations
 # ---------------------------------------------------------------------------

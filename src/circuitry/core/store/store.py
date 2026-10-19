@@ -4,10 +4,16 @@ import threading
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..saved_state import dumps_saved_state
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 #: ``Store.effect_start`` / ``Store.effect_complete``.
 _EffectCallback = Callable[[str, dict[str, Any]], None]
@@ -346,12 +352,60 @@ class Store:
         ``_child_on_write``) — nothing ever reads it until something
         publishes a snapshot, so without this call a running effect inside
         one stays invisible to ``--live-state`` until it finishes (#634).
+
+        ``effect_start`` fires *before* that publish, not after: a watcher
+        like a TUI's own ``on_write`` observer can treat "the next state
+        write" as its cancellation point (stopping the run by raising from
+        there), and this call's own publish is exactly such a write. Firing
+        ``effect_start`` first guarantees it always runs even when the
+        publish right after it raises. If it does, this method closes the
+        pair itself -- marking *effect_node* complete (if its own ``meta``
+        isn't already) and firing :meth:`fire_effect_complete` -- before
+        re-raising, so a run stopped exactly here never leaves a node with
+        ``created_at`` set and no ``completed_at``, nor a start event with
+        no matching end event (#634).
+        """
+        if self.effect_start is not None:
+            self.effect_start(self.effect_path(name), effect_node)
+        self.publish_or_finalize(name, effect_node)
+
+    def publish_or_finalize(self, name: str, effect_node: dict[str, Any]) -> None:
+        """Republish, but close *effect_node*'s start/complete pair first if
+        the publish raises (a cancelled run stopping at exactly this write)
+        rather than leaving it stuck mid-dispatch. Used by
+        :meth:`fire_effect_start` for a pass's first publish, and directly
+        by a caller that republishes an *already started* effect again
+        later (a tool's retry resetting its meta, for one).
+        """
+        try:
+            self.publish()
+        except Exception:
+            meta = effect_node.get("meta")
+            if isinstance(meta, dict) and meta.get("completed_at") is None:
+                meta["completed_at"] = _now_iso()
+                # A regular attempt already sets `error: None` as part of
+                # its own pre-dispatch reset, so `setdefault` wouldn't
+                # replace it -- an explicit assignment is needed here.
+                if not meta.get("error"):
+                    meta["error"] = "cancelled"
+            self.fire_effect_complete(name, effect_node)
+            raise
+
+    def publish(self) -> None:
+        """Republish this store's current view through ``on_write`` (if set).
+
+        A tool's attempt loop keeps mutating its node (``created_at``,
+        ``waiting_for``, a retry's reset meta) after ``fire_effect_start``
+        already fired once for the whole pass -- each attempt calls this
+        again once its own meta is in place, so a retry is visible too.
+
+        A retry's own republish needs the same cancellation safety
+        :meth:`fire_effect_start` gives the pass's first one -- use
+        :meth:`publish_or_finalize` for that instead of calling this
+        directly.
         """
         if self.on_write is not None:
             self.on_write(self.root_state)
-        if self.effect_start is None:
-            return
-        self.effect_start(self.effect_path(name), effect_node)
 
     def fire_effect_complete(
         self, name: str, effect_result: dict[str, Any]

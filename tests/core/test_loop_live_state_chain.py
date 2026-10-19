@@ -84,6 +84,17 @@ def test_each_chain_loop_publishes_after_every_completed_pass() -> None:
     ]
     assert "a" in completed_values
 
+    # #299 itself: some snapshot shows iter_0 already complete while
+    # iter_1 hasn't appeared at all yet -- not only once iter_1's own
+    # start (#634) republishes the whole root and iter_0 happens to be
+    # complete by then too.
+    assert any(
+        work.get("iter_0", {}).get("step", {}).get("value") == "a"
+        and "iter_1" not in work
+        for s in snapshots
+        for work in [s.get("prime", {}).get("work", {})]
+    )
+
 
 def test_while_loop_publishes_after_every_completed_pass() -> None:
     snapshots: list[dict] = []
