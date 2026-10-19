@@ -386,7 +386,13 @@ fn run_status_color(status: RunStatus, theme: &Theme) -> Color {
 /// section's larger share of the remaining height, split 62/38
 /// across), and the three cards -- time, flow, cost -- in equal
 /// columns across the bottom (DESIGN.md §12: "the 62/38 rule covers
-/// two-way splits; equal panes ... share space equally").
+/// two-way splits; equal panes ... share space equally"). Below
+/// [`thresholds::TWO_COLUMN_MIN_WIDTH`]/`_MIN_HEIGHT` -- the same
+/// 80×20 line screen 2's own two-column layout collapses at -- the
+/// phase strip drops to one line, the now pane stacks the step over
+/// the log lines instead of splitting them side by side, and the
+/// three cards become one summary line (DESIGN.md: "below 80
+/// columns or 20 rows").
 fn draw_overview(
     frame: &mut Frame,
     area: Rect,
@@ -396,12 +402,25 @@ fn draw_overview(
     if area.height == 0 {
         return;
     }
-    let phase_height = 2.min(area.height);
+    let stacked = area.width < thresholds::TWO_COLUMN_MIN_WIDTH
+        || area.height < thresholds::TWO_COLUMN_MIN_HEIGHT;
+    let phase_height = if stacked { 1 } else { 2 }.min(area.height);
+    let cards_height = if stacked { 1 } else { 0 };
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(phase_height), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(phase_height),
+            Constraint::Min(0),
+            Constraint::Length(cards_height.min(area.height.saturating_sub(phase_height))),
+        ])
         .split(area);
-    draw_phase_strip(frame, sections[0], &overview.phase_strip, ctx);
+    draw_phase_strip(frame, sections[0], &overview.phase_strip, ctx, stacked);
+
+    if stacked {
+        draw_now_pane(frame, sections[1], &overview.now_pane, ctx, true);
+        draw_cards_summary_line(frame, sections[2], overview, ctx);
+        return;
+    }
 
     let rest = sections[1];
     let now_height = oscilloscope_core::layout::golden_major_section(rest.height);
@@ -414,7 +433,7 @@ fn draw_overview(
         ])
         .split(rest);
 
-    draw_now_pane(frame, rows[0], &overview.now_pane, ctx);
+    draw_now_pane(frame, rows[0], &overview.now_pane, ctx, false);
     draw_cards(frame, rows[1], overview, ctx);
 }
 
@@ -428,48 +447,74 @@ fn draw_phase_strip(
     area: Rect,
     steps: &[oscilloscope_core::screens::PhaseStep],
     ctx: &DrawCtx,
+    single_line: bool,
 ) {
     if area.height == 0 || steps.is_empty() {
         return;
     }
+    // The real separator drawn between two items is 5 columns wide
+    // (`"  →  "`/`"     "`), not the 3 the old width estimate used --
+    // undercounting it let the `○ N more` marker spill past the
+    // right edge once steps overflowed.
+    const SEP_WIDTH: usize = 5;
     let max_width = area.width as usize;
     let mut line1: Vec<Span> = Vec::new();
     let mut line2: Vec<Span> = Vec::new();
     let mut used = 0usize;
     let mut shown = 0usize;
-    for step in steps {
+    for (idx, step) in steps.iter().enumerate() {
         let glyph = status_glyph(step.status.kind);
         let label1 = format!("{glyph} {}", step.label);
-        let start = step
-            .start_ts
-            .as_deref()
-            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-        let dur = step
-            .duration_s
-            .map(oscilloscope_core::format::format_duration);
-        let label2 = match (&start, &dur) {
-            (Some(s), Some(d)) => format!("{s} · {d}"),
-            (Some(s), None) => s.clone(),
-            _ => String::new(),
+        let label2 = if single_line {
+            None
+        } else {
+            let start = step
+                .start_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+            let dur = step
+                .duration_s
+                .map(oscilloscope_core::format::format_duration);
+            Some(match (&start, &dur) {
+                (Some(s), Some(d)) => format!("{s} · {d}"),
+                (Some(s), None) => s.clone(),
+                _ => String::new(),
+            })
         };
-        let col_width = label1.chars().count().max(label2.chars().count());
-        let piece_width = col_width + 3;
-        if shown > 0 && used + piece_width > max_width {
+        let col_width = label1
+            .chars()
+            .count()
+            .max(label2.as_deref().map_or(0, |l| l.chars().count()));
+        let sep_width = if shown > 0 { SEP_WIDTH } else { 0 };
+        // Reserved only when this isn't the last step -- including
+        // the last one never needs a trailing `○ N more` marker, so
+        // nothing has to be held back for it.
+        let more_reserve = if idx + 1 < steps.len() {
+            let n = steps.len() - idx - 1;
+            2 + format!("○ {n} more").chars().count()
+        } else {
+            0
+        };
+        if shown > 0 && used + sep_width + col_width + more_reserve > max_width {
             break;
         }
-        used += piece_width;
+        used += sep_width + col_width;
         if shown > 0 {
             line1.push(Span::raw("  →  "));
-            line2.push(Span::raw("     "));
+            if !single_line {
+                line2.push(Span::raw("     "));
+            }
         }
         line1.push(Span::styled(
-            label1.clone(),
+            format!("{label1:<col_width$}"),
             status_style(step.status.kind, ctx.theme),
         ));
-        line2.push(Span::styled(
-            format!("{label2:<col_width$}"),
-            Style::default().fg(ctx.theme.dim),
-        ));
+        if let Some(label2) = label2 {
+            line2.push(Span::styled(
+                format!("{label2:<col_width$}"),
+                Style::default().fg(ctx.theme.dim),
+            ));
+        }
         shown += 1;
     }
     if shown < steps.len() {
@@ -479,7 +524,12 @@ fn draw_phase_strip(
         }
         line1.push(Span::raw(format!("○ {more} more")));
     }
-    let paragraph = Paragraph::new(vec![Line::from(line1), Line::from(line2)]);
+    let lines = if single_line {
+        vec![Line::from(line1)]
+    } else {
+        vec![Line::from(line1), Line::from(line2)]
+    };
+    let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
 }
 
@@ -490,8 +540,34 @@ fn draw_now_pane(
     area: Rect,
     pane: &oscilloscope_core::screens::NowPane,
     ctx: &DrawCtx,
+    stacked: bool,
 ) {
     if area.height == 0 {
+        return;
+    }
+    let log_lines: Vec<Line> = pane
+        .log_lines
+        .iter()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    let focus =
+        Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
+    let log =
+        Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
+
+    if stacked {
+        // The step over the log lines (DESIGN.md: "below 80 columns
+        // or 20 rows ... the now pane stacks"); the step's own
+        // content is short and bounded, so it takes the golden
+        // section's smaller share, the log (which only ever grows by
+        // appending) the rest.
+        let focus_height = oscilloscope_core::layout::golden_section(area.height);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(focus_height), Constraint::Min(0)])
+            .split(area);
+        frame.render_widget(focus, rows[0]);
+        frame.render_widget(log, rows[1]);
         return;
     }
     let left_width = oscilloscope_core::layout::golden_major_section(area.width);
@@ -499,17 +575,7 @@ fn draw_now_pane(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(left_width), Constraint::Min(0)])
         .split(area);
-    let log_lines: Vec<Line> = pane
-        .log_lines
-        .iter()
-        .map(|l| Line::from(l.clone()))
-        .collect();
-    let log =
-        Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
     frame.render_widget(log, cols[0]);
-
-    let focus =
-        Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
     frame.render_widget(focus, cols[1]);
 }
 
@@ -641,6 +707,89 @@ fn focus_step_lines(
 /// The overview's own three cards (issue #626) -- time, flow, cost,
 /// equal columns (DESIGN.md §12: "equal panes ... share space
 /// equally").
+/// Truncates a line's own displayed text to `max_chars`, ending in
+/// `…` rather than letting the terminal clip it mid-word (DESIGN.md:
+/// "long values truncate with …"), styling kept span by span.
+fn truncate_line(line: Line<'static>, max_chars: usize) -> Line<'static> {
+    let total: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+    if total <= max_chars {
+        return line;
+    }
+    if max_chars == 0 {
+        return Line::from("");
+    }
+    let mut budget = max_chars.saturating_sub(1);
+    let mut spans = Vec::new();
+    for span in line.spans {
+        if budget == 0 {
+            break;
+        }
+        let count = span.content.chars().count();
+        if count <= budget {
+            budget -= count;
+            spans.push(span);
+        } else {
+            let truncated: String = span.content.chars().take(budget).collect();
+            spans.push(Span::styled(truncated, span.style));
+            budget = 0;
+        }
+    }
+    spans.push(Span::raw("…"));
+    Line::from(spans)
+}
+
+fn truncate_lines(lines: Vec<Line<'static>>, max_chars: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|l| truncate_line(l, max_chars))
+        .collect()
+}
+
+/// Below [`thresholds::TWO_COLUMN_MIN_WIDTH`]/`_MIN_HEIGHT`
+/// (DESIGN.md: "the cards become a single summary line") -- the
+/// same figures the three cards show, collapsed onto one line with
+/// no borders, so a tiny terminal still gets elapsed time, effects,
+/// failures, tokens and cost without three bordered boxes eating
+/// the only rows left.
+fn draw_cards_summary_line(
+    frame: &mut Frame,
+    area: Rect,
+    overview: &oscilloscope_core::screens::Overview,
+    ctx: &DrawCtx,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let time = &overview.time_card;
+    let flow = &overview.flow_card;
+    let cost = &overview.cost_card;
+    let effects = match flow.effects_planned {
+        Some(planned) if flow.effects_planned_is_lower_bound => {
+            format!("{}/{planned}+", flow.effects_done)
+        }
+        Some(planned) => format!("{}/{planned}", flow.effects_done),
+        None => flow.effects_done.to_string(),
+    };
+    let mut parts = vec![
+        oscilloscope_core::format::format_duration(time.elapsed_s),
+        format!("{effects} effects"),
+    ];
+    if flow.failures > 0 {
+        parts.push(format!("{} failed", flow.failures));
+    }
+    parts.push(format!(
+        "↑{} ↓{}",
+        oscilloscope_core::format::format_tokens(cost.tokens_sent),
+        oscilloscope_core::format::format_tokens(cost.tokens_received)
+    ));
+    if let Some(usd) = cost.cost_usd {
+        parts.push(format!("${usd:.2}"));
+    }
+    let _ = ctx;
+    let line = truncate_line(Line::from(parts.join(" · ")), area.width as usize);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn draw_cards(
     frame: &mut Frame,
     area: Rect,
@@ -694,12 +843,31 @@ fn draw_time_card(
     {
         lines.push(Line::from(format!("ETA ~{}", &eta[..5.min(eta.len())])));
     }
+    if !card.bar.is_empty() {
+        let max_ms = card
+            .bar
+            .iter()
+            .map(|(_, secs)| (*secs * 1000.0) as u64)
+            .max()
+            .unwrap_or(0);
+        let text = card
+            .bar
+            .iter()
+            .map(|(label, secs)| {
+                let blocks = bar((*secs * 1000.0) as u64, max_ms, 6);
+                format!("{label} {blocks}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(Line::from(text));
+    }
     if let Some((label, secs)) = &card.slowest_finished {
         lines.push(Line::from(format!(
             "slowest {label} {}",
             oscilloscope_core::format::format_duration(*secs)
         )));
     }
+    let lines = truncate_lines(lines, area.width.saturating_sub(2) as usize);
     let paragraph =
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" time "));
     frame.render_widget(paragraph, area);
@@ -758,9 +926,29 @@ fn draw_flow_card(
             oscilloscope_core::format::format_duration(secs)
         )));
     }
+    let _ = ctx;
+    let lines = truncate_lines(lines, area.width.saturating_sub(2) as usize);
     let paragraph =
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" flow "));
     frame.render_widget(paragraph, area);
+}
+
+/// A sparkline over `buckets` (DESIGN.md: "tokens over time as a
+/// sparkline"), one block character per bucket, scaled to the
+/// busiest one -- empty when nothing has completed yet.
+fn sparkline(buckets: &[u64]) -> String {
+    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = buckets.iter().copied().max().unwrap_or(0);
+    if max == 0 {
+        return String::new();
+    }
+    buckets
+        .iter()
+        .map(|&v| {
+            let idx = ((v as f64 / max as f64) * (LEVELS.len() - 1) as f64).round() as usize;
+            LEVELS[idx.min(LEVELS.len() - 1)]
+        })
+        .collect()
 }
 
 fn draw_cost_card(
@@ -777,6 +965,10 @@ fn draw_cost_card(
     if let Some(cost) = card.cost_usd {
         lines.push(Line::from(format!("${cost:.2}")));
     }
+    let spark = sparkline(&card.tokens_over_time);
+    if !spark.is_empty() {
+        lines.push(Line::from(spark));
+    }
     if let Some((path, total)) = &card.top_store {
         lines.push(Line::from(format!(
             "top {path} {}",
@@ -785,6 +977,7 @@ fn draw_cost_card(
     }
     lines.push(Line::from(card.in_flight.clone()));
     let _ = ctx;
+    let lines = truncate_lines(lines, area.width.saturating_sub(2) as usize);
     let paragraph =
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" cost "));
     frame.render_widget(paragraph, area);
@@ -1634,11 +1827,19 @@ pub fn draw(
         .constraints([Constraint::Length(1), Constraint::Min(5)])
         .split(area);
 
+    // `draw_header_line` appends the theme banner (`t`'s own, issue
+    // #535) after the line `header_line` itself already sized to
+    // the full width -- reserving room for it here, not after, is
+    // what keeps the two from overflowing past `area.width` together.
+    let banner_width = ctx
+        .theme_banner
+        .map(|name| format!("  theme: {name}").chars().count() as u16)
+        .unwrap_or(0);
     let segments = oscilloscope_core::screens::header_line(
         &state.header,
         now,
         ctx.zone,
-        area.width,
+        area.width.saturating_sub(banner_width),
         !ctx.no_animation,
         icon_frame,
         Some(app.screen),
@@ -2181,6 +2382,22 @@ mod golden_tests {
         state: Option<&Value>,
         process: ProcessState,
     ) -> String {
+        overview_snapshot_at_with_log(width, height, plan, model, state, process, &[])
+    }
+
+    /// [`overview_snapshot_at`], with the now pane's own log lines
+    /// (the TUI's own `log_lines: Vec<String>` buffer, not
+    /// `RenderState::log`, which the overview never reads -- see
+    /// `build_overview_if_active`'s own doc comment in `main.rs`).
+    fn overview_snapshot_at_with_log(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        log_lines: &[String],
+    ) -> String {
         let rendered = render::build_folded(
             "do-thing.yml",
             "cof",
@@ -2206,7 +2423,7 @@ mod golden_tests {
             state,
             &rendered.token_bar,
             &rendered.treemap,
-            &rendered.log,
+            log_lines,
             None,
             "2026-01-01T00:05:00Z",
         );
@@ -2334,6 +2551,47 @@ mod golden_tests {
     }
 
     #[test]
+    fn overview_running_at_120x40_with_log_lines() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let log_lines = vec![
+            "00:00:00 engine: started".to_string(),
+            "00:00:01 a: ok".to_string(),
+        ];
+        let text = overview_snapshot_at_with_log(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            &log_lines,
+        );
+        assert!(
+            text.contains("a: ok"),
+            "the now pane's own log side should show log lines:\n{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_running_at_60x18() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at(
+            60,
+            18,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
     fn overview_finished_at_120x40() {
         let plan = sample_plan();
         let mut model = RunModel::new();
@@ -2374,6 +2632,16 @@ mod golden_tests {
     }
 
     #[test]
+    fn overview_finished_at_60x18() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let process = ProcessState::exited(false);
+        let text = overview_snapshot_at(60, 18, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
     fn overview_failed_at_120x40() {
         let plan = sample_plan();
         let mut model = RunModel::new();
@@ -2410,6 +2678,16 @@ mod golden_tests {
         let state = overview_failed_state();
         let process = ProcessState::exited(false);
         let text = overview_snapshot_at(70, 20, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_failed_at_60x18() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_failed_state();
+        let process = ProcessState::exited(false);
+        let text = overview_snapshot_at(60, 18, &plan, &mut model, Some(&state), process);
         insta::assert_snapshot!(text);
     }
 

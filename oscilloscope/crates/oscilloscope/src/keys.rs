@@ -350,6 +350,26 @@ impl App {
                     self.collapsed.remove(path);
                 }
             }
+            // Issue #626: ⏎ on the overview opens screen 2 with the
+            // running step selected -- the same deepest-running-row
+            // tie-break `follow_target` and the now pane's own focus
+            // use, over the rows actually visible right now (root
+            // excluded: it's "running" for the whole run, never a
+            // real step to jump to).
+            KeyCode::Enter if self.screen == Screen::Overview => {
+                if let Some(target) = rows
+                    .iter()
+                    .filter(|r| {
+                        r.status.kind == oscilloscope_core::model::StatusKind::Running
+                            && r.kind != oscilloscope_core::render::RowKind::Root
+                    })
+                    .max_by_key(|r| r.depth)
+                {
+                    let path = target.path.clone();
+                    self.screen = Screen::Flow;
+                    self.select_tree_path(Some(path));
+                }
+            }
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
             // not by parsing its label.
@@ -885,6 +905,34 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_the_overview_opens_screen_2_with_the_running_step_selected() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Running),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        assert_eq!(
+            app.screen,
+            Screen::Overview,
+            "the overview is the default screen"
+        );
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        assert_eq!(app.screen, Screen::Flow);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+    }
+
+    #[test]
+    fn enter_on_the_overview_with_nothing_running_does_nothing() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        assert_eq!(app.screen, Screen::Overview);
+    }
+
+    #[test]
     fn enter_expands_a_quick_steps_row_and_left_folds_it_again() {
         let mut quick_steps_row = row("prime.a", 1, StatusKind::Done);
         quick_steps_row.label = "3 quick steps".to_string();
@@ -892,6 +940,10 @@ mod tests {
         let rows = [quick_steps_row];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        // Quick steps are a screen 2 concept -- on the overview
+        // (the default screen), ⏎ opens screen 2 instead (issue
+        // #626).
+        app.screen = Screen::Flow;
         app.selected_path = Some("prime.a".to_string());
         app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
         assert!(app.expanded_quick_steps.contains("prime.a"));

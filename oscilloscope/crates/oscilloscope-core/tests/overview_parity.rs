@@ -62,7 +62,7 @@ fn build_case_overview(dir_name: &str) -> Overview {
         Some(&state),
         &rendered.token_bar,
         &rendered.treemap,
-        &rendered.log,
+        &[],
         None,
         "2026-01-01T00:10:00Z",
     )

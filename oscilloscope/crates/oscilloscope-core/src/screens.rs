@@ -273,52 +273,69 @@ pub fn header_line(
         return build(&document, report.as_deref(), eta.as_deref(), &tabs);
     }
 
-    // 2. The report truncates, down to a bare `▸`.
+    // 2. The report truncates, down to a bare `▸` -- solved
+    // arithmetically (the exact budget left for it once everything
+    // else is at its current width), not by rebuilding the whole
+    // line once per character shaved off: that rebuilt every
+    // segment's text on every step, costing O(report length squared)
+    // on a single long report line.
     if let Some(full) = &report_text {
-        let mut n = full.chars().count();
-        loop {
-            let candidate = if n == 0 {
-                "▸".to_string()
-            } else {
-                truncate_tail(full, n)
-            };
-            if fits(&document, Some(&candidate), eta.as_deref(), &tabs) || n == 0 {
-                report = Some(candidate);
-                break;
-            }
-            n -= 1;
-        }
+        let full_len = full.chars().count();
+        let width_without_report = segments_width(&build(&document, None, eta.as_deref(), &tabs));
+        // The 3-column ` · ` separator only actually appears once
+        // there's a report at all.
+        let available = target.saturating_sub(width_without_report + 3);
+        report = Some(if available <= 1 {
+            "▸".to_string()
+        } else {
+            truncate_tail(full, available.min(full_len))
+        });
         if fits(&document, report.as_deref(), eta.as_deref(), &tabs) {
             return build(&document, report.as_deref(), eta.as_deref(), &tabs);
         }
     }
 
-    // 3. The document truncates, keeping its own tail.
+    // 3. The document truncates, keeping its own tail -- the same
+    // arithmetic approach as the report's own, above.
     {
-        let mut n = original_document.chars().count();
-        loop {
-            let candidate = if n == 0 {
-                String::new()
-            } else {
-                truncate_head_keep_tail(&original_document, n)
-            };
-            if fits(&candidate, report.as_deref(), eta.as_deref(), &tabs) || n == 0 {
-                document = candidate;
-                break;
-            }
-            n -= 1;
-        }
+        let empty = String::new();
+        let width_without_document =
+            segments_width(&build(&empty, report.as_deref(), eta.as_deref(), &tabs));
+        let available = target.saturating_sub(width_without_document);
+        document = shrink_document(&original_document, available);
         if fits(&document, report.as_deref(), eta.as_deref(), &tabs) {
             return build(&document, report.as_deref(), eta.as_deref(), &tabs);
         }
     }
 
-    // 4. The ETA is dropped entirely. Status, elapsed and the clock
-    // never truncate -- if the line is still too wide after this,
-    // it simply overflows (the renderer clips it, same as any other
-    // line that doesn't fit).
+    // 4. The ETA is dropped entirely -- freeing up room the document
+    // just gave up for nothing, so step 3's own truncation (against
+    // the ETA still being there) is redone from the original document
+    // now that it's gone, rather than left however small step 3 left
+    // it. Status, elapsed and the clock never truncate -- if the line
+    // is still too wide after this, it simply overflows (the
+    // renderer clips it, same as any other line that doesn't fit).
     eta = None;
+    let empty = String::new();
+    let width_without_document = segments_width(&build(&empty, report.as_deref(), None, &tabs));
+    let available = target.saturating_sub(width_without_document);
+    document = shrink_document(&original_document, available);
     build(&document, report.as_deref(), eta.as_deref(), &tabs)
+}
+
+/// [`truncate_head_keep_tail`]'s own `available`-is-the-whole-budget
+/// wrapper, shared by the document-truncation steps above: the full
+/// document when it already fits in `available` chars, truncated to
+/// exactly `available` otherwise (0 drops it entirely).
+fn shrink_document(original: &str, available: usize) -> String {
+    let len = original.chars().count();
+    if available >= len {
+        return original.to_string();
+    }
+    if available == 0 {
+        return String::new();
+    }
+    truncate_head_keep_tail(original, available)
 }
 
 /// [`truncate_head_keep_tail`]'s own counterpart: cuts the *end* and
@@ -490,6 +507,14 @@ pub struct CostCard {
     /// one (DESIGN.md: "cost ... once any effect reports
     /// meta.cost_usd") -- never shown as `$0.00` in the meantime.
     pub cost_usd: Option<f64>,
+    /// Tokens (sent + received) completed in each of a fixed number
+    /// of equal time buckets spanning the run so far, oldest first --
+    /// the sparkline's own data (DESIGN.md: "tokens over time as a
+    /// sparkline"), bucketed from exactly what every other card
+    /// already reads: each effect's own `meta.tokens_sent`/
+    /// `tokens_received` against its own `completed_at`. Empty before
+    /// the run has a start time or anything has completed.
+    pub tokens_over_time: Vec<u64>,
     pub top_store: Option<(String, u64)>,
     pub in_flight: String,
 }
@@ -579,18 +604,12 @@ fn build_now_pane(
     model: &RunModel,
     state: Option<&Value>,
     header: &crate::render::Header,
-    log: &[crate::diff::LogLine],
+    log: &[String],
     selected_path: Option<&str>,
     now: &str,
 ) -> NowPane {
     const LOG_TAIL: usize = 20;
-    let log_lines: Vec<String> = log
-        .iter()
-        .rev()
-        .take(LOG_TAIL)
-        .map(|l| l.text.clone())
-        .rev()
-        .collect();
+    let log_lines: Vec<String> = log.iter().rev().take(LOG_TAIL).rev().cloned().collect();
 
     let focus = if !matches!(header.status, RunStatus::Running) {
         NowFocus::Ended(EndedSummary {
@@ -599,18 +618,34 @@ fn build_now_pane(
             end_ts: header.run_end_ts.clone(),
             tokens_sent: header.tokens_sent,
             tokens_received: header.tokens_received,
-            cost_usd: state
-                .and_then(run_totals)
-                .and_then(|t| t.get("cost_usd").and_then(Value::as_f64)),
+            cost_usd: effective_cost_usd(state, flat),
         })
     } else {
         // The document root is "running" for the whole run, which
         // would otherwise inflate "+N more running" by one for the
         // entire run's duration even with nothing else going on --
         // it's never a real step to surface here.
-        let running: Vec<&Row> = rows
+        //
+        // A container counts as running the moment any descendant of
+        // its own is (`completed_at` stays unset until every child
+        // has), so a leaf actually running makes every one of its
+        // ancestors "running" too -- only the leaves (no running
+        // descendant of their own) are real steps to count or focus
+        // on; `review > fix > agent` with `agent` running must read
+        // one running step, not three.
+        let all_running: Vec<&Row> = rows
             .iter()
             .filter(|r| r.status.kind == StatusKind::Running && r.kind != RowKind::Root)
+            .collect();
+        let running: Vec<&Row> = all_running
+            .iter()
+            .filter(|r| {
+                let prefix = format!("{}.", r.path);
+                !all_running
+                    .iter()
+                    .any(|other| other.path.starts_with(&prefix))
+            })
+            .copied()
             .collect();
         // The step follow selects (DESIGN.md): whichever running row
         // is the shared selection, same as the orchestration pane's
@@ -691,13 +726,27 @@ fn build_flow_card(
     model: &RunModel,
     header: &crate::render::Header,
 ) -> FlowCard {
-    let failures = rows
+    // A container's own status propagates from a failed descendant
+    // the same way "running" does -- `review > fix > agent` with
+    // `agent` failed reads every one of its ancestors as `Failed`/
+    // `FailedHandled` too, so only the leaves (no failed descendant
+    // of their own) are real failures to count; the root is never
+    // one either.
+    let failing: Vec<&Row> = rows
         .iter()
         .filter(|r| {
-            matches!(
-                r.status.kind,
-                StatusKind::Failed | StatusKind::FailedHandled
-            )
+            r.kind != RowKind::Root
+                && matches!(
+                    r.status.kind,
+                    StatusKind::Failed | StatusKind::FailedHandled
+                )
+        })
+        .collect();
+    let failures = failing
+        .iter()
+        .filter(|r| {
+            let prefix = format!("{}.", r.path);
+            !failing.iter().any(|other| other.path.starts_with(&prefix))
         })
         .count() as u64;
 
@@ -764,11 +813,78 @@ fn build_flow_card(
     }
 }
 
+/// Issue #626: the cost card (and the ended summary, in
+/// `build_now_pane`) show a dollar figure the moment any effect's
+/// own `meta.cost_usd` has reported one, not only once the run has
+/// ended and `runtime.last_run.totals.cost_usd` exists (DESIGN.md:
+/// "cost ... once any effect reports meta.cost_usd") -- the
+/// authoritative total once cof has written it, summed from every
+/// node's own report otherwise. Shown only when it's actually
+/// positive -- `$0.00` means "not reported", same as `None`.
+fn effective_cost_usd(state: Option<&Value>, flat: &BTreeMap<String, NodeMeta>) -> Option<f64> {
+    state
+        .and_then(run_totals)
+        .and_then(|t| t.get("cost_usd").and_then(Value::as_f64))
+        .or_else(|| {
+            let sum: f64 = flat
+                .values()
+                .filter_map(|n| n.meta.get("cost_usd").and_then(Value::as_f64))
+                .sum();
+            (sum > 0.0).then_some(sum)
+        })
+        .filter(|c| *c > 0.0)
+}
+
+/// Issue #626's own sparkline: tokens completed in each of a fixed
+/// number of equal time buckets spanning `run_start_ts`..`now`, from
+/// every node's own `meta.tokens_sent`/`tokens_received` against its
+/// own `completed_at` -- the same per-node token rule `node_tokens`
+/// already applies elsewhere, bucketed by time instead of summed.
+fn build_tokens_over_time(
+    header: &crate::render::Header,
+    flat: &BTreeMap<String, NodeMeta>,
+    now: &str,
+) -> Vec<u64> {
+    const BUCKETS: usize = 12;
+    let Some(start) = header
+        .run_start_ts
+        .as_deref()
+        .and_then(crate::diff::parse_instant)
+    else {
+        return Vec::new();
+    };
+    let Some(end) = crate::diff::parse_instant(now) else {
+        return Vec::new();
+    };
+    let span_ms = (end - start).num_milliseconds().max(1) as f64;
+    let mut buckets = vec![0u64; BUCKETS];
+    for node in flat.values() {
+        let Some(completed) = node
+            .completed_at
+            .as_deref()
+            .and_then(crate::diff::parse_instant)
+        else {
+            continue;
+        };
+        let (sent, received) = crate::model::node_tokens(&node.meta);
+        let total = sent + received;
+        if total == 0 {
+            continue;
+        }
+        let frac = ((completed - start).num_milliseconds().max(0) as f64 / span_ms).min(0.999_999);
+        let idx = ((frac * BUCKETS as f64) as usize).min(BUCKETS - 1);
+        buckets[idx] += total;
+    }
+    buckets
+}
+
 fn build_cost_card(
     header: &crate::render::Header,
     state: Option<&Value>,
+    flat: &BTreeMap<String, NodeMeta>,
     treemap: &[TreemapNode],
     token_bar: &TokenBar,
+    now: &str,
 ) -> CostCard {
     fn top(nodes: &[TreemapNode]) -> Option<(String, u64)> {
         let mut best: Option<(String, u64)> = None;
@@ -789,10 +905,8 @@ fn build_cost_card(
     CostCard {
         tokens_sent: header.tokens_sent,
         tokens_received: header.tokens_received,
-        cost_usd: state
-            .and_then(run_totals)
-            .and_then(|t| t.get("cost_usd").and_then(Value::as_f64))
-            .filter(|c| *c > 0.0),
+        cost_usd: effective_cost_usd(state, flat),
+        tokens_over_time: build_tokens_over_time(header, flat, now),
         top_store: top(treemap),
         in_flight: token_bar_in_flight_line(token_bar),
     }
@@ -818,7 +932,7 @@ pub fn build_overview(
     state: Option<&Value>,
     token_bar: &TokenBar,
     treemap: &[TreemapNode],
-    log: &[crate::diff::LogLine],
+    log: &[String],
     selected_path: Option<&str>,
     now: &str,
 ) -> Overview {
@@ -837,7 +951,7 @@ pub fn build_overview(
     );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(header, state, treemap, token_bar);
+    let cost_card = build_cost_card(header, state, flat, treemap, token_bar, now);
     Overview {
         phase_strip,
         now_pane,
@@ -964,8 +1078,7 @@ mod tests {
         assert!(narrow_text.contains("11:52:55"));
     }
 
-    #[test]
-    fn header_line_truncates_report_before_document_at_80_columns() {
+    fn long_header() -> crate::render::Header {
         let mut header = base_header();
         header.document = "a-fairly-long-orchestration-document-name.yml".to_string();
         header.latest_report = Some(crate::render::HeaderReport {
@@ -973,6 +1086,12 @@ mod tests {
             message: "a somewhat long report message that will not fit".to_string(),
             ts: "2026-10-08T11:52:00Z".to_string(),
         });
+        header
+    }
+
+    #[test]
+    fn header_line_truncates_report_before_document_at_80_columns() {
+        let header = long_header();
         let segments = header_line(
             &header,
             "2026-10-08T11:52:55Z",
@@ -983,13 +1102,19 @@ mod tests {
             Some(Screen::Overview),
         );
         let text = header_line_text(&segments);
-        assert!(text.contains("running"));
-        assert!(text.contains("11:52:55"));
+        // The report is already down to a bare `▸` (step 2) before the
+        // document starts giving up its own head (step 3) -- and the
+        // ETA (step 4) survives both, since this width doesn't need
+        // it dropped too.
+        assert_eq!(
+            text,
+            "⠔⠒⠒⠤⠤⠔⠒⠒ …ument-name.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2"
+        );
     }
 
     #[test]
     fn header_line_drops_eta_before_status_at_50_columns() {
-        let header = base_header();
+        let header = long_header();
         let segments = header_line(
             &header,
             "2026-10-08T11:52:55Z",
@@ -1000,8 +1125,82 @@ mod tests {
             Some(Screen::Overview),
         );
         let text = header_line_text(&segments);
-        assert!(text.contains("running"));
-        assert!(text.contains("11:52:55"));
+        // Squeezed enough to drop the document to nothing and the
+        // report to a bare `▸` and the ETA entirely -- but status,
+        // elapsed and the clock are all still there, untruncated.
+        assert_eq!(text, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2");
+    }
+
+    #[test]
+    fn header_line_truncation_order_holds_at_every_required_width_without_a_report() {
+        let header = base_header();
+        let expected = [
+            (50u16, "⠔⠒⠒⠤⠤⠔⠒⠒ …l · ♥ running 47m57s · 11:52:55   [0]  2"),
+            (
+                80,
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0]  2",
+            ),
+            (
+                100,
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow",
+            ),
+            (
+                120,
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow",
+            ),
+        ];
+        for (width, want) in expected {
+            let segments = header_line(
+                &header,
+                "2026-10-08T11:52:55Z",
+                &utc(),
+                width,
+                true,
+                0,
+                Some(Screen::Overview),
+            );
+            assert_eq!(header_line_text(&segments), want, "at {width} columns");
+        }
+    }
+
+    #[test]
+    fn header_line_truncation_order_holds_at_every_required_width_with_a_report() {
+        let mut header = base_header();
+        header.latest_report = Some(crate::render::HeaderReport {
+            level: crate::observe::ReportLevel::Info,
+            message: "fixing 1 blocker".to_string(),
+            ts: "2026-10-08T11:52:00Z".to_string(),
+        });
+        let expected = [
+            (
+                50u16,
+                "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2",
+            ),
+            (
+                80,
+                "⠔⠒⠒⠤⠤⠔⠒⠒ …ature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2",
+            ),
+            (
+                100,
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 blocker   [0]  2",
+            ),
+            (
+                120,
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 blocker   [0 overview]  2 flow",
+            ),
+        ];
+        for (width, want) in expected {
+            let segments = header_line(
+                &header,
+                "2026-10-08T11:52:55Z",
+                &utc(),
+                width,
+                true,
+                0,
+                Some(Screen::Overview),
+            );
+            assert_eq!(header_line_text(&segments), want, "at {width} columns");
+        }
     }
 
     #[test]
@@ -1168,6 +1367,58 @@ mod tests {
     }
 
     #[test]
+    fn nested_running_containers_count_as_one_running_step() {
+        fn running_row(path: &str, depth: usize) -> Row {
+            Row {
+                path: path.to_string(),
+                depth,
+                label: path.rsplit('.').next().unwrap_or(path).to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: Some(1.0),
+                loop_progress: None,
+                dim: Some("shell".to_string()),
+                has_children: true,
+            }
+        }
+        // `review > fix > agent`: a container is "running" the moment
+        // any descendant is (`completed_at` unset until every child
+        // has one), so all three rows read `Running` here even though
+        // only `agent` (the leaf) is a real step actually in flight.
+        let rows = vec![
+            running_row("prime.review", 1),
+            running_row("prime.review.fix", 2),
+            running_row("prime.review.fix.agent", 3),
+        ];
+        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let header = base_header();
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            None,
+            &header,
+            &[],
+            None,
+            "2026-10-08T11:00:00Z",
+        );
+        match pane.focus {
+            NowFocus::Running(step, more) => {
+                assert_eq!(step.path, "prime.review.fix.agent");
+                assert_eq!(more, 0, "only the leaf is a real running step");
+            }
+            other => panic!("expected Running, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn the_running_focus_prefers_the_deepest_row_over_the_root() {
         fn running_row(path: &str, depth: usize) -> Row {
             Row {
@@ -1206,6 +1457,37 @@ mod tests {
             NowFocus::Running(step, _) => assert_eq!(step.path, "prime.a.b"),
             other => panic!("expected Running, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn nested_failed_containers_count_as_one_failure() {
+        fn failed_row(path: &str, depth: usize) -> Row {
+            Row {
+                path: path.to_string(),
+                depth,
+                label: path.rsplit('.').next().unwrap_or(path).to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::FailedHandled,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: Some(1.0),
+                loop_progress: None,
+                dim: Some("shell".to_string()),
+                has_children: true,
+            }
+        }
+        let rows = vec![
+            failed_row("prime.review", 1),
+            failed_row("prime.review.fix", 2),
+            failed_row("prime.review.fix.agent", 3),
+        ];
+        let flat = BTreeMap::new();
+        let model = RunModel::new();
+        let header = base_header();
+        let card = build_flow_card(&rows, &rows, &flat, &model, &header);
+        assert_eq!(card.failures, 1, "only the leaf is a real failure");
     }
 
     #[test]
@@ -1276,20 +1558,118 @@ mod tests {
     fn cost_is_hidden_until_any_effect_reports_it() {
         let header = base_header();
         let token_bar = TokenBar::default();
+        let flat = BTreeMap::new();
         let no_cost = build_cost_card(
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
+            &flat,
             &[],
             &token_bar,
+            "2026-10-08T11:52:55Z",
         );
         assert_eq!(no_cost.cost_usd, None);
         let with_cost = build_cost_card(
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
+            &flat,
             &[],
             &token_bar,
+            "2026-10-08T11:52:55Z",
         );
         assert_eq!(with_cost.cost_usd, Some(14.2));
+    }
+
+    #[test]
+    fn cost_sums_from_meta_cost_usd_mid_run_before_totals_exist() {
+        let header = base_header();
+        let token_bar = TokenBar::default();
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            NodeMeta {
+                created_at: Some("2026-10-08T11:04:58Z".to_string()),
+                completed_at: Some("2026-10-08T11:05:58Z".to_string()),
+                error: None,
+                branch: None,
+                progress_done: None,
+                progress_total: None,
+                progress_eta_s: None,
+                value: Value::Null,
+                meta: json!({"cost_usd": 1.5}),
+            },
+        );
+        flat.insert(
+            "prime.b".to_string(),
+            NodeMeta {
+                created_at: Some("2026-10-08T11:06:00Z".to_string()),
+                completed_at: Some("2026-10-08T11:07:00Z".to_string()),
+                error: None,
+                branch: None,
+                progress_done: None,
+                progress_total: None,
+                progress_eta_s: None,
+                value: Value::Null,
+                meta: json!({"cost_usd": 0.75}),
+            },
+        );
+        let card = build_cost_card(
+            &header,
+            None,
+            &flat,
+            &[],
+            &token_bar,
+            "2026-10-08T11:52:55Z",
+        );
+        assert_eq!(card.cost_usd, Some(2.25));
+    }
+
+    #[test]
+    fn tokens_over_time_buckets_by_each_effects_own_completion() {
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-10-08T11:00:00Z".to_string());
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            NodeMeta {
+                created_at: Some("2026-10-08T11:00:00Z".to_string()),
+                completed_at: Some("2026-10-08T11:00:10Z".to_string()),
+                error: None,
+                branch: None,
+                progress_done: None,
+                progress_total: None,
+                progress_eta_s: None,
+                value: Value::Null,
+                meta: json!({"tokens_sent": 100, "tokens_received": 0}),
+            },
+        );
+        flat.insert(
+            "prime.b".to_string(),
+            NodeMeta {
+                created_at: Some("2026-10-08T11:00:50Z".to_string()),
+                completed_at: Some("2026-10-08T11:00:55Z".to_string()),
+                error: None,
+                branch: None,
+                progress_done: None,
+                progress_total: None,
+                progress_eta_s: None,
+                value: Value::Null,
+                meta: json!({"tokens_sent": 0, "tokens_received": 40}),
+            },
+        );
+        let buckets = build_tokens_over_time(&header, &flat, "2026-10-08T11:01:00Z");
+        assert_eq!(buckets.len(), 12);
+        assert_eq!(buckets.iter().sum::<u64>(), 140);
+        // A 60s span in 12 buckets is 5s each: the first completion
+        // (at 10s) lands in bucket 2, well before the second (at 55s,
+        // the last bucket).
+        assert!(
+            buckets[2] > 0,
+            "the early completion lands in an early bucket: {buckets:?}"
+        );
+        assert!(
+            buckets[buckets.len() - 1] > 0,
+            "the late completion lands in a late bucket: {buckets:?}"
+        );
     }
 
     #[test]

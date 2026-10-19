@@ -1489,6 +1489,7 @@ fn build_overview_if_active(
     plan: &oscilloscope_core::plan::PlanTree,
     model: &oscilloscope_core::model::RunModel,
     state: Option<&serde_json::Value>,
+    log_lines: &[String],
     now: &str,
 ) -> Option<oscilloscope_core::screens::Overview> {
     if app.screen != oscilloscope_core::screens::Screen::Overview {
@@ -1506,7 +1507,7 @@ fn build_overview_if_active(
         state,
         &render_state.token_bar,
         &render_state.treemap,
-        &render_state.log,
+        log_lines,
         app.selected_path.as_deref(),
         now,
     ))
@@ -1717,6 +1718,7 @@ fn run_tui(
         &plan,
         &model,
         current_state.as_ref(),
+        &log_lines,
         &now_str,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
@@ -1847,14 +1849,6 @@ fn run_tui(
                 app.fold_enabled,
                 &app.expanded_quick_steps,
             );
-            overview = build_overview_if_active(
-                &app,
-                &render_state,
-                &plan,
-                &model,
-                current_state.as_ref(),
-                &now_str,
-            );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
                 &mut highlights,
@@ -1890,6 +1884,20 @@ fn run_tui(
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
             }
+            // Built after follow (and the first-selection fallback)
+            // updated `app.selected_path`, not before -- the now
+            // pane's own focus reads that selection, so building it
+            // earlier left it a tick stale on the very frame follow
+            // first lands on a target.
+            overview = build_overview_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                current_state.as_ref(),
+                &log_lines,
+                &now_str,
+            );
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
@@ -2006,6 +2014,26 @@ fn run_tui(
                         }
                         needs_rebuild = true;
                         needs_draw = true;
+                        // A key can change `app.screen` or
+                        // `app.selected_path` (a screen switch, a
+                        // move) right here, but the next rebuild
+                        // (above, at the top of the loop) doesn't run
+                        // until next iteration -- without this, the
+                        // frame this same key press draws still has
+                        // the *previous* screen's overview (`None`
+                        // right after switching onto it), one blank
+                        // redraw wide. `render_state` itself needs no
+                        // refresh here: nothing a key does changes
+                        // what it holds.
+                        overview = build_overview_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            current_state.as_ref(),
+                            &log_lines,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -2780,6 +2808,7 @@ fn run_tui_watch(
         &plan,
         &model,
         last_state.as_ref(),
+        &log_lines,
         &now_str,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
@@ -2932,14 +2961,6 @@ fn run_tui_watch(
             render_state.header.engine_alive = model
                 .run_start_pid()
                 .is_some_and(oscilloscope_core::supervise::process_alive);
-            overview = build_overview_if_active(
-                &app,
-                &render_state,
-                &plan,
-                &model,
-                last_state.as_ref(),
-                &now_str,
-            );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
                 &mut highlights,
@@ -2975,6 +2996,17 @@ fn run_tui_watch(
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
             }
+            // See `run_tui`'s own comment above -- built after
+            // follow updated the selection, not before.
+            overview = build_overview_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                last_state.as_ref(),
+                &log_lines,
+                &now_str,
+            );
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
@@ -3057,6 +3089,18 @@ fn run_tui_watch(
                         }
                         needs_rebuild = true;
                         needs_draw = true;
+                        // See `run_tui`'s own comment above --
+                        // refreshes the overview for this same
+                        // frame's draw, not next iteration's.
+                        overview = build_overview_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            last_state.as_ref(),
+                            &log_lines,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
