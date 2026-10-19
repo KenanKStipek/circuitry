@@ -1074,6 +1074,41 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// is actually looking at once they tab onto `Pane::Details` itself
 /// to scroll it -- including a named report's own row, which never
 /// has an orchestration-tree row of its own at all to select instead.
+/// Screen 0's own model (issue #626), built only while it's actually
+/// on display -- the performance rule ("models for screens not on
+/// display aren't built"). `flatten_state` runs again here rather
+/// than threading `RenderState`'s own internal `flat` map out of
+/// `render::build` just for this -- it's the same O(state size) walk
+/// `build` itself already does on every rebuild, and this only adds
+/// a second one while the overview is the screen being shown.
+fn build_overview_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    plan: &oscilloscope_core::plan::PlanTree,
+    model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
+    now: &str,
+) -> Option<oscilloscope_core::screens::Overview> {
+    if app.screen != oscilloscope_core::screens::Screen::Overview {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    Some(oscilloscope_core::screens::build_overview(
+        &render_state.rows,
+        &render_state.unfolded_rows,
+        &render_state.header,
+        &flat,
+        plan,
+        model,
+        state,
+        &render_state.token_bar,
+        &render_state.treemap,
+        &render_state.log,
+        now,
+    ))
+}
+
 fn details_selection_path(app: &App) -> Option<String> {
     if app.details_source == keys::Pane::State {
         if let Some(p) = &app.state_selected_path {
@@ -1259,6 +1294,7 @@ fn run_tui(
     // leave the instant the engine exits, rather than staying open on
     // its final state until the user explicitly asks to leave.
     let mut leave_once_exited = false;
+    let mut now_str = now_rfc3339();
     let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         &engine_name,
@@ -1267,10 +1303,18 @@ fn run_tui(
         current_state.as_ref(),
         ProcessState::Running,
         start.elapsed().as_secs_f64(),
-        &now_rfc3339(),
+        &now_str,
         &[],
         app.fold_enabled,
         &app.expanded_quick_steps,
+    );
+    let mut overview = build_overview_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        current_state.as_ref(),
+        &now_str,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
@@ -1386,6 +1430,7 @@ fn run_tui(
                     exited_at: exit_status_ts.clone(),
                 },
             };
+            now_str = now_rfc3339();
             render_state = oscilloscope_core::render::build_folded(
                 &document,
                 &engine_name,
@@ -1394,10 +1439,18 @@ fn run_tui(
                 current_state.as_ref(),
                 process,
                 start.elapsed().as_secs_f64(),
-                &now_rfc3339(),
+                &now_str,
                 &[],
                 app.fold_enabled,
                 &app.expanded_quick_steps,
+            );
+            overview = build_overview_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                current_state.as_ref(),
+                &now_str,
             );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
@@ -1604,6 +1657,7 @@ fn run_tui(
                 color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
+                no_animation,
             };
             let drew = terminal.draw(|f| {
                 tui::draw(
@@ -1616,6 +1670,8 @@ fn run_tui(
                     current_state.as_ref(),
                     &ctx,
                     icon_frame,
+                    &now_str,
+                    overview.as_ref(),
                 );
             });
             last_draw = Instant::now();
@@ -2270,6 +2326,7 @@ fn run_tui_watch(
     // own; only `ended` stops `observe_tick` from polling a run
     // directory that has nothing left to say.
     let mut ended = false;
+    let mut now_str = now_rfc3339();
     let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         "watch",
@@ -2278,10 +2335,24 @@ fn run_tui_watch(
         last_state.as_ref(),
         ProcessState::Running,
         start.elapsed().as_secs_f64(),
-        &now_rfc3339(),
+        &now_str,
         &[],
         app.fold_enabled,
         &app.expanded_quick_steps,
+    );
+    // `osi watch` owns no process of its own to read `ProcessState`
+    // from (DESIGN.md §4.1): the header's own `♥` (issue #626) reads
+    // the watched run's own pid from `--events`' `run_start` instead.
+    render_state.header.engine_alive = model
+        .run_start_pid()
+        .is_some_and(oscilloscope_core::supervise::process_alive);
+    let mut overview = build_overview_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &now_str,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
@@ -2415,6 +2486,7 @@ fn run_tui_watch(
             } else {
                 ProcessState::Running
             };
+            now_str = now_rfc3339();
             render_state = oscilloscope_core::render::build_folded(
                 &document,
                 "watch",
@@ -2423,10 +2495,21 @@ fn run_tui_watch(
                 last_state.as_ref(),
                 process,
                 start.elapsed().as_secs_f64(),
-                &now_rfc3339(),
+                &now_str,
                 &[],
                 app.fold_enabled,
                 &app.expanded_quick_steps,
+            );
+            render_state.header.engine_alive = model
+                .run_start_pid()
+                .is_some_and(oscilloscope_core::supervise::process_alive);
+            overview = build_overview_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                last_state.as_ref(),
+                &now_str,
             );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
@@ -2588,6 +2671,7 @@ fn run_tui_watch(
                 color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
+                no_animation,
             };
             let drew = terminal.draw(|f| {
                 tui::draw(
@@ -2600,6 +2684,8 @@ fn run_tui_watch(
                     last_state.as_ref(),
                     &ctx,
                     icon_frame,
+                    &now_str,
+                    overview.as_ref(),
                 );
             });
             last_draw = Instant::now();

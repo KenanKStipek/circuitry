@@ -249,6 +249,12 @@ pub struct Header {
     /// before any report at all, in which case the header reads
     /// exactly as it did before #610.
     pub latest_report: Option<HeaderReport>,
+    /// Whether the engine process is alive right now (issue #626's
+    /// header line: "`♥` shows while the engine process is alive") --
+    /// the one osi started (`ProcessState::Running`), or, for `osi
+    /// watch`, the pid `--events`' own `run_start` carried, read by
+    /// the caller the same way `run_start_pid` already does.
+    pub engine_alive: bool,
 }
 
 /// [`Header::latest_report`]'s own shape (#610): just enough for the
@@ -370,6 +376,40 @@ pub struct TokenBar {
     /// counted alongside running prompts, but with no token estimate
     /// of their own -- live agent token usage (#612) is a later lane.
     pub agents_running: u64,
+}
+
+/// `draw_token_bar`'s own second line, as plain text (issue #626):
+/// pulled out so the overview's cost card (`crate::screens::overview`)
+/// can show the same "what's in flight" line without reimplementing
+/// it -- `nothing in flight`, `N prompt(s)/agent(s) in flight`, or
+/// `now in ~N   (...)` once a running prompt has a token estimate.
+pub fn token_bar_in_flight_line(bar: &TokenBar) -> String {
+    if bar.prompts_running == 0 && bar.agents_running == 0 {
+        return "nothing in flight".to_string();
+    }
+    let mut parts = Vec::new();
+    if bar.prompts_running > 0 {
+        let plural = if bar.prompts_running == 1 { "" } else { "s" };
+        parts.push(format!("{} prompt{plural}", bar.prompts_running));
+    }
+    if bar.agents_running > 0 {
+        let plural = if bar.agents_running == 1 { "" } else { "s" };
+        parts.push(format!("{} agent{plural}", bar.agents_running));
+    }
+    let in_flight = format!("{} in flight", parts.join(" · "));
+    if bar.prompts_running == 0 {
+        return in_flight;
+    }
+    let estimate = if bar.estimated_input_is_lower_bound {
+        if bar.estimated_input == 0 {
+            "?".to_string()
+        } else {
+            format!("≈{}+", crate::format::format_tokens(bar.estimated_input))
+        }
+    } else {
+        format!("≈{}", crate::format::format_tokens(bar.estimated_input))
+    };
+    format!("now in {estimate}   ({in_flight})")
 }
 
 /// Everything one redraw needs (§6.3): the header, the plan tree
@@ -1260,6 +1300,7 @@ fn build_header(
     statuses: &BTreeMap<String, RowStatus>,
     all_paths: &BTreeMap<String, ()>,
 ) -> Header {
+    let engine_alive = matches!(process, ProcessState::Running);
     let status = run_status(state, process.clone());
     let run_id = model.run_start_id().map(str::to_string);
 
@@ -1489,6 +1530,7 @@ fn build_header(
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
         latest_report,
+        engine_alive,
     }
 }
 
@@ -1861,7 +1903,7 @@ fn all_observed_paths(
     all_paths
 }
 
-fn build_rows(
+pub(crate) fn build_rows(
     plan: &PlanTree,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,

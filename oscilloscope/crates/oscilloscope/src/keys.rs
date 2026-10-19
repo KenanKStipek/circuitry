@@ -6,6 +6,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use oscilloscope_core::render::{FullValueField, Row, StateRow};
+use oscilloscope_core::screens::Screen;
 
 /// DESIGN.md §6.3's `tab` cycle, issue #527: `Tree` → `Details` →
 /// `State` → `Tree`. The treemap and token bar have no pane of their
@@ -117,6 +118,12 @@ pub struct App {
     /// asked ⏎ to expand in place -- the existing collapse key (`←`)
     /// removes a path from here, folding that group again.
     pub expanded_quick_steps: std::collections::BTreeSet<String>,
+    /// Which screen is on display (issue #626): `0`/`2` switch
+    /// here, `1`/`3` do nothing (`Screen::from_key` already refuses
+    /// them). Selection, follow, folding, filters and collapsed rows
+    /// all live outside this field, so switching screens never
+    /// touches them.
+    pub screen: Screen,
     /// Which of the two independent selections (`selected_path`,
     /// `state_selected_path`) the details pane shows (#610): whichever
     /// one last actually changed, not whatever `pane` happens to be
@@ -154,6 +161,7 @@ impl App {
             fold_enabled: true,
             expanded_quick_steps: std::collections::BTreeSet::new(),
             details_source: Pane::Tree,
+            screen: Screen::default(),
         }
     }
 
@@ -376,6 +384,16 @@ impl App {
                     Pane::Details if self.state_viewport > 0 => Pane::State,
                     Pane::Details | Pane::State => Pane::Tree,
                 };
+            }
+            // Issue #626: `0`/`2` switch screens; `1`/`3` do
+            // nothing yet (`Screen::from_key` already refuses them,
+            // same as any other key with no binding). Selection,
+            // follow, folding, filters and collapsed rows are all
+            // outside `App::screen`, so none of them reset here.
+            KeyCode::Char(c @ '0'..='3') => {
+                if let Some(screen) = Screen::from_key(c) {
+                    self.screen = screen;
+                }
             }
             KeyCode::Char('t') => return Action::CycleTheme,
             KeyCode::Char('f') => self.follow = !self.follow,
@@ -1284,6 +1302,46 @@ mod tests {
             app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false),
             Action::CycleTheme
         );
+    }
+
+    #[test]
+    fn zero_and_two_switch_screens() {
+        let mut app = App::new(false);
+        assert_eq!(app.screen, Screen::Overview);
+        app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false);
+        assert_eq!(app.screen, Screen::Flow);
+        app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false);
+        assert_eq!(app.screen, Screen::Overview);
+    }
+
+    #[test]
+    fn one_and_three_do_nothing() {
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false);
+        assert_eq!(app.screen, Screen::Flow);
+        app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false);
+        assert_eq!(app.screen, Screen::Flow);
+        app.handle_key(key(KeyCode::Char('3')), &[], &[], true, false);
+        assert_eq!(app.screen, Screen::Flow);
+    }
+
+    #[test]
+    fn switching_screens_keeps_selection_follow_folding_filters_and_collapsed_rows() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.select_tree_path(Some("prime.a".to_string()));
+        app.follow = false;
+        app.fold_enabled = false;
+        app.filter = Some("needle".to_string());
+        app.collapsed.insert("prime.a".to_string());
+        app.handle_key(key(KeyCode::Char('2')), &visible, &[], true, false);
+        assert_eq!(app.screen, Screen::Flow);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert!(!app.follow);
+        assert!(!app.fold_enabled);
+        assert_eq!(app.filter.as_deref(), Some("needle"));
+        assert!(app.collapsed.contains("prime.a"));
     }
 
     fn state_row_with_children(path: &str, has_children: bool) -> StateRow {

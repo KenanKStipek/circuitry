@@ -39,6 +39,9 @@ pub struct DrawCtx<'a> {
     /// (issue #613): the real system zone in production
     /// (`main::LocalZone`), a fixed offset in tests.
     pub zone: &'a dyn oscilloscope_core::format::ClockZone,
+    /// `--no-animation` (issue #626): the header line's own scope-icon
+    /// trace draws as a static `◉` instead of an animated braille row.
+    pub no_animation: bool,
 }
 
 /// A fixed UTC offset for tests that need a [`oscilloscope_core::
@@ -289,206 +292,420 @@ fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
     Line::from(spans).style(style)
 }
 
-/// `header_area`'s own width is what's left once the scope icon
-/// (issue #535, `crate::icon`) takes its own columns to the left --
-/// the caller decides that split, this function only ever draws into
-/// whatever `area` it's given.
-fn draw_header(
+/// Draws [`oscilloscope_core::screens::header_line`]'s own segments
+/// (issue #626): one line, no border -- the three-row bordered
+/// header this replaces is gone, along with the three-row scope icon
+/// beside it (the icon's own trace is now the line's first segment).
+fn draw_header_line(
     frame: &mut Frame,
     area: Rect,
-    header: &oscilloscope_core::render::Header,
+    segments: &[oscilloscope_core::screens::HeaderSegment],
     ctx: &DrawCtx,
 ) {
-    let (status_text, status_color) = match header.status {
-        RunStatus::Running => ("running", ctx.theme.status_running),
-        RunStatus::Ok => ("ok", ctx.theme.status_done),
-        RunStatus::Failed => ("failed", ctx.theme.status_failed),
-        RunStatus::Cancelled => ("cancelled", ctx.theme.status_cancelled),
-        RunStatus::Aborted => ("aborted", ctx.theme.status_aborted),
-    };
-    let effects = match header.effects_planned {
-        // Finding 6: a `+` marks "planned" as a lower bound when some
-        // loop's own total pass count isn't known yet.
-        Some(planned) if header.effects_planned_is_lower_bound => {
-            format!("{}/{planned}+", header.effects_done)
-        }
-        Some(planned) => format!("{}/{planned}", header.effects_done),
-        None => header.effects_done.to_string(),
-    };
-    // Issue #613: the header also shows the run's own start ("since
-    // HH:MM:SS") while it's going, and once it has ended, its start
-    // and end ("HH:MM:SS–HH:MM:SS") -- through `ctx.zone`, never the
-    // machine's own zone read directly.
-    let clock_suffix = match (&header.run_start_ts, &header.run_end_ts) {
-        (Some(start), Some(end)) => match (
-            oscilloscope_core::format::format_clock_time(start, ctx.zone),
-            oscilloscope_core::format::format_clock_time(end, ctx.zone),
-        ) {
-            (Some(s), Some(e)) => format!(" ({s}–{e})"),
-            _ => String::new(),
-        },
-        (Some(start), None) => oscilloscope_core::format::format_clock_time(start, ctx.zone)
-            .map(|s| format!(" (since {s})"))
-            .unwrap_or_default(),
-        _ => String::new(),
-    };
-    let elapsed = format!(
-        "{}{clock_suffix}",
-        oscilloscope_core::format::format_duration(header.elapsed_s)
-    );
-    let tokens = format!(
-        "↑{} ↓{}",
-        oscilloscope_core::format::format_tokens(header.tokens_sent),
-        oscilloscope_core::format::format_tokens(header.tokens_received)
-    );
-    // The icon widening by one column (issue #535) left a long
-    // document path able to push `effects`/the token counts past the
-    // header's own right edge with nothing left to draw them at all
-    // -- `Paragraph` clips a line that doesn't fit rather than
-    // wrapping it. The fixed part of the line (everything but the
-    // document path and the trailing run-id/report slot, #610:
-    // "status, elapsed, effects and tokens are kept") is measured
-    // first, so the document path truncates itself (keeping its own
-    // tail, where the filename is) before anything else does.
-    let mut fixed_len = 2
-        + header.engine.chars().count()
-        + 2
-        + status_text.chars().count()
-        + 2
-        + elapsed.chars().count()
-        + 2
-        + "effects ".len()
-        + effects.chars().count()
-        + 2
-        + tokens.chars().count();
-    // The innermost loop's ETA, as a clock time (`~HH:MM`, issue
-    // #613), not a remaining duration -- `None` whenever the
-    // duration-based ETA is, so a missing `format_clock_time` parse
-    // (never happens for a real timestamp) just drops it, same as
-    // having no ETA at all.
-    let eta_clock = header
-        .innermost_loop_eta_ts
-        .as_deref()
-        .and_then(|ts| oscilloscope_core::format::format_clock_time(ts, ctx.zone))
-        .map(|hhmmss| hhmmss[..5].to_string());
-    if let Some(eta) = &eta_clock {
-        fixed_len += 2 + "ETA ~".len() + eta.chars().count();
-    }
+    use oscilloscope_core::screens::HeaderRole;
+    let status = status_of(segments);
+    let spans: Vec<Span> = segments
+        .iter()
+        .map(|seg| {
+            let style = match seg.role {
+                HeaderRole::Icon => Style::default().fg(crate::icon::trace_color(status, ctx.theme)),
+                HeaderRole::Alive => Style::default().fg(ctx.theme.status_running),
+                HeaderRole::Status => Style::default().fg(run_status_color(status, ctx.theme)),
+                HeaderRole::Elapsed | HeaderRole::Clock => Style::default(),
+                HeaderRole::Eta => Style::default(),
+                HeaderRole::Report => Style::default(),
+                HeaderRole::Warning => Style::default().fg(ctx.theme.warning),
+                HeaderRole::Document => Style::default(),
+                HeaderRole::TabActive => Style::default().add_modifier(Modifier::BOLD),
+                HeaderRole::TabInactive => Style::default().fg(ctx.theme.dim),
+                HeaderRole::Plain => Style::default(),
+            };
+            let highlight_key = match seg.role {
+                HeaderRole::Status => Some("header:status"),
+                HeaderRole::Report | HeaderRole::Warning => Some("header:report"),
+                _ => None,
+            };
+            let style = match highlight_key.and_then(|k| ctx.highlight(k)) {
+                Some(h) => with_highlight(style, Some(h)),
+                None => style,
+            };
+            Span::styled(seg.text.clone(), style)
+        })
+        .collect();
+    let mut spans = spans;
+    // `t`'s own banner (issue #535), kept as a trailing segment of
+    // the one-line header -- unrelated to `Header`/`screens::
+    // header_line` (DESIGN.md §6.1: it's a TUI-only, ephemeral
+    // notice about the front end's own colour choice, not something
+    // `--glance` or a GUI front end would ever need to show).
     if let Some(name) = ctx.theme_banner {
-        fixed_len += 2 + "theme: ".len() + name.chars().count();
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("theme: {name}"),
+            Style::default().fg(ctx.theme.dim),
+        ));
     }
-    let available = area.width.saturating_sub(2) as usize;
-    let leftover = available.saturating_sub(fixed_len);
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
+}
 
-    // #610: once a report has arrived, it takes the run id's own
-    // slot at the end of the line (`report_text`, `None` means "show
-    // `run_id` there instead, exactly as before any report"). The
-    // document path always truncates before the report message does
-    // -- `doc_budget` is computed assuming the report's full text
-    // fits, and only drops to its own floor of 1 when even that
-    // doesn't leave room, at which point the leftover is given to the
-    // report text instead, truncated with `…`, or collapsed to a
-    // bare `▸` once fewer than 8 columns remain for it at all.
-    let (doc_budget, run_id_text, report_text, report_style) = match &header.latest_report {
-        None => {
-            let run_id_len = header
-                .run_id
-                .as_ref()
-                .map(|r| 2 + r.chars().count())
-                .unwrap_or(0);
-            (
-                leftover.saturating_sub(run_id_len).max(1),
-                header.run_id.clone(),
-                None,
-                Style::default(),
-            )
+/// The header line carries no `RunStatus` of its own in
+/// [`oscilloscope_core::screens::HeaderSegment`] (DESIGN.md §6.1: no
+/// terminal code, and a status enum is still just data) -- its own
+/// `Status` segment's *text* (`"running"`/`"ok"`/...) is the one
+/// place it survives into the segment list, so this reads it back
+/// out rather than threading `RunStatus` past `header_line`'s own
+/// return value as a second, redundant parameter.
+fn status_of(segments: &[oscilloscope_core::screens::HeaderSegment]) -> RunStatus {
+    segments
+        .iter()
+        .find(|s| s.role == oscilloscope_core::screens::HeaderRole::Status)
+        .map(|s| match s.text.as_str() {
+            "ok" => RunStatus::Ok,
+            "failed" => RunStatus::Failed,
+            "cancelled" => RunStatus::Cancelled,
+            "aborted" => RunStatus::Aborted,
+            _ => RunStatus::Running,
+        })
+        .unwrap_or(RunStatus::Running)
+}
+
+fn run_status_color(status: RunStatus, theme: &Theme) -> Color {
+    match status {
+        RunStatus::Running => theme.status_running,
+        RunStatus::Ok => theme.status_done,
+        RunStatus::Failed => theme.status_failed,
+        RunStatus::Cancelled => theme.status_cancelled,
+        RunStatus::Aborted => theme.status_aborted,
+    }
+}
+
+/// Screen 0 (issue #626): a phase strip, the now pane (the golden
+/// section's larger share of the remaining height, split 62/38
+/// across), and the three cards -- time, flow, cost -- in equal
+/// columns across the bottom (DESIGN.md §12: "the 62/38 rule covers
+/// two-way splits; equal panes ... share space equally").
+fn draw_overview(
+    frame: &mut Frame,
+    area: Rect,
+    overview: &oscilloscope_core::screens::Overview,
+    ctx: &DrawCtx,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let phase_height = 2.min(area.height);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(phase_height), Constraint::Min(0)])
+        .split(area);
+    draw_phase_strip(frame, sections[0], &overview.phase_strip, ctx);
+
+    let rest = sections[1];
+    let now_height = oscilloscope_core::layout::golden_major_section(rest.height);
+    let cards_height = rest.height - now_height;
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(now_height),
+            Constraint::Length(cards_height),
+        ])
+        .split(rest);
+
+    draw_now_pane(frame, rows[0], &overview.now_pane, ctx);
+    draw_cards(frame, rows[1], overview, ctx);
+}
+
+/// The document's own top-level steps (issue #626), already
+/// breadcrumb-folded by `oscilloscope_core::fold::fold_rows` before
+/// `screens::build_overview` ever saw them. Steps that don't fit
+/// this width become `○ N more` -- the only place this truncation
+/// happens; `screens::build_overview` itself returns every step.
+fn draw_phase_strip(
+    frame: &mut Frame,
+    area: Rect,
+    steps: &[oscilloscope_core::screens::PhaseStep],
+    ctx: &DrawCtx,
+) {
+    if area.height == 0 || steps.is_empty() {
+        return;
+    }
+    let max_width = area.width as usize;
+    let mut line1: Vec<Span> = Vec::new();
+    let mut line2: Vec<Span> = Vec::new();
+    let mut used = 0usize;
+    let mut shown = 0usize;
+    for step in steps {
+        let glyph = status_glyph(step.status.kind);
+        let label1 = format!("{glyph} {}", step.label);
+        let start = step
+            .start_ts
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+        let dur = step.duration_s.map(oscilloscope_core::format::format_duration);
+        let label2 = match (&start, &dur) {
+            (Some(s), Some(d)) => format!("{s} · {d}"),
+            (Some(s), None) => s.clone(),
+            _ => String::new(),
+        };
+        let col_width = label1.chars().count().max(label2.chars().count());
+        let piece_width = col_width + 3;
+        if shown > 0 && used + piece_width > max_width {
+            break;
         }
-        Some(report) => {
-            let style = match report.level {
-                oscilloscope_core::observe::ReportLevel::Warning => {
-                    Style::default().fg(ctx.theme.warning)
-                }
-                oscilloscope_core::observe::ReportLevel::Info => Style::default(),
+        used += piece_width;
+        if shown > 0 {
+            line1.push(Span::raw("  →  "));
+            line2.push(Span::raw("     "));
+        }
+        line1.push(Span::styled(label1.clone(), status_style(step.status.kind, ctx.theme)));
+        line2.push(Span::styled(
+            format!("{label2:<col_width$}"),
+            Style::default().fg(ctx.theme.dim),
+        ));
+        shown += 1;
+    }
+    if shown < steps.len() {
+        let more = steps.len() - shown;
+        if shown > 0 {
+            line1.push(Span::raw("  "));
+        }
+        line1.push(Span::raw(format!("○ {more} more")));
+    }
+    let paragraph = Paragraph::new(vec![Line::from(line1), Line::from(line2)]);
+    frame.render_widget(paragraph, area);
+}
+
+/// The now pane's own left (log) / right (focus) split, 62/38
+/// (DESIGN.md's two-way-split rule).
+fn draw_now_pane(frame: &mut Frame, area: Rect, pane: &oscilloscope_core::screens::NowPane, ctx: &DrawCtx) {
+    if area.height == 0 {
+        return;
+    }
+    let left_width = oscilloscope_core::layout::golden_major_section(area.width);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(left_width), Constraint::Min(0)])
+        .split(area);
+    let log_lines: Vec<Line> = pane
+        .log_lines
+        .iter()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    let log = Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
+    frame.render_widget(log, cols[0]);
+
+    let focus = Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
+    frame.render_widget(focus, cols[1]);
+}
+
+/// The now pane's own right side (issue #626): the step follow
+/// selects, or, with nothing running, the last finished step, or,
+/// once the run has ended, its outcome and totals.
+fn focus_lines(focus: &oscilloscope_core::screens::NowFocus, ctx: &DrawCtx) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::NowFocus;
+    match focus {
+        NowFocus::None => vec![Line::from("nothing has run yet")],
+        NowFocus::Ended(summary) => {
+            let (status_text, color) = match summary.outcome {
+                RunStatus::Ok => ("ok", ctx.theme.status_done),
+                RunStatus::Failed => ("failed", ctx.theme.status_failed),
+                RunStatus::Cancelled => ("cancelled", ctx.theme.status_cancelled),
+                RunStatus::Aborted => ("aborted", ctx.theme.status_aborted),
+                RunStatus::Running => ("running", ctx.theme.status_running),
             };
-            let prefix = match report.level {
-                oscilloscope_core::observe::ReportLevel::Warning => "warning: ",
-                oscilloscope_core::observe::ReportLevel::Info => "",
-            };
-            // A Mustache-rendered message can contain a newline,
-            // which `Paragraph` would otherwise render literally
-            // inside this single-line header (#610) -- only the
-            // first line is ever shown here, the same rule `--log`'s
-            // own `report_line` applies.
-            let message = report.message.split('\n').next().unwrap_or("");
-            let full_text = format!("▸ {prefix}{message}");
-            let full_len = 2 + full_text.chars().count();
-            if leftover > full_len {
-                (leftover - full_len, None, Some(full_text), style)
-            } else {
-                let doc_budget = 1;
-                // `leftover` already counts the document's own
-                // trailing "  " separator (`fixed_len`'s very first
-                // `2 +`), so only `doc_budget` itself -- the
-                // document's own character count -- comes out here;
-                // the report text's own leading "  " separator is
-                // subtracted next, on its own, exactly once (#610):
-                // subtracting it twice would leave two unused columns
-                // before the border on every truncated report line.
-                let remaining = leftover.saturating_sub(doc_budget);
-                let report_budget = remaining.saturating_sub(2);
-                let text = if report_budget < 8 {
-                    "▸".to_string()
-                } else {
-                    truncate_label(&full_text, report_budget)
-                };
-                (doc_budget, None, Some(text), style)
+            let mut lines = vec![Line::from(Span::styled(status_text, Style::default().fg(color)))];
+            let start = summary.start_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+            let end = summary.end_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+            if let (Some(start), Some(end)) = (start, end) {
+                lines.push(Line::from(format!("{start}–{end}")));
             }
+            lines.push(Line::from(format!(
+                "↑{} ↓{}",
+                oscilloscope_core::format::format_tokens(summary.tokens_sent),
+                oscilloscope_core::format::format_tokens(summary.tokens_received)
+            )));
+            if let Some(cost) = summary.cost_usd {
+                lines.push(Line::from(format!("${cost:.2}")));
+            }
+            lines
         }
+        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), ctx),
+        NowFocus::LastFinished(step) => focus_step_lines(step, None, ctx),
+    }
+}
+
+fn focus_step_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    more_running: Option<usize>,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    {
+            let mut lines = vec![Line::from(step.breadcrumb.clone())];
+            let mut meta = vec![step.kind_label.to_string()];
+            if let Some(provider_or_model) = &step.provider_or_model {
+                meta.push(provider_or_model.clone());
+            }
+            lines.push(Line::from(Span::styled(meta.join(" · "), Style::default().fg(ctx.theme.dim))));
+            if let (Some(since), Some(elapsed)) = (
+                step.since_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+                step.elapsed_s,
+            ) {
+                lines.push(Line::from(format!(
+                    "since {since} · {}",
+                    oscilloscope_core::format::format_duration(elapsed)
+                )));
+            }
+            match &step.detail {
+                FocusDetail::Prompt { tokens, estimated, snippet } => {
+                    if let Some(tokens) = tokens {
+                        let prefix = if *estimated { "≈" } else { "" };
+                        lines.push(Line::from(format!(
+                            "{prefix}{}",
+                            oscilloscope_core::format::format_tokens(*tokens)
+                        )));
+                    }
+                    if let Some(snippet) = snippet {
+                        lines.push(Line::from(snippet.clone()));
+                    }
+                }
+                FocusDetail::Tool { command } => {
+                    if let Some(command) = command {
+                        lines.push(Line::from(command.clone()));
+                    }
+                }
+                FocusDetail::Agent { engine, model, note } => {
+                    let mut parts = Vec::new();
+                    if let Some(engine) = engine {
+                        parts.push(engine.clone());
+                    }
+                    if let Some(model) = model {
+                        parts.push(model.clone());
+                    }
+                    if !parts.is_empty() {
+                        lines.push(Line::from(parts.join(" · ")));
+                    }
+                    lines.push(Line::from(Span::styled(*note, Style::default().fg(ctx.theme.dim))));
+                }
+                FocusDetail::Plain => {}
+            }
+            if let Some(more) = more_running
+                && more > 0
+            {
+                lines.push(Line::from(format!("+{more} more running")));
+            }
+            lines
+    }
+}
+
+/// The overview's own three cards (issue #626) -- time, flow, cost,
+/// equal columns (DESIGN.md §12: "equal panes ... share space
+/// equally").
+fn draw_cards(frame: &mut Frame, area: Rect, overview: &oscilloscope_core::screens::Overview, ctx: &DrawCtx) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let third = area.width / 3;
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(third),
+            Constraint::Length(third),
+            Constraint::Length(area.width - 2 * third),
+        ])
+        .split(area);
+    draw_time_card(frame, cols[0], &overview.time_card, ctx);
+    draw_flow_card(frame, cols[1], &overview.flow_card, ctx);
+    draw_cost_card(frame, cols[2], &overview.cost_card, ctx);
+}
+
+fn draw_time_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::screens::TimeCard, ctx: &DrawCtx) {
+    let mut lines = Vec::new();
+    let start = card.start_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let end = card.end_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    match (&start, &end) {
+        (Some(s), Some(e)) => lines.push(Line::from(format!("{s}–{e}"))),
+        (Some(s), None) => lines.push(Line::from(format!("{s} → now"))),
+        _ => {}
+    }
+    lines.push(Line::from(oscilloscope_core::format::format_duration(card.elapsed_s)));
+    if let Some(eta) = card.eta_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)) {
+        lines.push(Line::from(format!("ETA ~{}", &eta[..5.min(eta.len())])));
+    }
+    if let Some((label, secs)) = &card.slowest_finished {
+        lines.push(Line::from(format!(
+            "slowest {label} {}",
+            oscilloscope_core::format::format_duration(*secs)
+        )));
+    }
+    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" time "));
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_flow_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::screens::FlowCard, ctx: &DrawCtx) {
+    use oscilloscope_core::screens::FlowEvent;
+    let mut lines = Vec::new();
+    let effects = match card.effects_planned {
+        Some(planned) if card.effects_planned_is_lower_bound => format!("{}/{planned}+", card.effects_done),
+        Some(planned) => format!("{}/{planned}", card.effects_done),
+        None => card.effects_done.to_string(),
     };
-    let document = truncate_label_from_left(&header.document, doc_budget);
-    let mut line = vec![
-        Span::raw(format!("{document}  ")),
-        Span::styled(header.engine.clone(), Style::default().fg(ctx.theme.dim)),
-        Span::raw("  "),
-        Span::styled(
-            status_text,
-            with_highlight(
-                Style::default().fg(status_color),
-                ctx.highlight("header:status"),
-            ),
-        ),
-        Span::raw(format!("  {elapsed}")),
-        Span::styled(
-            format!("  effects {effects}"),
-            with_highlight(Style::default(), ctx.highlight("header:effects")),
-        ),
-        Span::styled(
-            format!("  {tokens}"),
-            with_highlight(Style::default(), ctx.highlight("header:tokens")),
-        ),
-    ];
-    if let Some(eta) = &eta_clock {
-        line.push(Span::raw(format!("  ETA ~{eta}")));
+    lines.push(Line::from(format!("{effects} effects · {} failed", card.failures)));
+    for event in &card.recent {
+        let (text, ts) = match event {
+            FlowEvent::Decision { name, branch, ts } => (format!("{name} → {branch}"), ts),
+            FlowEvent::Report { message, ts } => (message.clone(), ts),
+        };
+        let clock = ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+        match clock {
+            Some(clock) => lines.push(Line::from(format!("{clock}  {text}"))),
+            None => lines.push(Line::from(text)),
+        }
     }
-    if let Some(run_id) = &run_id_text {
-        line.push(Span::styled(
-            format!("  {run_id}"),
-            Style::default().fg(ctx.theme.dim),
-        ));
+    if !card.loops.is_empty() {
+        let text = card
+            .loops
+            .iter()
+            .map(|(label, done, total)| match total {
+                Some(total) => format!("{label} {done}/{total}"),
+                None => format!("{label} {done}"),
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        lines.push(Line::from(text));
     }
-    if let Some(report_text) = &report_text {
-        line.push(Span::styled(
-            format!("  {report_text}"),
-            with_highlight(report_style, ctx.highlight("header:report")),
-        ));
+    if let Some(next) = &card.next_pending {
+        lines.push(Line::from(format!("next {next}")));
     }
-    if let Some(name) = ctx.theme_banner {
-        line.push(Span::styled(
-            format!("  theme: {name}"),
-            Style::default().fg(ctx.theme.dim),
-        ));
+    if let Some((count, secs)) = card.quick_steps {
+        lines.push(Line::from(format!(
+            "{count} quick steps · {}",
+            oscilloscope_core::format::format_duration(secs)
+        )));
     }
-    let paragraph = Paragraph::new(Line::from(line)).block(Block::default().borders(Borders::ALL));
+    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" flow "));
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_cost_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::screens::CostCard, ctx: &DrawCtx) {
+    let mut lines = vec![Line::from(format!(
+        "↑{} ↓{}",
+        oscilloscope_core::format::format_tokens(card.tokens_sent),
+        oscilloscope_core::format::format_tokens(card.tokens_received)
+    ))];
+    if let Some(cost) = card.cost_usd {
+        lines.push(Line::from(format!("${cost:.2}")));
+    }
+    if let Some((path, total)) = &card.top_store {
+        lines.push(Line::from(format!(
+            "top {path} {}",
+            oscilloscope_core::format::format_tokens(*total)
+        )));
+    }
+    lines.push(Line::from(card.in_flight.clone()));
+    let _ = ctx;
+    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" cost "));
     frame.render_widget(paragraph, area);
 }
 
@@ -500,9 +717,10 @@ fn draw_tree(
     area: Rect,
     rows: &[&Row],
     app: &mut App,
-    document: &str,
+    header: &oscilloscope_core::render::Header,
     ctx: &DrawCtx,
 ) {
+    let document = &header.document;
     let viewport = area.height.saturating_sub(2) as usize;
     app.tree_viewport = viewport;
     let selected_idx = app
@@ -525,7 +743,16 @@ fn draw_tree(
     } else {
         Style::default().fg(ctx.theme.border)
     };
-    let mut title = format!(" orchestration {}", orchestration_name(document));
+    let effects = match header.effects_planned {
+        Some(planned) if header.effects_planned_is_lower_bound => {
+            format!("{}/{planned}+", header.effects_done)
+        }
+        Some(planned) => format!("{}/{planned}", header.effects_done),
+        None => header.effects_done.to_string(),
+    };
+    // Issue #626: the effects count moved here from the header line,
+    // which no longer shows it at all.
+    let mut title = format!(" orchestration {} ({effects})", orchestration_name(document));
     if app.follow {
         title.push_str(" (following)");
     }
@@ -872,38 +1099,6 @@ fn truncate_label(label: &str, max: usize) -> String {
     }
 }
 
-/// [`truncate_label`], but keeping the *tail* and dropping the
-/// front, prefixed with `…` -- a path's own identifying part (the
-/// filename) is usually at the end, not the start.
-fn truncate_label_from_left(label: &str, max: usize) -> String {
-    let count = label.chars().count();
-    if count <= max {
-        label.to_string()
-    } else {
-        let skip = count - max.saturating_sub(1);
-        format!("…{}", label.chars().skip(skip).collect::<String>())
-    }
-}
-
-#[cfg(test)]
-mod truncate_label_from_left_tests {
-    use super::*;
-
-    /// The icon widening by one column (issue #535) could push a
-    /// long document path's own `effects`/token counts past the
-    /// header's right edge with nothing drawn there at all --
-    /// `draw_header` truncates the document name first so those
-    /// always have room; this pins the helper that does it.
-    #[test]
-    fn keeps_the_tail_and_marks_the_cut_with_a_leading_ellipsis() {
-        assert_eq!(truncate_label_from_left("short.yml", 20), "short.yml");
-        assert_eq!(
-            truncate_label_from_left("/var/folders/abc/do.yml", 10),
-            "…bc/do.yml"
-        );
-    }
-}
-
 /// [`clamp_scroll`]'s own job, but counting *lines* rather than
 /// entries (finding F3): a state-pane entry with a token line takes
 /// two of the pane's interior lines, not one, so clamping by entry
@@ -1225,64 +1420,8 @@ fn draw_token_bar(
             with_highlight(Style::default(), totals_highlight),
         ),
     ]);
-    let line2 = if token_bar.prompts_running == 0 && token_bar.agents_running == 0 {
-        Line::from("nothing in flight")
-    } else {
-        // Issue #613's "agents in flight": a running `agent` tool
-        // step is listed next to running prompts ("2 prompts · 1 agent
-        // in flight"), with no token estimate of its own.
-        let mut parts = Vec::new();
-        if token_bar.prompts_running > 0 {
-            let plural = if token_bar.prompts_running == 1 {
-                ""
-            } else {
-                "s"
-            };
-            parts.push(format!("{} prompt{plural}", token_bar.prompts_running));
-        }
-        if token_bar.agents_running > 0 {
-            let plural = if token_bar.agents_running == 1 {
-                ""
-            } else {
-                "s"
-            };
-            parts.push(format!("{} agent{plural}", token_bar.agents_running));
-        }
-        let in_flight = format!("{} in flight", parts.join(" · "));
-        if token_bar.prompts_running == 0 {
-            Line::from(in_flight)
-        } else {
-            // A tree-loop pass's prompt,
-            // and a `use: path:` child's, are counted as running even
-            // with no `prompt_sent` in state to estimate from at all
-            // (DESIGN.md §1.4), so the estimate is a lower bound, same as
-            // "effects planned" already does in the header -- a trailing
-            // `+` says so when it's still a real, nonzero estimate
-            // (`≈5+`, some known and some not). When *none* of the running
-            // prompts has a known `prompt_sent` at all, the estimate isn't
-            // merely low, it's entirely unknown -- `≈0+` reads as a
-            // broken number (zero tokens, running?), so this shows a
-            // plain `?` instead, the same glyph the header's own
-            // innermost-loop ETA uses for "unknown", not "zero".
-            let estimate = if token_bar.estimated_input_is_lower_bound {
-                if token_bar.estimated_input == 0 {
-                    "?".to_string()
-                } else {
-                    format!(
-                        "≈{}+",
-                        oscilloscope_core::format::format_tokens(token_bar.estimated_input)
-                    )
-                }
-            } else {
-                format!(
-                    "≈{}",
-                    oscilloscope_core::format::format_tokens(token_bar.estimated_input)
-                )
-            };
-            Line::from(format!("now in {estimate}   ({in_flight})"))
-        }
-    };
-    let line2 = line2.style(with_highlight(Style::default(), tokenbar_highlight));
+    let line2 = Line::from(oscilloscope_core::render::token_bar_in_flight_line(token_bar))
+        .style(with_highlight(Style::default(), tokenbar_highlight));
     let paragraph = Paragraph::new(vec![line1, line2])
         .block(Block::default().borders(Borders::ALL).title(" tokens "));
     frame.render_widget(paragraph, area);
@@ -1361,19 +1500,20 @@ const HELP_TEXT: &[&str] = &[
 /// border leaves room to spare.
 const HELP_OVERLAY_WIDTH: u16 = 61;
 
-/// One redraw's whole layout (DESIGN.md §6.3, issue #535): the
-/// header; a left column of the details pane over the orchestration
-/// pane, split at the golden section both ways (the column split
-/// itself, and the left column's own row split); a right column of
-/// the `tokens by key` treemap, the state pane and the log pane; and
-/// the token bar across the full bottom width. On a small terminal,
-/// panes drop in the order `thresholds` documents until a one-column
-/// layout (details, orchestration, log) is all that's left — the
-/// header and the token bar never disappear. `raw_state` is the
-/// engine's own last snapshot, untruncated — `details`' own
-/// `prompt_sent`/`value` are already cut to `DETAILS_PREVIEW_CHARS`
-/// for the details pane, which `v`'s own full-value overlay (finding
-/// 5) must not be.
+/// One redraw's whole layout (issue #626): a one-line header, shared
+/// by every screen (replacing the old three-row one), then the
+/// screen currently on display (`app.screen`) — screen 2 (`Flow`) is
+/// DESIGN.md §6.3's own layout, otherwise unchanged: a left column
+/// of the details pane over the orchestration pane, split at the
+/// golden section both ways; a right column of the `tokens by key`
+/// treemap, the state pane and the log pane; and the token bar
+/// across the full bottom width. `overview` is screen 0's own model,
+/// `Some` only while that screen is actually on display (issue
+/// #626's own performance rule: "models for screens not on display
+/// aren't built"). `raw_state` is the engine's own last snapshot,
+/// untruncated — `details`' own `prompt_sent`/`value` are already
+/// cut to `DETAILS_PREVIEW_CHARS` for the details pane, which `v`'s
+/// own full-value overlay (finding 5) must not be.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -1385,6 +1525,8 @@ pub fn draw(
     raw_state: Option<&serde_json::Value>,
     ctx: &DrawCtx,
     icon_frame: u64,
+    now: &str,
+    overview: Option<&oscilloscope_core::screens::Overview>,
 ) {
     let area = frame.area();
     if let Some(bg) = ctx.theme.background {
@@ -1401,33 +1543,122 @@ pub fn draw(
     }
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(crate::icon::ICON_HEIGHT),
-            Constraint::Min(5),
-            Constraint::Length(4),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(5)])
         .split(area);
 
-    // Issue #535: the scope icon sits left of the header, taking its
-    // own fixed width, below the two-column threshold the icon is
-    // hidden and the header takes the full width.
-    if area.width >= thresholds::TWO_COLUMN_MIN_WIDTH {
-        let header_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(crate::icon::ICON_WIDTH),
-                Constraint::Min(5),
-            ])
-            .split(sections[0]);
-        let icon_lines = crate::icon::lines(icon_frame, state.header.status, ctx.theme);
-        frame.render_widget(Paragraph::new(icon_lines), header_cols[0]);
-        draw_header(frame, header_cols[1], &state.header, ctx);
-    } else {
-        draw_header(frame, sections[0], &state.header, ctx);
-    }
-    draw_token_bar(frame, sections[2], &state.header, &state.token_bar, ctx);
+    let segments = oscilloscope_core::screens::header_line(
+        &state.header,
+        now,
+        ctx.zone,
+        area.width,
+        !ctx.no_animation,
+        icon_frame,
+        app.screen,
+    );
+    draw_header_line(frame, sections[0], &segments, ctx);
 
     let body = sections[1];
+    match app.screen {
+        oscilloscope_core::screens::Screen::Overview => {
+            if let Some(overview) = overview {
+                draw_overview(frame, body, overview, ctx);
+            }
+        }
+        _ => draw_screen2(frame, area, body, state, details, log_lines, log_total, app, ctx),
+    }
+
+    draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
+}
+
+/// [`draw`]'s own dialog overlays (help, confirm, the full-value and
+/// filter popups) — unchanged by issue #626, just pulled out so
+/// `draw` itself reads as "header, then the current screen, then
+/// whatever's on top of it".
+fn draw_dialog_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    details: Option<&Details>,
+    raw_state: Option<&serde_json::Value>,
+    ctx: &DrawCtx,
+) {
+    match &app.dialog {
+        Dialog::Help => {
+            let text = HELP_TEXT.iter().map(|l| Line::from(*l)).collect();
+            draw_overlay(
+                frame,
+                area,
+                " help ",
+                text,
+                HELP_OVERLAY_WIDTH,
+                HELP_TEXT.len() as u16 + 2,
+                ctx,
+            );
+        }
+        Dialog::ConfirmCancel { .. } => {
+            let text = vec![
+                Line::from("cancel the run?"),
+                Line::from(""),
+                Line::from("y = cancel   n/esc = back"),
+            ];
+            draw_overlay(frame, area, " confirm ", text, 36, 5, ctx);
+        }
+        Dialog::FullValue(field) => {
+            // Finding 5: reads straight from `raw_state`, bypassing
+            // `details`' own truncated preview entirely — that's the
+            // whole point of asking to see it in full.
+            // The node the details pane is showing (#610: a state-pane
+            // selection such as a named report), not the tree's own.
+            let full = details
+                .map(|d| d.path.as_str())
+                .and_then(|p| oscilloscope_core::render::full_value(p, *field, raw_state));
+            let text = vec![Line::from(full.unwrap_or_default())];
+            draw_overlay(
+                frame,
+                area,
+                " full value (press any key) ",
+                text,
+                area.width.saturating_sub(4),
+                area.height.saturating_sub(4),
+                ctx,
+            );
+        }
+        Dialog::FilterInput(buf) => {
+            let text = vec![
+                Line::from(format!("/{buf}")),
+                Line::from("enter = apply   esc = cancel"),
+            ];
+            draw_overlay(frame, area, " filter ", text, 40, 4, ctx);
+        }
+        Dialog::None => {}
+    }
+}
+
+/// Screen 2 (`Flow`, DESIGN.md §6.3): today's layout, moved out of
+/// [`draw`] when screens landed (issue #626) — every pane, threshold
+/// and golden-section split below is exactly as it was, now fed a
+/// `body` rect one row shorter (the header's own three rows are now
+/// one).
+#[allow(clippy::too_many_arguments)]
+fn draw_screen2(
+    frame: &mut Frame,
+    frame_area: Rect,
+    body: Rect,
+    state: &oscilloscope_core::render::RenderState,
+    details: Option<&Details>,
+    log_lines: &[String],
+    log_total: u64,
+    app: &mut App,
+    ctx: &DrawCtx,
+) {
+    let area = frame_area;
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(4)])
+        .split(body);
+    let body = sections[0];
+    draw_token_bar(frame, sections[1], &state.header, &state.token_bar, ctx);
+
     let visible = visible_rows(&state.rows, app);
     let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
     // Only while the details follow the orchestration pane's selection:
@@ -1460,7 +1691,7 @@ pub fn draw(
             ])
             .split(body);
         draw_details(frame, parts[0], details, details_row_kind, app, ctx);
-        draw_tree(frame, parts[1], &visible, app, &state.header.document, ctx);
+        draw_tree(frame, parts[1], &visible, app, &state.header, ctx);
         draw_log(frame, parts[2], log_lines, log_total, ctx);
     } else {
         let left_width = oscilloscope_core::layout::left_column_width(body.width);
@@ -1481,7 +1712,7 @@ pub fn draw(
             ])
             .split(columns[0]);
         draw_details(frame, left[0], details, details_row_kind, app, ctx);
-        draw_tree(frame, left[1], &visible, app, &state.header.document, ctx);
+        draw_tree(frame, left[1], &visible, app, &state.header, ctx);
 
         let show_treemap = area.width >= thresholds::TREEMAP_MIN_WIDTH
             && area.height >= thresholds::TREEMAP_MIN_HEIGHT;
@@ -1534,57 +1765,6 @@ pub fn draw(
             app.state_viewport = 0;
             draw_log(frame, columns[1], log_lines, log_total, ctx);
         }
-    }
-
-    match &app.dialog {
-        Dialog::Help => {
-            let text = HELP_TEXT.iter().map(|l| Line::from(*l)).collect();
-            draw_overlay(
-                frame,
-                area,
-                " help ",
-                text,
-                HELP_OVERLAY_WIDTH,
-                HELP_TEXT.len() as u16 + 2,
-                ctx,
-            );
-        }
-        Dialog::ConfirmCancel { .. } => {
-            let text = vec![
-                Line::from("cancel the run?"),
-                Line::from(""),
-                Line::from("y = cancel   n/esc = back"),
-            ];
-            draw_overlay(frame, area, " confirm ", text, 36, 5, ctx);
-        }
-        Dialog::FullValue(field) => {
-            // Finding 5: reads straight from `raw_state`, bypassing
-            // `details`' own truncated preview entirely — that's the
-            // whole point of asking to see it in full.
-            // The node the details pane is showing (#610: a state-pane
-            // selection such as a named report), not the tree's own.
-            let full = details
-                .map(|d| d.path.as_str())
-                .and_then(|p| oscilloscope_core::render::full_value(p, *field, raw_state));
-            let text = vec![Line::from(full.unwrap_or_default())];
-            draw_overlay(
-                frame,
-                area,
-                " full value (press any key) ",
-                text,
-                area.width.saturating_sub(4),
-                area.height.saturating_sub(4),
-                ctx,
-            );
-        }
-        Dialog::FilterInput(buf) => {
-            let text = vec![
-                Line::from(format!("/{buf}")),
-                Line::from("enter = apply   esc = cancel"),
-            ];
-            draw_overlay(frame, area, " filter ", text, 40, 4, ctx);
-        }
-        Dialog::None => {}
     }
 }
 
@@ -1855,6 +2035,7 @@ mod golden_tests {
         );
         let details = render::details_for(selected, plan, model, state);
         let mut app = App::new(engine == "watch");
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some(selected.to_string());
         // A regression: setting `selected_path`
         // directly (as every golden here does, to pin a specific row's
@@ -1875,6 +2056,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1890,6 +2072,8 @@ mod golden_tests {
                     state,
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -2051,6 +2235,7 @@ mod golden_tests {
             Some(&state),
         );
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some("prime.review.fix.agent".to_string());
         app.follow = false;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
@@ -2062,6 +2247,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2077,6 +2263,8 @@ mod golden_tests {
                     Some(&state),
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -2110,6 +2298,7 @@ mod golden_tests {
         // named report picked in the state pane.
         let details = render::details_for("prime.status", &plan, &model, Some(&state));
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some("prime.a".to_string());
         app.state_selected_path = Some("status".to_string());
         app.details_source = Pane::State;
@@ -2124,6 +2313,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal
@@ -2138,6 +2328,8 @@ mod golden_tests {
                     Some(&state),
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -2176,6 +2368,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let text: Vec<String> = details_lines(&details, None, &test_ctx, 80)
             .iter()
@@ -2222,9 +2415,11 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let screen = |source: crate::keys::Pane| {
             let mut app = App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Flow;
             app.selected_path = Some("prime.q1".to_string());
             app.details_source = source;
             app.follow = false;
@@ -2241,6 +2436,8 @@ mod golden_tests {
                         Some(&state),
                         &test_ctx,
                         0,
+                        "2026-01-01T00:00:00Z",
+                        None,
                     )
                 })
                 .unwrap();
@@ -2409,7 +2606,17 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    fn header_line_with_a_report(width: u16) -> String {
+    /// Issue #626 moved the header line's own truncation order (the
+    /// tabs shrink first, then the report, then the document, then
+    /// the ETA) into `oscilloscope_core::screens::header_line` itself
+    /// -- `oscilloscope-core`'s own tests cover the order directly
+    /// now (`header_line_shrinks_tabs_to_numbers_first`, `header_
+    /// line_truncates_report_before_document_at_80_columns`,
+    /// `header_line_drops_eta_before_status_at_50_columns`). This is
+    /// the one place left here that still shows a report actually
+    /// reaching the screen through `draw`'s own one-line header.
+    #[test]
+    fn header_report_collapses_to_a_bare_mark_when_almost_no_room_is_left() {
         let plan = sample_plan();
         let mut model = RunModel::new();
         model.observe_event(&Event::Report {
@@ -2424,7 +2631,7 @@ mod golden_tests {
             "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
         }});
         let text = snapshot_at(
-            width,
+            54,
             24,
             &plan,
             &mut model,
@@ -2434,33 +2641,10 @@ mod golden_tests {
             "prime.a",
             &[],
         );
-        text.lines().nth(1).unwrap().to_string()
-    }
-
-    /// #610: fewer than about 8 columns left for the report's own
-    /// text collapses it to a bare `▸`, rather than a truncated
-    /// message too short to read at all.
-    #[test]
-    fn header_report_collapses_to_a_bare_mark_when_almost_no_room_is_left() {
-        let line = header_line_with_a_report(54);
+        let line = text.lines().next().unwrap();
         assert!(line.contains("▸"), "{line}");
         assert!(!line.contains("running behind"), "{line}");
         assert!(!line.contains("warning:"), "{line}");
-    }
-
-    /// #610: the document path truncates before the report's own
-    /// message does -- wide enough for the full message to fit, the
-    /// document still gives way first rather than truncating evenly
-    /// alongside it.
-    #[test]
-    fn header_report_shows_in_full_while_the_document_path_still_truncates() {
-        let line = header_line_with_a_report(102);
-        assert!(
-            line.contains("▸ warning: running behind schedule"),
-            "{line}"
-        );
-        assert!(line.contains("…l  cof"), "{line}");
-        assert!(!line.contains("do-thing.yml"), "{line}");
     }
 
     /// #610: a warning-level report is styled in the theme's own
@@ -2501,8 +2685,10 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some("prime.a".to_string());
         app.follow = false;
         let log_lines = vec!["11:04:58 ▸ warning: behind".to_string()];
@@ -2520,6 +2706,8 @@ mod golden_tests {
                     Some(&state),
                     &ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -2911,6 +3099,7 @@ mod golden_tests {
             &[],
         );
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         assert!(app.follow, "issue #527: follow is on when the TUI starts");
         if let Some(target) = App::follow_target(&rendered.rows) {
             app.select_tree_path(Some(target.to_string()));
@@ -2935,6 +3124,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2950,6 +3140,8 @@ mod golden_tests {
                     Some(&state),
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -3053,6 +3245,7 @@ mod golden_tests {
         assert_eq!(rendered.rows.len(), N + 1, "the root row plus every leaf");
 
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         if let Some(target) = App::follow_target(&rendered.rows) {
             app.select_tree_path(Some(target.to_string()));
         }
@@ -3073,6 +3266,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3088,6 +3282,8 @@ mod golden_tests {
                     Some(&state),
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -3154,6 +3350,7 @@ mod golden_tests {
         );
         let details = render::details_for("n0", &plan, &RunModel::new(), Some(&state));
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some("n0".to_string());
 
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
@@ -3165,6 +3362,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3181,6 +3379,8 @@ mod golden_tests {
                     Some(&state),
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -3235,6 +3435,7 @@ mod golden_tests {
             Some(&state),
         );
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some("prime.fan.iter_0.ask".to_string());
         app.follow = false;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
@@ -3246,6 +3447,7 @@ mod golden_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3261,6 +3463,8 @@ mod golden_tests {
                     Some(&state),
                     &test_ctx,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -3317,6 +3521,7 @@ mod highlight_tests {
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
                 latest_report: None,
+                engine_alive: true,
             },
             unfolded_rows: Vec::new(),
             rows: vec![Row {
@@ -3352,6 +3557,7 @@ mod highlight_tests {
         let rendered = minimal_render_state();
         let theme = Theme::for_name(ThemeName::Dracula);
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some("prime.a".to_string());
         app.follow = false;
 
@@ -3395,12 +3601,13 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app_t0 = app.clone();
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app_t0, None, &ctx_t0, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app_t0, None, &ctx_t0, 0, "2026-01-01T00:00:00Z", None))
             .unwrap();
         let buffer_t0 = terminal.backend().buffer().clone();
         let (x, y) = find_row_cell(&buffer_t0);
@@ -3417,6 +3624,7 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app_after = app.clone();
         let backend2 = TestBackend::new(100, 24);
@@ -3433,6 +3641,8 @@ mod highlight_tests {
                     None,
                     &ctx_after,
                     0,
+                    "2026-01-01T00:00:00Z",
+                    None,
                 )
             })
             .unwrap();
@@ -3444,11 +3654,12 @@ mod highlight_tests {
         );
     }
 
-    /// Finding 15: an explicit buffer test for the icon's own
-    /// narrow-terminal rule -- hidden below `TWO_COLUMN_MIN_WIDTH`
-    /// (80 columns), drawn at and above it.
+    /// Issue #626: the scope icon's own trace is now the header
+    /// line's first segment, drawn at every width -- there is no
+    /// longer a narrow-terminal threshold below which it hides (the
+    /// old three-row bezel icon had one; the inline trace does not).
     #[test]
-    fn the_icon_is_hidden_below_eighty_columns_and_shown_at_it() {
+    fn the_icon_draws_at_every_width() {
         let rendered = minimal_render_state();
         let theme = Theme::for_name(ThemeName::Terminal);
         let tracker = Tracker::new();
@@ -3459,21 +3670,26 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
-        let has_bezel_corner = |width: u16| -> bool {
+        let first_cell_is_blank = |width: u16| -> bool {
             let mut app = App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Flow;
             let backend = TestBackend::new(width, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
-                .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+                .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
                 .unwrap();
-            terminal.backend().buffer()[(0, 0)].symbol() == "╭"
+            terminal.backend().buffer()[(0, 0)].symbol() == " "
         };
         assert!(
-            !has_bezel_corner(79),
-            "below 80 columns, the icon must not draw"
+            !first_cell_is_blank(40),
+            "the icon's own trace must draw even on a narrow terminal"
         );
-        assert!(has_bezel_corner(80), "at 80 columns, the icon must draw");
+        assert!(
+            !first_cell_is_blank(100),
+            "the icon's own trace must draw on a wide terminal too"
+        );
     }
 
     /// Finding 14: the token bar's own totals line must highlight on
@@ -3497,12 +3713,14 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let needle: Vec<char> = "120".chars().collect();
@@ -3543,12 +3761,14 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, theme.background.unwrap());
@@ -3556,12 +3776,12 @@ mod highlight_tests {
 
     /// Finding 7: the base fill set only `bg`, so a named theme's
     /// own `text` colour never actually painted anything -- a plain
-    /// cell (nothing drawn over it but the header block's borderless
-    /// fill) must read the theme's `text`, not the terminal's own
-    /// default foreground. `(80, 1)` is blank space inside the
-    /// header box, to the right of its own text -- `(0, 0)` is the
-    /// scope icon's own bezel corner now (issue #535), styled with
-    /// `icon_bezel`, not a plain untouched cell any more.
+    /// cell (nothing drawn over it but the base fill) must read the
+    /// theme's `text`, not the terminal's own default foreground.
+    /// `(95, 0)` is blank space on the one-line header (issue #626),
+    /// to the right of its own content -- the header has no border
+    /// of its own any more, so this is the simplest cell that's
+    /// reliably untouched by anything but the base fill.
     #[test]
     fn a_named_theme_paints_the_default_text_colour_of_an_empty_cell() {
         let rendered = minimal_render_state();
@@ -3574,16 +3794,18 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(80, 1)].symbol(), " ");
-        assert_eq!(buffer[(80, 1)].fg, theme.text);
+        assert_eq!(buffer[(95, 0)].symbol(), " ");
+        assert_eq!(buffer[(95, 0)].fg, theme.text);
     }
 
     #[test]
@@ -3598,12 +3820,14 @@ mod highlight_tests {
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
+            no_animation: false,
         };
         let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, Color::Reset);
