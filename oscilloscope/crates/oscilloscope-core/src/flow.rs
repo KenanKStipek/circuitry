@@ -553,20 +553,24 @@ fn merge_single_pass_loops(out: &mut Vec<FlowRow>) {
             i += 1;
             continue;
         };
-        // The pass row's own path, not its `kind`, is what marks it
-        // as a pass: a single-step pass body has a plan entry of its
-        // own at that same path, so `render::row_kind_for` gives it
-        // that step's kind (or, folded into a breadcrumb with its
-        // own one child, the breadcrumb's kind) well ahead of the
-        // `RowKind::Pass` fallback, the same way an unnamed `if`
-        // sharing the pass's path can give it `RowKind::If` instead
-        // (this module's own doc comment on `is_named_if_path`).
-        let is_pass_path = out[pass_idx]
+        // The pass row's own path or label, not its `kind`, is what
+        // marks it as a pass (`fold::is_quick_step`'s own doc comment
+        // has both reasons why): a single-step pass body sharing its
+        // leaf's own path gives `render::row_kind_for` that leaf's
+        // kind well ahead of the `RowKind::Pass` fallback, the same
+        // way an unnamed `if` sharing the pass's path can give it
+        // `RowKind::If` instead (this module's own doc comment on
+        // `is_named_if_path`); a pass breadcrumb-folded with its own
+        // single child keeps the child's path and kind, never the
+        // pass's, but its own label still starts with `pass_row_
+        // label`'s `"pass "`.
+        let is_pass_row = out[pass_idx]
             .path
             .rsplit('.')
             .next()
-            .is_some_and(|seg| seg.starts_with("iter_"));
-        if !is_pass_path {
+            .is_some_and(|seg| seg.starts_with("iter_"))
+            || crate::fold::is_pass_label(&out[pass_idx].label);
+        if !is_pass_row {
             i += 1;
             continue;
         }
@@ -580,7 +584,14 @@ fn merge_single_pass_loops(out: &mut Vec<FlowRow>) {
             i += 1;
             continue;
         }
-        let pass_label = out[pass_idx].label.clone();
+        // A pass breadcrumb-folded with its own single child reads
+        // "pass N of M › <child>" -- only the pass's own prefix goes
+        // into the merged label, the same way a named loop's single
+        // pass merge never names the pass's own one step either.
+        let pass_label = out[pass_idx].label.split_once(" › ").map_or_else(
+            || out[pass_idx].label.clone(),
+            |(prefix, _)| prefix.to_string(),
+        );
         let pass_status = out[pass_idx].status.clone();
         let pass_duration = out[pass_idx].duration_s;
         let pass_start = out[pass_idx].start_ts.clone();
