@@ -47,9 +47,12 @@
 //! help).
 
 use cel::common::ast::operators;
-use cel::extractors::Arguments;
-use cel::objects::Key;
-use cel::{Context, ExecutionError, Value};
+use cel::common::types::{
+    CelBytes as BorrowedBytes, CelList as BorrowedList, CelMap as BorrowedMap,
+    CelMapKey as BorrowedMapKey, CelString as BorrowedString,
+};
+use cel::common::value::Val;
+use cel::{Context, ExecutionError, FunctionContext, Value};
 
 const STRICT_INDEX: &str = "__electricity_python_index";
 
@@ -90,68 +93,91 @@ fn python_sequence_index(index: &Value, len: usize) -> Result<usize, ()> {
 }
 
 /// celpy's `list`/`str`/`bytes.__getitem__`, and a strict (non-
-/// cross-converting) map lookup — `Err(())` for an index with no CEL
-/// [`Key`] counterpart, out of range, or a container that isn't a
-/// `list`/`map`/`string`/`bytes` at all.
-fn python_index(container: &Value, index: &Value) -> Result<Value, ()> {
-    match container {
-        Value::List(items) => {
-            let idx = python_sequence_index(index, items.len())?;
-            Ok(items[idx].clone())
+/// cross-converting) map lookup, on a borrowed container rather than
+/// one `strict_index_fn` has already fully converted into an owned
+/// [`Value`] — `Err(())` for an index with no CEL key counterpart, out
+/// of range, or a container that isn't a `list`/`map`/`string`/`bytes`
+/// at all. Only the single looked-up element is ever converted via
+/// [`Value::try_from`], not the whole container (issue #400): a `list`
+/// index copies just that one element, out of a `DefaultList` whose own
+/// elements `cel` already stores as individually boxed `Val`s, rather
+/// than rebuilding every element into an owned `Value::List` only to
+/// throw away every one but the indexed element, paid again on every
+/// pass of a comprehension like `state.l.filter(x, state.l[0] == 0)`.
+fn python_index(container: &dyn Val, index: &Value) -> Result<Value, ()> {
+    if let Some(items) = container.downcast_ref::<BorrowedList>() {
+        let idx = python_sequence_index(index, items.inner().len())?;
+        return Value::try_from(items.inner()[idx].as_ref()).map_err(|_| ());
+    }
+    if let Some(s) = container.downcast_ref::<BorrowedString>() {
+        // Python indexes a `str` by Unicode code point, not by byte —
+        // `s.inner().chars()` is the Rust equivalent. Collects only the
+        // characters, never the whole container's `Value` tree.
+        let chars: Vec<char> = s.inner().chars().collect();
+        let idx = python_sequence_index(index, chars.len())?;
+        return Ok(Value::String(std::sync::Arc::new(chars[idx].to_string())));
+    }
+    if let Some(b) = container.downcast_ref::<BorrowedBytes>() {
+        // Python's `bytes.__getitem__` with a plain (non-slice) index
+        // returns the byte as an `int`, not a length-1 `bytes`.
+        let bytes = b.inner();
+        let idx = python_sequence_index(index, bytes.len())?;
+        return Ok(Value::Int(i64::from(bytes[idx])));
+    }
+    if let Some(map) = container.downcast_ref::<BorrowedMap>() {
+        return borrowed_map_index(map, index);
+    }
+    Err(())
+}
+
+/// [`python_index`]'s `map` arm: a strict (non-cross-converting) key
+/// match through the underlying `HashMap` directly, same semantics as
+/// the comment this replaces explained, but reading only the one
+/// matched entry's value rather than every one in the map.
+fn borrowed_map_index(map: &BorrowedMap, index: &Value) -> Result<Value, ()> {
+    let key: Option<BorrowedMapKey> = match index {
+        Value::Int(n) => Some(BorrowedMapKey::from(*n)),
+        Value::UInt(n) => Some(BorrowedMapKey::from(*n)),
+        Value::String(s) => Some(BorrowedMapKey::from(s.as_str().to_string())),
+        Value::Bool(b) => Some(BorrowedMapKey::from(*b)),
+        _ => None,
+    };
+    if let Some(key) = key {
+        if let Some(value) = map.inner().get(&key) {
+            return Value::try_from(value.as_ref()).map_err(|_| ());
         }
-        Value::String(s) => {
-            // Python indexes a `str` by Unicode code point, not by byte
-            // — `s.chars()` is the Rust equivalent.
-            let chars: Vec<char> = s.chars().collect();
-            let idx = python_sequence_index(index, chars.len())?;
-            Ok(Value::String(std::sync::Arc::new(chars[idx].to_string())))
-        }
-        Value::Bytes(b) => {
-            // Python's `bytes.__getitem__` with a plain (non-slice)
-            // index returns the byte as an `int`, not a length-1
-            // `bytes`.
-            let idx = python_sequence_index(index, b.len())?;
-            Ok(Value::Int(i64::from(b[idx])))
-        }
-        Value::Map(map) => {
-            // `cel::objects::Map::get` cross-converts an int/uint key
-            // the way `cel`'s native map indexing always has; celpy's
-            // own `IntType`/`UintType.__eq__` is `@type_matched` and
-            // raises for the other one instead of finding it — this
-            // looks the key up directly through the underlying
-            // `HashMap`, matching celpy's own strict type match.
-            let key: Key = index.clone().try_into().map_err(|_| ())?;
-            if let Some(value) = map.map.get(&key) {
-                return Ok(value.clone());
-            }
-            // celpy's own asymmetry (module docs): a plain dict lookup
-            // with an `int`/`uint` probe finds a `bool`-keyed entry
-            // (`BoolType` has no `__eq__` override, so it hashes and
-            // compares through the plain `int` it subclasses) even
-            // though the strict key match above never matches
-            // `Key::Bool` against `Key::Int`/`Key::Uint` directly. Only
-            // tried for an `int`/`uint` probe that missed above — a
-            // `bool` probe keeps raising against an `int`/`uint`-keyed
-            // entry, since `IntType`/`UintType.__eq__`'s own
-            // `@type_matched` has no exemption for the reverse
-            // direction.
-            let bool_equivalent = match index {
-                Value::Int(n) if *n == 0 || *n == 1 => Some(*n == 1),
-                Value::UInt(n) if *n == 0 || *n == 1 => Some(*n == 1),
-                _ => None,
-            };
-            match bool_equivalent.and_then(|b| map.map.get(&Key::Bool(b))) {
-                Some(value) => Ok(value.clone()),
-                None => Err(()),
-            }
-        }
-        _ => Err(()),
+    }
+    // celpy's own asymmetry (module docs): a plain dict lookup with an
+    // `int`/`uint` probe finds a `bool`-keyed entry (`BoolType` has no
+    // `__eq__` override, so it hashes and compares through the plain
+    // `int` it subclasses) even though the strict key match above never
+    // matches a bool key against an int/uint probe directly. Only tried
+    // for an `int`/`uint` probe that missed above — a `bool` probe keeps
+    // raising against an `int`/`uint`-keyed entry, since
+    // `IntType`/`UintType.__eq__`'s own `@type_matched` has no exemption
+    // for the reverse direction.
+    let bool_equivalent = match index {
+        Value::Int(n) if *n == 0 || *n == 1 => Some(*n == 1),
+        Value::UInt(n) if *n == 0 || *n == 1 => Some(*n == 1),
+        _ => None,
+    };
+    match bool_equivalent.and_then(|b| map.inner().get(&BorrowedMapKey::from(b))) {
+        Some(value) => Value::try_from(value.as_ref()).map_err(|_| ()),
+        None => Err(()),
     }
 }
 
-fn strict_index_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
-    python_index(&args[0], &args[1])
-        .map_err(|()| ExecutionError::UnsupportedIndex(args[1].clone(), args[0].clone()))
+fn strict_index_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
+    let container_ref = ftx.args[0].as_ref();
+    let index_ref = ftx.args[1].as_ref();
+    let index = Value::try_from(index_ref)?;
+    match python_index(container_ref, &index) {
+        Ok(value) => Ok(value),
+        Err(()) => Err(ExecutionError::UnsupportedIndex(
+            index,
+            Value::try_from(container_ref)?,
+        )),
+    }
 }
 
 #[cfg(test)]

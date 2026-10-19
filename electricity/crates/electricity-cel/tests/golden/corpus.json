@@ -5312,6 +5312,41 @@
     "strict": false
   },
   {
+    "expr": "state.m.exists(k, k == null)",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": "n"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
     "expr": "size(state.m) == 1",
     "mode": "condition",
     "outcome": {
@@ -5374,6 +5409,79 @@
                 {
                   "t": "str",
                   "v": "f"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "naive": "2020-01-01T00:00:00.000000",
+                  "offset_seconds": 0,
+                  "t": "datetime"
+                },
+                {
+                  "t": "str",
+                  "v": "t"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bytes",
+                  "v": "6b"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
                 }
               ]
             ]
@@ -6229,6 +6337,41 @@
                 {
                   "t": "bool",
                   "v": false
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[true] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
                 },
                 {
                   "t": "str",

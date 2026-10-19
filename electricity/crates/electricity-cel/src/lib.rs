@@ -31,17 +31,18 @@
 //! expression *does* read is `ValueError("overflow")`, wrapped into
 //! `CelEvaluationError` the same as any other evaluation failure.
 //!
-//! For [`evaluate_expect`] this is a deliberate, evidence-backed
-//! deviation, not parity: `evaluate_cel_expect` in `core/cel_eval.py`
-//! converts `value`/`meta`/`state` *before* its own `try`/`except`, so
-//! the matching `ValueError` escapes **uncaught** — it is not a
+//! For [`evaluate_expect`] this crate still raises a `CelError` — the
+//! same shape [`evaluate_condition`] already uses for its own overflow
+//! — but `evaluate_cel_expect` in `core/cel_eval.py` converts
+//! `value`/`meta`/`state` *before* its own `try`/`except`, so in Python
+//! the matching `ValueError` escapes **uncaught**: it is not a
 //! `CelEvaluationError`, and the two call sites that invoke
 //! `core.expect` handle that raw `ValueError` differently from each
 //! other and from a failed expectation:
 //!
 //! - `core.tool`'s attempt loop (`tool.py`) catches every exception from
 //!   the attempt, `ValueError` included: the attempt fails and is
-//!   retried up to the step's `retry:` policy, `meta.error` becomes
+//!   retried up to the step's `retries:` policy, `meta.error` becomes
 //!   `"overflow"`, and `meta.expect` is never set (a failed expectation
 //!   sets it). `on_error: fail` then re-raises the bare `ValueError`.
 //! - `core.use` (`use.py`) catches it too, but re-raises a `ValueError`
@@ -50,13 +51,14 @@
 //!
 //! Both differ from a genuinely failed expectation (`meta.expect.error`
 //! set, `meta.error` becoming `"expect failed: <summary>"`, retried up
-//! to `max_attempts` for `use`). This crate raises a `CelError` here —
-//! the same shape [`evaluate_condition`] already uses for its own
-//! overflow — rather than reproducing either Python outcome exactly;
-//! [`CelError::is_overflow`] lets a future caller distinguish this case
-//! and reproduce whichever of the two Python behaviours it is wiring up
-//! to (tool vs. use) if that parity ever matters, rather than baking in
-//! a guess now.
+//! to `max_attempts` for `use`). [`CelError::is_overflow`] is exactly
+//! what lets `electricity-vm`'s own `tool`/`use` dispatch
+//! (`exec/tool.rs`, `exec/use_.rs`) reproduce both outcomes exactly,
+//! rather than treating this `CelError` as an ordinary evaluation
+//! failure the way `if`/`while` CEL (below) already can: it branches on
+//! `is_overflow()` before deciding how to report the failure, instead
+//! of always wrapping it the same way every other `CelError` gets
+//! wrapped.
 //!
 //! A `Value::Dict` key that converts, in Circuitry's own `_to_cel`
 //! (`core/cel_eval.py`), to Python's `None` — a bare `Value::None` key,
@@ -251,10 +253,11 @@ impl CelError {
 
     /// Whether this is a big-int-overflow failure (`convert::ConvertError::Overflow`)
     /// rather than a parse/compile/evaluation failure — see the module
-    /// docs' note on [`evaluate_expect`]'s big-int deviation: a future
-    /// caller that wants to reproduce Circuitry's own `core.tool`/
-    /// `core.use` handling of that specific case, rather than treating
-    /// it like any other `CelError`, can branch on this.
+    /// docs' note on [`evaluate_expect`]'s big-int deviation: this is
+    /// what `electricity-vm`'s own `tool`/`use` dispatch branches on to
+    /// reproduce Circuitry's own `core.tool`/`core.use` handling of
+    /// that specific case, rather than treating it like any other
+    /// `CelError`.
     pub fn is_overflow(&self) -> bool {
         self.overflow
     }

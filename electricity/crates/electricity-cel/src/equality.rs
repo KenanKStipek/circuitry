@@ -20,9 +20,10 @@
 //! `_spec_eq`/`_spec_ne`) catches that nested `TypeError` and falls back
 //! to its own rule: equal only if the *container's own* two operands are
 //! themselves numeric — never true for two lists/maps, which is why
-//! `[1, 2] == [1.0, 2.0]` is `false` in celpy. [`spec_eq`]/[`spec_ne`]
-//! reproduce that by attempting [`strict_eq`] (celpy's exact-type rule,
-//! applied recursively) first and falling back the same way on `Err`.
+//! `[1, 2] == [1.0, 2.0]` is `false` in celpy. [`spec_eq`] (used for
+//! both `==` and `!=`, [`strict_eq_fn`]/[`strict_ne_fn`]) reproduces
+//! that by attempting [`strict_eq`] (celpy's exact-type rule, applied
+//! recursively) first and falling back the same way on `Err`.
 //!
 //! `in` has no such fallback (`evaluation.py`'s `operator_in`): a type
 //! mismatch it can't look past raises outright rather than deciding
@@ -89,8 +90,13 @@
 //! other non-`double`).
 
 use cel::common::ast::operators;
-use cel::extractors::Arguments;
-use cel::{Context, ExecutionError, Value};
+use cel::common::types::Kind;
+use cel::common::types::{
+    CelBytes as BorrowedBytes, CelList as BorrowedList, CelMap as BorrowedMap,
+    CelMapKey as BorrowedMapKey, CelString as BorrowedString,
+};
+use cel::{Context, ExecutionError, FunctionContext, Value};
+use std::sync::Arc;
 
 const STRICT_EQ: &str = "__electricity_strict_eq";
 const STRICT_NE: &str = "__electricity_strict_ne";
@@ -136,8 +142,8 @@ fn numeric_f64(v: &Value) -> f64 {
 /// celpy's exact-type equality, applied recursively: `Err` wherever a
 /// celtypes dunder would raise — a numeric type mismatch, or a
 /// list/map compared against a different shape or length — `Ok` with
-/// the structural answer otherwise. [`spec_eq`]/[`spec_ne`] catch the
-/// `Err` at the top; `in` ([`strict_in_fn`]) does not.
+/// the structural answer otherwise. [`spec_eq`] catches the `Err` at
+/// the top; `in` ([`strict_in_fn`]) does not.
 fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(x == y),
@@ -235,16 +241,48 @@ fn spec_eq(a: &Value, b: &Value) -> bool {
         .unwrap_or_else(|()| is_numeric(a) && is_numeric(b) && numeric_f64(a) == numeric_f64(b))
 }
 
-fn spec_ne(a: &Value, b: &Value) -> bool {
-    !spec_eq(a, b)
+/// Whether *kind* is one `cel` never materializes cheaply — the only
+/// ones whose [`Value::try_from`] conversion from a borrowed `&dyn Val`
+/// walks and clones every element rather than just the one value
+/// itself (issue #400).
+fn is_expensive_kind(kind: Kind) -> bool {
+    matches!(kind, Kind::List | Kind::Map)
 }
 
-fn strict_eq_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
-    Ok(Value::Bool(spec_eq(&args[0], &args[1])))
+/// `spec_eq`, deciding from the two arguments' [`Kind`]s alone whenever
+/// that's enough, so `strict_eq_fn`/`strict_ne_fn` never pay for
+/// [`Value::try_from`]'s full, recursive container copy unless the
+/// comparison can actually depend on a container's contents.
+///
+/// Exactly one side being a `list`/`map`, or both being containers of
+/// *different* kinds (a `list` against a `map`), decides `false`
+/// immediately: [`strict_eq`]'s own container arms only ever match a
+/// `list` against a `list` or a `map` against a `map`, and its
+/// catch-all (`raises_on_mismatch`) always resolves a container
+/// mismatched this way to `false` too — whether or not the other side
+/// is `null` — once [`spec_eq`]'s own fallback (neither side numeric)
+/// is applied. Every other pairing (both scalars, whatever their own
+/// types) stays cheap regardless, so it converts both sides and
+/// defers to the existing, value-level [`spec_eq`].
+fn spec_eq_from_context(ftx: &FunctionContext) -> Result<bool, ExecutionError> {
+    let a_ref = ftx.args[0].as_ref();
+    let b_ref = ftx.args[1].as_ref();
+    let a_kind = a_ref.get_type().kind();
+    let b_kind = b_ref.get_type().kind();
+    if (is_expensive_kind(a_kind) || is_expensive_kind(b_kind)) && a_kind != b_kind {
+        return Ok(false);
+    }
+    let a = Value::try_from(a_ref)?;
+    let b = Value::try_from(b_ref)?;
+    Ok(spec_eq(&a, &b))
 }
 
-fn strict_ne_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
-    Ok(Value::Bool(spec_ne(&args[0], &args[1])))
+fn strict_eq_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
+    Ok(Value::Bool(spec_eq_from_context(ftx)?))
+}
+
+fn strict_ne_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
+    Ok(Value::Bool(!spec_eq_from_context(ftx)?))
 }
 
 /// `in`, matching celpy's `operator_in`: `true` as soon as a strict match
@@ -256,81 +294,82 @@ fn strict_ne_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
 /// `for c in container` loop over a celpy `str`/`bytes` does (module
 /// docs, fourth review finding 1) — `'lo' in 'hello'` is `false` (no
 /// single character equals the two-character item), not an error.
-fn strict_in_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
-    let item = &args[0];
-    let container = &args[1];
+fn strict_in_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
+    let item_ref = ftx.args[0].as_ref();
+    let container_ref = ftx.args[1].as_ref();
+    let item = Value::try_from(item_ref)?;
     // `convert.rs`'s own null-key sentinel: a `null` probe against a
     // map holding the collapsed `None`/bare-`date` key slot matches,
     // the same way `None in {<a None or date key>: ...}` does in
-    // Python (confirmed against the real evaluator) -- the sentinel
-    // itself is never exposed as a `Value::String` match for any other
-    // probe, including a literal string equal to it, which this
-    // crate's own module docs on `convert::NULL_KEY_SENTINEL` already
-    // call out as a (vanishingly unlikely) risk rather than something
-    // this check also needs to special-case.
-    if let (Value::Null, Value::Map(map)) = (item, container) {
-        if map.map.keys().any(crate::convert::is_null_key_sentinel) {
-            return Ok(Value::Bool(true));
+    // Python (confirmed against the real evaluator). The sentinel is
+    // also what a `map`/`exists`/`all`/`filter` comprehension's own
+    // loop variable is bound to for that slot, unlike celpy's `None`
+    // (DESIGN.md §7.2) -- a probe that is itself that very sentinel
+    // string, rather than `null`, would therefore also match here, a
+    // risk vanishingly unlikely to matter in practice since no real
+    // orchestration constructs it.
+    if matches!(item, Value::Null) {
+        if let Some(map) = container_ref.downcast_ref::<BorrowedMap>() {
+            let has_sentinel = map.inner().keys().any(|key| {
+                matches!(key, BorrowedMapKey::String(s) if s.inner() == crate::convert::NULL_KEY_SENTINEL)
+            });
+            if has_sentinel {
+                return Ok(Value::Bool(true));
+            }
         }
     }
-    // Scans *container*'s own elements by reference -- never collecting
-    // them into a fresh `Vec<Value>` first (issue #400): `cel` itself
-    // passes this function's own arguments as owned values no matter
-    // what, but that clone is `Arc::clone` for `Value::List`/`Value::
-    // Map` (O(1), whatever the container's size), unlike a `Vec<Value>`
-    // built fresh on every call, which is a real, size-proportional copy
-    // -- paid again on every macro iteration for `state.l.filter(x, x in
-    // state.l)`, the shape that makes it quadratic overall.
+    // Scans *container*'s own elements by reference, converting only
+    // the element actually compared on each step rather than
+    // rebuilding the whole container into a fresh `Value` up front
+    // (issue #400) -- the shape that made `state.l.filter(x, x in
+    // state.l)` pay a full, size-proportional copy of `state.l` on
+    // every one of its own iterations, on top of the scan itself.
     let mut had_error = false;
-    match container {
-        Value::List(items) => {
-            for element in items.iter() {
-                match strict_eq(element, item) {
-                    Ok(true) => return Ok(Value::Bool(true)),
-                    Ok(false) => {}
-                    Err(()) => had_error = true,
-                }
+    if let Some(list) = container_ref.downcast_ref::<BorrowedList>() {
+        for element in list.inner() {
+            let element = Value::try_from(element.as_ref())?;
+            match strict_eq(&element, &item) {
+                Ok(true) => return Ok(Value::Bool(true)),
+                Ok(false) => {}
+                Err(()) => had_error = true,
             }
         }
-        Value::Map(map) => {
-            for key in map.map.keys() {
-                match strict_eq(&Value::from(key), item) {
-                    Ok(true) => return Ok(Value::Bool(true)),
-                    Ok(false) => {}
-                    Err(()) => had_error = true,
-                }
+    } else if let Some(map) = container_ref.downcast_ref::<BorrowedMap>() {
+        // Only each *key* is ever converted -- an `in` probe never
+        // depends on a map's values, so this skips exactly the
+        // recursive value conversion a full `Value::try_from` of the
+        // whole map would otherwise pay for no reason.
+        for key in map.inner().keys() {
+            let key_value = Value::try_from(key.inner())?;
+            match strict_eq(&key_value, &item) {
+                Ok(true) => return Ok(Value::Bool(true)),
+                Ok(false) => {}
+                Err(()) => had_error = true,
             }
         }
-        Value::String(s) => {
-            for c in s.chars() {
-                match strict_eq(&Value::String(std::sync::Arc::new(c.to_string())), item) {
-                    Ok(true) => return Ok(Value::Bool(true)),
-                    Ok(false) => {}
-                    Err(()) => had_error = true,
-                }
+    } else if let Some(s) = container_ref.downcast_ref::<BorrowedString>() {
+        for c in s.inner().chars() {
+            match strict_eq(&Value::String(Arc::new(c.to_string())), &item) {
+                Ok(true) => return Ok(Value::Bool(true)),
+                Ok(false) => {}
+                Err(()) => had_error = true,
             }
         }
-        Value::Bytes(b) => {
-            for byte in b.iter() {
-                match strict_eq(&Value::Int(i64::from(*byte)), item) {
-                    Ok(true) => return Ok(Value::Bool(true)),
-                    Ok(false) => {}
-                    Err(()) => had_error = true,
-                }
+    } else if let Some(b) = container_ref.downcast_ref::<BorrowedBytes>() {
+        for byte in b.inner().iter() {
+            match strict_eq(&Value::Int(i64::from(*byte)), &item) {
+                Ok(true) => return Ok(Value::Bool(true)),
+                Ok(false) => {}
+                Err(()) => had_error = true,
             }
         }
-        _ => {
-            return Err(ExecutionError::ValuesNotComparable(
-                item.clone(),
-                container.clone(),
-            ));
-        }
+    } else {
+        let container = Value::try_from(container_ref)?;
+        return Err(ExecutionError::ValuesNotComparable(item, container));
     }
     if had_error {
-        Err(ExecutionError::ValuesNotComparable(
-            item.clone(),
-            container.clone(),
-        ))
+        let container = Value::try_from(container_ref)?;
+        Err(ExecutionError::ValuesNotComparable(item, container))
     } else {
         Ok(Value::Bool(false))
     }

@@ -177,12 +177,6 @@ fn dict_to_cel(entries: &electricity_value::Dict, depth: usize) -> Result<CelMap
 /// `celtypes.MapType`'s own key-type check, which rejects `None` too.
 pub(crate) const NULL_KEY_SENTINEL: &str = "\u{0}electricity-cel: key with no CEL counterpart, collapsed like Circuitry's own null key\u{0}";
 
-/// Whether *key* is [`NULL_KEY_SENTINEL`] — the slot `equality.rs`'s own
-/// `in` arm treats as matching a `null` probe.
-pub(crate) fn is_null_key_sentinel(key: &Key) -> bool {
-    matches!(key, Key::String(s) if s.as_str() == NULL_KEY_SENTINEL)
-}
-
 fn to_cel_key(key: &Value) -> Result<Option<Key>, ConvertError> {
     match key {
         Value::Bool(b) => Ok(Some(Key::Bool(*b))),
@@ -270,7 +264,11 @@ mod tests {
             panic!("expected a map");
         };
         assert_eq!(map.map.len(), 2);
-        let sentinel = map.map.keys().find(|k| is_null_key_sentinel(k)).unwrap();
+        let sentinel = map
+            .map
+            .keys()
+            .find(|k| matches!(k, Key::String(s) if s.as_str() == NULL_KEY_SENTINEL))
+            .unwrap();
         assert_eq!(map.map.get(sentinel), Some(&cel::Value::Int(3)));
     }
 

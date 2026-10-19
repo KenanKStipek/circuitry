@@ -180,9 +180,18 @@ def divergent_condition(
     itself; the Python side is never hand-written -- `python_result`
     still comes from an actual call into `evaluate_cel`, which this
     function asserts succeeds (a case written with this helper is, by
-    definition, one where Circuitry itself never raises).
+    definition, one where Circuitry itself never raises). Also asserts
+    *python_result* actually differs from *electricity_result* -- a
+    case where both engines agree, written with this helper by mistake,
+    would otherwise pass silently rather than failing loudly (issue
+    #400 review): that shape belongs to `condition()`, not this one.
     """
     python_result = evaluate_cel(expr, state, strict=strict)
+    if python_result == electricity_result:
+        raise ValueError(
+            f"divergent_condition({expr!r}, ...): both engines agree "
+            f"({python_result!r}) -- this isn't a divergence, use condition() instead"
+        )
     return {
         "mode": "condition",
         "expr": expr,
@@ -681,6 +690,22 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
+    # --- issue #400 review: a `map`/`exists`/`all`/`filter`
+    # comprehension's own loop variable, iterating the collapsed
+    # `None`/bare-`date` key slot, is bound to Circuitry's real `None`
+    # in Python but to electricity's own internal sentinel string (not
+    # `null`) here -- `k == null` is `true` in Python, `false` here, a
+    # divergence the `in`/`size()` fix above does not reach, since
+    # that is `cel`'s own map-comprehension machinery iterating its
+    # keys, not this crate's own code.
+    cases += [
+        divergent_condition(
+            "state.m.exists(k, k == null)",
+            {"m": {None: "n"}},
+            electricity_result=False,
+        ),
+    ]
+
     # --- issue #400: a key that keeps its own, real CEL value in
     # Python instead of becoming `None` -- a `float` key is kept as its
     # own `DoubleType`, reachable through `in`/`size()`, never
@@ -701,6 +726,20 @@ def build_corpus() -> list[dict]:
         divergent_condition(
             "2.5 in state.m",
             {"m": {2.5: "f"}},
+            electricity_result=False,
+        ),
+        # A `datetime.datetime`/`bytes` key keeps its own, real CEL
+        # value the same way a `float` key does above -- `cel::objects
+        # ::Key` has no `Timestamp`/`Bytes` variant either, so the same
+        # divergence applies.
+        divergent_condition(
+            "size(state.m) == 1",
+            {"m": {datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc): "t"}},
+            electricity_result=False,
+        ),
+        divergent_condition(
+            "size(state.m) == 1",
+            {"m": {b"k": "b"}},
             electricity_result=False,
         ),
     ]
@@ -844,6 +883,11 @@ def build_corpus() -> list[dict]:
         condition("state.m[1] == 'a'", {"m": {True: "a"}}),
         condition("state.m[1u] == 'a'", {"m": {True: "a"}}),
         condition("state.m[0] == 'a'", {"m": {False: "a"}}),
+        # The reverse direction is not a divergence at all: a `bool`
+        # probe still raises against an `int`/`uint`-keyed entry, since
+        # `IntType`/`UintType.__eq__`'s own `@type_matched` has no
+        # exemption for it either way.
+        condition("state.m[true] == 'a'", {"m": {1: "a"}}),
     ]
 
     # --- fourth review of #379: shapes the third review's own list of
