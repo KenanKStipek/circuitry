@@ -185,11 +185,69 @@ pub enum PlanEntryKind {
     },
     If {
         named: bool,
+        /// The compiled condition's own mode and text (issue #635's
+        /// Flow screen: a decision row's dim second line) — `None`
+        /// only for a plan built with no real `Region::If` behind it
+        /// at all (never true for a compiled plan; `PlanTree::empty`
+        /// has no `If` entries to begin with).
+        condition: Option<ConditionInfo>,
+        /// Every real path the `then` branch directly contributes
+        /// (`iter_*` placeholder included, same shape as
+        /// `branch_alternates`'s own entries) — the Flow screen's own
+        /// inference for an unnamed `if` reads these against the rows
+        /// actually observed; a *named* if's own taken/untaken branch
+        /// instead reads `meta.branch` directly, but still carries
+        /// these for its condition's untaken-branch summary line.
+        then_paths: Vec<String>,
+        /// The `else` branch's own direct paths, empty when the `if`
+        /// has no `else` at all.
+        else_paths: Vec<String>,
     },
     Dynamic {
         flow: Flow,
     },
     TryFinally,
+}
+
+/// A compiled `if`'s own condition, reduced to what a front end can
+/// show (issue #635's Flow screen: a decision row's dim second line,
+/// and the selected pane's own condition line) — never the full
+/// [`electricity_bytecode::Condition`]/[`electricity_bytecode::TemplateText`]
+/// shape, since nothing here needs to re-evaluate or re-render either,
+/// only display a short, already-final piece of text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConditionInfo {
+    pub mode: ConditionMode,
+    /// The CEL expression verbatim, or a model-mode template's own
+    /// first source line — never cut short here; a caller with a
+    /// column budget cuts it with `…` at display time.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConditionMode {
+    Cel,
+    Model,
+}
+
+/// One unnamed `if`'s own decision, recorded in document order
+/// (issue #635's Flow screen) — an unnamed `if` writes no node and
+/// fires no event (DESIGN.md §1.3), so it has no path of its own for
+/// a caller to look up the way a named one's can be, via
+/// `PlanTree::match_path`; `host_path` is the chain/tree scope its
+/// own `PlanEntry` was folded into instead (the same path
+/// `is_transparent`'s own doc comment already describes as "exactly
+/// its enclosing scope's"), which can and often does hold more than
+/// one unnamed `if`'s entry at once. The Flow screen enumerates
+/// `PlanTree::unnamed_if_decisions` directly, in this same document
+/// order, rather than trying to recover each one from `host_path`
+/// alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnnamedIfDecision {
+    pub host_path: String,
+    pub condition: Option<ConditionInfo>,
+    pub then_paths: Vec<String>,
+    pub else_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +353,10 @@ pub struct PlanTree {
     /// to belong to the branch that didn't run, not merely one that
     /// "hasn't been reached yet".
     branch_alternates: HashMap<String, Vec<String>>,
+    /// Every unnamed `if`'s own decision, in document order (issue
+    /// #635) — empty with no plan at all, same as every other field
+    /// here.
+    unnamed_if_decisions: Vec<UnnamedIfDecision>,
 }
 
 impl PlanTree {
@@ -307,6 +369,7 @@ impl PlanTree {
             countable_paths: Vec::new(),
             earlier_siblings: HashMap::new(),
             branch_alternates: HashMap::new(),
+            unnamed_if_decisions: Vec::new(),
         }
     }
 
@@ -356,6 +419,12 @@ impl PlanTree {
             .get(path)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// Every unnamed `if`'s own decision, in document order (issue
+    /// #635's Flow screen).
+    pub fn unnamed_if_decisions(&self) -> &[UnnamedIfDecision] {
+        &self.unnamed_if_decisions
     }
 
     pub fn from_program(program: &Program) -> Self {
@@ -409,6 +478,7 @@ impl PlanTree {
         }
         let mut earlier_siblings = HashMap::new();
         let mut branch_alternates = HashMap::new();
+        let mut unnamed_if_decisions = Vec::new();
         let mut ctx = WalkCtx {
             base_dir: base_dir.as_deref(),
             cycle_guard: &mut cycle_guard,
@@ -417,6 +487,7 @@ impl PlanTree {
             countable_paths: &mut countable_paths,
             earlier_siblings: &mut earlier_siblings,
             branch_alternates: &mut branch_alternates,
+            unnamed_if_decisions: &mut unnamed_if_decisions,
             loader,
         };
         walk_op(&program.root, None, None, &mut trie, &mut ctx);
@@ -428,6 +499,7 @@ impl PlanTree {
             countable_paths,
             earlier_siblings,
             branch_alternates,
+            unnamed_if_decisions,
         }
     }
 
@@ -519,6 +591,7 @@ struct WalkCtx<'a> {
     countable_paths: &'a mut Vec<String>,
     earlier_siblings: &'a mut HashMap<String, Vec<String>>,
     branch_alternates: &'a mut HashMap<String, Vec<String>>,
+    unnamed_if_decisions: &'a mut Vec<UnnamedIfDecision>,
     loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
 }
 
@@ -580,11 +653,21 @@ fn mark_report(trie: &mut TrieNode, path: &EffectPath) {
     node.report = true;
 }
 
-fn region_kind(region: &Region) -> PlanEntryKind {
+fn region_kind(region: &Region, graft: Option<&EffectPath>) -> PlanEntryKind {
     match region {
         Region::Block { .. } => PlanEntryKind::Dynamic { flow: Flow::Chain },
         Region::Parallel { .. } => PlanEntryKind::Dynamic { flow: Flow::Tree },
-        Region::If { .. } => PlanEntryKind::If { named: true },
+        Region::If {
+            cond, then_, else_, ..
+        } => PlanEntryKind::If {
+            named: true,
+            condition: Some(condition_info(cond)),
+            then_paths: collect_branch_paths(then_, graft),
+            else_paths: else_
+                .as_deref()
+                .map(|e| collect_branch_paths(e, graft))
+                .unwrap_or_default(),
+        },
         Region::Loop {
             flow,
             max_concurrency,
@@ -598,6 +681,79 @@ fn region_kind(region: &Region) -> PlanEntryKind {
             named: true,
         },
         Region::TryFinally { .. } => PlanEntryKind::TryFinally,
+    }
+}
+
+/// [`PlanEntryKind::If`]'s own `condition` field, from the compiled
+/// `Condition` itself (issue #635) — a model-mode condition's text is
+/// its template's first source line only (the issue's own "the first
+/// line of a model-mode template, cut with …" — the cutting-short
+/// itself is a display-width concern, left to the caller).
+fn condition_info(cond: &electricity_bytecode::Condition) -> ConditionInfo {
+    match cond {
+        electricity_bytecode::Condition::Cel { expr, .. } => ConditionInfo {
+            mode: ConditionMode::Cel,
+            text: expr.clone(),
+        },
+        electricity_bytecode::Condition::Model { template } => ConditionInfo {
+            mode: ConditionMode::Model,
+            text: template.source.lines().next().unwrap_or("").to_string(),
+        },
+    }
+}
+
+/// Every real, first-level display path an `if` branch (or a loop
+/// body) directly contributes (issue #635) — the same flattening
+/// `walk_block`'s own `then_new`/`else_new` already compute for a
+/// *transparent* `if` with an `else` (review finding 9), generalised
+/// to any branch reached from any context (a named `if`'s own
+/// branches, or one reached directly from a tree `Parallel`, neither
+/// of which `walk_block` ever walks): a transparent nested `if`/loop
+/// contributes no path of its own, only its own branches' real
+/// children, recursively; a report contributes nothing (`is_report`,
+/// same reason `walk_block` skips it); anything else contributes
+/// exactly its own `effective_path`, never recursing into a named
+/// container's own children — the same "first level only" rule
+/// `earlier`'s own entries already follow.
+fn collect_branch_paths(region: &Region, graft: Option<&EffectPath>) -> Vec<String> {
+    match region {
+        Region::Block { ops, .. } => {
+            let mut out = Vec::new();
+            for op in ops {
+                if is_report(op) {
+                    continue;
+                }
+                if is_transparent(op) {
+                    match &op.kind {
+                        NodeKind::Control(Region::If { then_, else_, .. }) => {
+                            out.extend(collect_branch_paths(then_, graft));
+                            if let Some(else_) = else_ {
+                                out.extend(collect_branch_paths(else_, graft));
+                            }
+                        }
+                        NodeKind::Control(Region::Loop { body, .. }) => {
+                            out.extend(collect_branch_paths(body, graft));
+                        }
+                        _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
+                    }
+                } else {
+                    out.push(display_path(&effective_path(&op.path, graft)));
+                }
+            }
+            out
+        }
+        Region::Parallel { branches, .. } => branches
+            .iter()
+            .filter(|op| !is_report(op))
+            .map(|op| display_path(&effective_path(&op.path, graft)))
+            .collect(),
+        Region::Loop { body, .. } => collect_branch_paths(body, graft),
+        Region::TryFinally { body, .. } => collect_branch_paths(body, graft),
+        // An `if` branch or loop body is always compiled as a `Block`
+        // or `Parallel` (runtime-semantics §5.1) — never a bare `If`
+        // itself; this arm only guards against that assumption ever
+        // changing silently.
+        Region::If { .. } => Vec::new(),
     }
 }
 
@@ -682,9 +838,10 @@ fn record_op_entry(
             LeafKind::Report(_) => unreachable!("reports return above, via is_report"),
         },
         NodeKind::Control(region) => {
-            let mut k = region_kind(region);
+            let mut k = region_kind(region, graft);
             if op.name.is_none() {
-                if let PlanEntryKind::If { named } | PlanEntryKind::Loop { named, .. } = &mut k {
+                if let PlanEntryKind::If { named, .. } | PlanEntryKind::Loop { named, .. } = &mut k
+                {
                     *named = false;
                 }
             }
@@ -703,9 +860,29 @@ fn record_op_entry(
     // reasoning.
     if !matches!(
         kind,
-        PlanEntryKind::If { named: false } | PlanEntryKind::Loop { named: false, .. }
+        PlanEntryKind::If { named: false, .. } | PlanEntryKind::Loop { named: false, .. }
     ) {
         ctx.countable_paths.push(display.clone());
+    }
+    // Issue #635: an unnamed `if`'s own decision is recorded here, in
+    // document order, regardless of which context reached it (a
+    // transparent chain member via `walk_block`, or a direct
+    // `Parallel` branch via `walk_op`) -- `record_op_entry` is the
+    // one place every `if`, named or not, funnels its `PlanEntryKind`
+    // through.
+    if let PlanEntryKind::If {
+        named: false,
+        condition,
+        then_paths,
+        else_paths,
+    } = &kind
+    {
+        ctx.unnamed_if_decisions.push(UnnamedIfDecision {
+            host_path: display.clone(),
+            condition: condition.clone(),
+            then_paths: then_paths.clone(),
+            else_paths: else_paths.clone(),
+        });
     }
     ctx.all_paths.push(display);
     insert(
@@ -940,6 +1117,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             countable_paths: ctx.countable_paths,
             earlier_siblings: ctx.earlier_siblings,
             branch_alternates: ctx.branch_alternates,
+            unnamed_if_decisions: ctx.unnamed_if_decisions,
             loader: ctx.loader,
         };
         if let NodeKind::Control(region) = &child_program.root.kind {
@@ -2414,5 +2592,352 @@ mod tests {
         let plan = PlanTree::from_program(&program);
         let a = plan.match_path("prime.fan.a").expect("branch a matches");
         assert_eq!(a.entries[0].parent_flow, Some(Flow::Tree));
+    }
+
+    fn if_region(
+        cond: electricity_bytecode::Condition,
+        then_: Region,
+        else_: Option<Region>,
+    ) -> Region {
+        Region::If {
+            cond,
+            then_: Box::new(then_),
+            else_: else_.map(Box::new),
+            threshold: 0.5,
+        }
+    }
+
+    fn cel(expr: &str) -> electricity_bytecode::Condition {
+        electricity_bytecode::Condition::Cel {
+            expr: expr.to_string(),
+            strict: false,
+        }
+    }
+
+    fn block(ops: Vec<Op>) -> Region {
+        Region::Block {
+            ops,
+            overlay: true,
+        }
+    }
+
+    fn program_with_root(root: Op) -> Program {
+        Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
+    /// Issue #635: a named `if`'s own `PlanEntry` carries its
+    /// condition text and both branches' own direct paths, so the
+    /// Flow screen can show the dim condition line and the untaken
+    /// branch's summary without a second pass over the plan.
+    #[test]
+    fn a_named_ifs_plan_entry_carries_its_condition_and_branch_paths() {
+        let root_path = EffectPath::root();
+        let if_path = root_path.clone().push_name("gate");
+        let chosen_then = if_path.clone().push_name("chosen_then");
+        let chosen_else = if_path.clone().push_name("chosen_else");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: if_path,
+                name: Some("gate".to_string()),
+                kind: NodeKind::Control(if_region(
+                    cel("x > 1"),
+                    block(vec![tool_op(chosen_then, "chosen_then")]),
+                    Some(block(vec![tool_op(chosen_else, "chosen_else")])),
+                )),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        let m = plan.match_path("prime.gate").expect("the if's own node");
+        let entry = m
+            .entries
+            .iter()
+            .find(|e| matches!(e.kind, PlanEntryKind::If { .. }))
+            .expect("an If entry");
+        match &entry.kind {
+            PlanEntryKind::If {
+                named,
+                condition,
+                then_paths,
+                else_paths,
+            } => {
+                assert!(named);
+                assert_eq!(
+                    condition,
+                    &Some(ConditionInfo {
+                        mode: ConditionMode::Cel,
+                        text: "x > 1".to_string()
+                    })
+                );
+                assert_eq!(then_paths, &["prime.gate.chosen_then".to_string()]);
+                assert_eq!(else_paths, &["prime.gate.chosen_else".to_string()]);
+            }
+            other => panic!("expected an If entry, got {other:?}"),
+        }
+    }
+
+    /// Issue #635: an unnamed `if` writes no node of its own, so its
+    /// decision is recorded in `PlanTree::unnamed_if_decisions`
+    /// instead, in document order, with both branches' own paths.
+    #[test]
+    fn an_unnamed_if_with_else_is_recorded_in_unnamed_if_decisions() {
+        let root_path = EffectPath::root();
+        let then_child = root_path.clone().push_name("then_branch");
+        let else_child = root_path.clone().push_name("else_branch");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: root_path,
+                name: None,
+                kind: NodeKind::Control(if_region(
+                    cel("true"),
+                    block(vec![tool_op(then_child, "then_branch")]),
+                    Some(block(vec![tool_op(else_child, "else_branch")])),
+                )),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        let decisions = plan.unnamed_if_decisions();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].host_path, "prime");
+        assert_eq!(
+            decisions[0].then_paths,
+            vec!["prime.then_branch".to_string()]
+        );
+        assert_eq!(
+            decisions[0].else_paths,
+            vec!["prime.else_branch".to_string()]
+        );
+        assert_eq!(
+            decisions[0].condition,
+            Some(ConditionInfo {
+                mode: ConditionMode::Cel,
+                text: "true".to_string()
+            })
+        );
+    }
+
+    /// An unnamed `if` with no `else` at all still gets a decision
+    /// entry, with an empty `else_paths` -- never one entry missing
+    /// outright, which would leave the Flow screen with nothing to
+    /// anchor its `◆ if` row on.
+    #[test]
+    fn an_unnamed_if_with_no_else_records_an_empty_else_paths() {
+        let root_path = EffectPath::root();
+        let then_child = root_path.clone().push_name("then_branch");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: root_path,
+                name: None,
+                kind: NodeKind::Control(if_region(
+                    cel("true"),
+                    block(vec![tool_op(then_child, "then_branch")]),
+                    None,
+                )),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        let decisions = plan.unnamed_if_decisions();
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0].else_paths.is_empty());
+    }
+
+    /// Review risk 1 (issue #635): an unnamed `if` directly under a
+    /// tree `dynamic`'s own `Parallel` branches is reached through
+    /// `walk_op`, never `walk_block`'s own transparent-if handling --
+    /// `record_op_entry` is the one place both contexts funnel their
+    /// `PlanEntryKind::If` through, so this still gets a decision
+    /// entry.
+    #[test]
+    fn an_unnamed_if_directly_under_a_tree_dynamic_is_recorded() {
+        let root_path = EffectPath::root();
+        let fan_path = root_path.clone().push_name("fan");
+        let a_path = fan_path.clone().push_name("a");
+        let then_child = fan_path.clone().push_name("then_branch");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: fan_path.clone(),
+                name: Some("fan".to_string()),
+                kind: NodeKind::Control(Region::Parallel {
+                    branches: vec![
+                        tool_op(a_path, "a"),
+                        Op {
+                            path: fan_path,
+                            name: None,
+                            kind: NodeKind::Control(if_region(
+                                cel("true"),
+                                block(vec![tool_op(then_child, "then_branch")]),
+                                None,
+                            )),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                    ],
+                    max_concurrency: None,
+                    stop_on_error: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        let decisions = plan.unnamed_if_decisions();
+        assert_eq!(decisions.len(), 1, "{decisions:?}");
+        assert_eq!(decisions[0].host_path, "prime.fan");
+        assert_eq!(
+            decisions[0].then_paths,
+            vec!["prime.fan.then_branch".to_string()]
+        );
+    }
+
+    /// An unnamed `if` directly inside a *named* loop's own pass body
+    /// keeps the `iter_*` placeholder in its branches' own paths --
+    /// resolving it against a real pass is the Flow model's own job
+    /// (`PlanTree::match_path` already resolves `iter_*` for any
+    /// other path), not this index's.
+    #[test]
+    fn an_unnamed_if_inside_a_named_loops_pass_keeps_the_iter_placeholder() {
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let nap_path = pass_path.clone().push_name("nap");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: loop_path,
+                name: Some("fan".to_string()),
+                kind: NodeKind::Control(Region::Loop {
+                    name: Some("fan".to_string()),
+                    spec: LoopSpec::Each {
+                        in_path: "prime.items".to_string(),
+                        as_name: "item".to_string(),
+                        truncate: false,
+                    },
+                    body: Box::new(block(vec![Op {
+                        path: pass_path.clone(),
+                        name: None,
+                        kind: NodeKind::Control(if_region(
+                            cel("true"),
+                            block(vec![tool_op(nap_path, "nap")]),
+                            None,
+                        )),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }])),
+                    flow: electricity_bytecode::LoopFlow::Chain,
+                    max_concurrency: None,
+                    max_iterations: None,
+                    min_iterations: 0,
+                    collect: None,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        let decisions = plan.unnamed_if_decisions();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].host_path, "prime.fan.iter_*");
+        assert_eq!(
+            decisions[0].then_paths,
+            vec!["prime.fan.iter_*.nap".to_string()]
+        );
+    }
+
+    /// Issue #635: a model-mode condition's own display text is its
+    /// template's first source line only.
+    #[test]
+    fn model_mode_condition_text_is_the_templates_first_source_line() {
+        let root_path = EffectPath::root();
+        let if_path = root_path.clone().push_name("gate");
+        let chosen = if_path.clone().push_name("chosen");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: if_path,
+                name: Some("gate".to_string()),
+                kind: NodeKind::Control(if_region(
+                    electricity_bytecode::Condition::Model {
+                        template: electricity_bytecode::TemplateText::new(
+                            "is this blocked?\nsecond line",
+                            false,
+                            electricity_bytecode::Escape::None,
+                        ),
+                    },
+                    block(vec![tool_op(chosen, "chosen")]),
+                    None,
+                )),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        let m = plan.match_path("prime.gate").expect("the if's own node");
+        let entry = m
+            .entries
+            .iter()
+            .find(|e| matches!(e.kind, PlanEntryKind::If { .. }))
+            .expect("an If entry");
+        match &entry.kind {
+            PlanEntryKind::If { condition, .. } => {
+                assert_eq!(
+                    condition,
+                    &Some(ConditionInfo {
+                        mode: ConditionMode::Model,
+                        text: "is this blocked?".to_string()
+                    })
+                );
+            }
+            other => panic!("expected an If entry, got {other:?}"),
+        }
     }
 }
