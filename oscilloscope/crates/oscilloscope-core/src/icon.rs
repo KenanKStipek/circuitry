@@ -45,6 +45,63 @@ pub fn trace_dots(width: usize, height: usize, frame: u64, running: bool) -> Vec
     rows
 }
 
+/// The header line's own trace (issue #626): about 8 cells wide
+/// (`TRACE_CELLS`), one row of braille glyphs -- plain text, no
+/// colour (`oscilloscope`'s own `icon::trace_color` picks that from
+/// the run status). A static `◉` when `animate` is false
+/// (`--no-animation`), the same single glyph an ended run's still
+/// trace used to collapse to.
+pub const TRACE_CELLS: usize = 8;
+
+/// One text row of braille is 4 dot-rows tall, 2 dot-columns wide
+/// per glyph -- `TRACE_CELLS` glyphs need `TRACE_CELLS * 2` dot
+/// columns.
+pub fn header_trace_text(frame: u64, running: bool, animate: bool) -> String {
+    if !animate {
+        return "◉".to_string();
+    }
+    let dots = trace_dots(TRACE_CELLS * 2, 4, frame, running);
+    braille_row(&dots)
+}
+
+fn bit_for(dy: usize, dx: usize) -> u8 {
+    match (dy, dx) {
+        (0, 0) => 0x01,
+        (1, 0) => 0x02,
+        (2, 0) => 0x04,
+        (0, 1) => 0x08,
+        (1, 1) => 0x10,
+        (2, 1) => 0x20,
+        (3, 0) => 0x40,
+        (3, 1) => 0x80,
+        _ => 0,
+    }
+}
+
+/// One text row of braille glyphs (U+2800 base) from a 4-row dot
+/// matrix -- each glyph covers a 2×4 block of dots. Moved here from
+/// `oscilloscope`'s own `icon.rs` (issue #626) so [`header_trace_text`]
+/// can build the header line's own trace with no terminal code.
+pub fn braille_row(dots: &[Vec<bool>]) -> String {
+    let width = dots.first().map_or(0, Vec::len);
+    let mut out = String::new();
+    let mut x = 0;
+    while x < width {
+        let mut byte: u8 = 0;
+        for dy in 0..4 {
+            for dx in 0..2 {
+                let xx = x + dx;
+                if xx < width && dots.get(dy).is_some_and(|row| row[xx]) {
+                    byte |= bit_for(dy, dx);
+                }
+            }
+        }
+        out.push(char::from_u32(0x2800 + byte as u32).unwrap_or(' '));
+        x += 2;
+    }
+    out
+}
+
 /// Renders a dot matrix as a text grid (`#`/`.`) for tests and the
 /// PR description's own pasted frames — not what the TUI draws
 /// (that's braille glyphs, `tui.rs`'s own job), just a human-readable
@@ -132,5 +189,26 @@ mod tests {
     fn zero_sized_grid_does_not_panic() {
         assert_eq!(trace_dots(0, 0, 0, true), Vec::<Vec<bool>>::new());
         assert_eq!(trace_dots(4, 0, 0, false), Vec::<Vec<bool>>::new());
+    }
+
+    #[test]
+    fn no_animation_is_a_static_dot() {
+        assert_eq!(header_trace_text(0, true, false), "◉");
+        assert_eq!(header_trace_text(41, true, false), "◉");
+    }
+
+    #[test]
+    fn animated_trace_is_eight_cells_and_moves() {
+        let frame0 = header_trace_text(0, true, true);
+        let frame1 = header_trace_text(1, true, true);
+        assert_eq!(frame0.chars().count(), TRACE_CELLS);
+        assert_ne!(frame0, frame1);
+    }
+
+    #[test]
+    fn an_ended_run_has_a_still_animated_trace() {
+        let frame0 = header_trace_text(0, false, true);
+        let frame9 = header_trace_text(9, false, true);
+        assert_eq!(frame0, frame9);
     }
 }

@@ -77,6 +77,11 @@ struct RunArgs {
     /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY.
     #[arg(long)]
     log: bool,
+    /// Shows only the header line (issue #626), without the tabs,
+    /// rewritten in place about once a second -- for a tmux status
+    /// line. Can't be combined with `--log`.
+    #[arg(long)]
+    glance: bool,
     /// Switches off the update highlights and the scope icon's
     /// trace: both draw a still frame instead (DESIGN.md §6.3).
     #[arg(long)]
@@ -114,6 +119,16 @@ struct WatchArgs {
     /// makes.
     #[arg(long)]
     log: bool,
+    /// Shows only the header line (issue #626), without the tabs,
+    /// rewritten in place about once a second -- for a tmux status
+    /// line. Can't be combined with `--log`.
+    #[arg(long)]
+    glance: bool,
+    /// With `--glance`: prints the current line once and exits 0,
+    /// rather than watching -- for a tmux status line that runs its
+    /// own command on a timer instead of leaving one process attached.
+    #[arg(long)]
+    once: bool,
     /// Switches off the update highlights and the scope icon's
     /// trace: both draw a still frame instead (DESIGN.md §6.3).
     #[arg(long)]
@@ -445,6 +460,422 @@ fn supervise_plain(
     }
 }
 
+/// `--glance` rewrites the header line about once a second (issue
+/// #626) -- any wider than the real terminal would wrap in a tmux
+/// status line, so this reads the controlling terminal's own width
+/// when there is one, falling back to a generous default when stdout
+/// isn't a TTY at all (a tmux status line's own capture, say).
+fn glance_width() -> u16 {
+    crossterm::terminal::size().map(|(w, _)| w).unwrap_or(120)
+}
+
+/// Builds and writes one `--glance` line (issue #626) -- `header_
+/// line`'s own segments, as plain text, with no tabs (`current:
+/// None`). An intermediate line is rewritten in place (`\r`, then
+/// clears to the end of the line so a shorter new line doesn't leave
+/// a stale tail behind); the final line, once the run has ended,
+/// stays on screen with its own trailing newline instead -- and is
+/// the only line ever written at all when stdout isn't a terminal.
+#[allow(clippy::too_many_arguments)]
+fn write_glance_line(
+    out: &mut impl Write,
+    document: &str,
+    plan: &PlanTree,
+    model: &mut RunModel,
+    state: Option<&serde_json::Value>,
+    process: ProcessState,
+    elapsed_s: f64,
+    zone: &dyn oscilloscope_core::format::ClockZone,
+    no_animation: bool,
+    is_tty: bool,
+    final_line: bool,
+    engine_alive_override: Option<bool>,
+) {
+    if !is_tty && !final_line {
+        // DESIGN.md: "when stdout isn't a terminal, it prints one
+        // line when the run ends" -- no intermediate rewrites at all.
+        return;
+    }
+    let now = now_rfc3339();
+    let mut rendered = oscilloscope_core::render::build(
+        document,
+        "",
+        plan,
+        model,
+        state,
+        process,
+        elapsed_s,
+        &now,
+        &[],
+    );
+    // `osi watch` owns no process of its own for `render::build`'s
+    // own `engine_alive` (derived from `process`, which `watch_
+    // glance` always passes as `Running` while it's still watching)
+    // to read -- `♥` has to come from the watched run's own pid in
+    // `--events`' `run_start` instead, same as the TUI's watch loop.
+    if let Some(alive) = engine_alive_override {
+        rendered.header.engine_alive = alive;
+    }
+    let icon_frame = icon_frame_for(no_animation, Duration::from_secs_f64(elapsed_s));
+    let segments = oscilloscope_core::screens::header_line(
+        &rendered.header,
+        &now,
+        zone,
+        glance_width(),
+        !no_animation,
+        icon_frame,
+        None,
+    );
+    let text = oscilloscope_core::screens::header_line_text(&segments);
+    if is_tty {
+        // Rewritten in place: `\r` returns to the start of the line,
+        // then `\x1b[K` clears to its end so a shorter new line
+        // doesn't leave a stale tail of the previous, longer one
+        // behind.
+        if final_line {
+            let _ = writeln!(out, "\r{text}\x1b[K");
+        } else {
+            let _ = write!(out, "\r{text}\x1b[K");
+        }
+    } else {
+        // Not a terminal (a pipe, a file, a tmux `#(...)` capture):
+        // one plain line, no `\r`/`\x1b[K` -- there's no previous
+        // line on screen to overwrite, and a control code there would
+        // just be bytes in whatever's reading it.
+        debug_assert!(
+            final_line,
+            "the only line ever written when stdout isn't a terminal"
+        );
+        let _ = writeln!(out, "{text}");
+    }
+    let _ = out.flush();
+}
+
+/// How often `--glance` rewrites its own line (DESIGN.md: "about
+/// once a second").
+const GLANCE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// `osi <doc> --glance` (issue #626): the engine runs exactly as it
+/// does under `--log`/the TUI, but the only thing ever written to
+/// stdout is the header line, rewritten in place. Signals and exit
+/// codes work exactly as `--log`'s own `supervise_plain`/`finish_run`
+/// pair already do -- this mirrors their forwarding and kill-deadline
+/// logic, without any of their per-line printing.
+#[allow(clippy::too_many_arguments)]
+fn run_glance(
+    mut child: SupervisedChild,
+    stderr_rx: std::sync::mpsc::Receiver<String>,
+    spec: RunSpec,
+    plan: PlanTree,
+    run_dir: PathBuf,
+    document: String,
+    mut signals: Option<SignalWatcher>,
+    no_animation: bool,
+) -> ExitCode {
+    let start = Instant::now();
+    let zone = LocalZone;
+    let is_tty = std::io::stdout().is_terminal();
+    let mut live_poller = LiveStatePoller::new(spec.live_state_path());
+    let mut events_tailer = EventsTailer::new(spec.events_path());
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut current_state: Option<serde_json::Value> = None;
+    let mut signal_count: u32 = 0;
+    let mut kill_deadline: Option<Instant> = None;
+    let mut last_write = Instant::now() - GLANCE_INTERVAL;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    let exit_status = loop {
+        if let Some(watcher) = signals.as_mut() {
+            for sig in watcher.pending() {
+                signal_count += 1;
+                child.forward(sig);
+                if signal_count == 2 {
+                    kill_deadline = Some(Instant::now() + std::time::Duration::from_secs(10));
+                }
+            }
+        }
+        if let Some(deadline) = kill_deadline {
+            if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
+                child.kill_group();
+                kill_deadline = None;
+            }
+        }
+        // `--glance` shows only the header line -- the engine's own
+        // stderr is still drained (so the pipe never blocks it), just
+        // never printed.
+        for _ in stderr_rx.try_iter() {}
+        let (_, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        if let Some(state) = state {
+            current_state = Some(state);
+        }
+
+        if let Ok(Some(status)) = child.try_wait() {
+            break status;
+        }
+        if last_write.elapsed() >= GLANCE_INTERVAL {
+            write_glance_line(
+                &mut out,
+                &document,
+                &plan,
+                &mut model,
+                current_state.as_ref(),
+                ProcessState::Running,
+                start.elapsed().as_secs_f64(),
+                &zone,
+                no_animation,
+                is_tty,
+                false,
+                None,
+            );
+            last_write = Instant::now();
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let exit_status = child.wait().unwrap_or(exit_status);
+    for _ in stderr_rx.try_iter() {}
+    let (_, final_state, _) = drain_until_ended(
+        &spec.out_path(),
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+    );
+    // The authoritative final state once a run truly ended with one
+    // (DESIGN.md §2.1 rule 7) -- `None` both before any write and
+    // after a second-signal abort with no final write at all, in
+    // which case the last live snapshot stays, same as `finish_run`'s
+    // own summary falls back to it.
+    if final_state.is_some() {
+        current_state = final_state;
+    }
+
+    let process = ProcessState::Exited {
+        interrupted: signal_count > 0,
+        likely_failed: exit_status.code() == Some(1),
+        has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+        exited_at: Some(now_rfc3339()),
+    };
+    write_glance_line(
+        &mut out,
+        &document,
+        &plan,
+        &mut model,
+        current_state.as_ref(),
+        process,
+        start.elapsed().as_secs_f64(),
+        &zone,
+        no_animation,
+        is_tty,
+        true,
+        None,
+    );
+
+    ExitCode::from(exit_code(exit_status) as u8)
+}
+
+/// `osi watch`'s own document name (issue #626): the watched run's
+/// own `runtime.last_run.orchestration_path` once a live-state write
+/// has it, else whatever the caller was pointed at.
+fn watch_document_name(state: Option<&serde_json::Value>, fallback: &str) -> String {
+    state
+        .and_then(oscilloscope_core::model::orchestration_path)
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// `osi watch <dir> --glance` (issue #626): the same stop conditions
+/// `supervise_plain_watch` already uses (a completed live-state
+/// write, an events `run_end`, or the watched pid going away), but
+/// rewriting the header line instead of printing diff lines --
+/// `osi watch` owns no engine to forward a signal to, so a local one
+/// just ends the watch, same as `q` does in the TUI (detaching, never
+/// an abort). `--once` skips the loop entirely: one read, one line,
+/// exit 0, for a tmux status line that runs its own command on a
+/// timer instead.
+fn watch_glance(
+    run_dir: PathBuf,
+    live_state_path: PathBuf,
+    plan: PlanTree,
+    fallback_document: String,
+    no_animation: bool,
+    once: bool,
+) -> ExitCode {
+    let start = Instant::now();
+    let zone = LocalZone;
+    let is_tty = std::io::stdout().is_terminal();
+    let mut live_poller = LiveStatePoller::new(&live_state_path);
+    let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut last_state: Option<serde_json::Value> = None;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    if once {
+        let (_, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        last_state = state;
+        let document = watch_document_name(last_state.as_ref(), &fallback_document);
+        let process = if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                exited_at: None,
+            }
+        } else {
+            ProcessState::Running
+        };
+        let engine_alive = Some(
+            model
+                .run_start_pid()
+                .is_some_and(oscilloscope_core::supervise::process_alive),
+        );
+        write_glance_line(
+            &mut out,
+            &document,
+            &plan,
+            &mut model,
+            last_state.as_ref(),
+            process,
+            start.elapsed().as_secs_f64(),
+            &zone,
+            no_animation,
+            is_tty,
+            true,
+            engine_alive,
+        );
+        return ExitCode::from(0);
+    }
+
+    let mut signals = SignalWatcher::new().ok();
+    let mut last_write = Instant::now() - GLANCE_INTERVAL;
+    let mut local_signal: Option<ForwardSignal> = None;
+    loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                local_signal = Some(sig);
+                break;
+            }
+        }
+        let (_, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        if state.is_some() {
+            last_state = state;
+        }
+        if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            break;
+        }
+        if model.run_ended_by_events() {
+            let (_, state) = observe_tick(
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+            );
+            if state.is_some() {
+                last_state = state;
+            }
+            break;
+        }
+        if let Some(pid) = model.run_start_pid() {
+            if !oscilloscope_core::supervise::process_alive(pid) {
+                break;
+            }
+        }
+        if last_write.elapsed() >= GLANCE_INTERVAL {
+            let document = watch_document_name(last_state.as_ref(), &fallback_document);
+            let engine_alive = Some(
+                model
+                    .run_start_pid()
+                    .is_some_and(oscilloscope_core::supervise::process_alive),
+            );
+            write_glance_line(
+                &mut out,
+                &document,
+                &plan,
+                &mut model,
+                last_state.as_ref(),
+                ProcessState::Running,
+                start.elapsed().as_secs_f64(),
+                &zone,
+                no_animation,
+                is_tty,
+                false,
+                engine_alive,
+            );
+            last_write = Instant::now();
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    let document = watch_document_name(last_state.as_ref(), &fallback_document);
+    // A voluntary detach from a run that's still going is not an
+    // abort -- shown as still running, exactly as the TUI's own
+    // finished screen would leave it, rather than a synthetic
+    // "aborted" ending it never had.
+    let process = if local_signal.is_some() {
+        ProcessState::Running
+    } else {
+        ProcessState::Exited {
+            interrupted: false,
+            likely_failed: model.run_end_ok() == Some(false),
+            has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+            exited_at: None,
+        }
+    };
+    let engine_alive = Some(
+        model
+            .run_start_pid()
+            .is_some_and(oscilloscope_core::supervise::process_alive),
+    );
+    write_glance_line(
+        &mut out,
+        &document,
+        &plan,
+        &mut model,
+        last_state.as_ref(),
+        process,
+        start.elapsed().as_secs_f64(),
+        &zone,
+        no_animation,
+        is_tty,
+        true,
+        engine_alive,
+    );
+    // Signals and exit codes work exactly as `--log`'s own do
+    // (DESIGN.md) -- the same rule `finish_watch` uses, not a second
+    // copy of it.
+    ExitCode::from(watch_exit_code(local_signal, &model, &last_state))
+}
+
 fn do_run(args: RunArgs) -> ExitCode {
     // Issue #535: resolved before anything else runs, same spirit as
     // the signal watcher just below -- a bad `OSI_THEME` is a usage
@@ -458,6 +889,10 @@ fn do_run(args: RunArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if args.log && args.glance {
+        eprintln!("osi: --log and --glance can't be combined");
+        return ExitCode::from(2);
+    }
 
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
@@ -603,6 +1038,21 @@ fn do_run(args: RunArgs) -> ExitCode {
                 return exit_early(1);
             }
         };
+
+    // Issue #626: `--glance` wins over both the TUI and `--log` --
+    // it shows only the header line, on any stdout, TTY or not.
+    if args.glance {
+        return run_glance(
+            child,
+            stderr_rx,
+            spec,
+            plan,
+            run_dir,
+            args.orchestration.clone(),
+            signals,
+            args.no_animation,
+        );
+    }
 
     // DESIGN.md §6.2/§6.3: a TTY gets the interactive TUI; `--log` or
     // any non-TTY stdout keeps this function's own plain-text stream
@@ -1074,6 +1524,43 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// is actually looking at once they tab onto `Pane::Details` itself
 /// to scroll it -- including a named report's own row, which never
 /// has an orchestration-tree row of its own at all to select instead.
+/// Screen 0's own model (issue #626), built only while it's actually
+/// on display -- the performance rule ("models for screens not on
+/// display aren't built"). `flatten_state` runs again here rather
+/// than threading `RenderState`'s own internal `flat` map out of
+/// `render::build` just for this -- it's the same O(state size) walk
+/// `build` itself already does on every rebuild, and this only adds
+/// a second one while the overview is the screen being shown.
+fn build_overview_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    plan: &oscilloscope_core::plan::PlanTree,
+    model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
+    log_lines: &[String],
+    now: &str,
+) -> Option<oscilloscope_core::screens::Overview> {
+    if app.screen != oscilloscope_core::screens::Screen::Overview {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    Some(oscilloscope_core::screens::build_overview(
+        &render_state.rows,
+        &render_state.unfolded_rows,
+        &render_state.header,
+        &flat,
+        plan,
+        model,
+        state,
+        &render_state.token_bar,
+        &render_state.treemap,
+        log_lines,
+        app.selected_path.as_deref(),
+        now,
+    ))
+}
+
 fn details_selection_path(app: &App) -> Option<String> {
     if app.details_source == keys::Pane::State {
         if let Some(p) = &app.state_selected_path {
@@ -1259,6 +1746,7 @@ fn run_tui(
     // leave the instant the engine exits, rather than staying open on
     // its final state until the user explicitly asks to leave.
     let mut leave_once_exited = false;
+    let mut now_str = now_rfc3339();
     let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         &engine_name,
@@ -1267,10 +1755,19 @@ fn run_tui(
         current_state.as_ref(),
         ProcessState::Running,
         start.elapsed().as_secs_f64(),
-        &now_rfc3339(),
+        &now_str,
         &[],
         app.fold_enabled,
         &app.expanded_quick_steps,
+    );
+    let mut overview = build_overview_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        current_state.as_ref(),
+        &log_lines,
+        &now_str,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
@@ -1386,6 +1883,7 @@ fn run_tui(
                     exited_at: exit_status_ts.clone(),
                 },
             };
+            now_str = now_rfc3339();
             render_state = oscilloscope_core::render::build_folded(
                 &document,
                 &engine_name,
@@ -1394,7 +1892,7 @@ fn run_tui(
                 current_state.as_ref(),
                 process,
                 start.elapsed().as_secs_f64(),
-                &now_rfc3339(),
+                &now_str,
                 &[],
                 app.fold_enabled,
                 &app.expanded_quick_steps,
@@ -1434,6 +1932,20 @@ fn run_tui(
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
             }
+            // Built after follow (and the first-selection fallback)
+            // updated `app.selected_path`, not before -- the now
+            // pane's own focus reads that selection, so building it
+            // earlier left it a tick stale on the very frame follow
+            // first lands on a target.
+            overview = build_overview_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                current_state.as_ref(),
+                &log_lines,
+                &now_str,
+            );
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
@@ -1550,6 +2062,26 @@ fn run_tui(
                         }
                         needs_rebuild = true;
                         needs_draw = true;
+                        // A key can change `app.screen` or
+                        // `app.selected_path` (a screen switch, a
+                        // move) right here, but the next rebuild
+                        // (above, at the top of the loop) doesn't run
+                        // until next iteration -- without this, the
+                        // frame this same key press draws still has
+                        // the *previous* screen's overview (`None`
+                        // right after switching onto it), one blank
+                        // redraw wide. `render_state` itself needs no
+                        // refresh here: nothing a key does changes
+                        // what it holds.
+                        overview = build_overview_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            current_state.as_ref(),
+                            &log_lines,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -1604,6 +2136,7 @@ fn run_tui(
                 color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
+                no_animation,
             };
             let drew = terminal.draw(|f| {
                 tui::draw(
@@ -1616,6 +2149,8 @@ fn run_tui(
                     current_state.as_ref(),
                     &ctx,
                     icon_frame,
+                    &now_str,
+                    overview.as_ref(),
                 );
             });
             last_draw = Instant::now();
@@ -2040,6 +2575,14 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if args.log && args.glance {
+        eprintln!("osi: --log and --glance can't be combined");
+        return ExitCode::from(2);
+    }
+    if args.once && !args.glance {
+        eprintln!("osi: --once needs --glance");
+        return ExitCode::from(2);
+    }
 
     let target = PathBuf::from(&args.target);
     // P2-4: a typo'd path used to be silently treated as a direct
@@ -2095,6 +2638,19 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         },
         None => PlanTree::empty(),
     };
+
+    // Issue #626: `--glance` wins over both the TUI and `--log`,
+    // same as `osi <doc>`.
+    if args.glance {
+        return watch_glance(
+            run_dir,
+            live_state_path,
+            plan,
+            args.target.clone(),
+            args.no_animation,
+            args.once,
+        );
+    }
 
     // DESIGN.md §6.2/§6.3: same TTY/—log split as `osi <doc>`; `q` in
     // this one just detaches (§6.3), since watch owns no engine of
@@ -2170,7 +2726,7 @@ fn run_tui_watch(
     run_dir: PathBuf,
     live_state_path: PathBuf,
     plan: PlanTree,
-    document: String,
+    fallback_document: String,
     no_animation: bool,
     mut theme_name: theme::ThemeName,
 ) -> ExitCode {
@@ -2270,6 +2826,11 @@ fn run_tui_watch(
     // own; only `ended` stops `observe_tick` from polling a run
     // directory that has nothing left to say.
     let mut ended = false;
+    let mut now_str = now_rfc3339();
+    // Issue #626: `osi watch` names the document from the run's own
+    // `runtime.last_run.orchestration_path` once a live-state write
+    // has it, not from the directory/file it was pointed at.
+    let mut document = watch_document_name(last_state.as_ref(), &fallback_document);
     let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         "watch",
@@ -2278,10 +2839,25 @@ fn run_tui_watch(
         last_state.as_ref(),
         ProcessState::Running,
         start.elapsed().as_secs_f64(),
-        &now_rfc3339(),
+        &now_str,
         &[],
         app.fold_enabled,
         &app.expanded_quick_steps,
+    );
+    // `osi watch` owns no process of its own to read `ProcessState`
+    // from (DESIGN.md §4.1): the header's own `♥` (issue #626) reads
+    // the watched run's own pid from `--events`' `run_start` instead.
+    render_state.header.engine_alive = model
+        .run_start_pid()
+        .is_some_and(oscilloscope_core::supervise::process_alive);
+    let mut overview = build_overview_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &log_lines,
+        &now_str,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
@@ -2415,6 +2991,8 @@ fn run_tui_watch(
             } else {
                 ProcessState::Running
             };
+            now_str = now_rfc3339();
+            document = watch_document_name(last_state.as_ref(), &fallback_document);
             render_state = oscilloscope_core::render::build_folded(
                 &document,
                 "watch",
@@ -2423,11 +3001,14 @@ fn run_tui_watch(
                 last_state.as_ref(),
                 process,
                 start.elapsed().as_secs_f64(),
-                &now_rfc3339(),
+                &now_str,
                 &[],
                 app.fold_enabled,
                 &app.expanded_quick_steps,
             );
+            render_state.header.engine_alive = model
+                .run_start_pid()
+                .is_some_and(oscilloscope_core::supervise::process_alive);
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
                 &mut highlights,
@@ -2463,6 +3044,17 @@ fn run_tui_watch(
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
             }
+            // See `run_tui`'s own comment above -- built after
+            // follow updated the selection, not before.
+            overview = build_overview_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                last_state.as_ref(),
+                &log_lines,
+                &now_str,
+            );
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
@@ -2545,6 +3137,18 @@ fn run_tui_watch(
                         }
                         needs_rebuild = true;
                         needs_draw = true;
+                        // See `run_tui`'s own comment above --
+                        // refreshes the overview for this same
+                        // frame's draw, not next iteration's.
+                        overview = build_overview_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            last_state.as_ref(),
+                            &log_lines,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -2588,6 +3192,7 @@ fn run_tui_watch(
                 color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
+                no_animation,
             };
             let drew = terminal.draw(|f| {
                 tui::draw(
@@ -2600,6 +3205,8 @@ fn run_tui_watch(
                     last_state.as_ref(),
                     &ctx,
                     icon_frame,
+                    &now_str,
+                    overview.as_ref(),
                 );
             });
             last_draw = Instant::now();
@@ -2736,6 +3343,23 @@ fn finish_watch(
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
 
+    watch_exit_code(local_signal, model, last_state)
+}
+
+/// `osi watch`'s own exit code (DESIGN.md §4.1), shared by `finish_
+/// watch`'s own `--log`/TUI ending above and `watch_glance`'s --
+/// "signals and exit codes work as with `--log`" means the exact
+/// same rule, not a second copy of it that can drift: a local signal
+/// (Ctrl-C, or one `osi watch` itself received) first, the watched
+/// run's own `run_end` signal next, then whether the last state it
+/// saw actually ended ok, falling back to `model.run_end_ok()` for an
+/// events-only run with no live-state write at all, and finally an
+/// abort (a dead pid with no clean completion either way).
+fn watch_exit_code(
+    local_signal: Option<ForwardSignal>,
+    model: &RunModel,
+    last_state: &Option<serde_json::Value>,
+) -> u8 {
     if let Some(sig) = local_signal {
         match sig {
             ForwardSignal::Int => 130,
@@ -2807,6 +3431,32 @@ mod tests {
         std::iter::once("osi".to_string())
             .chain(words.iter().map(|w| w.to_string()))
             .collect()
+    }
+
+    /// Issue #626: `osi watch` names the document from the watched
+    /// run's own `runtime.last_run.orchestration_path` once a
+    /// live-state write has it, not from whatever directory or file
+    /// it was pointed at -- the only document name `osi watch` ever
+    /// actually has of its own.
+    #[test]
+    fn watch_document_name_prefers_the_runs_own_orchestration_path() {
+        let state = serde_json::json!({
+            "runtime": {"last_run": {"orchestration_path": "do-thing.yml"}}
+        });
+        assert_eq!(
+            watch_document_name(Some(&state), "fallback.yml"),
+            "do-thing.yml"
+        );
+    }
+
+    #[test]
+    fn watch_document_name_falls_back_with_no_state_or_orchestration_path_yet() {
+        assert_eq!(watch_document_name(None, "fallback.yml"), "fallback.yml");
+        let state = serde_json::json!({"runtime": {"last_run": {}}});
+        assert_eq!(
+            watch_document_name(Some(&state), "fallback.yml"),
+            "fallback.yml"
+        );
     }
 
     /// #610: a state-pane selection must stay what `Details` shows
@@ -3272,12 +3922,24 @@ mod tests {
         assert!(rendered.contains("Which engine runs the orchestration"));
         assert!(rendered.contains("Keeps the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
+        assert!(rendered.contains("Shows only the header line"));
         assert!(rendered.contains("Switches off the update highlights"));
         assert!(rendered.contains("The colour theme"));
         // Finding 10: `--theme`'s possible values (a derived
         // `ValueEnum`) are listed in `--help`, not just its own
         // description text.
         assert!(rendered.contains("dracula"), "{rendered}");
+    }
+
+    #[test]
+    fn watch_args_help_describes_glance_and_once() {
+        let err = WatchArgs::try_parse_from(
+            std::iter::once("osi watch".to_string()).chain(["--help".to_string()]),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("Shows only the header line"));
+        assert!(rendered.contains("prints the current line once and exits 0"));
     }
 
     #[test]

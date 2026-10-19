@@ -97,9 +97,58 @@ On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 (DESIGN.md §6.3) instead of the plain-text stream. `--log`, or any non-TTY
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
-On a terminal big enough (120×40 shows every pane usefully): a header (a
-small animated oscilloscope icon to its left, on a wide enough terminal); a
-left column of the details pane (the selected row's own meta, and, for a
+osi has four screens, switched with `0`-`3`: the overview (`0`, the
+default for both `osi <doc>` and `osi watch`) and flow (`2`, today's
+layout, below); time (`1`) and cost (`3`) arrive in their own issues, so
+their keys do nothing yet and they have no tab. Selection, follow,
+folding, filters and collapsed rows are shared across every screen.
+
+Every screen shares one header line: the scope icon's own animated
+trace (a static `◉` with `--no-animation`), the document, `♥` while
+the engine process is alive, the run's status and elapsed time, the
+current clock time, the innermost running loop's ETA, the latest report
+(#610, once one has arrived), and the screen tabs. When
+it's short of room: the tabs shrink to their own numbers first, then the
+report truncates (down to a bare `▸`), then the document (keeping its
+own tail), then the ETA goes — status, elapsed and the clock never
+truncate. `osi watch` names the document from the run's own
+`runtime.last_run.orchestration_path`.
+
+### The overview (`0`)
+
+A phase strip (the document's own top-level steps, with a single-child
+wrapper folded into one breadcrumb, each with its own status glyph,
+start time and duration); a now pane (the run's latest log lines next
+to whichever step follow selects — its breadcrumb, kind, provider or
+model, since/elapsed, and, for a prompt, its token estimate and a
+prompt snippet, for a tool its rendered command, for an agent its
+engine and model with a note that live session data isn't available
+yet; the last finished step with nothing running, or the run's own
+outcome, start-end and totals once it has ended); and three cards —
+time (start/end, elapsed, ETA, a bar of the top-level steps' own
+durations, the slowest finished one), flow (effects done out of
+planned, failures, the latest decisions or reports, loop progress, the
+next pending step, quick steps) and cost (tokens in/out, cost once any
+effect reports one, the store with the most tokens, what's in flight).
+The effects count and tokens that used to be in the header live in the
+flow and cost cards now; screen 2's own orchestration pane title and
+token bar keep them too.
+
+### `--glance`
+
+`osi <doc> --glance` and `osi watch <dir> --glance` show only the
+header line, without the tabs, rewritten in place about once a second;
+the final line stays on screen once the run ends. Signals and exit
+codes work exactly as `--log`'s own do, and the two flags can't be
+combined. `osi watch <dir> --glance --once` prints the current line
+once and exits 0, for a tmux status line that runs its own command on
+a timer instead of leaving one process attached. When stdout isn't a
+terminal, only that one final line is ever printed.
+
+### Screen 2 (`flow`): today's layout
+
+On a terminal big enough (120×40 shows every pane usefully): a left
+column of the details pane (the selected row's own meta, and, for a
 prompt, a `sent`/`received` block with a snippet and token count each)
 over the orchestration pane (the plan tree, a status glyph, duration, loop
 `n/total` and the provider/model in a dim colour), the column split and
@@ -122,15 +171,14 @@ bar never disappear:
 
 1. below 100×30: the treemap;
 2. below 90×24: the state pane too (the right column becomes the log pane alone);
-3. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked); the scope icon stops being drawn at this width too.
+3. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked).
 
 A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in three places.
-Once the run's first report arrives, the header shows its message in
-place of the run id (a warning styled in the theme's own warning colour);
-document path and message both truncate before status, elapsed, effects
-or tokens ever do, collapsing to a bare `▸` once there's barely room for
-it at all. The run id itself moves to the root row's own details, and to
-a `■ run started` line in `--log`. Every report, named or not, gets its
+Once the run's first report arrives, the header shows its message
+(a warning styled in the theme's own warning colour) after the clock
+time and before the screen tabs, per the truncation order above. The
+run id lives in the root row's own details, and in a `■ run started`
+line in `--log`. Every report, named or not, gets its
 own log line (`▸ <message>`, `▸ warning: <message>`), with a compact
 `data` preview after it when it has one. A *named* report still writes a
 shadow-state node (so it has a row in the state pane, with its own
@@ -162,6 +210,8 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 
 | Key | Action |
 |---|---|
+| `0` | the overview |
+| `2` | flow (today's layout); `1`/`3` (time, cost) do nothing yet |
 | `↑↓` / `j`/`k` | move (the focused pane's own selection, or the details pane's scroll) |
 | `PgUp`/`PgDn` | move a page |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
@@ -214,9 +264,7 @@ A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
 golden tests) at 120×40, every pane populated:
 
 ```
-╭────────────┬──╮┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│⠔⠒⠒⠤⠤⠔⠒⠒⠤⠤⠔⠒│◉ ││do-thing.yml  cof  running  5.0s  effects 2/6  ↑170 t ↓410 t                                         │
-╰────────────┴──╯└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:05   0 overview  [2 flow]                                                
 ┌ details ───────────────────────────────────────────────────────────────┐┌ tokens by key ─────────────────────────────┐
 │path   prime.a                                                          ││┌prime 580 t───────────────────────────────┐│
 │type   tool                                                             │││a 460 t                          ┌fan 12…┐││
