@@ -1969,7 +1969,7 @@ const HELP_TEXT: &[&str] = &[
     "⏎            overview: open flow; flow: expand; cost: zoom in",
     "esc i o $    cost: zoom out · switch measure (same key: total)",
     "z            fold on/off (breadcrumbs, quick steps)",
-    "tab          flow → selected → story (else → details → state)",
+    "tab          flow → selected → story → flow (else: tree → details)",
     "s / l        swap selected for state / story for the log",
     "f            follow the running row (on by default)",
     "e            errors only",

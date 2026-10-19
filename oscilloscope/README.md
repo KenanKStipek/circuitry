@@ -163,17 +163,17 @@ nothing from either branch having started; until either happens, it reads
 condition (the CEL expression, or a model-mode template's first line, cut
 with `…`) is a dim second line under it; narrower, it's in the selected
 pane only. A named loop with exactly one pass so far merges into one row,
-`⟳ <name>  pass N of M`; more than one pass keeps one row each, as
+`⟲ <name>  pass N of M`; more than one pass keeps one row each, as
 before. Two or more consecutive, finished, sub-second tool steps still
 fold into one `N quick steps` row (`⏎` expands it in place), and the
 pane's own footer totals every quick step in the run
 (`quick steps folded: 9 · 2.1s`) and gives a health line
 (`health: 0 failed · 0 retries · 0 warnings`). Columns (start, duration,
-tokens, cost) sit to the right of each row, right-aligned; a narrow pane
+tokens, cost) sit to the right of each row; a narrow pane
 drops them in this order — cost, start, tokens — duration always stays.
 
 The selected pane (top right) shows the flow pane's own selection: a
-prompt's text (or a tool's rendered command, or an agent's prompt) under
+prompt's text (or a tool's rendered command) under
 "asked", what it's doing right now (a running prompt's token estimate, a
 running tool's elapsed time, or a running agent's engine/model with a note
 that live session data isn't available yet), and, once it finishes, its
@@ -292,35 +292,42 @@ key — the terminal is gone by definition). Short of one of those three, a
 run that finishes on its own stays up for `q`/Ctrl-C to leave.
 
 A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
-golden tests) at 100×24, a named decision taken, a loop's single pass
-merged into one row, and a quick-steps row folded with its own footer
-total:
+golden tests) at 100×30, a run just finished with a named decision taken,
+its untaken branch's own dim summary line, an unnamed decision inferred,
+a loop's single pass merged into one row, a quick-steps row folded with
+its own footer total, and the story:
 
 ```
-⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 7m24s · 00:00:00   0 overview  [2 flow]  3 cost                   
-┌ flow (do-thing · 2/5) ◆ decision ⟳ loop ▶ running ─────────────────┐┌ selected ──────────────────────────┐
-│◐ prime                                                             ││fix › agent                         │
-│  ✓ check   → then   0.5s                                           ││agent · agent                       │
-│  ✓ review   7m13s                                                  ││since 11:46:43 · 0.0s               │
-│    ◐ fix › agent   6.8s                                            ││live session data isn't available ye│
-│  ✓ 3 quick steps   1.0s                                            ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│                                                                     ││                                    │
-│quick steps folded: 3 · 1.0s                                        ││                                    │
-│health: 0 failed · 0 retries · 0 warnings                           ││                                    │
-└─────────────────────────────────────────────────────────────────────┘└────────────────────────────────────┘
+⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0 overview  [2 flow]  3 cost                           
+┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running ─────────┐┌ selected ──────────────────────────┐
+│✓ prime   2.0s                                              ││chosen                              │
+│  ✓ 2 quick steps   0.4s                                    ││tool · shell                        │
+│  ◆ gate  → then   0.0s                                     ││produced:                           │
+│    x > 1                                                   ││ok                                  │
+│    · else: other                                           ││                                    │
+│    ✓ chosen   0.3s                                         ││                                    │
+│  ◆ if y > 1  → then  (inferred)                            ││                                    │
+│    y > 1                                                   ││                                    │
+│    · else: u_else                                          ││                                    │
+│  ✓ u_then   0.2s                                           │└────────────────────────────────────┘
+│  ⟲ fan  pass 1 of 1   0.4s                                 │┌ story ─────────────────────────────┐
+│                                                            ││00:00:00 ■ run started  abc         │
+│                                                            ││00:00:00 ◆ gate → then              │
+│                                                            ││00:00:00 ◆ if y > 1 → then          │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│quick steps folded: 5 · 1.3s                                ││                                    │
+│health: 0 failed · 0 retries · 0 warnings                   ││                                    │
+│                                                            ││                                    │
+└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘
 ```
 
 ### Screen 3 (`cost`): where the tokens and money went
