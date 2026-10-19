@@ -229,7 +229,11 @@ fn emit_cell(node: &TreemapNode, rect: Rect, depth: u16, merged: bool, out: &mut
 
 /// Deterministic input order (issue #527): largest total first, ties
 /// broken by key — never by children order or observation order.
-fn sorted_children(children: &[TreemapNode]) -> Vec<&TreemapNode> {
+/// `pub` so a front end's own selection order (issue #632: "↑/↓
+/// select tiles in size order") can match exactly what [`layout`]
+/// itself lays tiles out in, rather than keeping its own, possibly
+/// diverging, copy of this rule.
+pub fn sorted_children(children: &[TreemapNode]) -> Vec<&TreemapNode> {
     let mut items: Vec<&TreemapNode> = children.iter().filter(|n| n.total > 0).collect();
     items.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.key.cmp(&b.key)));
     items

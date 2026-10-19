@@ -1190,7 +1190,10 @@ mod tests {
         // Squeezed enough to drop the document to nothing and the
         // report to a bare `▸` and the ETA entirely -- but status,
         // elapsed and the clock are all still there, untruncated.
-        assert_eq!(text, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2  3");
+        assert_eq!(
+            text,
+            "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2  3"
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use oscilloscope_core::render::{FullValueField, Row, StateRow};
 use oscilloscope_core::screens::Screen;
+use oscilloscope_core::treemap::{Measure, TreemapNode};
 
 /// DESIGN.md §6.3's `tab` cycle, issue #527: `Tree` → `Details` →
 /// `State` → `Tree`. The treemap and token bar have no pane of their
@@ -218,6 +219,11 @@ impl App {
     /// details carry a `prompt_sent` (review finding 5): `v` opens
     /// that first when there is one, since it's usually the more
     /// useful of the two to read in full, and the value otherwise.
+    /// `cost_tree` is the Cost screen's own by-store tree for the
+    /// currently selected measure (issue #632) -- empty for every
+    /// caller that doesn't care about it (every screen but Cost never
+    /// reads it at all). The tree is one frame stale at worst, the
+    /// same way `rows`/`state_rows` already are.
     pub fn handle_key(
         &mut self,
         key: KeyEvent,
@@ -225,6 +231,7 @@ impl App {
         state_rows: &[&StateRow],
         running: bool,
         has_prompt_sent: bool,
+        cost_tree: &[TreemapNode],
     ) -> Action {
         // Finding K3: raw mode turns a real Ctrl-C into `Char('c')`
         // with the CONTROL modifier, not a distinct key code — caught
@@ -299,7 +306,9 @@ impl App {
                 }
                 Action::None
             }
-            Dialog::None => self.handle_key_normal(key, rows, state_rows, running, has_prompt_sent),
+            Dialog::None => {
+                self.handle_key_normal(key, rows, state_rows, running, has_prompt_sent, cost_tree)
+            }
         }
     }
 
@@ -310,7 +319,16 @@ impl App {
         state_rows: &[&StateRow],
         running: bool,
         has_prompt_sent: bool,
+        cost_tree: &[TreemapNode],
     ) -> Action {
+        // Issue #632: the Cost screen's own keys (`i`/`o`/`$`, ↑↓ to
+        // select a store in size order, `⏎`/`esc` to zoom) take over
+        // first, before any of the generic panes' own bindings below
+        // -- `0`-`3` (screen switching), `t`, `?`, `c`/`q` and Ctrl-C
+        // still fall through to the match below unchanged.
+        if self.screen == Screen::Cost && self.handle_cost_key(key, cost_tree) {
+            return Action::None;
+        }
         match key.code {
             // DESIGN.md §6.3/issue #527: every one of these moves (or
             // scrolls) whichever pane currently has focus — the
@@ -475,6 +493,106 @@ impl App {
             Pane::State => self.state_viewport.max(1),
             Pane::Details => self.details_viewport.max(1),
         }
+    }
+
+    /// The Cost screen's own keys (issue #632), tried before any of
+    /// the generic panes' own bindings; `true` means the key was
+    /// consumed here and `handle_key_normal`'s own match below must
+    /// not also act on it.
+    fn handle_cost_key(&mut self, key: KeyEvent, tree: &[TreemapNode]) -> bool {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_cost_selection(tree, -1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_cost_selection(tree, 1);
+                true
+            }
+            // `⏎` zooms into the selected store (DESIGN.md) -- only
+            // once it actually has children of its own to zoom into;
+            // a leaf (or a store too small to show its own children
+            // at all) has nothing further down to show.
+            KeyCode::Enter => {
+                let level = self.cost_level(tree);
+                let items = oscilloscope_core::treemap::sorted_children(level);
+                let target = self
+                    .cost_selected
+                    .as_deref()
+                    .and_then(|p| items.iter().find(|n| n.path == p).copied())
+                    .or_else(|| items.first().copied());
+                if let Some(node) = target {
+                    if !node.children.is_empty() {
+                        self.cost_zoom.push(node.path.clone());
+                        self.cost_selected = None;
+                    }
+                }
+                true
+            }
+            // `esc` zooms back out one level (DESIGN.md) -- a no-op
+            // at the top level, same as every other screen's `esc`
+            // with nothing open.
+            KeyCode::Esc => {
+                if !self.cost_zoom.is_empty() {
+                    self.cost_zoom.pop();
+                    self.cost_selected = None;
+                }
+                true
+            }
+            // `i`/`o`/`$` switch the treemap's own measure; the same
+            // key again returns to the default, total tokens
+            // (`Measure::from_key`'s own toggle rule).
+            KeyCode::Char(c @ ('i' | 'o' | '$')) => {
+                if let Some(measure) = Measure::from_key(self.cost_measure, c) {
+                    self.cost_measure = measure;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The Cost screen's own current zoom level's children (issue
+    /// #632): walks `self.cost_zoom`'s own stack of store paths into
+    /// `tree`, dropping any trailing entry that no longer resolves
+    /// (the underlying state changed since it was pushed) rather than
+    /// leaving the screen stuck on a level that no longer exists.
+    pub(crate) fn cost_level<'a>(&mut self, tree: &'a [TreemapNode]) -> &'a [TreemapNode] {
+        let mut level = tree;
+        let mut valid_depth = 0;
+        for path in &self.cost_zoom {
+            match level.iter().find(|n| &n.path == path) {
+                Some(node) => {
+                    level = &node.children;
+                    valid_depth += 1;
+                }
+                None => break,
+            }
+        }
+        self.cost_zoom.truncate(valid_depth);
+        level
+    }
+
+    /// `↑`/`↓` select tiles in size order (DESIGN.md), the same
+    /// largest-total-first, tie-by-key order `treemap::layout` itself
+    /// lays tiles out in -- so moving the selection one step always
+    /// matches moving to the tile actually next to it on screen.
+    fn move_cost_selection(&mut self, tree: &[TreemapNode], delta: i32) {
+        let level = self.cost_level(tree);
+        let items = oscilloscope_core::treemap::sorted_children(level);
+        if items.is_empty() {
+            return;
+        }
+        let current = self
+            .cost_selected
+            .as_deref()
+            .and_then(|p| items.iter().position(|n| n.path == p));
+        let next = match current {
+            Some(idx) => (idx as i32 + delta).clamp(0, items.len() as i32 - 1) as usize,
+            None if delta >= 0 => 0,
+            None => items.len() - 1,
+        };
+        self.cost_selected = Some(items[next].path.clone());
     }
 
     fn move_or_scroll(&mut self, rows: &[&Row], state_rows: &[&StateRow], delta: i32) {
@@ -803,14 +921,14 @@ mod tests {
         ];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Down), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
-        app.handle_key(key(KeyCode::Down), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         // Already at the end: another Down must not go out of bounds.
-        app.handle_key(key(KeyCode::Down), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
-        app.handle_key(key(KeyCode::Up), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Up), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
     }
 
@@ -820,9 +938,9 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.selected_path = Some("prime.loop".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(app.collapsed.contains("prime.loop"));
-        app.handle_key(key(KeyCode::Right), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Right), &visible, &[], true, false, &[]);
         assert!(!app.collapsed.contains("prime.loop"));
     }
 
@@ -877,9 +995,9 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         assert!(app.follow, "issue #527: follow is on when the TUI starts");
-        app.handle_key(key(KeyCode::Char('f')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('f')), &visible, &[], true, false, &[]);
         assert!(!app.follow);
-        app.handle_key(key(KeyCode::Char('f')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('f')), &visible, &[], true, false, &[]);
         assert!(app.follow);
     }
 
@@ -889,9 +1007,9 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         assert!(app.fold_enabled, "issue #613: fold is on by default");
-        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
         assert!(!app.fold_enabled);
-        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
         assert!(app.fold_enabled);
     }
 
@@ -934,7 +1052,7 @@ mod tests {
             Screen::Overview,
             "the overview is the default screen"
         );
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
     }
@@ -944,7 +1062,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Overview);
     }
 
@@ -961,9 +1079,9 @@ mod tests {
         // #626).
         app.screen = Screen::Flow;
         app.selected_path = Some("prime.a".to_string());
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
         assert!(app.expanded_quick_steps.contains("prime.a"));
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(!app.expanded_quick_steps.contains("prime.a"));
     }
 
@@ -984,7 +1102,7 @@ mod tests {
         let mut app = App::new(false);
         app.expanded_quick_steps.insert("prime.a".to_string());
         app.selected_path = Some("prime.b".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(!app.expanded_quick_steps.contains("prime.a"));
     }
 
@@ -1006,7 +1124,7 @@ mod tests {
         let mut app = App::new(false);
         app.expanded_quick_steps.insert("prime.q1".to_string());
         app.selected_path = Some("prime.box".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(app.expanded_quick_steps.contains("prime.q1"));
         assert!(app.collapsed.contains("prime.box"));
     }
@@ -1017,7 +1135,7 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.selected_path = Some("prime.a".to_string());
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
         assert!(app.expanded_quick_steps.is_empty());
     }
 
@@ -1040,10 +1158,10 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('/')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('/')), &visible, &[], true, false, &[]);
         assert!(matches!(app.dialog, Dialog::FilterInput(_)));
-        app.handle_key(key(KeyCode::Char('a')), &visible, &[], true, false);
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('a')), &visible, &[], true, false, &[]);
+        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
         assert_eq!(app.filter.as_deref(), Some("a"));
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -1066,13 +1184,13 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false);
+        let action = app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false, &[]);
         assert_eq!(action, Action::None);
         assert!(matches!(
             app.dialog,
             Dialog::ConfirmCancel { quit_after: false }
         ));
-        let action = app.handle_key(key(KeyCode::Char('y')), &visible, &[], true, false);
+        let action = app.handle_key(key(KeyCode::Char('y')), &visible, &[], true, false, &[]);
         assert_eq!(action, Action::Cancel);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -1082,8 +1200,8 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false);
-        let action = app.handle_key(key(KeyCode::Char('n')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false, &[]);
+        let action = app.handle_key(key(KeyCode::Char('n')), &visible, &[], true, false, &[]);
         assert_eq!(action, Action::None);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -1093,13 +1211,13 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(key(KeyCode::Char('q')), &visible, &[], true, false);
+        let action = app.handle_key(key(KeyCode::Char('q')), &visible, &[], true, false, &[]);
         assert_eq!(action, Action::None);
         assert!(matches!(
             app.dialog,
             Dialog::ConfirmCancel { quit_after: true }
         ));
-        let action = app.handle_key(key(KeyCode::Char('y')), &visible, &[], true, false);
+        let action = app.handle_key(key(KeyCode::Char('y')), &visible, &[], true, false, &[]);
         assert_eq!(action, Action::Cancel);
         assert!(app.quit_when_finished);
     }
@@ -1109,8 +1227,8 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false);
-        app.handle_key(key(KeyCode::Char('y')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false, &[]);
+        app.handle_key(key(KeyCode::Char('y')), &visible, &[], true, false, &[]);
         assert!(!app.quit_when_finished);
     }
 
@@ -1119,7 +1237,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(key(KeyCode::Char('q')), &visible, &[], false, false);
+        let action = app.handle_key(key(KeyCode::Char('q')), &visible, &[], false, false, &[]);
         assert_eq!(action, Action::Quit);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -1129,7 +1247,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(true);
-        let action = app.handle_key(key(KeyCode::Char('q')), &visible, &[], true, false);
+        let action = app.handle_key(key(KeyCode::Char('q')), &visible, &[], true, false, &[]);
         assert_eq!(action, Action::Quit);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -1139,7 +1257,14 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, &[], true, false);
+        let action = app.handle_key(
+            ctrl_key(KeyCode::Char('c')),
+            &visible,
+            &[],
+            true,
+            false,
+            &[],
+        );
         assert_eq!(action, Action::CtrlC);
         assert_eq!(app.dialog, Dialog::None, "Ctrl-C never opens a confirm");
     }
@@ -1149,7 +1274,14 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, &[], false, false);
+        let action = app.handle_key(
+            ctrl_key(KeyCode::Char('c')),
+            &visible,
+            &[],
+            false,
+            false,
+            &[],
+        );
         assert_eq!(action, Action::CtrlC);
     }
 
@@ -1158,12 +1290,19 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('c')), &visible, &[], true, false, &[]);
         assert!(matches!(
             app.dialog,
             Dialog::ConfirmCancel { quit_after: false }
         ));
-        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, &[], true, false);
+        let action = app.handle_key(
+            ctrl_key(KeyCode::Char('c')),
+            &visible,
+            &[],
+            true,
+            false,
+            &[],
+        );
         assert_eq!(action, Action::CtrlC);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -1173,8 +1312,8 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('/')), &visible, &[], false, false);
-        let action = app.handle_key(key(KeyCode::Char('c')), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Char('/')), &visible, &[], false, false, &[]);
+        let action = app.handle_key(key(KeyCode::Char('c')), &visible, &[], false, false, &[]);
         assert_eq!(action, Action::None);
         assert_eq!(app.dialog, Dialog::FilterInput("c".to_string()));
     }
@@ -1184,9 +1323,9 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::Help);
-        app.handle_key(key(KeyCode::Char('x')), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Char('x')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::None);
     }
 
@@ -1195,9 +1334,9 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert!(matches!(app.dialog, Dialog::FullValue(_)));
-        app.handle_key(key(KeyCode::Esc), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::None);
     }
 
@@ -1206,7 +1345,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
     }
 
@@ -1217,7 +1356,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true);
+        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
     }
 
@@ -1226,14 +1365,14 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true);
+        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
-        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true);
+        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
-        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true);
+        app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
         // A key other than `v` still closes it, same as any overlay.
-        app.handle_key(key(KeyCode::Esc), &visible, &[], false, true);
+        app.handle_key(key(KeyCode::Esc), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::None);
     }
 
@@ -1244,11 +1383,11 @@ mod tests {
         let mut app = App::new(false);
         app.state_viewport = 8;
         assert_eq!(app.pane, Pane::Tree);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Details);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::State);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Tree);
     }
 
@@ -1261,9 +1400,9 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.state_viewport = 0;
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Details);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Tree, "the state pane has nothing to focus");
     }
 
@@ -1276,18 +1415,18 @@ mod tests {
         let mut app = App::new(false);
         app.tree_viewport = 3;
         app.select_tree_path(Some("prime.r0".to_string()));
-        app.handle_key(key(KeyCode::PageDown), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::PageDown), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.r3"));
         assert!(!app.follow);
-        app.handle_key(key(KeyCode::PageUp), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::PageUp), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.r0"));
-        app.handle_key(key(KeyCode::End), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::End), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.r9"));
-        app.handle_key(key(KeyCode::Char('g')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('g')), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.r0"));
-        app.handle_key(key(KeyCode::Char('G')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('G')), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.r9"));
-        app.handle_key(key(KeyCode::Home), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Home), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.r0"));
     }
 
@@ -1301,7 +1440,7 @@ mod tests {
         let mut app = App::new(false);
         app.select_tree_path(Some("prime.a".to_string()));
         app.details_scroll = 5;
-        app.handle_key(key(KeyCode::Down), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         assert_eq!(app.details_scroll, 0);
     }
@@ -1331,7 +1470,14 @@ mod tests {
         let mut app = App::new(false);
         app.pane = Pane::State;
         app.select_tree_path(Some("prime.a".to_string()));
-        app.handle_key(key(KeyCode::Down), &visible, &state_visible, true, false);
+        app.handle_key(
+            key(KeyCode::Down),
+            &visible,
+            &state_visible,
+            true,
+            false,
+            &[],
+        );
         assert_eq!(app.state_selected_path.as_deref(), Some("a"));
         assert_eq!(
             app.selected_path.as_deref(),
@@ -1344,6 +1490,7 @@ mod tests {
             &state_visible,
             true,
             false,
+            &[],
         );
         assert_eq!(app.state_selected_path.as_deref(), Some("b"));
     }
@@ -1356,10 +1503,10 @@ mod tests {
         app.pane = Pane::Details;
         app.details_viewport = 4;
         app.select_tree_path(Some("prime.a".to_string()));
-        app.handle_key(key(KeyCode::PageDown), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::PageDown), &visible, &[], true, false, &[]);
         assert_eq!(app.details_scroll, 4);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
-        app.handle_key(key(KeyCode::Home), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Home), &visible, &[], true, false, &[]);
         assert_eq!(app.details_scroll, 0);
     }
 
@@ -1367,7 +1514,7 @@ mod tests {
     fn t_returns_the_cycle_theme_action() {
         let mut app = App::new(false);
         assert_eq!(
-            app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false),
+            app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false, &[]),
             Action::CycleTheme
         );
     }
@@ -1376,21 +1523,21 @@ mod tests {
     fn zero_and_two_switch_screens() {
         let mut app = App::new(false);
         assert_eq!(app.screen, Screen::Overview);
-        app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false);
+        app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
-        app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false);
+        app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Overview);
     }
 
     #[test]
-    fn one_and_three_do_nothing() {
+    fn one_does_nothing_but_three_switches_to_cost() {
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false);
+        app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
-        app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false);
+        app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
-        app.handle_key(key(KeyCode::Char('3')), &[], &[], true, false);
-        assert_eq!(app.screen, Screen::Flow);
+        app.handle_key(key(KeyCode::Char('3')), &[], &[], true, false, &[]);
+        assert_eq!(app.screen, Screen::Cost);
     }
 
     #[test]
@@ -1403,7 +1550,7 @@ mod tests {
         app.fold_enabled = false;
         app.filter = Some("needle".to_string());
         app.collapsed.insert("prime.a".to_string());
-        app.handle_key(key(KeyCode::Char('2')), &visible, &[], true, false);
+        app.handle_key(key(KeyCode::Char('2')), &visible, &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         assert!(!app.follow);
@@ -1428,7 +1575,7 @@ mod tests {
         let mut app = App::new(false);
         app.pane = Pane::State;
         app.state_selected_path = Some("fan".to_string());
-        app.handle_key(key(KeyCode::Left), &[], &state_rows, true, false);
+        app.handle_key(key(KeyCode::Left), &[], &state_rows, true, false, &[]);
         assert!(app.state_collapsed.contains("fan"));
         assert!(
             app.collapsed.is_empty(),
@@ -1440,7 +1587,7 @@ mod tests {
             1,
             "a collapsed row's own children are hidden"
         );
-        app.handle_key(key(KeyCode::Right), &[], &state_rows, true, false);
+        app.handle_key(key(KeyCode::Right), &[], &state_rows, true, false, &[]);
         assert!(!app.state_collapsed.contains("fan"));
         let visible = visible_state_rows(&rows, &app);
         assert_eq!(visible.len(), 2);
