@@ -19,11 +19,10 @@ use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind, run_tot
 use crate::observe::duration_seconds;
 use crate::plan::PlanTree;
 use crate::render::{Row, RowKind, TokenBar, details_for, token_bar_in_flight_line};
-use crate::treemap::TreemapNode;
 
-/// Which of the four screens is on display. `0` and `2` have a
-/// screen to show; `1` and `3` (time, cost) don't yet, so their key
-/// does nothing and they get no tab (issue #626).
+/// Which of the four screens is on display. `0`, `2` and `3` (issue
+/// #632) have a screen to show; `1` (time) doesn't yet, so its key
+/// does nothing and it gets no tab (issue #626).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -52,13 +51,14 @@ impl Screen {
         }
     }
 
-    /// `false` for `Time`/`Cost`: they arrive in their own issues.
+    /// `false` for `Time`: it arrives in a later issue. `Cost`
+    /// (issue #632) is available from here on.
     pub fn is_available(self) -> bool {
-        matches!(self, Screen::Overview | Screen::Flow)
+        matches!(self, Screen::Overview | Screen::Flow | Screen::Cost)
     }
 
     /// The screen a `0`-`3` key names, or `None` for any other key,
-    /// or for a digit whose screen isn't built yet (`1`, `3`) --
+    /// or for a digit whose screen isn't built yet (`1`) --
     /// callers never need a second check of [`Screen::is_available`].
     pub fn from_key(c: char) -> Option<Screen> {
         let screen = match c {
@@ -74,7 +74,7 @@ impl Screen {
     /// Every screen with a tab, in tab order (issue #626's header:
     /// "until then they have no tab").
     pub fn available() -> &'static [Screen] {
-        &[Screen::Overview, Screen::Flow]
+        &[Screen::Overview, Screen::Flow, Screen::Cost]
     }
 }
 
@@ -549,7 +549,15 @@ fn build_focused_step(
     now: &str,
 ) -> FocusedStep {
     let node = node_for(row, flat);
-    let since_ts = node.and_then(|n| n.created_at.clone());
+    // Issue #631: a step known only from `--events` (a tree-loop
+    // pass's prompt, confirmed running before it ever gets a state
+    // node of its own, DESIGN.md §1.4) has no `created_at` here to
+    // read `since` from at all -- `RunModel::event_started_at` is the
+    // same start time the token bar's own running-prompt count
+    // already trusts for exactly this case.
+    let since_ts = node
+        .and_then(|n| n.created_at.clone())
+        .or_else(|| model.event_started_at(&row.path).map(str::to_string));
     let elapsed_s = since_ts
         .as_deref()
         .and_then(|start| duration_seconds(start, now));
@@ -585,11 +593,21 @@ fn build_focused_step(
     } else {
         FocusDetail::Plain
     };
+    // Issue #631: same reasoning as `since_ts` above -- `row.dim` is
+    // only ever populated from a state node's own `meta`, so a step
+    // known only from events has nothing there yet either; the
+    // compiled plan's own prompt op (`PlanTree::
+    // prompt_model_or_provider`) is the one other source that can
+    // name its model/adapter before state ever does.
+    let provider_or_model = row
+        .dim
+        .clone()
+        .or_else(|| plan.prompt_model_or_provider(&row.path));
     FocusedStep {
         path: row.path.clone(),
         breadcrumb: row.label.clone(),
         kind_label: if agent { "agent" } else { row.kind.label() },
-        provider_or_model: row.dim.clone(),
+        provider_or_model,
         since_ts,
         elapsed_s,
         detail,
@@ -882,33 +900,78 @@ fn build_cost_card(
     header: &crate::render::Header,
     state: Option<&Value>,
     flat: &BTreeMap<String, NodeMeta>,
-    treemap: &[TreemapNode],
     token_bar: &TokenBar,
     now: &str,
 ) -> CostCard {
-    fn top(nodes: &[TreemapNode]) -> Option<(String, u64)> {
-        let mut best: Option<(String, u64)> = None;
-        for node in nodes {
-            if node.children.is_empty()
-                && best.as_ref().is_none_or(|(_, total)| node.total > *total)
-            {
-                best = Some((node.path.clone(), node.total));
-            }
-            if let Some(child_best) = top(&node.children) {
-                if best.as_ref().is_none_or(|(_, total)| child_best.1 > *total) {
-                    best = Some(child_best);
-                }
-            }
-        }
-        best
-    }
     CostCard {
         tokens_sent: header.tokens_sent,
         tokens_received: header.tokens_received,
         cost_usd: effective_cost_usd(state, flat),
         tokens_over_time: build_tokens_over_time(header, flat, now),
-        top_store: top(treemap),
+        // Issue #632: the overview's own "largest store" must agree
+        // with the Cost screen's own ranking -- `crate::cost::
+        // top_store` is the same leaf-scan rule that screen's own
+        // table uses, read directly from `flat` rather than through
+        // the Cost screen's own by-store tree, which (DESIGN.md's
+        // performance rule) is built only while that screen is
+        // actually on display.
+        top_store: crate::cost::top_store(flat),
         in_flight: token_bar_in_flight_line(token_bar),
+    }
+}
+
+/// Screen 3's own model (issue #632): the by-store treemap for
+/// whichever [`crate::treemap::Measure`] is currently selected, the
+/// "largest stores" table and its footer, and the "tokens over time"
+/// stacked chart's own per-phase series. A caller builds this only
+/// while the Cost screen is actually on display (the same
+/// performance rule the overview's own model follows) -- unlike the
+/// overview, this is also rebuilt on every measure switch (`i`/`o`/
+/// `$`) and zoom, both of which only ever change `measure`/how the
+/// already-built `tree` is sliced, never trigger a fresh
+/// `RunModel::observe` of their own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostScreen {
+    pub measure: crate::treemap::Measure,
+    /// The root's own children, already chain-folded -- the
+    /// top-level tiles before any zoom (DESIGN.md: "the zoomed
+    /// store's path is shown as a breadcrumb above the treemap",
+    /// `oscilloscope`'s own `App::cost_zoom` decides which node's
+    /// children are actually on screen this frame).
+    pub tree: Vec<crate::treemap::TreemapNode>,
+    /// How many *finished* stores were left out for having no value
+    /// under `measure` at all (DESIGN.md: "the footer counts them").
+    pub stores_without_measure: u64,
+    pub stores: crate::cost::LargestStores,
+    /// One series per top-level phase, in the phase strip's own
+    /// order (DESIGN.md: "one band per top-level step").
+    pub tokens_over_time: Vec<(String, Vec<u64>)>,
+}
+
+pub fn build_cost_screen(
+    rows: &[Row],
+    header: &crate::render::Header,
+    flat: &BTreeMap<String, NodeMeta>,
+    statuses: &BTreeMap<String, crate::model::RowStatus>,
+    state: Option<&Value>,
+    measure: crate::treemap::Measure,
+    now: &str,
+) -> CostScreen {
+    let (tree, stores_without_measure) =
+        crate::treemap::build_tree_for_measure("prime", flat, statuses, measure);
+    let stores = crate::cost::largest_stores("prime", flat, statuses, state);
+    let phases: Vec<(String, String)> = build_phase_strip(rows)
+        .into_iter()
+        .map(|p| (p.path, p.label))
+        .collect();
+    let tokens_over_time =
+        crate::cost::tokens_over_time_by_phase(header.run_start_ts.as_deref(), now, flat, &phases);
+    CostScreen {
+        measure,
+        tree,
+        stores_without_measure,
+        stores,
+        tokens_over_time,
     }
 }
 
@@ -931,7 +994,6 @@ pub fn build_overview(
     model: &RunModel,
     state: Option<&Value>,
     token_bar: &TokenBar,
-    treemap: &[TreemapNode],
     log: &[String],
     selected_path: Option<&str>,
     now: &str,
@@ -951,7 +1013,7 @@ pub fn build_overview(
     );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(header, state, flat, treemap, token_bar, now);
+    let cost_card = build_cost_card(header, state, flat, token_bar, now);
     Overview {
         phase_strip,
         now_pane,
@@ -998,8 +1060,8 @@ mod tests {
     fn screen_from_key_only_accepts_available_screens() {
         assert_eq!(Screen::from_key('0'), Some(Screen::Overview));
         assert_eq!(Screen::from_key('2'), Some(Screen::Flow));
+        assert_eq!(Screen::from_key('3'), Some(Screen::Cost));
         assert_eq!(Screen::from_key('1'), None);
-        assert_eq!(Screen::from_key('3'), None);
         assert_eq!(Screen::from_key('x'), None);
     }
 
@@ -1108,7 +1170,7 @@ mod tests {
         // it dropped too.
         assert_eq!(
             text,
-            "⠔⠒⠒⠤⠤⠔⠒⠒ …ument-name.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2"
+            "⠔⠒⠒⠤⠤⠔⠒⠒ …nt-name.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2  3"
         );
     }
 
@@ -1128,25 +1190,25 @@ mod tests {
         // Squeezed enough to drop the document to nothing and the
         // report to a bare `▸` and the ETA entirely -- but status,
         // elapsed and the clock are all still there, untruncated.
-        assert_eq!(text, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2");
+        assert_eq!(text, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2  3");
     }
 
     #[test]
     fn header_line_truncation_order_holds_at_every_required_width_without_a_report() {
         let header = base_header();
         let expected = [
-            (50u16, "⠔⠒⠒⠤⠤⠔⠒⠒ …l · ♥ running 47m57s · 11:52:55   [0]  2"),
+            (50u16, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55   [0]  2  3"),
             (
                 80,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0]  2",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0]  2  3",
             ),
             (
                 100,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow  3 cost",
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow  3 cost",
             ),
         ];
         for (width, want) in expected {
@@ -1174,19 +1236,19 @@ mod tests {
         let expected = [
             (
                 50u16,
-                "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2",
+                "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2  3",
             ),
             (
                 80,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ …ature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ …re-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2  3",
             ),
             (
                 100,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 blocker   [0]  2",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 block…   [0]  2  3",
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 blocker   [0 overview]  2 flow",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 blocker   [0 overview]  2 flow  3 cost",
             ),
         ];
         for (width, want) in expected {
@@ -1563,7 +1625,6 @@ mod tests {
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
             &flat,
-            &[],
             &token_bar,
             "2026-10-08T11:52:55Z",
         );
@@ -1572,7 +1633,6 @@ mod tests {
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
             &flat,
-            &[],
             &token_bar,
             "2026-10-08T11:52:55Z",
         );
@@ -1612,14 +1672,7 @@ mod tests {
                 meta: json!({"cost_usd": 0.75}),
             },
         );
-        let card = build_cost_card(
-            &header,
-            None,
-            &flat,
-            &[],
-            &token_bar,
-            "2026-10-08T11:52:55Z",
-        );
+        let card = build_cost_card(&header, None, &flat, &token_bar, "2026-10-08T11:52:55Z");
         assert_eq!(card.cost_usd, Some(2.25));
     }
 

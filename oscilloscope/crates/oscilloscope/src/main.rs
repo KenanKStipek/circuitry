@@ -1554,7 +1554,6 @@ fn build_overview_if_active(
         model,
         state,
         &render_state.token_bar,
-        &render_state.treemap,
         log_lines,
         app.selected_path.as_deref(),
         now,

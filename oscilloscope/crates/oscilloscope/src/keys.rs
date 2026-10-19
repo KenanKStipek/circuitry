@@ -135,6 +135,19 @@ pub struct App {
     /// `pane == Pane::State` is only true while that pane itself has
     /// focus, never while scrolling its own selection's details.
     pub details_source: Pane,
+    /// The Cost screen's own treemap measure (issue #632): `i`/`o`/
+    /// `$` switch it, the same key again returns to `Total`.
+    pub cost_measure: oscilloscope_core::treemap::Measure,
+    /// The Cost screen's own zoom stack (issue #632): each `⏎`
+    /// pushes the selected store's own path, zooming into its
+    /// children; `esc` pops one level back out. Empty means the
+    /// top-level tiles (the root's own children).
+    pub cost_zoom: Vec<String>,
+    /// The selected store's own path at the Cost screen's *current*
+    /// zoom level -- independent of `selected_path`/
+    /// `state_selected_path`, same reasoning as those two staying
+    /// independent of each other.
+    pub cost_selected: Option<String>,
 }
 
 impl App {
@@ -162,6 +175,9 @@ impl App {
             expanded_quick_steps: std::collections::BTreeSet::new(),
             details_source: Pane::Tree,
             screen: Screen::default(),
+            cost_measure: oscilloscope_core::treemap::Measure::Total,
+            cost_zoom: Vec::new(),
+            cost_selected: None,
         }
     }
 

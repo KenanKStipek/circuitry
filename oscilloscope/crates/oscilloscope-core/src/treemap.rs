@@ -341,41 +341,109 @@ fn round_rect((x, y, w, h): (f64, f64, f64, f64)) -> Rect {
     }
 }
 
-/// Builds the `tokens by key` tree (DESIGN.md §6.3) from flattened
-/// state: issue #527's own "the root cell is `prime`" — a single
-/// [`TreemapNode`] for `root_path` itself (normally `"prime"`),
-/// carrying its own subtree's token total and recursing into its
-/// children exactly the way any other container does ([`build_node`]
-/// makes no distinction between the root and a nested container at
-/// all). "Nothing has tokens yet" is an empty list, not a zero-area
-/// root cell — the caller still calls [`layout`] on it either way.
-pub fn build_tree(
-    root_path: &str,
-    flat: &BTreeMap<String, crate::model::NodeMeta>,
-    statuses: &BTreeMap<String, crate::model::RowStatus>,
-) -> Vec<TreemapNode> {
-    build_node(root_path, flat, statuses).into_iter().collect()
+/// The Cost screen's own treemap measure (issue #632): `Total`
+/// (tokens in + out) is the default; `i`/`o`/`$` switch to input
+/// tokens, output tokens or cost, and the same key again returns to
+/// `Total`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Measure {
+    Total,
+    In,
+    Out,
+    Cost,
 }
 
-fn build_node(
-    path: &str,
-    flat: &BTreeMap<String, crate::model::NodeMeta>,
-    statuses: &BTreeMap<String, crate::model::RowStatus>,
-) -> Option<TreemapNode> {
-    let (sent, received) = crate::model::subtree_tokens(path, flat);
-    let total = sent + received;
-    if total == 0 {
-        return None;
+impl Measure {
+    pub fn label(self) -> &'static str {
+        match self {
+            Measure::Total => "tokens",
+            Measure::In => "input tokens",
+            Measure::Out => "output tokens",
+            Measure::Cost => "cost",
+        }
     }
-    let key = path.rsplit('.').next().unwrap_or(path).to_string();
-    let status = statuses.get(path).map(|s| s.kind);
 
-    // `subtree_entries` bounds this to `path`'s own subtree instead
-    // of scanning every path in the state (issue #527's redraw-cost
-    // acceptance); checking only the last pushed entry (not `Vec::
-    // contains`) keeps de-duplicating from becoming quadratic in the
-    // child count too — safe because `subtree_entries`' own order is
-    // sorted, so duplicates are always adjacent.
+    /// `i`/`o`/`$` pick a measure; the same key again returns to
+    /// [`Measure::Total`] (issue #632's own toggle rule). `None` for
+    /// any other key -- `t` is never handled here, it stays the
+    /// theme-cycle key.
+    pub fn from_key(current: Measure, key: char) -> Option<Measure> {
+        let target = match key {
+            'i' => Measure::In,
+            'o' => Measure::Out,
+            '$' => Measure::Cost,
+            _ => return None,
+        };
+        Some(if current == target {
+            Measure::Total
+        } else {
+            target
+        })
+    }
+}
+
+/// Scales a dollar figure into the same integer weight
+/// [`squarify`]'s geometry already uses for token counts -- a cell's
+/// own `total` is in micro-dollars under [`Measure::Cost`], never a
+/// raw cent or dollar count, so two stores a cent apart still order
+/// (and size) correctly. [`display_cost_usd`] is the inverse, for a
+/// front end showing the real figure back.
+const COST_SCALE: f64 = 1_000_000.0;
+
+pub fn display_cost_usd(total: u64) -> f64 {
+    total as f64 / COST_SCALE
+}
+
+/// A nominal, non-zero weight for a leaf that is still running and
+/// has not reported anything for the chosen measure yet (DESIGN.md:
+/// "a tile for a step that is still running ... reads `tokens when
+/// done`") -- real geometry still needs *some* positive weight to
+/// give it a cell at all ([`squarify`]'s own "a key with total == 0
+/// must not be passed in"); a front end never shows this number,
+/// only the fixed "tokens when done" text, gated on [`TreemapCell`]'s
+/// own `status`/`has_children` (`Some(StatusKind::Running)` and no
+/// children at all).
+const RUNNING_PLACEHOLDER_WEIGHT: u64 = 1;
+
+fn own_measure_value(node: &crate::model::NodeMeta, measure: Measure) -> u64 {
+    match measure {
+        Measure::Total => {
+            let (sent, received) = crate::model::node_tokens(&node.meta);
+            sent + received
+        }
+        Measure::In => crate::model::node_tokens(&node.meta).0,
+        Measure::Out => crate::model::node_tokens(&node.meta).1,
+        Measure::Cost => node
+            .meta
+            .get("cost_usd")
+            .and_then(serde_json::Value::as_f64)
+            .map(|c| (c.max(0.0) * COST_SCALE).round() as u64)
+            .unwrap_or(0),
+    }
+}
+
+/// Whether `meta` belongs to a kind of leaf that could ever report a
+/// token or cost figure at all (a prompt/reflector's own `adapter`/
+/// `prompt_sent`, or an agent tool's `provider`) -- the same shapes
+/// `screens::is_agent_row` and DESIGN.md §1.2 check elsewhere. A
+/// plain tool never gets a cell here, running or not: it is not a
+/// store this screen tracks at all, so it must not count toward the
+/// "stores without <measure>" footer either, and a running one must
+/// not get [`RUNNING_PLACEHOLDER_WEIGHT`]'s own "tokens when done"
+/// treatment -- it will never report one.
+fn is_token_bearing_kind(meta: &serde_json::Value) -> bool {
+    meta.get("adapter").is_some()
+        || meta.get("prompt_sent").is_some()
+        || meta
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+}
+
+/// Every direct child segment of `path` actually present somewhere
+/// under it in `flat` (issue #527's own redraw-cost bound:
+/// `subtree_entries` stays `O(log n + matches)`, never a full scan).
+fn direct_children_of(path: &str, flat: &BTreeMap<String, crate::model::NodeMeta>) -> Vec<String> {
     let prefix = format!("{path}.");
     let mut direct_children: Vec<String> = Vec::new();
     for (p, _) in crate::model::subtree_entries(path, flat) {
@@ -388,11 +456,98 @@ fn build_node(
             direct_children.push(child_path);
         }
     }
+    direct_children
+}
+
+/// Builds the Cost screen's own by-store tree for one [`Measure`]
+/// (issue #632), replacing the old `tokens by key` treemap screen 2
+/// had (always rooted at one `prime` cell): returns `root_path`'s own
+/// *children*, each already chain-folded ([`fold_single_child`]),
+/// as the top-level tiles -- there is no single wrapping root cell
+/// any more, since the mockup's own top-level tiles are the state
+/// stores themselves (`plan › agent`, `implement › chunk 1 › agent`,
+/// ...), not one big box around all of them. The second return value
+/// is how many *finished* stores were left out for having no value
+/// under this measure at all (DESIGN.md's `3 stores without cost`
+/// footer) -- a store still running never counts there, since it
+/// always gets a cell of its own via [`RUNNING_PLACEHOLDER_WEIGHT`].
+pub fn build_tree_for_measure(
+    root_path: &str,
+    flat: &BTreeMap<String, crate::model::NodeMeta>,
+    statuses: &BTreeMap<String, crate::model::RowStatus>,
+    measure: Measure,
+) -> (Vec<TreemapNode>, u64) {
+    let mut excluded = 0u64;
+    let root = build_node_for_measure(root_path, flat, statuses, measure, &mut excluded);
+    (root.map(|r| r.children).unwrap_or_default(), excluded)
+}
+
+fn build_node_for_measure(
+    path: &str,
+    flat: &BTreeMap<String, crate::model::NodeMeta>,
+    statuses: &BTreeMap<String, crate::model::RowStatus>,
+    measure: Measure,
+    excluded: &mut u64,
+) -> Option<TreemapNode> {
+    let status = statuses.get(path).map(|s| s.kind);
+    let direct_children = direct_children_of(path, flat);
+    if direct_children.is_empty() {
+        // A true leaf: the only way `direct_children_of` is ever
+        // empty for a path this function was actually called on (the
+        // top call aside, which checks its own result) is that
+        // nothing starts with `path.` in `flat` at all -- and this
+        // function only ever recurses into a path that does, so a
+        // leaf reached here always has its own real `{value, meta}`
+        // entry to read.
+        let node = flat.get(path)?;
+        let running = node.completed_at.is_none();
+        if running {
+            if !is_token_bearing_kind(&node.meta) {
+                return None;
+            }
+            let total = own_measure_value(node, measure).max(RUNNING_PLACEHOLDER_WEIGHT);
+            let key = path.rsplit('.').next().unwrap_or(path).to_string();
+            return Some(TreemapNode {
+                key,
+                path: path.to_string(),
+                total,
+                status,
+                children: Vec::new(),
+            });
+        }
+        let (sent, received) = crate::model::node_tokens(&node.meta);
+        let has_cost = node.meta.get("cost_usd").is_some();
+        if sent == 0 && received == 0 && !has_cost {
+            // Never reported anything at all under any measure -- not
+            // a store this screen tracks, so not counted either.
+            return None;
+        }
+        let total = own_measure_value(node, measure);
+        if total == 0 {
+            *excluded += 1;
+            return None;
+        }
+        let key = path.rsplit('.').next().unwrap_or(path).to_string();
+        return Some(TreemapNode {
+            key,
+            path: path.to_string(),
+            total,
+            status,
+            children: Vec::new(),
+        });
+    }
     let children: Vec<TreemapNode> = direct_children
         .into_iter()
-        .filter_map(|child_path| build_node(&child_path, flat, statuses))
+        .filter_map(|child_path| {
+            build_node_for_measure(&child_path, flat, statuses, measure, excluded)
+        })
+        .map(fold_single_child)
         .collect();
-
+    let total: u64 = children.iter().map(|c| c.total).sum();
+    if total == 0 {
+        return None;
+    }
+    let key = path.rsplit('.').next().unwrap_or(path).to_string();
     Some(TreemapNode {
         key,
         path: path.to_string(),
@@ -400,6 +555,35 @@ fn build_node(
         status,
         children,
     })
+}
+
+/// Issue #632's own chain folding, by the same safety rule
+/// `fold::fold_node`'s breadcrumbs use for the orchestration pane's
+/// rows ("folding a container with its one child is only safe when
+/// their statuses actually agree"): a node with exactly one child
+/// folds with it into one tile, `outer › inner`, keeping the child's
+/// own path (so zoom and selection still target it) and status. A
+/// per-store node has no `RowKind` of its own to exclude a loop or a
+/// quick-steps summary by -- those are row-list concepts, not
+/// per-store ones -- so this is status agreement alone, including
+/// both being *known* (`Some`), never a bare `None == None`. Applied
+/// to each of a container's own children as they're collected
+/// ([`build_node_for_measure`]), never to the node the caller itself
+/// just built -- that's what keeps the top root (`build_tree_for_
+/// measure`'s own `root_path`) from ever folding its single child
+/// away into itself: nothing above the top call ever folds it.
+fn fold_single_child(node: TreemapNode) -> TreemapNode {
+    if node.children.len() == 1 && node.status.is_some() && node.status == node.children[0].status {
+        let child = node.children.into_iter().next().expect("checked len == 1");
+        return TreemapNode {
+            key: format!("{} \u{203a} {}", node.key, child.key),
+            path: child.path,
+            total: node.total,
+            status: child.status,
+            children: child.children,
+        };
+    }
+    node
 }
 
 #[cfg(test)]
@@ -507,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn build_tree_from_flat_state_omits_zero_token_subtrees() {
+    fn build_tree_for_measure_omits_zero_token_subtrees_and_has_no_wrapping_root_cell() {
         use crate::model::flatten_state;
         use serde_json::json;
 
@@ -517,19 +701,20 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let tree = build_tree("prime", &flat, &statuses);
-        // Issue #527: the root cell is `prime` itself, wrapping
-        // whichever of its children actually have tokens.
-        assert_eq!(tree.len(), 1);
-        let root = &tree[0];
-        assert_eq!(root.key, "prime");
-        assert_eq!(root.total, 30);
-        let keys: Vec<&str> = root.children.iter().map(|n| n.key.as_str()).collect();
-        assert_eq!(keys, vec!["summarize"]);
+        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        // Issue #632: no single `prime` wrapping cell any more -- the
+        // top-level tiles are `prime`'s own children directly.
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "summarize");
+        assert_eq!(top[0].total, 30);
+        assert_eq!(
+            excluded, 0,
+            "a plain tool with no tokens is never a store at all"
+        );
     }
 
     #[test]
-    fn build_tree_returns_empty_when_nothing_has_tokens_yet() {
+    fn build_tree_for_measure_returns_empty_when_nothing_has_tokens_yet() {
         use crate::model::flatten_state;
         use serde_json::json;
 
@@ -538,7 +723,206 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let tree = build_tree("prime", &flat, &statuses);
-        assert!(tree.is_empty());
+        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        assert!(top.is_empty());
+        assert_eq!(excluded, 0);
+    }
+
+    fn prompt_node(
+        sent: u64,
+        received: u64,
+        cost: Option<f64>,
+        running: bool,
+    ) -> serde_json::Value {
+        use serde_json::json;
+        let mut meta = json!({
+            "created_at": "t0",
+            "completed_at": if running { serde_json::Value::Null } else { serde_json::Value::String("t1".to_string()) },
+            "adapter": "scripted",
+            "tokens_sent_total": sent,
+            "tokens_received_total": received,
+        });
+        if let Some(cost) = cost {
+            meta["cost_usd"] = json!(cost);
+        }
+        json!({"value": "y", "meta": meta})
+    }
+
+    #[test]
+    fn measure_switching_reads_in_out_and_cost_separately() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "plan": prompt_node(100, 50, Some(1.5), false),
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let (total, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let (input, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::In);
+        let (output, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Out);
+        let (cost, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Cost);
+        assert_eq!(total[0].total, 150);
+        assert_eq!(input[0].total, 100);
+        assert_eq!(output[0].total, 50);
+        assert_eq!(display_cost_usd(cost[0].total), 1.5);
+    }
+
+    #[test]
+    fn measure_from_key_toggles_back_to_total_on_the_same_key() {
+        assert_eq!(Measure::from_key(Measure::Total, 'i'), Some(Measure::In));
+        assert_eq!(Measure::from_key(Measure::In, 'i'), Some(Measure::Total));
+        assert_eq!(Measure::from_key(Measure::Total, 'o'), Some(Measure::Out));
+        assert_eq!(Measure::from_key(Measure::Out, 'o'), Some(Measure::Total));
+        assert_eq!(Measure::from_key(Measure::Total, '$'), Some(Measure::Cost));
+        assert_eq!(Measure::from_key(Measure::Cost, '$'), Some(Measure::Total));
+        // Switching straight from one measure to a different one (not
+        // the same key twice) just switches, it does not bounce
+        // through `Total`.
+        assert_eq!(Measure::from_key(Measure::In, 'o'), Some(Measure::Out));
+        assert_eq!(Measure::from_key(Measure::Total, 't'), None);
+    }
+
+    #[test]
+    fn a_single_child_chain_folds_into_one_breadcrumb_tile() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // `plan` wraps a lone `agent` child with the same (done)
+        // status -- the chain must fold into one `plan › agent` tile
+        // carrying `agent`'s own path.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "plan": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"},
+                "agent": prompt_node(100, 50, None, false)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.plan".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        statuses.insert(
+            "prime.plan.agent".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let (top, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "plan \u{203a} agent");
+        assert_eq!(top[0].path, "prime.plan.agent");
+        assert!(top[0].children.is_empty());
+    }
+
+    #[test]
+    fn a_chain_with_disagreeing_statuses_does_not_fold() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "plan": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "agent": prompt_node(100, 50, None, false)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.plan".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        statuses.insert(
+            "prime.plan.agent".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let (top, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "plan");
+        assert_eq!(top[0].children.len(), 1);
+        assert_eq!(top[0].children[0].key, "agent");
+    }
+
+    #[test]
+    fn a_running_prompt_gets_a_placeholder_cell_instead_of_vanishing() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "agent": prompt_node(0, 0, None, true),
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.agent".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].status, Some(StatusKind::Running));
+        assert!(top[0].total > 0, "a running store still gets a cell");
+        assert_eq!(excluded, 0, "a running store is never counted as excluded");
+    }
+
+    #[test]
+    fn a_running_plain_tool_never_gets_a_cell() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "build": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}},
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.build".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        assert!(top.is_empty());
+        assert_eq!(excluded, 0);
+    }
+
+    #[test]
+    fn a_finished_store_without_the_chosen_measure_is_excluded_and_counted() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // `plan` has tokens (a store under `Total`) but never reported
+        // a cost -- excluded, and counted, under `Measure::Cost` only.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "plan": prompt_node(100, 50, None, false),
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let (top_total, excluded_total) =
+            build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        assert_eq!(top_total.len(), 1);
+        assert_eq!(excluded_total, 0);
+        let (top_cost, excluded_cost) =
+            build_tree_for_measure("prime", &flat, &statuses, Measure::Cost);
+        assert!(top_cost.is_empty());
+        assert_eq!(excluded_cost, 1);
     }
 }

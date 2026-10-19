@@ -202,11 +202,19 @@ pub struct PlanEntry {
     /// (`None` for the document root) — DESIGN.md §2.1 rule 1 only
     /// applies to a chain-flow container.
     pub parent_flow: Option<Flow>,
-    /// A tool leaf's own `provider` (`None` for every other kind) —
-    /// issue #613's "agents in flight" needs this for a row events
-    /// alone have confirmed running, before state ever carries a
-    /// node (and so a `meta.provider`) for it at all.
+    /// A tool leaf's own `provider`, or a prompt leaf's own adapter
+    /// (`None` for every other kind) — issue #613's "agents in
+    /// flight" needs the tool case for a row events alone have
+    /// confirmed running, before state ever carries a node (and so a
+    /// `meta.provider`) for it at all; issue #631's now pane needs
+    /// the prompt case for a row known only from `--events` (a
+    /// tree-loop pass's prompt), which never gets a state node (and
+    /// so a `meta.adapter`) while it runs either.
     pub provider: Option<String>,
+    /// A prompt leaf's own `model` (`None` for every other kind, and
+    /// for a prompt with none set) — issue #631's now pane, same
+    /// reasoning as `provider` above.
+    pub model: Option<String>,
 }
 
 /// One pass index resolved while matching a concrete path against a
@@ -457,6 +465,20 @@ impl PlanTree {
         })
     }
 
+    /// Issue #631's now pane: the model (preferred) or adapter named
+    /// by `path`'s own compiled prompt op, when the plan has one —
+    /// used only while state has no node of its own to read `meta.
+    /// model`/`meta.adapter` from yet (a tree-loop pass's prompt,
+    /// confirmed running by `--events` alone). `None` for any other
+    /// kind, or a path the plan has nothing to say about.
+    pub fn prompt_model_or_provider(&self, path: &str) -> Option<String> {
+        let entry = self.match_path(path)?.entries.first()?;
+        if !matches!(entry.kind, PlanEntryKind::Leaf(LeafEffectKind::Prompt)) {
+            return None;
+        }
+        entry.model.clone().or_else(|| entry.provider.clone())
+    }
+
     /// Whether `path` is a report's own (#605/#610): resolved the
     /// same way `match_path` resolves a `Pass` placeholder against a
     /// concrete `iter_N` segment, so a report inside a named loop's
@@ -642,6 +664,7 @@ fn record_op_entry(
         return path;
     }
     let mut provider = None;
+    let mut model = None;
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
@@ -649,7 +672,11 @@ fn record_op_entry(
                 provider = Some(tool.provider.clone());
                 PlanEntryKind::Leaf(LeafEffectKind::Tool)
             }
-            LeafKind::Prompt(_) => PlanEntryKind::Leaf(LeafEffectKind::Prompt),
+            LeafKind::Prompt(prompt) => {
+                provider = prompt.provider.clone();
+                model = prompt.model.clone();
+                PlanEntryKind::Leaf(LeafEffectKind::Prompt)
+            }
             LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
             LeafKind::Reflector(_) => PlanEntryKind::Leaf(LeafEffectKind::Reflector),
             LeafKind::Report(_) => unreachable!("reports return above, via is_report"),
@@ -691,6 +718,7 @@ fn record_op_entry(
             kind,
             parent_flow,
             provider,
+            model,
         },
     );
     path

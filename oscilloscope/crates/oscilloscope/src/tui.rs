@@ -888,9 +888,10 @@ fn draw_flow_card(
         Some(planned) => format!("{}/{planned}", card.effects_done),
         None => card.effects_done.to_string(),
     };
-    lines.push(Line::from(format!(
-        "{effects} effects · {} failed",
-        card.failures
+    let effects_highlight = ctx.highlight("header:effects");
+    lines.push(Line::from(Span::styled(
+        format!("{effects} effects · {} failed", card.failures),
+        with_highlight(Style::default(), effects_highlight),
     )));
     for event in &card.recent {
         let (text, ts) = match event {
@@ -921,8 +922,13 @@ fn draw_flow_card(
         lines.push(Line::from(format!("next {next}")));
     }
     if let Some((count, secs)) = card.quick_steps {
+        let noun = if count == 1 {
+            "quick step"
+        } else {
+            "quick steps"
+        };
         lines.push(Line::from(format!(
-            "{count} quick steps · {}",
+            "{count} {noun} · {}",
             oscilloscope_core::format::format_duration(secs)
         )));
     }
