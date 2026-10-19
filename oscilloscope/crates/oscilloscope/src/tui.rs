@@ -104,14 +104,12 @@ mod thresholds {
     /// chart sits beside the largest-stores table, under the
     /// treemap. Below it (but still at [`COST_TREEMAP_MIN_WIDTH`]/
     /// `_MIN_HEIGHT`), the chart is dropped and the table takes the
-    /// treemap's own row's full width instead. DESIGN.md's own
-    /// "100×30" is a full terminal's size, but this (like every
-    /// other threshold here) is checked against the *body* area
-    /// `draw`'s own one-line header has already been subtracted from
-    /// -- `_MIN_HEIGHT` is one less than the nominal figure so a
-    /// terminal exactly that tall still qualifies.
+    /// treemap's own row's full width instead. Both figures are whole-
+    /// *terminal* sizes, same as every other threshold here -- checked
+    /// against `frame.area()`, never `body`, inclusive (100×30 and
+    /// 80×20 themselves already qualify).
     pub const COST_CHART_MIN_WIDTH: u16 = 100;
-    pub const COST_CHART_MIN_HEIGHT: u16 = 29;
+    pub const COST_CHART_MIN_HEIGHT: u16 = 30;
     /// Below this, the treemap itself is dropped too, leaving the
     /// table alone (`⏎` still zooms it) -- the same floor screen 2's
     /// own two-column layout collapses at.
@@ -2081,7 +2079,22 @@ fn draw_cost_table(
             .map(|s| status_color(s, ctx.theme))
             .unwrap_or(ctx.theme.text);
         let mut style = Style::default().fg(color);
-        if selected.as_deref() == Some(row.path.as_str()) {
+        // The orchestration pane's own selection can name a
+        // container (`fan`), not only a leaf -- in table-only mode
+        // `↑`/`↓` walk the treemap's own tiles, so a selected
+        // container never has a row whose path matches it exactly
+        // unless that container also happens to be a `while: mode:
+        // model` loop with a `check` row of its own. Every row *under*
+        // the selection (its path, plus `.`) is reversed too, the same
+        // as the treemap highlights every descendant tile of a
+        // selected container.
+        let is_selected = selected.as_deref().is_some_and(|sel| {
+            row.path == sel
+                || (row.path.len() > sel.len()
+                    && row.path.starts_with(sel)
+                    && row.path.as_bytes()[sel.len()] == b'.')
+        });
+        if is_selected {
             style = style.add_modifier(Modifier::REVERSED);
         }
         // The same "nothing real yet" rule the treemap's own tiles
@@ -2109,7 +2122,7 @@ fn draw_cost_table(
             }
         };
         let label = match zoom_root {
-            Some(root) => oscilloscope_core::cost::path_breadcrumb_relative_to(&row.path, root),
+            Some(root) => oscilloscope_core::cost::zoomed_row_label(row, root),
             None => row.label.clone(),
         };
         // Shortened from the left (`… › iter_1 › review`), never the
@@ -2150,11 +2163,12 @@ fn draw_cost_table(
     }
 
     // The footer (the run's own totals, its gap, its cost coverage)
-    // is pinned to the bottom: with more rows than fit, rows are what
-    // gets cut, ending in a "+N more" line, never the footer itself
-    // scrolling off the bottom of a `Paragraph` that simply stops
-    // drawing past its own area -- which is exactly what appending
-    // the footer after every row, unconditionally, used to risk.
+    // always stays visible, right after the rows: with more rows than
+    // fit, rows are what gets cut, ending in a "+N more" line, never
+    // the footer itself scrolling off the bottom of a `Paragraph` that
+    // simply stops drawing past its own area -- which is exactly what
+    // appending the footer after every row, unconditionally, used to
+    // risk.
     let reserved = footer_lines.len() + 1; // +1: the blank separator line, always present.
     let available_for_rows = (inner.height as usize).saturating_sub(reserved);
     let mut lines: Vec<Line> = Vec::new();
@@ -2186,14 +2200,15 @@ fn draw_cost_table(
 /// zooms it.
 fn draw_cost_screen(
     frame: &mut Frame,
+    frame_area: Rect,
     area: Rect,
     screen: &oscilloscope_core::screens::CostScreen,
     app: &mut App,
     cost_layout: &mut CostLayoutCache,
     ctx: &DrawCtx,
 ) {
-    let show_treemap = area.width >= thresholds::COST_TREEMAP_MIN_WIDTH
-        && area.height >= thresholds::COST_TREEMAP_MIN_HEIGHT;
+    let show_treemap = frame_area.width >= thresholds::COST_TREEMAP_MIN_WIDTH
+        && frame_area.height >= thresholds::COST_TREEMAP_MIN_HEIGHT;
     if !show_treemap {
         draw_cost_table(frame, area, screen, app, ctx);
         return;
@@ -2206,8 +2221,8 @@ fn draw_cost_screen(
         .split(area);
     draw_cost_treemap(frame, rows[0], screen, app, cost_layout, ctx);
 
-    let show_chart = area.width >= thresholds::COST_CHART_MIN_WIDTH
-        && area.height >= thresholds::COST_CHART_MIN_HEIGHT;
+    let show_chart = frame_area.width >= thresholds::COST_CHART_MIN_WIDTH
+        && frame_area.height >= thresholds::COST_CHART_MIN_HEIGHT;
     if !show_chart {
         draw_cost_table(frame, rows[1], screen, app, ctx);
         return;
@@ -2376,7 +2391,7 @@ pub fn draw(
         }
         oscilloscope_core::screens::Screen::Cost => {
             if let Some(cost_screen) = cost_screen {
-                draw_cost_screen(frame, body, cost_screen, app, cost_layout, ctx);
+                draw_cost_screen(frame, area, body, cost_screen, app, cost_layout, ctx);
             }
         }
         _ => draw_screen2(
@@ -3479,6 +3494,36 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// 80×20 itself still qualifies for the treemap and the table
+    /// (`COST_TREEMAP_MIN_WIDTH`/`_MIN_HEIGHT` are inclusive, checked
+    /// against the whole terminal) -- only below it does the table
+    /// show alone.
+    #[test]
+    fn cost_running_at_80x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_running_state();
+        let text = cost_snapshot_at(
+            80,
+            20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_finished_at_80x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let process = ProcessState::exited(true);
+        let text = cost_snapshot_at(80, 20, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
     #[test]
     fn cost_running_at_70x20() {
         let plan = sample_plan();
@@ -3595,6 +3640,18 @@ mod golden_tests {
         assert!(
             !text.contains("b  ↑"),
             "zoomed into fan, b must not show: {text}"
+        );
+        assert!(
+            text.contains("iter_0 › nap"),
+            "zoomed into fan, iter_0's row must read relative to it: {text}"
+        );
+        assert!(
+            text.contains("iter_1 › nap"),
+            "zoomed into fan, iter_1's row must read relative to it: {text}"
+        );
+        assert!(
+            !text.contains("fan ›"),
+            "zoomed into fan, no row may still carry fan's own name as a prefix: {text}"
         );
         let buffer = terminal.backend().buffer();
         let tinted = (0..buffer.area.height).any(|y| {
@@ -5643,6 +5700,18 @@ mod golden_tests {
         assert!(
             !text.contains("a 900"),
             "a must be off screen while zoomed: {text}"
+        );
+        assert!(
+            text.contains("iter_0 › nap"),
+            "zoomed into fan, iter_0's table row must read relative to it: {text}"
+        );
+        assert!(
+            text.contains("iter_1 › nap"),
+            "zoomed into fan, iter_1's table row must read relative to it: {text}"
+        );
+        assert!(
+            !text.contains("fan ›"),
+            "zoomed into fan, no table row may still carry fan's own name as a prefix: {text}"
         );
     }
 }
