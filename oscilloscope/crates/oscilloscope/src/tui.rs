@@ -127,7 +127,12 @@ mod thresholds {
     /// (issue #635: "narrow panes drop columns in this order: cost,
     /// start, tokens").
     pub const FLOW_COST_COLUMN_MIN_WIDTH: u16 = 95;
-    pub const FLOW_START_COLUMN_MIN_WIDTH: u16 = 80;
+    // The flow pane's own width is a golden-section share of the
+    // body, never the whole terminal's -- at the widest required
+    // size (120 columns), the pane itself is about 74 columns wide,
+    // so a threshold above that can never show the start column at
+    // any supported terminal size at all.
+    pub const FLOW_START_COLUMN_MIN_WIDTH: u16 = 70;
     pub const FLOW_TOKENS_COLUMN_MIN_WIDTH: u16 = 65;
     /// The condition dim second line (issue #635's Decisions: "a dim
     /// second line at 100 columns and wider; otherwise it appears
@@ -2190,14 +2195,27 @@ fn flow_row_lines(
             }
         }
         FlowRowKind::Decision {
-            branch, inferred, ..
+            branch,
+            inferred,
+            nothing_ran,
+            ..
         } => {
             spans.push(Span::raw(format!("{indent}◆ {}", row.label)));
-            let arrow = match branch {
-                Some(b) => format!("  → {b}"),
-                None => "  …".to_string(),
-            };
-            spans.push(Span::styled(arrow, Style::default().fg(ctx.theme.dim)));
+            // The label itself already carries the arrow for the
+            // same-names case (`if → ?`, `unnamed_if_label`'s own
+            // output never otherwise ends this way) -- a second,
+            // separate `…` right after it would just repeat the
+            // same "not yet decided" meaning twice.
+            if !row.label.ends_with("→ ?") {
+                let mut arrow = match branch {
+                    Some(b) => format!("  → {b}"),
+                    None => "  …".to_string(),
+                };
+                if *nothing_ran {
+                    arrow.push_str(" (nothing ran)");
+                }
+                spans.push(Span::styled(arrow, Style::default().fg(ctx.theme.dim)));
+            }
             if *inferred {
                 spans.push(Span::styled(
                     "  (inferred)",
@@ -2295,6 +2313,12 @@ fn draw_flow_pane(
     app: &mut App,
     header: &oscilloscope_core::render::Header,
     frame_width: u16,
+    // DESIGN.md: "Below 80×20: one column ... the flow pane shows
+    // duration only" -- the one-column layout's own flow pane often
+    // ends up no narrower than the two-column one's left column (it
+    // gets the whole body width instead of a golden-section share of
+    // it), so this can't be the width thresholds' own call to make.
+    one_column: bool,
     ctx: &DrawCtx,
 ) {
     let footer_lines = 3u16;
@@ -2306,7 +2330,15 @@ fn draw_flow_pane(
         .and_then(|p| visible.iter().position(|r| r.path == p));
     app.tree_scroll = clamp_scroll(app.tree_scroll, selected_idx, visible.len(), viewport);
 
-    let columns = flow_columns_for_width(area.width);
+    let columns = if one_column {
+        FlowColumns {
+            cost: false,
+            start: false,
+            tokens: false,
+        }
+    } else {
+        flow_columns_for_width(area.width)
+    };
     let show_condition = frame_width >= thresholds::FLOW_CONDITION_LINE_MIN_WIDTH;
     let visible_paths: std::collections::BTreeSet<&str> =
         visible.iter().map(|r| r.path.as_str()).collect();
@@ -2764,6 +2796,7 @@ fn draw_flow_screen(
             app,
             &state.header,
             frame_area.width,
+            false,
             ctx,
         );
         let selected_rows = oscilloscope_core::layout::golden_section(columns[1].height);
@@ -2794,6 +2827,7 @@ fn draw_flow_screen(
             app,
             &state.header,
             frame_area.width,
+            false,
             ctx,
         );
         if app.flow_story_shows_log {
@@ -2820,6 +2854,7 @@ fn draw_flow_screen(
             app,
             &state.header,
             frame_area.width,
+            true,
             ctx,
         );
     }

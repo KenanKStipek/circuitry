@@ -4,7 +4,7 @@ expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:00   0 overview  [2 flow]  3 cost                                        "
 "┌ flow (do-thing · 2/5+) ◆ decision ⟲ loop ▶ running ────────────────────┐┌ selected ──────────────────────────────────┐"
-"│◐ prime                                                                 ││a                                           │"
+"│◐ prime   460 t                                                         ││a                                           │"
 "│  ✓ a   460 t                                                           ││tool                                        │"
 "│  ✓ b                                                                   ││produced:                                   │"
 "│  ◐ fan                                                                 ││the summary text                            │"

@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::diff::{LogKind, LogLine};
 use crate::fold::is_quick_step;
 use crate::format::{ClockZone, format_clock_time};
-use crate::model::{NodeMeta, RowStatus, StatusKind, node_tokens};
+use crate::model::{NodeMeta, RowStatus, StatusKind};
 use crate::plan::{ConditionInfo, PlanTree, UnnamedIfDecision};
 use crate::render::{LoopProgress, Row, RowKind};
 
@@ -291,8 +291,7 @@ fn branch_paths_for_path(plan: &PlanTree, path: &str) -> (Vec<String>, Vec<Strin
 }
 
 fn row_tokens(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> Option<u64> {
-    let node = flat.get(&row.path)?;
-    let (sent, received) = node_tokens(&node.meta);
+    let (sent, received) = crate::model::subtree_tokens(&row.path, flat);
     let total = sent + received;
     (total > 0).then_some(total)
 }
@@ -688,6 +687,27 @@ fn unnamed_branch_state(decision: &UnnamedIfDecision, rows: &[Row]) -> (Option<S
     }
 }
 
+/// An unnamed `if` has no name of its own to tell two of them apart
+/// by, so its row's own label carries a cut-short piece of its
+/// condition too (DESIGN.md's Decisions section: "labelled `◆ if
+/// <condition, cut short>`"), not just the separate dim condition
+/// line a named `if`'s own name already makes optional.
+const UNNAMED_IF_LABEL_CHARS: usize = 28;
+
+fn unnamed_if_label(condition: Option<&ConditionInfo>) -> String {
+    let Some(condition) = condition else {
+        return "if".to_string();
+    };
+    let text = condition.text.lines().next().unwrap_or(&condition.text);
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= UNNAMED_IF_LABEL_CHARS {
+        format!("if {text}")
+    } else {
+        let cut: String = chars[..UNNAMED_IF_LABEL_CHARS].iter().collect();
+        format!("if {cut}…")
+    }
+}
+
 fn push_unnamed_decision(
     out: &mut Vec<FlowRow>,
     decision: &UnnamedIfDecision,
@@ -714,7 +734,7 @@ fn push_unnamed_decision(
         label: if same_names {
             "if → ?".to_string()
         } else {
-            "if".to_string()
+            unnamed_if_label(decision.condition.as_ref())
         },
         kind: FlowRowKind::Decision {
             branch: branch.clone(),
@@ -766,6 +786,24 @@ fn push_unnamed_decision(
     }
 }
 
+/// A real decision line's own text (`diff::LogLine::text`, shared
+/// verbatim with `--log`) names the step by its full dotted path --
+/// `◆ prime.gate → then` -- but the story shows only its own short
+/// name, `gate → then` (DESIGN.md's own example line), so this strips
+/// everything up to and including the last `.` before the arrow,
+/// display-only: the `LogLine` itself, and `--log`'s own output, are
+/// never touched.
+fn shorten_decision_path(text: &str) -> String {
+    let Some(rest) = text.strip_prefix("\u{25c6} ") else {
+        return text.to_string();
+    };
+    let Some((path, tail)) = rest.split_once(' ') else {
+        return text.to_string();
+    };
+    let short = path.rsplit('.').next().unwrap_or(path);
+    format!("\u{25c6} {short} {tail}")
+}
+
 /// The run's own story (DESIGN.md: "the run's notable events, oldest
 /// first, with clock times"): `story_lines` is the caller's own
 /// bounded buffer of real `--log` lines, raw `ts`/`text` (never
@@ -773,25 +811,33 @@ fn push_unnamed_decision(
 /// kinds: run start/end, decision, report, failure, same as `--log`
 /// otherwise is); every unnamed `if`'s own inferred decision this
 /// same build resolved joins in too, with the clock time of whichever
-/// branch it read as taken. Sorted by each entry's own raw `ts`
-/// string, which (RFC-3339, every source here using the same
-/// precision within one run) already sorts in time order without
-/// parsing it.
+/// branch it read as taken. Sorted by each entry's own real instant
+/// (`diff::parse_instant`, the same RFC-3339 parser `sort_log_lines`
+/// uses), never a plain string compare -- an `--events` line's own
+/// millisecond timestamp and a state-sourced one's microsecond one
+/// aren't lexicographically comparable at all, and a `None` (an
+/// inferred decision whose own branch hasn't resolved a start time
+/// yet) sorts last rather than first.
 pub fn build_story(
     story_lines: &[LogLine],
     flow_rows: &[FlowRow],
     zone: &dyn ClockZone,
 ) -> Vec<StoryEntry> {
-    let mut keyed: Vec<(String, StoryEntry)> = story_lines
+    let mut keyed: Vec<(Option<String>, StoryEntry)> = story_lines
         .iter()
         .map(|l| {
             let clock = l.ts.as_deref().and_then(|ts| format_clock_time(ts, zone));
+            let body = if l.kind == LogKind::Decision {
+                shorten_decision_path(&l.text)
+            } else {
+                l.text.clone()
+            };
             let text = match &clock {
-                Some(clock) => format!("{clock} {}", l.text),
-                None => l.text.clone(),
+                Some(clock) => format!("{clock} {body}"),
+                None => body,
             };
             (
-                l.ts.clone().unwrap_or_default(),
+                l.ts.clone(),
                 StoryEntry {
                     text,
                     inferred: false,
@@ -815,7 +861,7 @@ pub fn build_story(
                 None => format!("\u{25c6} {} \u{2192} {branch}", row.label),
             };
             keyed.push((
-                row.start_ts.clone().unwrap_or_default(),
+                row.start_ts.clone(),
                 StoryEntry {
                     text,
                     inferred: true,
@@ -823,7 +869,17 @@ pub fn build_story(
             ));
         }
     }
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    keyed.sort_by(|a, b| match (&a.0, &b.0) {
+        (Some(x), Some(y)) => {
+            match (crate::diff::parse_instant(x), crate::diff::parse_instant(y)) {
+                (Some(ix), Some(iy)) => ix.cmp(&iy),
+                _ => x.cmp(y),
+            }
+        }
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
     keyed.into_iter().map(|(_, entry)| entry).collect()
 }
 
@@ -1342,11 +1398,38 @@ mod tests {
             vec![
                 "00:00:05 ■ run started  abc",
                 "00:00:07 ◆ if → then",
-                "00:00:10 ◆ prime.gate → then",
+                "00:00:10 ◆ gate → then",
                 "00:00:10 ▸ halfway",
             ]
         );
         assert!(!entries[0].inferred);
         assert!(entries[1].inferred);
+    }
+
+    /// An `--events` line's own millisecond timestamp and a state-
+    /// sourced one's microsecond one aren't lexicographically
+    /// comparable at all -- a plain string sort would read the
+    /// state line's `064+00:00` suffix as sorting after the event
+    /// line's `Z`, even though the state line's own instant is
+    /// earlier.
+    #[test]
+    fn build_story_sorts_by_real_instant_not_by_string() {
+        let real = vec![
+            LogLine {
+                ts: Some("2026-01-01T00:00:01.500Z".to_string()),
+                text: "▸ later".to_string(),
+                kind: crate::diff::LogKind::Report,
+                path: Some("prime.status".to_string()),
+            },
+            LogLine {
+                ts: Some("2026-01-01T00:00:01.200064+00:00".to_string()),
+                text: "▸ earlier".to_string(),
+                kind: crate::diff::LogKind::Report,
+                path: Some("prime.status".to_string()),
+            },
+        ];
+        let entries = build_story(&real, &[], &FixedZone);
+        let texts: Vec<&str> = entries.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["00:00:01 ▸ earlier", "00:00:01 ▸ later"]);
     }
 }
