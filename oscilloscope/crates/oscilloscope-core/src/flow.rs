@@ -188,10 +188,8 @@ fn row_started(rows: &[Row], path: &str) -> bool {
 
 /// The earliest `created_at` among `paths`' own rows (issue #635: an
 /// unnamed `if`'s inferred decision has no `meta.branch`/`created_at`
-/// of its own, so its story entry's clock time is read from whichever
-/// branch's own first step actually started instead -- the
-/// orchestrator notes' own "first observed step of the taken
-/// branch").
+/// of its own, so its story entry's clock time is read from the
+/// taken branch's own first observed step instead).
 fn earliest_created_at(
     rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
@@ -393,7 +391,7 @@ pub fn build_flow_rows(
     // falling back to right *after* its own host row once neither
     // has (a pass that hasn't started, an empty branch with no real
     // path on either side, or a branch whose own first step folded
-    // away into an ancestor's breadcrumb, review finding 6). Evidence
+    // away into an ancestor's breadcrumb). Evidence
     // is read from `unfolded_rows`, never the folded `rows` this
     // loop draws from: a breadcrumb keeps only its own leaf's path,
     // and quick-step folding keeps only its run's first path, so

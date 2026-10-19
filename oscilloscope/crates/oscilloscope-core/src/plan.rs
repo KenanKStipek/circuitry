@@ -705,8 +705,8 @@ fn condition_info(cond: &electricity_bytecode::Condition) -> ConditionInfo {
 /// Every real, first-level display path an `if` branch (or a loop
 /// body) directly contributes (issue #635) — the same flattening
 /// `walk_block`'s own `then_new`/`else_new` already compute for a
-/// *transparent* `if` with an `else` (review finding 9), generalised
-/// to any branch reached from any context (a named `if`'s own
+/// *transparent* `if` with an `else`, generalised to any branch
+/// reached from any context (a named `if`'s own
 /// branches, or one reached directly from a tree `Parallel`, neither
 /// of which `walk_block` ever walks): a transparent nested `if`/loop
 /// contributes no path of its own, only its own branches' real
