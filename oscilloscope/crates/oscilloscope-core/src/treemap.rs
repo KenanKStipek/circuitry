@@ -33,7 +33,24 @@ pub struct TreemapNode {
     /// the orchestration pane (issue #527) without having to
     /// reconstruct a path from nested keys alone.
     pub path: String,
+    /// The real, unboosted value under the tree's own [`Measure`] --
+    /// what every figure a front end actually draws (a tile's own
+    /// label, a container's title, a row's share) is computed from,
+    /// and what a container's own total is: the sum of its
+    /// children's real totals, never their [`Self::weight`]. A
+    /// running leaf with nothing reported yet is `0` here, same as a
+    /// finished one that reported nothing (though the latter is never
+    /// built as a node at all).
     pub total: u64,
+    /// [`layout`]'s own sizing input -- equal to `total` except for a
+    /// leaf or container still sitting at nothing but a running
+    /// placeholder ([`boost_running_placeholders`]), which needs a
+    /// real share of its row to stay drawable even though it has
+    /// nothing to show yet. Never read by anything that displays a
+    /// number: only squarify's own area math, [`sorted_children`]'s
+    /// own order, and the merge-pass "too small to draw" decisions in
+    /// [`layout_into`] ever consult this field.
+    pub weight: u64,
     pub status: Option<StatusKind>,
     pub children: Vec<TreemapNode>,
 }
@@ -45,6 +62,7 @@ impl TreemapNode {
             path: key.clone(),
             key,
             total,
+            weight: total,
             status,
             children: Vec::new(),
         }
@@ -139,31 +157,35 @@ fn layout_into(
     }
 
     // Issue #527: a rect too small to draw at all gets folded into
-    // one merged `…` cell per parent, sized by the combined total of
+    // one merged `…` cell per parent, sized by the combined weight of
     // everything folded into it, and the parent is squarified again
-    // with that merged entry standing in for all of them. Finding
-    // F10: that second pass can itself still leave a survivor (or the
-    // merged bucket's own cell) under 2×1 — rarer, but the same
-    // problem one level removed — so this repeats, folding in
-    // whatever is newly too small each time, until a pass leaves
-    // nothing new to fold in. Bounded by `items.len()` iterations:
-    // each one either converges, or strictly shrinks the survivor
-    // count by at least one.
-    let mut survivors: Vec<(&TreemapNode, u64)> = items.iter().map(|n| (*n, n.total)).collect();
+    // with that merged entry standing in for all of them. That
+    // second pass can itself still leave a survivor (or the merged
+    // bucket's own cell) under 2×1 — rarer, but the same problem one
+    // level removed — so this repeats, folding in whatever is newly
+    // too small each time, until a pass leaves nothing new to fold
+    // in. Bounded by `items.len()` iterations: each one either
+    // converges, or strictly shrinks the survivor count by at least
+    // one. The merged bucket's own displayed number is the real
+    // *total* of everything folded into it, never the sizing
+    // *weight* that decided it needed folding in the first place --
+    // the same real/weight split every other cell keeps.
+    let mut survivors: Vec<&TreemapNode> = items;
+    let mut merged_weight: u64 = 0;
     let mut merged_total: u64 = 0;
 
     let (weights, int_rects) = loop {
         let mut weights: Vec<(Option<&TreemapNode>, u64)> =
-            survivors.iter().map(|(n, t)| (Some(*n), *t)).collect();
-        if merged_total > 0 {
-            weights.push((None, merged_total));
+            survivors.iter().map(|n| (Some(*n), n.weight)).collect();
+        if merged_weight > 0 {
+            weights.push((None, merged_weight));
         }
-        weights.sort_by(|(a_node, a_total), (b_node, b_total)| {
-            b_total
-                .cmp(a_total)
+        weights.sort_by(|(a_node, a_weight), (b_node, b_weight)| {
+            b_weight
+                .cmp(a_weight)
                 .then_with(|| sort_key(*a_node).cmp(sort_key(*b_node)))
         });
-        let weight_values: Vec<f64> = weights.iter().map(|(_, t)| *t as f64).collect();
+        let weight_values: Vec<f64> = weights.iter().map(|(_, w)| *w as f64).collect();
         // Issue #632: the squarify decisions below (`worst_ratio`,
         // which side a row grows along) are run in a "visual" space
         // where the y-axis is stretched by `CELL_ASPECT` first --
@@ -187,36 +209,39 @@ fn layout_into(
             .map(|(rx, ry, rw, rh)| round_rect((rx, ry / CELL_ASPECT, rw, rh / CELL_ASPECT)))
             .collect();
 
-        let mut newly_too_small: u64 = 0;
-        let mut next_survivors: Vec<(&TreemapNode, u64)> = Vec::new();
-        for ((node, total), rect) in weights.iter().zip(int_rects.iter()) {
+        let mut newly_too_small_weight: u64 = 0;
+        let mut newly_too_small_total: u64 = 0;
+        let mut next_survivors: Vec<&TreemapNode> = Vec::new();
+        for ((node, _weight), rect) in weights.iter().zip(int_rects.iter()) {
             if too_small(rect.w, rect.h) {
                 // The merged bucket (`node: None`) itself coming up
                 // too small contributes nothing further to fold in —
                 // there is nothing smaller left than the bucket that
                 // already holds everything too small to draw.
-                if node.is_some() {
-                    newly_too_small += total;
+                if let Some(n) = node {
+                    newly_too_small_weight += n.weight;
+                    newly_too_small_total += n.total;
                 }
             } else if let Some(n) = node {
-                next_survivors.push((*n, *total));
+                next_survivors.push(*n);
             }
         }
-        if newly_too_small == 0 {
+        if newly_too_small_weight == 0 {
             break (weights, int_rects);
         }
         survivors = next_survivors;
-        merged_total += newly_too_small;
+        merged_weight += newly_too_small_weight;
+        merged_total += newly_too_small_total;
     };
 
-    for ((node, total), rect) in weights.iter().zip(int_rects.iter()) {
+    for ((node, _weight), rect) in weights.iter().zip(int_rects.iter()) {
         match node {
             Some(node) => emit_cell(node, *rect, depth, false, out),
             None => out.push(TreemapCell {
                 label: "…".to_string(),
                 path: None,
                 rect: *rect,
-                total: *total,
+                total: merged_total,
                 status: None,
                 has_children: false,
                 merged: true,
@@ -259,15 +284,17 @@ fn emit_cell(node: &TreemapNode, rect: Rect, depth: u16, merged: bool, out: &mut
     }
 }
 
-/// Deterministic input order (issue #527): largest total first, ties
-/// broken by key — never by children order or observation order.
-/// `pub` so a front end's own selection order (issue #632: "↑/↓
-/// select tiles in size order") can match exactly what [`layout`]
-/// itself lays tiles out in, rather than keeping its own, possibly
-/// diverging, copy of this rule.
+/// Deterministic input order (issue #527): largest *weight* first
+/// (the squarify-sizing field -- a running store's own boosted
+/// placeholder weight, not its real, possibly-zero, total, is what
+/// decides its place here too), ties broken by key — never by
+/// children order or observation order. `pub` so a front end's own
+/// selection order (issue #632: "↑/↓ select tiles in size order")
+/// can match exactly what [`layout`] itself lays tiles out in, rather
+/// than keeping its own, possibly diverging, copy of this rule.
 pub fn sorted_children(children: &[TreemapNode]) -> Vec<&TreemapNode> {
-    let mut items: Vec<&TreemapNode> = children.iter().filter(|n| n.total > 0).collect();
-    items.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.key.cmp(&b.key)));
+    let mut items: Vec<&TreemapNode> = children.iter().filter(|n| n.weight > 0).collect();
+    items.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.key.cmp(&b.key)));
     items
 }
 
@@ -520,7 +547,15 @@ pub fn build_tree_for_measure(
 ) -> (Vec<TreemapNode>, u64) {
     let mut excluded = 0u64;
     let root = build_node_for_measure(root_path, flat, statuses, kinds, measure, &mut excluded);
-    (root.map(|r| r.children).unwrap_or_default(), excluded)
+    let mut children = root.map(|r| r.children).unwrap_or_default();
+    // The root never gets a tile of its own: a `check` leaf built
+    // from its own meta (the `while: mode: model` case just below)
+    // would otherwise surface right alongside the real top-level
+    // stores -- it is never one, no matter what its own meta reports
+    // (every other container's own `check` leaf stays, nested inside
+    // that container's own tile instead of at the top level).
+    children.retain(|c| c.path != root_path);
+    (children, excluded)
 }
 
 fn build_node_for_measure(
@@ -547,12 +582,19 @@ fn build_node_for_measure(
     // `tokens_received_total` (and, for `Measure::Cost`, its own
     // `cost_usd`) onto *this* container's meta, every pass, never a
     // null placeholder here (`docs/orchestration-reference.md`'s own
-    // `while.template` row) -- a container that reports a value of
-    // its own is a store in exactly the same sense its children are,
-    // so it gets a leaf tile of its own alongside them rather than
-    // vanishing into an unexplained gap between this screen's total
-    // and `runtime.last_run.totals`.
-    if let Some(own_leaf) = leaf_node_for_measure(path, flat, status, measure, &mut 0) {
+    // `while.template` row) -- a container that *already reports* a
+    // nonzero value of its own is a store in exactly the same sense
+    // its children are, so it gets a leaf tile of its own alongside
+    // them rather than vanishing into an unexplained gap between this
+    // screen's total and `runtime.last_run.totals`. Unlike a true
+    // leaf, a container merely still running with nothing of its own
+    // reported *yet* gets no placeholder tile at all --
+    // `container_own_value_node` never applies [`RUNNING_PLACEHOLDER_
+    // WEIGHT`] the way [`leaf_node_for_measure`] does, since nearly
+    // every container's own meta carries an `adapter` key (the root's
+    // included) without ever meaning to report its own measure the
+    // way a `while: mode: model` loop deliberately does.
+    if let Some(own_leaf) = container_own_value_node(path, flat, status, measure) {
         children.push(TreemapNode {
             key: "check".to_string(),
             ..own_leaf
@@ -560,7 +602,8 @@ fn build_node_for_measure(
     }
     boost_running_placeholders(&mut children);
     let total: u64 = children.iter().map(|c| c.total).sum();
-    if total == 0 {
+    let weight: u64 = children.iter().map(|c| c.weight).sum();
+    if weight == 0 {
         return None;
     }
     let key = path.rsplit('.').next().unwrap_or(path).to_string();
@@ -568,17 +611,15 @@ fn build_node_for_measure(
         key,
         path: path.to_string(),
         total,
+        weight,
         status,
         children,
     })
 }
 
-/// The leaf-building half of [`build_node_for_measure`], shared with
-/// a container's own leaf tile (the `while: mode: model` case
-/// above) -- `excluded` is passed `&mut 0` for that second use, since
-/// a container already left out of the tree for scoring zero under
-/// `measure` is counted once, as a container, by its own caller, not
-/// a second time for an own-value leaf that was never added at all.
+/// The leaf-building half of [`build_node_for_measure`] -- `excluded`
+/// counts a *finished* leaf that reported nothing under `measure` at
+/// all (DESIGN.md's `3 stores without cost` footer).
 fn leaf_node_for_measure(
     path: &str,
     flat: &BTreeMap<String, crate::model::NodeMeta>,
@@ -599,11 +640,18 @@ fn leaf_node_for_measure(
         if !is_token_bearing_kind(&node.meta) {
             return None;
         }
-        let total = own_measure_value(node, measure).max(RUNNING_PLACEHOLDER_WEIGHT);
+        // `total` is the real value (zero, almost always, since a
+        // running leaf has nothing to report yet) -- only `weight`
+        // gets the placeholder floor, so a front end drawing "tokens
+        // when done" from a leaf whose `total` is honestly zero never
+        // has to subtract this floor back out again.
+        let total = own_measure_value(node, measure);
+        let weight = total.max(RUNNING_PLACEHOLDER_WEIGHT);
         return Some(TreemapNode {
             key,
             path: path.to_string(),
             total,
+            weight,
             status,
             children: Vec::new(),
         });
@@ -624,6 +672,45 @@ fn leaf_node_for_measure(
         key,
         path: path.to_string(),
         total,
+        weight: total,
+        status,
+        children: Vec::new(),
+    })
+}
+
+/// A container's own leaf tile (the `while: mode: model` case,
+/// [`build_node_for_measure`]'s own doc comment) -- unlike
+/// [`leaf_node_for_measure`], never a running placeholder: a
+/// container that is merely still running, with nothing of its own
+/// reported yet, gets no tile of its own at all. Only a container
+/// that has *already* reported a real, nonzero value under `measure`
+/// qualifies -- the same bar a finished leaf clears in `leaf_node_
+/// for_measure`, applied here regardless of whether this container
+/// itself has already finished (a `while: mode: model` loop writes
+/// its own totals as it goes, one pass at a time, well before the
+/// loop itself is done).
+fn container_own_value_node(
+    path: &str,
+    flat: &BTreeMap<String, crate::model::NodeMeta>,
+    status: Option<StatusKind>,
+    measure: Measure,
+) -> Option<TreemapNode> {
+    let node = flat.get(path)?;
+    let (sent, received) = crate::model::node_tokens(&node.meta);
+    let has_cost = node.meta.get("cost_usd").is_some();
+    if sent == 0 && received == 0 && !has_cost {
+        return None;
+    }
+    let total = own_measure_value(node, measure);
+    if total == 0 {
+        return None;
+    }
+    let key = path.rsplit('.').next().unwrap_or(path).to_string();
+    Some(TreemapNode {
+        key,
+        path: path.to_string(),
+        total,
+        weight: total,
         status,
         children: Vec::new(),
     })
@@ -649,30 +736,33 @@ fn median_total(totals: &[u64]) -> Option<u64> {
 /// when done`" never actually shows, and the same happens one level
 /// up to a container whose entire subtree is still just that one
 /// placeholder (a loop with a single running pass, say) -- its own
-/// `total` is the placeholder value unchanged, bubbled straight up
-/// through however many containers wrap it, however far from its own
-/// real siblings that puts it. This boosts *any* child still sitting
-/// at the bare placeholder weight -- leaf or container, whatever its
-/// own status -- to its siblings' own median total above that floor,
-/// which [`layout`] then treats the same as any other real weight: a
+/// `weight` is the placeholder value unchanged, bubbled straight up
+/// through however many containers wrap it (each container's own
+/// `weight` is the sum of its children's, same as `total` is the sum
+/// of their real totals), however far from its own real siblings
+/// that puts it. This boosts *any* child still sitting at the bare
+/// placeholder weight -- leaf or container, whatever its own status
+/// -- to its siblings' own median *weight* above that floor, which
+/// [`layout`] then treats the same as any other real weight: a
 /// visible share of the row, never a number a front end actually
-/// shows (gated on `status`/`has_children` alone, same as every
-/// other running leaf). A sibling group with nothing above the floor
+/// shows (gated on `status`/`has_children`, and `total > 0`, the same
+/// as every other running leaf -- `total` itself is never touched
+/// here, only `weight`). A sibling group with nothing above the floor
 /// either (every child still running, or genuinely all at 1 token)
 /// gets no boost at all -- there is nothing realer to measure against
 /// yet.
 fn boost_running_placeholders(children: &mut [TreemapNode]) {
-    let real_totals: Vec<u64> = children
+    let real_weights: Vec<u64> = children
         .iter()
-        .map(|c| c.total)
-        .filter(|&t| t > RUNNING_PLACEHOLDER_WEIGHT)
+        .map(|c| c.weight)
+        .filter(|&w| w > RUNNING_PLACEHOLDER_WEIGHT)
         .collect();
-    let Some(median) = median_total(&real_totals) else {
+    let Some(median) = median_total(&real_weights) else {
         return;
     };
     for child in children.iter_mut() {
-        if child.total <= RUNNING_PLACEHOLDER_WEIGHT {
-            child.total = median;
+        if child.weight <= RUNNING_PLACEHOLDER_WEIGHT {
+            child.weight = median;
         }
     }
 }
@@ -708,6 +798,7 @@ fn fold_single_child(node: TreemapNode, kinds: &BTreeMap<String, RowKind>) -> Tr
             key: format!("{} \u{203a} {}", node.key, child.key),
             path: child.path,
             total: node.total,
+            weight: node.weight,
             status: child.status,
             children: child.children,
         };
@@ -832,6 +923,125 @@ mod tests {
         assert_ne!(a.rect.y, b.rect.y, "cells were {cells:#?}");
     }
 
+    /// Issue #632: every tile big enough for its own rounding error to
+    /// matter (at least 4x2 character cells) stays within this bound,
+    /// on its *cell-corrected* aspect ratio (`width / (height *
+    /// CELL_ASPECT)`, the same space `layout_into`'s own squarify
+    /// comparisons run in) -- never the raw character-cell ratio,
+    /// which `tiles_are_squarified_for_the_terminals_tall_cells_not_
+    /// square_characters` above already covers for the 1:1 case.
+    /// `squarify`'s own row-growth rule (`worst_ratio`) only ever
+    /// grows a row while doing so does not make its worst ratio
+    /// *worse*, so within one row the ratio is already well-behaved;
+    /// what this bound actually has to absorb is the last, often
+    /// oddly-shaped row of a long tail once integer rounding has its
+    /// say. 4 is not a theoretical ceiling (squarify gives no such
+    /// constant for an arbitrary weight sequence) -- it is the worst
+    /// this module's own distributions below ever produced across
+    /// every pane size tried while developing this test, including
+    /// several deliberately more adversarial ones no longer kept here
+    /// (a 5-way long tail at 60x18 hit exactly 4.0); it is asserted as
+    /// a regression bound; a real failure here is worth a fresh look,
+    /// not a reflexive bump.
+    const ASPECT_BOUND: f64 = 4.0;
+
+    fn weights_equal(n: usize) -> Vec<TreemapNode> {
+        (0..n).map(|i| leaf(&format!("k{i}"), 100)).collect()
+    }
+
+    /// One large store (70% of the total) alongside several
+    /// meaningfully-sized ones, not a handful of negligible ones --
+    /// the latter would simply fold into the merged `…` bucket
+    /// (`many_tiny_children_merge_into_one_dots_cell` above already
+    /// covers that), never exercising squarify's own row-growth
+    /// aspect-ratio trade-off at a realistic size.
+    fn weights_one_dominant(n: usize) -> Vec<TreemapNode> {
+        let mut v = vec![leaf("big", 7_000)];
+        v.extend((0..n).map(|i| leaf(&format!("k{i}"), 600)));
+        v
+    }
+
+    /// One large store plus a tail of `n` small ones whose own
+    /// weights decay (`1000 / (i + 2)`), so most of the tail survives
+    /// as its own real tile rather than folding into the merged `…`
+    /// bucket -- the regime that actually stresses the last row's own
+    /// aspect ratio once rounding lands unevenly across many small
+    /// tiles.
+    fn weights_long_tail(n: usize) -> Vec<TreemapNode> {
+        let mut v = vec![leaf("big", 4_000)];
+        for i in 0..n {
+            v.push(leaf(&format!("k{i}"), 1000 / (i as u64 + 2)));
+        }
+        v
+    }
+
+    /// Whether two character-cell rects overlap: a closed x-range and
+    /// a closed y-range both have to overlap at once.
+    fn rects_overlap(a: Rect, b: Rect) -> bool {
+        let a_x1 = a.x + a.w;
+        let a_y1 = a.y + a.h;
+        let b_x1 = b.x + b.w;
+        let b_y1 = b.y + b.h;
+        a.x < b_x1 && b.x < a_x1 && a.y < b_y1 && b.y < a_y1
+    }
+
+    #[test]
+    fn tile_aspect_ratios_stay_within_bound_across_distributions_and_pane_sizes() {
+        let dists: [(&str, Vec<TreemapNode>); 3] = [
+            ("equal", weights_equal(8)),
+            ("one dominant", weights_one_dominant(5)),
+            ("long tail of 20", weights_long_tail(20)),
+        ];
+        let panes = [(120u16, 40u16), (80u16, 24u16), (60u16, 18u16)];
+
+        for (dist_name, children) in &dists {
+            for (w, h) in panes {
+                let cells = layout(children, 0, 0, w, h);
+                assert!(
+                    !cells.is_empty(),
+                    "{dist_name} at {w}x{h} produced no cells"
+                );
+
+                // No two tiles overlap, and together they cover the
+                // whole pane exactly (every cell here is a leaf -- no
+                // container's own child rect nests inside another
+                // cell's area) -- squarify's own boundary-sharing
+                // construction (this module's doc comment) is what
+                // makes both true at once, not merely "close".
+                for (i, a) in cells.iter().enumerate() {
+                    for b in &cells[i + 1..] {
+                        assert!(
+                            !rects_overlap(a.rect, b.rect),
+                            "{dist_name} at {w}x{h}: {a:?} overlaps {b:?}"
+                        );
+                    }
+                }
+                let covered: u64 = cells
+                    .iter()
+                    .map(|c| c.rect.w as u64 * c.rect.h as u64)
+                    .sum();
+                assert_eq!(
+                    covered,
+                    w as u64 * h as u64,
+                    "{dist_name} at {w}x{h}: tiles cover {covered} of {} cells",
+                    w as u64 * h as u64
+                );
+
+                for cell in &cells {
+                    if cell.rect.w < 4 || cell.rect.h < 2 {
+                        continue;
+                    }
+                    let ratio = cell.rect.w as f64 / (cell.rect.h as f64 * CELL_ASPECT);
+                    let ratio = ratio.max(1.0 / ratio);
+                    assert!(
+                        ratio <= ASPECT_BOUND,
+                        "{dist_name} at {w}x{h}: {cell:?} has cell-corrected aspect ratio {ratio}, over the {ASPECT_BOUND} bound"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_container_lays_out_its_own_children_inside_a_border() {
         let child_a = leaf("fetch", 100);
@@ -840,6 +1050,7 @@ mod tests {
             key: "loop".to_string(),
             path: "prime.loop".to_string(),
             total: 150,
+            weight: 150,
             status: Some(StatusKind::Running),
             children: vec![child_a, child_b],
         };
@@ -1060,7 +1271,11 @@ mod tests {
             build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].status, Some(StatusKind::Running));
-        assert!(top[0].total > 0, "a running store still gets a cell");
+        assert!(top[0].weight > 0, "a running store still gets a cell");
+        assert_eq!(
+            top[0].total, 0,
+            "nothing reported yet is honestly zero, not a boosted number"
+        );
         assert_eq!(excluded, 0, "a running store is never counted as excluded");
     }
 
@@ -1203,6 +1418,139 @@ mod tests {
             "the table must also carry the loop's own row: {:#?}",
             stores.rows
         );
+    }
+
+    #[test]
+    fn a_container_with_a_finished_child_and_a_running_child_reads_the_real_total() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null},
+                "done": prompt_node(70, 30, None, false),
+                "running": prompt_node(0, 0, None, true)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.fan".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "fan");
+        assert_eq!(
+            top[0].total, 100,
+            "the real, unboosted total -- the finished child's 100, never the running child's own boosted weight folded in"
+        );
+    }
+
+    #[test]
+    fn a_container_with_only_a_running_child_reads_zero_but_still_draws() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null},
+                "running": prompt_node(0, 0, None, true)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.fan".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(
+            top[0].total, 0,
+            "nothing real reported yet -- a front end reads this as \"tokens when done\", never a number"
+        );
+        assert!(
+            top[0].weight > 0,
+            "still drawable: a nonzero layout weight even though the real total is zero"
+        );
+    }
+
+    #[test]
+    fn a_container_merely_running_with_an_adapter_key_of_its_own_gets_no_check_tile() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // The bug this guards against: both engines record an
+        // `adapter` key on nearly every container's own meta (the
+        // root's included), not only a genuine `while: mode: model`
+        // loop's -- `is_token_bearing_kind` alone, the rule a *leaf*
+        // uses, would wrongly treat any such running container as a
+        // store reporting \"tokens when done\" of its own.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "adapter": "scripted"},
+                "nap": prompt_node(10, 5, None, false)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.fan".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "fan");
+        assert_eq!(top[0].total, 15, "only nap's own real tokens");
+        assert!(
+            top[0].children.iter().all(|c| c.key != "check"),
+            "a container merely carrying an `adapter` key, never having reported its own value, gets no check tile: {:#?}",
+            top[0].children
+        );
+    }
+
+    #[test]
+    fn the_root_never_gets_a_tile_of_its_own_even_when_its_meta_reports_a_value() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // The root itself writes `tokens_sent_total`/`tokens_received_
+        // total` the same way a `while: mode: model` loop's own meta
+        // does (an edge case: the document's own root effect list
+        // behaving like one) -- it must still never surface as a
+        // top-level `check` tile alongside the real stores.
+        let state = json!({"prime": {"value": null, "meta": {
+            "completed_at": "t1", "adapter": "scripted", "tokens_sent_total": 40, "tokens_received_total": 10
+        },
+            "a": prompt_node(70, 30, None, false)
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert!(
+            top.iter().all(|n| n.path != "prime"),
+            "the root must never get a tile of its own: {top:#?}"
+        );
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "a");
     }
 
     #[test]

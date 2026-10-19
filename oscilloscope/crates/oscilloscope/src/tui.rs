@@ -104,9 +104,14 @@ mod thresholds {
     /// chart sits beside the largest-stores table, under the
     /// treemap. Below it (but still at [`COST_TREEMAP_MIN_WIDTH`]/
     /// `_MIN_HEIGHT`), the chart is dropped and the table takes the
-    /// treemap's own row's full width instead.
+    /// treemap's own row's full width instead. DESIGN.md's own
+    /// "100×30" is a full terminal's size, but this (like every
+    /// other threshold here) is checked against the *body* area
+    /// `draw`'s own one-line header has already been subtracted from
+    /// -- `_MIN_HEIGHT` is one less than the nominal figure so a
+    /// terminal exactly that tall still qualifies.
     pub const COST_CHART_MIN_WIDTH: u16 = 100;
-    pub const COST_CHART_MIN_HEIGHT: u16 = 30;
+    pub const COST_CHART_MIN_HEIGHT: u16 = 29;
     /// Below this, the treemap itself is dropped too, leaving the
     /// table alone (`⏎` still zooms it) -- the same floor screen 2's
     /// own two-column layout collapses at.
@@ -1742,21 +1747,30 @@ fn draw_cost_treemap(
         }
         // DESIGN.md: a tile for a step that is still running reads
         // "tokens when done" until it finishes, never a number --
-        // true for every still-running leaf-like tile regardless of
-        // whether a previous attempt already left it a nonzero
-        // placeholder weight. A run that ended (aborted or
-        // cancelled) while a leaf was still in flight leaves it in
-        // the exact same state -- no `completed_at` ever written --
-        // but it will never reach "done" either, so it reads "no
-        // tokens reported" instead, rather than the placeholder
-        // weight's own number read back as if it were a real one.
-        let value_text = match cell.status {
-            _ if cell.has_children => format_measure_value(cell.total, screen.measure),
-            Some(StatusKind::Running) => "tokens when done".to_string(),
-            Some(StatusKind::Aborted) | Some(StatusKind::Cancelled) => {
-                "no tokens reported".to_string()
+        // true for a container's own tile exactly as much as a
+        // leaf's: `cell.total` is always the real, unboosted value
+        // ([`oscilloscope_core::treemap::TreemapNode`]'s own doc
+        // comment), so a container with at least one real, finished
+        // child already shows that real total (never hidden behind
+        // "tokens when done" merely because something else under it
+        // is still running), while one with nothing but a running
+        // placeholder underneath reads exactly like a bare running
+        // leaf would. A run that ended (aborted or cancelled) while a
+        // leaf was still in flight leaves it in the exact same state
+        // -- no `completed_at` ever written -- but it will never
+        // reach "done" either, so it reads "no tokens reported"
+        // instead, rather than the placeholder weight's own number
+        // read back as if it were a real one.
+        let value_text = if cell.total > 0 {
+            format_measure_value(cell.total, screen.measure)
+        } else {
+            match cell.status {
+                Some(StatusKind::Running) => "tokens when done".to_string(),
+                Some(StatusKind::Aborted) | Some(StatusKind::Cancelled) => {
+                    "no tokens reported".to_string()
+                }
+                _ => format_measure_value(cell.total, screen.measure),
             }
-            _ => format_measure_value(cell.total, screen.measure),
         };
         let labelled = format!("{} {value_text}", cell.label);
         if cell.has_children {
@@ -2045,7 +2059,13 @@ fn draw_cost_table(
         .filter(|r| !zoomed || in_path_scope(&r.path))
         .collect();
     let total_tokens: u64 = rows.iter().map(|r| r.tokens_sent + r.tokens_received).sum();
-    let mut lines: Vec<Line> = Vec::new();
+    // Relative to the zoomed store, not the whole run, once zoomed --
+    // `row.label` itself is always root-relative (`oscilloscope_core
+    // ::cost::StoreRow`'s own doc comment), so a zoomed view re-
+    // derives it from the row's own real path instead of trying to
+    // strip a prefix back out of an already-built string.
+    let zoom_root = app.cost_zoom.last().map(String::as_str);
+    let mut row_lines: Vec<Line> = Vec::new();
     for row in &rows {
         let share = if total_tokens > 0 {
             (row.tokens_sent + row.tokens_received) as f64 / total_tokens as f64 * 100.0
@@ -2064,33 +2084,63 @@ fn draw_cost_table(
         if selected.as_deref() == Some(row.path.as_str()) {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        lines.push(Line::styled(
+        // The same "nothing real yet" rule the treemap's own tiles
+        // read by (`draw_cost_treemap`'s `value_text`): a running (or
+        // ended-without-finishing) row with nothing reported shows
+        // the same placeholder text its tile does, never `↑0 t ↓0 t
+        // 0%` read back as if it meant something.
+        let value_text = if row.tokens_sent + row.tokens_received > 0 {
             format!(
-                "{}  ↑{} ↓{}{cost}  {share:.0}%",
-                row.label,
+                "↑{} ↓{}{cost}  {share:.0}%",
                 oscilloscope_core::format::format_tokens(row.tokens_sent),
                 oscilloscope_core::format::format_tokens(row.tokens_received),
-            ),
-            style,
-        ));
+            )
+        } else {
+            match row.status {
+                Some(StatusKind::Running) => "tokens when done".to_string(),
+                Some(StatusKind::Aborted) | Some(StatusKind::Cancelled) => {
+                    "no tokens reported".to_string()
+                }
+                _ => format!(
+                    "↑{} ↓{}{cost}  {share:.0}%",
+                    oscilloscope_core::format::format_tokens(row.tokens_sent),
+                    oscilloscope_core::format::format_tokens(row.tokens_received),
+                ),
+            }
+        };
+        let label = match zoom_root {
+            Some(root) => oscilloscope_core::cost::path_breadcrumb_relative_to(&row.path, root),
+            None => row.label.clone(),
+        };
+        // Shortened from the left (`… › iter_1 › review`), never the
+        // right: the leaf is the one segment that actually has to
+        // stay readable to tell two same-named rows apart.
+        let label_budget = (inner.width as usize).saturating_sub(2 + value_text.chars().count());
+        let label = oscilloscope_core::cost::shorten_breadcrumb_from_left(&label, label_budget);
+        row_lines.push(Line::styled(format!("{label}  {value_text}"), style));
     }
-    lines.push(Line::from(""));
+
     let footer = &screen.stores.footer;
-    let mut footer_line = format!(
-        "total ↑{} ↓{}",
-        oscilloscope_core::format::format_tokens(footer.run_tokens_sent),
-        oscilloscope_core::format::format_tokens(footer.run_tokens_received),
-    );
-    if let Some(cost_label) = footer.cost_label() {
-        footer_line.push_str("  ");
-        footer_line.push_str(&cost_label);
-    }
-    lines.push(Line::styled(
-        footer_line,
+    let mut footer_lines: Vec<Line> = Vec::new();
+    // The coverage note (`$4.20 (from 3 of 9 prompts)`) gets its own
+    // line, not appended to the totals line -- issue #632's small-
+    // terminal acceptance item: sharing one line with `total ↑X ↓Y`
+    // left only the table pane's own narrower width (beside the
+    // chart, DESIGN.md's 62/38 split) for both, truncating the label
+    // well before the pane itself ran out of room for it alone.
+    footer_lines.push(Line::styled(
+        format!(
+            "total ↑{} ↓{}",
+            oscilloscope_core::format::format_tokens(footer.run_tokens_sent),
+            oscilloscope_core::format::format_tokens(footer.run_tokens_received),
+        ),
         Style::default().fg(ctx.theme.dim),
     ));
+    if let Some(cost_label) = footer.cost_label_for_width(inner.width as usize) {
+        footer_lines.push(Line::styled(cost_label, Style::default().fg(ctx.theme.dim)));
+    }
     if footer.gap_tokens > 0 {
-        lines.push(Line::styled(
+        footer_lines.push(Line::styled(
             format!(
                 "{} not in the table above",
                 oscilloscope_core::format::format_tokens(footer.gap_tokens)
@@ -2098,6 +2148,30 @@ fn draw_cost_table(
             Style::default().fg(ctx.theme.dim),
         ));
     }
+
+    // The footer (the run's own totals, its gap, its cost coverage)
+    // is pinned to the bottom: with more rows than fit, rows are what
+    // gets cut, ending in a "+N more" line, never the footer itself
+    // scrolling off the bottom of a `Paragraph` that simply stops
+    // drawing past its own area -- which is exactly what appending
+    // the footer after every row, unconditionally, used to risk.
+    let reserved = footer_lines.len() + 1; // +1: the blank separator line, always present.
+    let available_for_rows = (inner.height as usize).saturating_sub(reserved);
+    let mut lines: Vec<Line> = Vec::new();
+    if row_lines.len() <= available_for_rows {
+        lines.extend(row_lines);
+    } else if available_for_rows > 0 {
+        let shown = available_for_rows - 1; // -1: this tier's own "+N more" line.
+        let dropped = row_lines.len() - shown;
+        lines.extend(row_lines.into_iter().take(shown));
+        lines.push(Line::styled(
+            format!("+{dropped} more"),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.extend(footer_lines);
+
     let lines = truncate_lines(lines, inner.width as usize);
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -2239,8 +2313,7 @@ const HELP_OVERLAY_WIDTH: u16 = 68;
 /// own tree or area actually changes. `raw_state` is the engine's
 /// own last snapshot, untruncated — `details`' own `prompt_sent`/
 /// `value` are already cut to `DETAILS_PREVIEW_CHARS` for the
-/// details pane, which `v`'s own full-value overlay (finding 5) must
-/// not be.
+/// details pane, which `v`'s own full-value overlay must not be.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -3335,6 +3408,25 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Issue #632's own small-terminal acceptance item: at 120x40 the
+    /// table pane sits beside the chart (DESIGN.md's 62/38 split,
+    /// narrower than the full screen width), and the coverage label
+    /// must still show in full there, on its own line, not truncated
+    /// mid-word the way sharing the totals line's own width used to
+    /// leave it (`$1.20 (from 1 of 4 pr…`).
+    #[test]
+    fn the_full_cost_coverage_label_shows_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = cost_finished_state();
+        let process = ProcessState::exited(true);
+        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
+        assert!(
+            text.contains("$1.20 (from 1 of 4 prompts)"),
+            "the full coverage label did not appear:\n{text}"
+        );
+    }
+
     #[test]
     fn cost_running_at_100x30() {
         let plan = sample_plan();
@@ -3513,8 +3605,8 @@ mod golden_tests {
 
     #[test]
     fn pending_plan() {
-        // Finding F5: kept at 70×20 deliberately, as one of this
-        // suite's own one-column-fallback goldens.
+        // Kept at 70×20 deliberately, as one of this suite's own
+        // one-column-fallback goldens.
         let plan = sample_plan();
         let mut model = RunModel::new();
         let text = snapshot_one_column(
@@ -4320,8 +4412,7 @@ mod golden_tests {
 
     #[test]
     fn aborted_no_final_state() {
-        // Finding F5: the other one-column-fallback golden kept at
-        // 70×20.
+        // The other one-column-fallback golden kept at 70×20.
         let plan = sample_plan();
         let mut model = RunModel::new();
         let text = snapshot_one_column(
@@ -5221,14 +5312,24 @@ mod golden_tests {
     /// count.
     #[test]
     fn an_aborted_leafs_placeholder_weight_never_reads_as_a_real_number() {
-        // A weight comparable to its sibling's -- this test pins the
-        // *display text* decision alone, which `draw_cost_treemap`
-        // makes from `status`, never `total` (the boosting a real
-        // placeholder weight gets happens earlier, while the tree is
-        // built, covered separately in `treemap`'s own tests).
+        // `cut_off`'s own `weight` (what boosting a running/aborted
+        // placeholder actually touches, `treemap`'s own tests) is
+        // comparable to its sibling's, large enough to draw a real
+        // share of the row -- but its `total` (the real value) is
+        // honestly zero, which is what this test pins: `draw_cost_
+        // treemap`'s display-text decision reads `total`, never
+        // `weight`, so the boosted number itself can never leak into
+        // the label text.
         let tree = vec![
             TreemapNode::leaf("big", 1_000_000, Some(StatusKind::Done)),
-            TreemapNode::leaf("cut_off", 900_000, Some(StatusKind::Aborted)),
+            TreemapNode {
+                key: "cut_off".to_string(),
+                path: "cut_off".to_string(),
+                total: 0,
+                weight: 900_000,
+                status: Some(StatusKind::Aborted),
+                children: Vec::new(),
+            },
         ];
         let screen = oscilloscope_core::screens::CostScreen {
             measure: Measure::Total,
@@ -5263,6 +5364,130 @@ mod golden_tests {
         let text = terminal.backend().to_string();
         assert!(text.contains("no tokens reported"), "{text}");
         assert!(!text.contains("cut_off 900"), "{text}");
+    }
+
+    fn cost_table_screen(
+        rows: Vec<oscilloscope_core::cost::StoreRow>,
+    ) -> oscilloscope_core::screens::CostScreen {
+        let run_tokens_sent = rows.iter().map(|r| r.tokens_sent).sum();
+        let run_tokens_received = rows.iter().map(|r| r.tokens_received).sum();
+        oscilloscope_core::screens::CostScreen {
+            measure: Measure::Total,
+            tree: Vec::new(),
+            stores_without_measure: 0,
+            stores: oscilloscope_core::cost::LargestStores {
+                rows,
+                footer: oscilloscope_core::cost::StoresFooter {
+                    run_tokens_sent,
+                    run_tokens_received,
+                    run_cost_usd: None,
+                    gap_tokens: 0,
+                    cost_reporting: 0,
+                    cost_stores: 0,
+                },
+            },
+            tokens_over_time: Vec::new(),
+            chart_start_ts: None,
+            chart_end_ts: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn draw_cost_table_text(
+        screen: &oscilloscope_core::screens::CostScreen,
+        width: u16,
+        height: u16,
+    ) -> String {
+        let mut app = App::new(false);
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_cost_table(f, area, screen, &mut app, &ctx);
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// 20 stores in the table pane an 80×24 terminal's own layout
+    /// actually carves out for it (DESIGN.md's small-terminal rule:
+    /// the treemap above, the table taking the rest -- no chart below
+    /// 100 columns wide): the footer (the run's own totals, its cost
+    /// coverage) must still show in full, at the bottom, with a
+    /// `+N more` line accounting for whatever rows had to drop to
+    /// make room for it, never the footer itself scrolled off the
+    /// bottom the way appending it after every row used to risk.
+    #[test]
+    fn the_footer_stays_pinned_with_20_stores_at_80x24() {
+        let rows: Vec<oscilloscope_core::cost::StoreRow> = (0..20)
+            .map(|i| oscilloscope_core::cost::StoreRow {
+                label: format!("store{i}"),
+                path: format!("prime.store{i}"),
+                tokens_sent: 100,
+                tokens_received: 50,
+                cost_usd: None,
+                status: Some(StatusKind::Done),
+            })
+            .collect();
+        let screen = cost_table_screen(rows);
+        // The table pane's own area at a nominal 80×24 terminal
+        // (`draw_cost_screen`'s own derivation: a 1-line header, then
+        // the treemap's golden-major share of the remaining height,
+        // the table taking the rest, full width since the chart needs
+        // 100 columns).
+        let text = draw_cost_table_text(&screen, 80, 9);
+        assert!(
+            text.contains("total ↑"),
+            "the footer's own totals line must still show: {text}"
+        );
+        assert!(
+            text.contains("more"),
+            "rows had to be dropped to fit, so a +N more line must show: {text}"
+        );
+        assert!(text.contains("store0"), "{text}");
+    }
+
+    /// DESIGN.md: a still-running store's table row reads the same
+    /// "tokens when done" its tile does, never `↑0 t ↓0 t 0%` read
+    /// back as if it meant something.
+    #[test]
+    fn a_running_rows_own_table_line_reads_tokens_when_done() {
+        let rows = vec![
+            oscilloscope_core::cost::StoreRow {
+                label: "review".to_string(),
+                path: "prime.review".to_string(),
+                tokens_sent: 0,
+                tokens_received: 0,
+                cost_usd: None,
+                status: Some(StatusKind::Running),
+            },
+            oscilloscope_core::cost::StoreRow {
+                label: "plan".to_string(),
+                path: "prime.plan".to_string(),
+                tokens_sent: 100,
+                tokens_received: 50,
+                cost_usd: None,
+                status: Some(StatusKind::Done),
+            },
+        ];
+        let screen = cost_table_screen(rows);
+        let text = draw_cost_table_text(&screen, 60, 10);
+        assert!(
+            text.contains("review  tokens when done"),
+            "a running row must read \"tokens when done\", not 0 t: {text}"
+        );
+        assert!(!text.contains("↑0 t ↓0 t"), "{text}");
     }
 
     /// DESIGN.md's own performance rule, directly, rather than only

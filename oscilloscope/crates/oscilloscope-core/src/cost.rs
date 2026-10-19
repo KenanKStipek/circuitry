@@ -19,11 +19,16 @@ use crate::treemap::{Measure, TreemapNode, build_tree_for_measure};
 /// in, tokens out, cost (when reported) and share of the total").
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreRow {
-    /// The same chain-folded breadcrumb label the treemap's own tile
-    /// shows for this store (`plan › agent`) — both read the
-    /// identical by-store tree, so the table's own ranking and the
-    /// treemap's own tiles can never disagree about what a store is
-    /// called.
+    /// This row's own path, relative to the table's own root (its
+    /// caller's `root_path`, almost always the whole run), as a
+    /// " › "-joined breadcrumb (`reviews › iter_1 › review`,
+    /// [`path_breadcrumb_relative_to`]) -- DESIGN.md: "the table
+    /// shows the path". Never just a leaf's own bare key: two stores
+    /// sharing one (a `review` effect run inside several loop passes,
+    /// say) would otherwise produce identical, indistinguishable
+    /// rows. A single-child chain the treemap folds into one tile
+    /// reads the same here as there (`plan › agent`), since both
+    /// come from the same real dotted path.
     pub label: String,
     pub path: String,
     pub tokens_sent: u64,
@@ -77,6 +82,34 @@ impl StoresFooter {
             Some(format!("${cost:.2}"))
         }
     }
+
+    /// [`Self::cost_label`], shrunk to fit `max_width` columns without
+    /// ever losing the one fragment it exists to show at all once it
+    /// is partial -- `N of M` (issue #632's own small-terminal rule:
+    /// "it may shorten, but N of M must stay"). Tried widest first:
+    /// the full label; the same with the leading `$cost` figure
+    /// dropped; `N of M prompts` alone. A label with nothing to drop
+    /// (every store already reporting one, so there is no coverage
+    /// note at all) is returned as-is regardless of `max_width` --
+    /// truncating a bare `$4.20` down to a single fragment would lose
+    /// the figure itself, the one thing a non-partial label has.
+    pub fn cost_label_for_width(&self, max_width: usize) -> Option<String> {
+        let full = self.cost_label()?;
+        if full.chars().count() <= max_width || self.cost_reporting >= self.cost_stores {
+            return Some(full);
+        }
+        let without_cost = format!(
+            "(from {} of {} prompts)",
+            self.cost_reporting, self.cost_stores
+        );
+        if without_cost.chars().count() <= max_width {
+            return Some(without_cost);
+        }
+        Some(format!(
+            "{} of {} prompts",
+            self.cost_reporting, self.cost_stores
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -103,7 +136,7 @@ pub fn largest_stores(
     let (tree, _excluded) =
         build_tree_for_measure(root_path, flat, statuses, kinds, Measure::Total);
     let mut rows = Vec::new();
-    flatten_leaves_into(&tree, flat, &mut rows);
+    flatten_leaves_into(&tree, flat, root_path, &mut rows);
     rows.sort_by(|a, b| {
         (b.tokens_sent + b.tokens_received)
             .cmp(&(a.tokens_sent + a.tokens_received))
@@ -170,6 +203,7 @@ pub fn largest_stores(
 fn flatten_leaves_into(
     nodes: &[TreemapNode],
     flat: &BTreeMap<String, NodeMeta>,
+    root_path: &str,
     out: &mut Vec<StoreRow>,
 ) {
     for node in nodes {
@@ -178,7 +212,7 @@ fn flatten_leaves_into(
                 let (tokens_sent, tokens_received) = node_tokens(&n.meta);
                 let cost_usd = n.meta.get("cost_usd").and_then(Value::as_f64);
                 out.push(StoreRow {
-                    label: node.key.clone(),
+                    label: path_breadcrumb_relative_to(&node.path, root_path),
                     path: node.path.clone(),
                     tokens_sent,
                     tokens_received,
@@ -187,9 +221,48 @@ fn flatten_leaves_into(
                 });
             }
         } else {
-            flatten_leaves_into(&node.children, flat, out);
+            flatten_leaves_into(&node.children, flat, root_path, out);
         }
     }
+}
+
+/// A real dotted path, relative to `ancestor_path`, as a " › "-joined
+/// breadcrumb (`reviews › iter_1 › review`) -- the table's own row
+/// label (relative to the whole run) and, zoomed, a front end's own
+/// re-derivation of the same thing relative to the zoomed store
+/// instead, both built by calling this with a different
+/// `ancestor_path`, never a second, possibly-diverging copy of the
+/// stripping rule. `path` unchanged if it doesn't actually start with
+/// `ancestor_path` (never expected, since every row's own path always
+/// descends from the tree it was read out of).
+pub fn path_breadcrumb_relative_to(path: &str, ancestor_path: &str) -> String {
+    let prefix = format!("{ancestor_path}.");
+    let relative = path.strip_prefix(prefix.as_str()).unwrap_or(path);
+    relative.replace('.', " › ")
+}
+
+/// Shortens a " › "-joined breadcrumb to at most `max_width` columns
+/// by dropping whole leading segments and prefixing `…`, never the
+/// trailing (leaf) segment -- the one part of a row's own path that
+/// actually has to stay readable to tell it apart from a same-named
+/// sibling elsewhere in the tree. Returns `label` unchanged if it
+/// already fits, or has only one segment to begin with (nothing to
+/// drop without losing the leaf itself).
+pub fn shorten_breadcrumb_from_left(label: &str, max_width: usize) -> String {
+    if label.chars().count() <= max_width {
+        return label.to_string();
+    }
+    let segments: Vec<&str> = label.split(" › ").collect();
+    if segments.len() <= 1 {
+        return label.to_string();
+    }
+    for drop in 1..segments.len() {
+        let candidate = format!("… › {}", segments[drop..].join(" › "));
+        if candidate.chars().count() <= max_width {
+            return candidate;
+        }
+    }
+    format!("… › {}", segments[segments.len() - 1])
 }
 
 /// The overview's own cost card (DESIGN.md: "the overview's cost card
@@ -381,6 +454,95 @@ mod tests {
     }
 
     #[test]
+    fn two_stores_with_the_same_key_under_different_parents_give_distinct_rows() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "reviews": {"value": null, "meta": {"completed_at": "t1"},
+                "iter_0": {"value": null, "meta": {"completed_at": "t1"},
+                    "review": prompt(10, 5, None, "t1"),
+                    "risk": prompt(20, 5, None, "t1")
+                },
+                "iter_1": {"value": null, "meta": {"completed_at": "t1"},
+                    "review": prompt(30, 5, None, "t1"),
+                    "risk": prompt(40, 5, None, "t1")
+                }
+            }
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
+        let labels: Vec<&str> = result.rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(
+            labels.len(),
+            labels
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            "every row's own label must be distinct: {labels:?}"
+        );
+        assert!(labels.contains(&"reviews › iter_0 › review"));
+        assert!(labels.contains(&"reviews › iter_1 › review"));
+        assert!(labels.contains(&"reviews › iter_0 › risk"));
+        assert!(labels.contains(&"reviews › iter_1 › risk"));
+    }
+
+    #[test]
+    fn path_breadcrumb_relative_to_strips_the_ancestor_and_joins_with_the_breadcrumb_arrow() {
+        assert_eq!(
+            path_breadcrumb_relative_to("prime.reviews.iter_1.review", "prime"),
+            "reviews › iter_1 › review"
+        );
+        assert_eq!(
+            path_breadcrumb_relative_to("prime.reviews.iter_1.review", "prime.reviews"),
+            "iter_1 › review"
+        );
+        assert_eq!(
+            path_breadcrumb_relative_to("prime.plan.agent", "prime"),
+            "plan › agent"
+        );
+    }
+
+    #[test]
+    fn shorten_breadcrumb_from_left_drops_leading_segments_but_keeps_the_leaf() {
+        let label = "reviews › iter_1 › review";
+        assert_eq!(shorten_breadcrumb_from_left(label, 100), label);
+        assert_eq!(
+            shorten_breadcrumb_from_left(label, "… › iter_1 › review".chars().count()),
+            "… › iter_1 › review"
+        );
+        assert_eq!(
+            shorten_breadcrumb_from_left(label, "… › review".chars().count()),
+            "… › review"
+        );
+        // Even at an extreme width, the leaf is never dropped.
+        assert_eq!(shorten_breadcrumb_from_left(label, 1), "… › review");
+        // A single segment (no ancestors) is never prefixed with `…` --
+        // there is nothing to drop without losing the leaf itself.
+        assert_eq!(shorten_breadcrumb_from_left("review", 1), "review");
+    }
+
+    #[test]
+    fn a_tie_in_total_tokens_picks_the_same_store_both_ways() {
+        // Two stores with the identical total (150) -- `top_store`'s
+        // own tie-break (`best_path <= &path` keeps the first,
+        // lowest-path winner) and the table's own sort
+        // (`.then_with(|| a.path.cmp(&b.path))`) must agree on which
+        // one that is, not merely agree when there happens to be a
+        // single largest store.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "beta": prompt(100, 50, None, "t1"),
+            "alpha": prompt(100, 50, None, "t1"),
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let table = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
+        let top = top_store(&flat).expect("a top store");
+        assert_eq!(top.0, "prime.alpha", "the lowest path wins the tie");
+        assert_eq!(top.0, table.rows[0].path);
+    }
+
+    #[test]
     fn tokens_over_time_by_phase_buckets_each_phase_separately() {
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "plan": prompt(100, 0, None, "2026-01-01T00:00:00Z"),
@@ -467,6 +629,74 @@ mod tests {
             result.footer.cost_label(),
             Some("$2.70 (from 2 of 3 prompts)".to_string())
         );
+    }
+
+    #[test]
+    fn cost_label_for_width_returns_the_full_label_when_it_fits() {
+        let footer = StoresFooter {
+            run_tokens_sent: 1300,
+            run_tokens_received: 600,
+            run_cost_usd: Some(1.2),
+            gap_tokens: 0,
+            cost_reporting: 1,
+            cost_stores: 4,
+        };
+        let full = "$1.20 (from 1 of 4 prompts)";
+        assert_eq!(footer.cost_label().as_deref(), Some(full));
+        // 44 columns: the table pane's own interior width at 120x40
+        // (issue #632's small-terminal acceptance item).
+        assert_eq!(footer.cost_label_for_width(44).as_deref(), Some(full));
+        // Exactly the label's own length: still the full label, not
+        // shortened one character early.
+        assert_eq!(
+            footer.cost_label_for_width(full.chars().count()).as_deref(),
+            Some(full)
+        );
+    }
+
+    #[test]
+    fn cost_label_for_width_drops_the_dollar_figure_before_the_coverage_note() {
+        let footer = StoresFooter {
+            run_tokens_sent: 1300,
+            run_tokens_received: 600,
+            run_cost_usd: Some(1.2),
+            gap_tokens: 0,
+            cost_reporting: 1,
+            cost_stores: 4,
+        };
+        assert_eq!(
+            footer
+                .cost_label_for_width("(from 1 of 4 prompts)".chars().count())
+                .as_deref(),
+            Some("(from 1 of 4 prompts)")
+        );
+    }
+
+    #[test]
+    fn cost_label_for_width_keeps_n_of_m_even_at_an_extreme_width() {
+        let footer = StoresFooter {
+            run_tokens_sent: 1300,
+            run_tokens_received: 600,
+            run_cost_usd: Some(1.2),
+            gap_tokens: 0,
+            cost_reporting: 1,
+            cost_stores: 4,
+        };
+        let label = footer.cost_label_for_width(1).expect("still Some");
+        assert!(label.contains("1 of 4"), "label was {label:?}");
+    }
+
+    #[test]
+    fn cost_label_for_width_never_shortens_a_non_partial_label() {
+        let footer = StoresFooter {
+            run_tokens_sent: 100,
+            run_tokens_received: 50,
+            run_cost_usd: Some(1.5),
+            gap_tokens: 0,
+            cost_reporting: 1,
+            cost_stores: 1,
+        };
+        assert_eq!(footer.cost_label_for_width(1).as_deref(), Some("$1.50"));
     }
 
     #[test]

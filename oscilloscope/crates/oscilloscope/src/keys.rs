@@ -1638,6 +1638,7 @@ mod tests {
             key: "review".to_string(),
             path: "prime.review".to_string(),
             total: 100,
+            weight: 100,
             status: Some(oscilloscope_core::model::StatusKind::Done),
             children: vec![cost_leaf("agent", 60), cost_leaf("fix", 40)],
         }];
