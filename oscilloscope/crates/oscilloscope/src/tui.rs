@@ -80,11 +80,11 @@ fn with_highlight(style: Style, highlight: Option<Style>) -> Style {
 
 /// Issue #527's own small-terminal fallback thresholds: below each,
 /// drop one more pane, in this order, until the rest fits. The header
-/// and the token bar never disappear. These are whole-*terminal*
-/// sizes (DESIGN.md §6.3, the README's TUI section) — checked against
+/// line itself never disappears. These are whole-*terminal* sizes
+/// (DESIGN.md §6.3, the README's TUI section) — checked against
 /// `frame.area()` itself, never against `body` (the terminal minus
-/// the header's 3 rows and the token bar's 4), which would silently
-/// shift every height threshold down by 7.
+/// the header's own single row), which would silently shift every
+/// height threshold down by one.
 mod thresholds {
     /// Below this, the state pane is dropped — screen 2's right
     /// column becomes the log pane alone (issue #632 moved the
@@ -3112,14 +3112,14 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Finding F5: a two-column size (still well under
-    /// [`thresholds::TREEMAP_MIN_WIDTH`]/`_MIN_HEIGHT`, so the right
-    /// column is the state pane over the log pane, no treemap) — most
-    /// goldens here want this, since a one-column layout at 70×20
-    /// drops the error display, the loop pass rows and everything but
-    /// `path` from the details pane, which left these goldens checking
-    /// far less than they look like they do. [`snapshot_one_column`]
-    /// keeps a couple of them at the smaller size deliberately, as the
+    /// A two-column size, under [`thresholds::STATE_PANE_MIN_WIDTH`]/
+    /// `_MIN_HEIGHT`, so the right column is the log pane alone, no
+    /// state pane — most goldens here want this, since a one-column
+    /// layout at 70×20 drops the error display, the loop pass rows
+    /// and everything but `path` from the details pane, which left
+    /// these goldens checking far less than they look like they do.
+    /// [`snapshot_one_column`] keeps a couple of them at the smaller
+    /// size deliberately, as the
     /// one-column fallback's own coverage.
     #[allow(clippy::too_many_arguments)]
     fn snapshot(

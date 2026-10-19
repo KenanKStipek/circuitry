@@ -317,24 +317,35 @@ table of the largest stores, laid out at three sizes:
 The treemap's default measure is total tokens (in + out); `i`/`o`/`$`
 switch it to input tokens, output tokens or cost, and the same key again
 returns to total. A single-child chain folds into one tile (`plan ›
-agent`), by the same status-safety rule the orchestration pane's own
-breadcrumbs use. `↑`/`↓` select a tile in size order, `⏎` zooms into the
+agent`), by the exact same breadcrumb-eligibility rule the orchestration
+pane's own breadcrumbs use (a loop, the document root and a quick-steps
+summary never fold away, and neither side folds while its own status is
+still pending). `↑`/`↓` select a tile in size order, `⏎` zooms into the
 selected store's own children, and `esc` zooms back out; the zoomed
-store's own path is shown in the treemap's title. A store with no value
-for the chosen measure is left out, and the title counts how many were
-(`N stores without cost`); a store still running shows "tokens when done"
-instead of a number, however small its placeholder weight is. The
-treemap's own squarify layout accounts for the terminal's own tall
+store's own name at each level (never its full dotted path) is shown
+alongside the measure in the treemap's title. A store with no value for
+the chosen measure is left out, and the title counts how many were
+(`N stores without cost`); a store still running shows "tokens when
+done" instead of a number, however small its placeholder weight is, and
+one that never finished because the run itself ended first (aborted or
+cancelled) reads "no tokens reported" instead, rather than its own
+placeholder weight read back as if it were real. A `while: mode: model`
+loop's own tokens (written onto the loop's own meta alongside its
+passes) get a leaf of their own next to them, rather than being dropped.
+The treemap's own squarify layout accounts for the terminal's own tall
 character cells (about 2:1), so a tile that is actually square in
 character cells (and so visibly tall and narrow on screen) is never what
 "the worst aspect ratio" means — a visually square tile is. The largest-
 stores table always ranks by total tokens, regardless of the treemap's
-own measure, and its footer gives the run's own totals
-(`runtime.last_run.totals`) and any gap between them and the table (a
-declared-outputs `use` child's effects, for one, never reach the final
-state tree at all even though the run's own totals counted them as they
-completed). `meta.cost_usd` shows wherever an effect reports it; when
-only some do, the figure is marked with its own coverage.
+own measure, filters to the zoomed store below the treemap (so `⏎` still
+has a visible effect even where the treemap itself doesn't fit), and its
+footer gives the run's own totals (`runtime.last_run.totals`) and any gap
+between them and the table (a declared-outputs `use` child's effects, for
+one, never reach the final state tree at all even though the run's own
+totals counted them as they completed). `meta.cost_usd` shows wherever an
+effect reports it; when only some finished stores do, the figure is
+marked with its own coverage (`$4.20 (from 3 of 9 prompts)`) -- a store
+still running is never counted either way.
 
 | Key | Action |
 |---|---|
@@ -350,18 +361,28 @@ capture is `crates/oscilloscope/src/snapshots/osi__tui__golden_tests__
 cost_running_at_120x40.snap`):
 
 ```
-⠐⠒⠒⠤⠤⠐⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 overview  2 flow  [3 cost]
-┌ tokens by store · tokens ───────────────────────────────────────────────────────────────────────────────────┐
-│a 1.3 kt                                                                                b 450 t                       │
-│                                                                                                                      │
-│                                                                                                                      │
-└────────────────────────────────────────────────────────────────────────────────────┘
-┌ tokens over time ───────────────────────────────────────────┐┌ largest stores ─────────────────────────┘
-│    █                                                                   ││a  ↑900 t ↓400 t  $1.20  74%                │
-│    █                                                                   ││b  ↑300 t ↓150 t  26%                       │
-│    █                                                                   ││fan › iter_0 › nap  ↑0 t ↓0 t  0%           │
-│    █    █                                                              ││total ↑1.2 kt ↓550 t                        │
-└────────────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────┘
+⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 overview  2 flow  [3 cost]                                       
+┌ tokens by store · tokens ────────────────────────────────────────────────────────────────────────────────────────────┐
+│a 1.3 kt                                          ┌fan 1.3 kt───────────────────────────────────────┐b 450 t          │
+│                                                  │iter_0 › nap tokens when done                    │                 │
+│                                                  │                                                 │                 │
+│                                                  └─────────────────────────────────────────────────┘                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ tokens over time ──────────────────────────────────────────────────────┐┌ largest stores ────────────────────────────┐
+│            ███                                                         ││a  ↑900 t ↓400 t  $1.20  74%                │
+│            ███                                                         ││b  ↑300 t ↓150 t  26%                       │
+│            ███                                                         ││iter_0 › nap  ↑0 t ↓0 t  0%                 │
+│            ███                                                         ││                                            │
+│            ███                                                         ││total ↑1.2 kt ↓550 t  $1.20 (from 1 of 2 pr…│
+│            ███                                                         ││                                            │
+│            ███                                                         ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│            ███            ▓▓▓                                          ││                                            │
+│00:00:00                        00:02:30                        00:05:00││                                            │
+│█ a ▓ b ▒ fan                                                           ││                                            │
+└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
 ```
 
 Raw mode and the alternate screen are entered once and restored on every

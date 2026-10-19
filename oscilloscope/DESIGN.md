@@ -1079,7 +1079,10 @@ keep their names from when the header line itself showed those two —
 issue #626 moved them into the overview's own cards and screen 2's
 orchestration pane title, but the underlying change they mark is the
 same either way; issue #632 gave `header:effects` its first real
-consumer, the overview's own flow card. The Cost screen's own by-store
+consumer, the overview's own flow card, and `header:tokens`/`tokenbar`
+their first ones since the token bar itself left screen 2 (also #632):
+the overview's own cost card tints its ↑/↓ line with the former and its
+in-flight line with the latter. The Cost screen's own by-store
 treemap (§6.3b) is built only while that screen is on display, so it
 is not part of `RenderState` at all and has no update-highlight key of
 its own here. The first observation (`old:
@@ -1295,46 +1298,69 @@ rule the overview's own model follows).
 **The by-store treemap** (`oscilloscope-core/src/treemap.rs`'s
 `Measure`/`build_tree_for_measure`, drawn by `tui.rs`'s
 `draw_cost_treemap`). A proportional-area chart, one tile per state
-store (a path with a real `{value, meta}` node, DESIGN.md §1.2 --
-a container's own tokens/cost are always null, so only a leaf ever has
-any of its own to show). Unlike screen 2's old treemap, there is no
-single wrapping `prime` root cell: `build_tree_for_measure`'s own
-top-level tiles are the root's own children directly, each already
-chain-folded. The default measure is total tokens (sent + received);
-`i`/`o`/`$` switch it to input tokens, output tokens or cost, and the
-same key again returns to total (`Measure::from_key`). A node's own
-value for the chosen measure is `model::node_tokens`'s sent/received
-sum, one side of that pair alone, or `meta.cost_usd` scaled into
-micro-dollars (`treemap::display_cost_usd` is the inverse, for
-display) -- the same integer-weight geometry `squarify` already uses
-for tokens, so a cost-by-measure layout needs no code of its own
-beyond which value feeds it. A container's own total is still the sum
-over its subtree, exactly as before.
+store (a path with a real `{value, meta}` node that is either a leaf,
+or a `while: mode: model` loop container, which writes its own
+`tokens_sent_total`/`tokens_received_total` (and, under `Measure::
+Cost`, its own `cost_usd`) onto its own meta every pass, alongside its
+real children -- the one case where a container's own tokens/cost are
+not null, so it gets a leaf tile of its own, labelled `check`, next to
+its real children rather than being silently dropped from the
+treemap, the table and the overview's own top store alike). Unlike
+screen 2's old treemap, there is no single wrapping `prime` root cell:
+`build_tree_for_measure`'s own top-level tiles are the root's own
+children directly, each already chain-folded. The default measure is
+total tokens (sent + received); `i`/`o`/`$` switch it to input tokens,
+output tokens or cost, and the same key again returns to total
+(`Measure::from_key`). A node's own value for the chosen measure is
+`model::node_tokens`'s sent/received sum, one side of that pair alone,
+or `meta.cost_usd` scaled into micro-dollars (`treemap::display_cost_
+usd` is the inverse, for display) -- the same integer-weight geometry
+`squarify` already uses for tokens, so a cost-by-measure layout needs
+no code of its own beyond which value feeds it. A container's own
+total is the sum over its subtree, including its own `check` leaf
+when it has one.
 
 *Chain folding* (`treemap::fold_single_child`): a node with exactly one
 child folds with it into one tile, `outer › inner`, applied to each of
 a container's own children as they're collected (never to the node
 itself, which is what keeps the top-level root from ever folding its
 own single child away into itself, with no path-threading needed to
-exclude it specially) -- the same status-safety rule
-`fold::fold_node`'s own row-level breadcrumbs use ("only safe when
-both ends' status is known and they agree"), since a per-store node
-has no `RowKind` of its own to additionally exclude a loop or a
-quick-steps summary by.
+exclude it specially) -- the exact same rule `fold::kind_breadcrumb_
+eligible` applies to the orchestration pane's own row-level
+breadcrumbs, shared rather than duplicated: both sides' own `RowKind`
+(from a path-to-`RowKind` map threaded in alongside the per-path
+statuses, since a per-store node carries no `RowKind` of its own) must
+be eligible -- not the document root, a loop container or a
+quick-steps summary, and not still `Pending` -- *and* both sides'
+status must agree, so a loop's own `n/total` progress never
+disappears into a breadcrumb the way a true wrapper does.
 
 *A store still running* (`completed_at` unset) that has not reported
 anything for the chosen measure yet still gets a cell, with a nominal,
 non-zero placeholder weight (`RUNNING_PLACEHOLDER_WEIGHT`) so it isn't
 filtered out as a zero-weight node the way a plain tool (never
 token-bearing at all, `is_token_bearing_kind`: `meta.adapter`,
-`meta.prompt_sent`, or an agent tool's own `provider`) would be --
-`tui.rs` shows such a tile's own label as "tokens when done" instead of
-a number, gated on exactly the `TreemapCell` fields already there
-(`status == Running`, no children), regardless of whatever that
-placeholder weight happens to be. A store with no value for the chosen
-measure at all (finished, never running) is left out, and
-`build_tree_for_measure`'s own second return value counts how many --
-the treemap's own title shows it (`3 stores without cost`).
+`meta.prompt_sent`, or an agent tool's own `provider`) would be. That
+bare placeholder weight is usually many orders of magnitude smaller
+than its real siblings', though, and squarify would otherwise round it
+under 2×1 and fold it straight into the merged `…` bucket -- invisible
+at every level the folded weight bubbles up through, container after
+container, however many are between it and whichever level it finally
+competes against a real sibling at. `treemap::boost_running_
+placeholders` runs at every level a container's children are
+assembled: any child (leaf or container) still sitting at the bare
+placeholder weight is boosted to its siblings' own median total above
+it, so it always gets a real, visible share of the row. `tui.rs` shows
+such a tile's own label as "tokens when done" instead of a number,
+gated on `status == Running` alone (never on the boosted weight
+itself, which a front end never shows) -- and a leaf that never
+finished because the run itself ended first (`status` is `Aborted` or
+`Cancelled`, the identical data shape a still-running leaf has) reads
+"no tokens reported" instead, since it will never reach "done" either.
+A store with no value for the chosen measure at all (finished, never
+running) is left out, and `build_tree_for_measure`'s own second return
+value counts how many -- the treemap's own title shows it (`3 stores
+without cost`).
 
 *Squarify's own cell-aspect correction.* A terminal's own character
 cells are about twice as tall as they are wide, so a tile that is
@@ -1367,8 +1393,12 @@ show), and `esc` pops one level back out. `cost_level` walks
 `cost_zoom`'s own stack into the current measure's tree each time,
 dropping any trailing entry that no longer resolves (the underlying
 state changed since it was pushed) rather than leaving the screen
-stuck on a level that no longer exists. The zoomed store's own path is
-shown as a breadcrumb in the treemap's own title.
+stuck on a level that no longer exists. The zoomed store's own *name*
+at each level (not its full dotted path, which already contains every
+shallower level's own as a prefix and would read `prime.fan › prime.
+fan.iter_0`) is shown as a breadcrumb in the treemap's own title,
+alongside the measure, which stays visible while zoomed rather than
+being replaced by the breadcrumb.
 
 **Layout caching** (`tui::CostLayoutCache`, DESIGN.md's own
 performance rule: "laid out again only when the tree or the area
@@ -1384,31 +1414,49 @@ changed.
 phase`, drawn by `tui.rs`'s `draw_cost_chart`). A stacked chart, one
 band per top-level phase (the document's own top-level steps, already
 breadcrumb-folded the same way the overview's phase strip is), on a
-clock axis from the run's start to now: each effect's own tokens
-(sent + received) are counted into one of `cost::TOKENS_OVER_TIME_
-BUCKETS` (24) equal time spans by its own `completed_at`, the same
-rule the overview's own single-series sparkline
-(`screens::build_tokens_over_time`) uses, just bucketed per phase
-instead of summed across the whole run. The chart groups those
-buckets into however many columns the pane's own width actually has
-room for, then fills each column's own rows bottom-up, per phase,
+clock axis from the run's start to its own end (`header.run_end_ts`
+once the run has one, `now` while it's still going -- a finished run's
+chart, under `osi watch`, stops growing new buckets as real clock time
+keeps advancing underneath it): each effect's own tokens (sent +
+received) are counted into one of `cost::TOKENS_OVER_TIME_BUCKETS`
+(24) equal time spans by its own `completed_at`, the same rule the
+overview's own single-series sparkline (`screens::build_tokens_over_
+time`) uses, just bucketed per phase instead of summed across the
+whole run. `CostScreen` carries the exact start/end timestamps this
+bucketing used (`chart_start_ts`/`chart_end_ts`), so the chart's own
+clock-axis labels can never name a different span than the bars
+themselves cover. The chart rebins those buckets across exactly as
+many columns as the pane's own width has -- splitting one bucket's
+value across every column it spans when the pane is wider than the
+bucket count, or summing several buckets into one column when it
+isn't -- rather than capping the chart's own width at the bucket
+count, then fills each column's own rows bottom-up, per phase,
 proportional to that phase's own share of the column's total -- the
 nearest a character-cell terminal gets to a real stacked-area fill.
-No projection to the run's own ETA: a whole-run ETA needs run history,
-a later issue.
+Each band also draws in its own fill glyph (`tui::phase_glyph`), not
+only its own colour (DESIGN.md's own "never colour alone" rule), and
+the bottom two rows (whenever there's room for them) are a clock axis
+(start, middle and end, `format::midpoint_clock_time` for the middle)
+and a glyph-and-label legend, rather than more bars. No projection to
+the run's own ETA: a whole-run ETA needs run history, a later issue.
 
 **The largest-stores table** (`oscilloscope-core::cost::
 largest_stores`, drawn by `tui.rs`'s `draw_cost_table`). Always ranks
 by total tokens, regardless of the treemap's own selected measure --
 built from the same by-store tree as the treemap (always at
 `Measure::Total`), flattened to its own leaves (every leaf there is a
-real, individual store by the same subtree-token invariant the
-treemap's own filtering already relies on: a container's own tokens
-are always null, so a leaf is the only kind of node that can ever
-have a nonzero one). Each row shows the store's own breadcrumb label
-(the same chain-folded one the treemap's own tile for it would show),
-tokens in/out, cost when reported, and its own share of the table's
-total. The footer gives the run's own totals (`runtime.last_run.
+real, individual store, including a `while: mode: model` loop's own
+`check` leaf alongside its passes). Each row shows the store's own
+breadcrumb label (the same chain-folded one the treemap's own tile for
+it would show), tokens in/out, cost when reported, and its own share
+of the table's total. `tui::draw_cost_table` filters those rows to
+whichever level `App::cost_level` says is currently zoomed into (the
+same self-healing walk the treemap itself uses) and reverses the row
+matching `App::cost_selected` -- below the treemap's own minimum size,
+where the table is the only thing on screen, this is what keeps `⏎`
+and `↑`/`↓` having a *visible* effect, not only a change to hidden
+state. The footer, unaffected by zoom (it is about the whole run, not
+a zoomed slice of it), gives the run's own totals (`runtime.last_run.
 totals`, falling back to summing every node's own tokens directly
 while the run hasn't ended yet, the same fallback `render::
 build_header` already uses) and the gap between them and the table's
@@ -1417,19 +1465,23 @@ effects count toward the run's totals as they complete but never land
 in the final state tree at all (DESIGN.md §1.2), so the table can only
 ever fall short of the run's own totals there, never exceed them.
 The overview's own cost card shows the identical top store
-(`cost::top_store`, the same leaf-scan rule, read straight from
-`flat` without building the by-store tree at all) as its own "largest
-store", so the two screens' rankings can never disagree.
+(`cost::top_store`, read straight from `flat` without building the
+by-store tree at all, ranked by the exact same rule the table's own
+sort uses -- largest total first, ties broken by the lowest path --
+so the two can never disagree even when a tie is involved) as its own
+"largest store", so the two screens' rankings can never disagree.
 
 **Cost.** `meta.cost_usd` is shown wherever an effect reports it, on
 any leaf, not only a prompt's -- a row with no `cost_usd` simply has
 no `$` figure of its own. The table's footer sums it the same way the
 overview's own cost card does (`run_cost_usd`, falling back to
 summing every effect's own `meta.cost_usd` before the run has ended);
-when some of the table's own stores never reported one at all, the
-figure is marked with its own coverage (`StoresFooter::cost_label`:
-`$4.20 (from 3 of 9 stores)`), rather than reading as the whole run's
-cost when it is only part of it.
+when some *finished* stores never reported one at all, the figure is
+marked with its own coverage (`StoresFooter::cost_label`: `$4.20 (from
+3 of 9 prompts)`, the issue's own wording), rather than reading as the
+whole run's cost when it is only part of it -- a store still running
+is never counted in that coverage figure either way, since it hasn't
+failed to report a cost, it simply hasn't finished yet.
 
 **Small terminals** (`tui::draw_cost_screen`, thresholds in `tui.rs`):
 
@@ -1451,7 +1503,7 @@ cost when it is only part of it.
 - **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osi watch` — at 100×24 (two-column: the right side is the state pane over the log pane, no treemap), since that is what most of these actually want to show (the orchestration review found the previous blanket 70×20 lost the details pane's own type/plan/provider lines and the state pane entirely). `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_state_pane` and `two_column_layout_at_100x30_shows_the_state_pane` cover the threshold boundary-adjacent to those: 80×24 is two-column with the state pane dropped, and 100×30 shows it (issue #632 removed screen 2's own treemap threshold entirely, so 100×30 no longer sits on a boundary of its own there). `full_layout_with_state_pane_following`, at 120×40, is the most comfortable size, with every pane populated. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position.
 - **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle (including skipping straight past the state pane when it isn't drawn at all, `state_viewport == 0`), the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal. `tui.rs`'s own `scroll_tests` module unit-tests `clamp_scroll`/`scroll_indicator` and the state pane's line-aware `clamp_state_scroll` directly, beyond what the rendered goldens already exercise indirectly.
 - **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
-- **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-weight key gets no cell (including a zero-total tree, which is empty, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout), and two equal-weight tiles in a rect wider than it is tall split by stacking rather than by columns once the terminal's own ~2:1 cell aspect is accounted for. Issue #632's own Cost screen additions: `build_tree_for_measure` reads `i`/`o`/`$`/total separately from the same node (`measure_switching_reads_in_out_and_cost_separately`), the same key toggling back to total (`measure_from_key_toggles_back_to_total_on_the_same_key`), a single-child chain folding into one breadcrumb tile when both ends' status agrees and staying unfolded when it doesn't, a running store getting a placeholder cell instead of vanishing (and a running plain tool never getting one at all), and a finished store with no value under the chosen measure being excluded and counted. `oscilloscope-core/src/cost.rs` covers the largest-stores table ranking by total tokens with a zero-gap footer, a gap when the run's own totals exceed the table (a declared-outputs `use` child's effects), the partial-cost label marking its own coverage once some but not all stores reported one (and having none at all once none have, and no coverage note once every one has), the overview's own top store matching the table's first row, the tokens-over-time chart's own per-phase bucketing, and the stores' totals matching the run's totals on both engines' own recorded final state for a retried prompt (the same fixture `model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity` use). `oscilloscope/src/keys.rs` covers the Cost screen's own keys: `i`/`o`/`$` switching the measure and the same key returning to total, `↑`/`↓` selecting tiles in size order, `⏎` zooming into a store with children (and doing nothing on a leaf), `esc` zooming back out (and doing nothing at the top level), a stale zoom path that no longer resolves being dropped rather than sticking, and every Cost key being inert on any other screen. `tui.rs`'s own golden tests cover the Cost screen at 120×40, 100×30, 80×24 and 70×20, both running and finished, and the 2,000-node timing measurement (both building and drawing it, and that redrawing with nothing changed skips `squarify` by way of `CostLayoutCache`) covers it alongside the overview's own.
+- **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-weight key gets no cell (including a zero-total tree, which is empty, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout), and two equal-weight tiles in a rect wider than it is tall split by stacking rather than by columns once the terminal's own ~2:1 cell aspect is accounted for. Issue #632's own Cost screen additions: `build_tree_for_measure` reads `i`/`o`/`$`/total separately from the same node (`measure_switching_reads_in_out_and_cost_separately`), the same key toggling back to total (`measure_from_key_toggles_back_to_total_on_the_same_key`), a single-child chain folding into one breadcrumb tile when both ends are breadcrumb-eligible and their status agrees, staying unfolded when either isn't (including a loop container, which must survive zoomed-out even with a single pass, `chain_folding_follows_the_breadcrumb_eligibility_rule_not_status_agreement_alone`), a running store getting a placeholder cell instead of vanishing (and a running plain tool never getting one at all), a finished store with no value under the chosen measure being excluded and counted, a `while: mode: model` loop's own tokens getting a `check` leaf alongside its passes rather than being dropped, and a running leaf next to real-sized siblings still getting a drawable (non-merged) cell once boosted. `oscilloscope-core/src/cost.rs` covers the largest-stores table ranking by total tokens with a zero-gap footer, a gap when the run's own totals exceed the table (a declared-outputs `use` child's effects), the partial-cost label marking its own coverage once some but not all *finished* stores reported one (and having none at all once none have, no coverage note once every one has, and a still-running store never counted either way), the overview's own top store matching the table's first row, the tokens-over-time chart's own per-phase bucketing, and the stores' totals matching the run's totals on both engines' own recorded final state for a retried prompt (the same fixture `model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity` use). `oscilloscope-core/src/format.rs` covers `midpoint_clock_time`'s own halving and its rejection of an unparseable timestamp. `oscilloscope/src/keys.rs` covers the Cost screen's own keys: `i`/`o`/`$` switching the measure and the same key returning to total, `↑`/`↓` selecting tiles in size order, `⏎` zooming into a store with children (and doing nothing on a leaf), `esc` zooming back out (and doing nothing at the top level), a stale zoom path that no longer resolves being dropped rather than sticking, and every Cost key being inert on any other screen. `tui.rs`'s own golden tests cover the Cost screen at 120×40, 100×30, 80×24 and 70×20, both running and finished, and the 2,000-node timing measurement (both building and drawing it, and that redrawing with nothing changed skips `squarify` by way of `CostLayoutCache`) covers it alongside the overview's own; further unit-level `tui.rs` tests cover the help overlay still fitting at 80×24, `header:tokens`/`tokenbar` tinting the cost card's own lines, the table alone (below the treemap's own minimum size) still reflecting a zoom and a selection already in effect, and an aborted leaf's own placeholder weight never reading back as a real token count.
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
 - **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSI_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;
