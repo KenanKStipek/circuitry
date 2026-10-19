@@ -95,6 +95,7 @@ use cel::common::types::{
     CelBytes as BorrowedBytes, CelList as BorrowedList, CelMap as BorrowedMap,
     CelMapKey as BorrowedMapKey, CelString as BorrowedString,
 };
+use cel::common::value::Val;
 use cel::{Context, ExecutionError, FunctionContext, Value};
 use std::sync::Arc;
 
@@ -264,6 +265,35 @@ fn is_expensive_kind(kind: Kind) -> bool {
 /// is applied. Every other pairing (both scalars, whatever their own
 /// types) stays cheap regardless, so it converts both sides and
 /// defers to the existing, value-level [`spec_eq`].
+/// Whether *a_ref* and *b_ref*, both of the same *kind* and both a
+/// `list` or both a `map`, already differ in length read straight off
+/// the borrowed container -- cheap to check, and enough on its own to
+/// decide `false` ([`strict_eq`]'s own `List`/`Map` arms do exactly
+/// this first, given owned values): [`spec_eq_from_context`] uses it to
+/// skip converting either side at all once it's true, rather than
+/// paying for the full, recursive [`Value::try_from`] on both only to
+/// have [`strict_eq`] immediately decide the same thing from their
+/// lengths.
+fn same_kind_length_mismatch(a_ref: &dyn Val, b_ref: &dyn Val, kind: Kind) -> bool {
+    match kind {
+        Kind::List => match (
+            a_ref.downcast_ref::<BorrowedList>(),
+            b_ref.downcast_ref::<BorrowedList>(),
+        ) {
+            (Some(a), Some(b)) => a.inner().len() != b.inner().len(),
+            _ => false,
+        },
+        Kind::Map => match (
+            a_ref.downcast_ref::<BorrowedMap>(),
+            b_ref.downcast_ref::<BorrowedMap>(),
+        ) {
+            (Some(a), Some(b)) => a.inner().len() != b.inner().len(),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn spec_eq_from_context(ftx: &FunctionContext) -> Result<bool, ExecutionError> {
     if ftx.args.len() != 2 {
         return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
@@ -273,6 +303,12 @@ fn spec_eq_from_context(ftx: &FunctionContext) -> Result<bool, ExecutionError> {
     let a_kind = a_ref.get_type().kind();
     let b_kind = b_ref.get_type().kind();
     if (is_expensive_kind(a_kind) || is_expensive_kind(b_kind)) && a_kind != b_kind {
+        return Ok(false);
+    }
+    if a_kind == b_kind
+        && is_expensive_kind(a_kind)
+        && same_kind_length_mismatch(a_ref, b_ref, a_kind)
+    {
         return Ok(false);
     }
     let a = Value::try_from(a_ref)?;
@@ -420,6 +456,23 @@ mod tests {
     fn map_equality_does_not_cross_numeric_types() {
         assert_eq!(eval("{'a': 1} != {'a': 1.0}"), Ok(Value::Bool(true)));
         assert_eq!(eval("{'a': 1} == {'a': 1.0}"), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn same_kind_length_mismatch_decides_false_without_raising() {
+        // A length mismatch between two lists (or two maps) of the
+        // same kind never raises, even when an element pair that would
+        // raise never gets compared at all.
+        assert_eq!(eval("[1, 1.0] == [1]"), Ok(Value::Bool(false)));
+        assert_eq!(eval("[1] != [1, 1.0]"), Ok(Value::Bool(true)));
+        assert_eq!(
+            eval("{'a': 1, 'b': 1.0} == {'a': 1}"),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            eval("{'a': 1} != {'a': 1, 'b': 1.0}"),
+            Ok(Value::Bool(true))
+        );
     }
 
     #[test]

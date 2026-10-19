@@ -131,9 +131,11 @@ fn python_index(container: &dyn Val, index: &Value) -> Result<Value, ()> {
 }
 
 /// [`python_index`]'s `map` arm: a strict (non-cross-converting) key
-/// match through the underlying `HashMap` directly, same semantics as
-/// the comment this replaces explained, but reading only the one
-/// matched entry's value rather than every one in the map.
+/// match through the underlying `HashMap` directly -- celpy's own
+/// `MapType.__getitem__` raises on an `int`/`uint` key mismatch rather
+/// than finding the entry the way `cel`'s own, cross-converting
+/// [`cel::objects::Map::get`] does (module docs) -- reading only the
+/// one matched entry's value rather than every one in the map.
 fn borrowed_map_index(map: &BorrowedMap, index: &Value) -> Result<Value, ()> {
     let key: Option<BorrowedMapKey> = match index {
         Value::Int(n) => Some(BorrowedMapKey::from(*n)),

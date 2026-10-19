@@ -1542,7 +1542,7 @@ regardless of which underlying crate is used:
   `cel`'s own map-comprehension machinery iterates the map's real keys directly, which this
   crate has no hook into the way it does for `in`/indexing/`==`/`!=` above, so `k == null` for
   that key is `true` in cel-python and `false` here (pinned by a corpus `divergent_condition`
-  case, issue #400 review). A key that keeps its own, real CEL value in cel-python instead
+  case). A key that keeps its own, real CEL value in cel-python instead
   of becoming `None` — a `float`, a `datetime.datetime`, `bytes`, or a nested `list`/`dict` — is
   still a known, documented divergence: it is **dropped** here, because `cel::objects::Key` has
   no variant for any of them, unlike the `None`/bare-`date` case above, which needed no new `Key`
@@ -1624,11 +1624,24 @@ regardless of which underlying crate is used:
   built-in `list`/`map`/`string`/`bytes` type and converting only the elements, keys or single
   value actually compared — never the whole container. A `==`/`!=` between two values that *are*
   both `list` or both `map` still needs every element of both sides to decide, the same as
-  cel-python's own container equality, so it still converts both in full. Ordering (`<`, `<=`,
-  `>`, `>=`) reads `FunctionContext::args` the same way, checking both operands' `Kind`s first:
-  every container operand there already raises (above), so it decides that without converting
-  either side — the one case where this crate's own conversion is paid at all is building the
-  two `Value`s the resulting error carries, not the comparison itself.
+  cel-python's own container equality, so it still converts both in full; a same-kind length
+  mismatch decides `false` first, straight off the borrowed container, without converting either
+  side at all. Ordering (`<`, `<=`, `>`, `>=`) reads `FunctionContext::args` the same way,
+  checking both operands' `Kind`s first: every container operand there already raises (above), so
+  it decides that without converting either side — the one case where this crate's own conversion
+  is paid at all is building the two `Value`s the resulting error carries, not the comparison
+  itself.
+
+  **A remaining leftover**: every error path above — `in`'s own "not comparable" error, indexing's
+  own "unsupported index" error, and ordering's own — still converts the *whole* container to
+  build the `Value` its error carries, even when the lookup or scan that failed never needed to
+  look at more than one element to decide so. That conversion is paid even when the error itself
+  is thrown away immediately — inside `has()`, or the short-circuiting side of `||` — so
+  `state.items.filter(i, has(state.index[i.id]))` still costs the whole `state.index` on every
+  iteration where the key is missing, not just the one lookup. Left as is here because the error
+  text itself is built from those same two `Value`s; changing what gets converted would change
+  what the error says. Issue #629 tracks changing that text (and, with it, removing this
+  conversion).
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
   the parse tree for every dotted `state.` read before evaluating, and makes the whole expression

@@ -121,9 +121,11 @@
 //! override, so a plain dict lookup resolves through the plain `int`
 //! it subclasses), but a `bool` probe against an `int`/`uint`-keyed
 //! entry still raises, matching celpy exactly in both directions
-//! (`indexing` module docs, pinned by a Rust unit test rather than
-//! the differential corpus, which can't express a map literal with
-//! both an `int`/`uint` *and* a `bool` key reaching the same slot).
+//! (`indexing` module docs). Both directions are pinned by the
+//! differential corpus, each its own case; the one shape the corpus
+//! can't express -- a map *literal* with both an `int`/`uint` *and* a
+//! `bool` key reaching the same slot -- stays a Rust unit test
+//! instead.
 //!
 //! `in` over a bare `string`/`bytes` operand iterates its characters or
 //! bytes, matching celpy's own `for c in container`; `cel`'s own `@in`
