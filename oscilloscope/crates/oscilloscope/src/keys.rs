@@ -18,6 +18,10 @@ pub enum Pane {
     Tree,
     Details,
     State,
+    /// The Flow screen's own story pane (issue #635) -- scrollable,
+    /// reached from `Details` by `tab` only while `screen == Flow`;
+    /// every other screen's own cycle never visits it at all.
+    Story,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +153,18 @@ pub struct App {
     /// `state_selected_path`, same reasoning as those two staying
     /// independent of each other.
     pub cost_selected: Option<String>,
+    /// The Flow screen's own story pane scroll position and interior
+    /// height (issue #635), the same pairing `tree_scroll`/
+    /// `tree_viewport` already are for the orchestration pane.
+    pub story_scroll: usize,
+    pub story_viewport: usize,
+    /// `s` (issue #635): the Flow screen's selected pane shows today's
+    /// state tree instead of the focused step's own detail, so a
+    /// named report stays selectable (#610). `s` again swaps back.
+    pub flow_selected_shows_state: bool,
+    /// `l` (issue #635): the Flow screen's story pane shows the full
+    /// log instead. `l` again swaps back.
+    pub flow_story_shows_log: bool,
 }
 
 impl App {
@@ -179,6 +195,10 @@ impl App {
             cost_measure: oscilloscope_core::treemap::Measure::Total,
             cost_zoom: Vec::new(),
             cost_selected: None,
+            story_scroll: 0,
+            story_viewport: 0,
+            flow_selected_shows_state: false,
+            flow_story_shows_log: false,
         }
     }
 
@@ -429,14 +449,26 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                // Finding 12: on a small terminal the state pane isn't
-                // drawn at all (`tui::draw` zeroes `state_viewport` the
-                // same frame) — `tab` must not focus a pane with nothing
-                // to show or scroll.
-                self.pane = match self.pane {
-                    Pane::Tree => Pane::Details,
-                    Pane::Details if self.state_viewport > 0 => Pane::State,
-                    Pane::Details | Pane::State => Pane::Tree,
+                // Issue #635: the Flow screen's own cycle is flow →
+                // selected → story → flow -- it never visits the state
+                // pane via `tab` at all (`s` swaps the selected pane's
+                // own content instead).
+                self.pane = if self.screen == Screen::Flow {
+                    match self.pane {
+                        Pane::Tree => Pane::Details,
+                        Pane::Details => Pane::Story,
+                        Pane::Story | Pane::State => Pane::Tree,
+                    }
+                } else {
+                    // Finding 12: on a small terminal the state pane
+                    // isn't drawn at all (`tui::draw` zeroes
+                    // `state_viewport` the same frame) — `tab` must not
+                    // focus a pane with nothing to show or scroll.
+                    match self.pane {
+                        Pane::Tree => Pane::Details,
+                        Pane::Details if self.state_viewport > 0 => Pane::State,
+                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                    }
                 };
             }
             // Issue #626: `0`/`2` switch screens; `1`/`3` do
@@ -450,6 +482,17 @@ impl App {
                 }
             }
             KeyCode::Char('t') => return Action::CycleTheme,
+            // Issue #635: the Flow screen's own content swaps -- `s`
+            // for the selected pane (the focused step's own detail vs
+            // today's state tree, so a named report stays
+            // selectable), `l` for the story pane (the story vs the
+            // full log). Both no-ops on any other screen.
+            KeyCode::Char('s') if self.screen == Screen::Flow => {
+                self.flow_selected_shows_state = !self.flow_selected_shows_state;
+            }
+            KeyCode::Char('l') if self.screen == Screen::Flow => {
+                self.flow_story_shows_log = !self.flow_story_shows_log;
+            }
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #613: `z` turns folding off to show the full,
             // unfolded tree, and back on again.
@@ -492,6 +535,7 @@ impl App {
             Pane::Tree => self.tree_viewport.max(1),
             Pane::State => self.state_viewport.max(1),
             Pane::Details => self.details_viewport.max(1),
+            Pane::Story => self.story_viewport.max(1),
         }
     }
 
@@ -603,6 +647,20 @@ impl App {
             }
             Pane::State => self.move_state_selection(state_rows, delta),
             Pane::Details => self.scroll_details(delta),
+            Pane::Story => self.scroll_story(delta),
+        }
+    }
+
+    /// The story pane's own scroll (issue #635: "the selected pane
+    /// and the story scroll with ↑↓ when they have focus") -- clamped
+    /// by `tui::draw`'s own render the same way `scroll_details`'s
+    /// `details_scroll` already is, since only it knows the story's
+    /// real line count this frame.
+    fn scroll_story(&mut self, delta: i32) {
+        if delta < 0 {
+            self.story_scroll = self.story_scroll.saturating_sub((-delta) as usize);
+        } else {
+            self.story_scroll = self.story_scroll.saturating_add(delta as usize);
         }
     }
 
@@ -631,6 +689,9 @@ impl App {
             }
             Pane::Details => {
                 self.details_scroll = if to_first { 0 } else { usize::MAX };
+            }
+            Pane::Story => {
+                self.story_scroll = if to_first { 0 } else { usize::MAX };
             }
         }
     }
@@ -1374,6 +1435,49 @@ mod tests {
         // A key other than `v` still closes it, same as any overlay.
         app.handle_key(key(KeyCode::Esc), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::None);
+    }
+
+    #[test]
+    fn the_flow_screens_tab_cycle_visits_the_story_pane_not_the_state_pane() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.state_viewport = 8;
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Details);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Story);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn s_and_l_toggle_the_flow_screens_own_content_swaps_only_on_the_flow_screen() {
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
+        assert!(!app.flow_selected_shows_state, "not the Flow screen yet");
+        app.screen = Screen::Flow;
+        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
+        assert!(app.flow_selected_shows_state);
+        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
+        assert!(!app.flow_selected_shows_state);
+        app.handle_key(key(KeyCode::Char('l')), &[], &[], false, false, &[]);
+        assert!(app.flow_story_shows_log);
+        app.handle_key(key(KeyCode::Char('l')), &[], &[], false, false, &[]);
+        assert!(!app.flow_story_shows_log);
+    }
+
+    #[test]
+    fn up_down_scroll_the_story_pane_when_it_has_focus() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.pane = Pane::Story;
+        app.handle_key(key(KeyCode::Down), &[], &[], false, false, &[]);
+        assert_eq!(app.story_scroll, 1);
+        app.handle_key(key(KeyCode::Up), &[], &[], false, false, &[]);
+        assert_eq!(app.story_scroll, 0);
     }
 
     #[test]
