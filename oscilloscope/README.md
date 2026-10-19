@@ -311,7 +311,7 @@ table of the largest stores, laid out at three sizes:
 
 1. 100×30 and up: the treemap (62% of the height) above the chart and the
    table, side by side at 62/38;
-2. 80×24 to just under that: the treemap above the table alone (no chart);
+2. 80×20 to just under that: the treemap above the table alone (no chart);
 3. below 80×20: the table alone, where `⏎` still zooms it.
 
 The treemap's default measure is total tokens (in + out); `i`/`o`/`$`
@@ -363,7 +363,7 @@ cost_running_at_120x40.snap`):
 ```
 ⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 overview  2 flow  [3 cost]                                       
 ┌ tokens by store · tokens ────────────────────────────────────────────────────────────────────────────────────────────┐
-│a 1.3 kt                                          ┌fan 1.3 kt───────────────────────────────────────┐b 450 t          │
+│a 1.3 kt                                          ┌fan tokens when done─────────────────────────────┐b 450 t          │
 │                                                  │iter_0 › nap tokens when done                    │                 │
 │                                                  │                                                 │                 │
 │                                                  └─────────────────────────────────────────────────┘                 │
@@ -371,10 +371,10 @@ cost_running_at_120x40.snap`):
 ┌ tokens over time ──────────────────────────────────────────────────────┐┌ largest stores ────────────────────────────┐
 │            ███                                                         ││a  ↑900 t ↓400 t  $1.20  74%                │
 │            ███                                                         ││b  ↑300 t ↓150 t  26%                       │
-│            ███                                                         ││iter_0 › nap  ↑0 t ↓0 t  0%                 │
+│            ███                                                         ││fan › iter_0 › nap  tokens when done        │
 │            ███                                                         ││                                            │
-│            ███                                                         ││total ↑1.2 kt ↓550 t  $1.20 (from 1 of 2 pr…│
-│            ███                                                         ││                                            │
+│            ███                                                         ││total ↑1.2 kt ↓550 t                        │
+│            ███                                                         ││$1.20 (from 1 of 2 prompts)                 │
 │            ███                                                         ││                                            │
 │            ███            ▓▓▓                                          ││                                            │
 │            ███            ▓▓▓                                          ││                                            │
