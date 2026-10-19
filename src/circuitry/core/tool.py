@@ -846,6 +846,11 @@ class ToolRuntime:
             # below, so it never lingers once nothing is running.
             meta.pop("live", None)
             meta["waiting_for"] = None
+            # fire_effect_start already republished once, before created_at
+            # and completed_at existed on this node -- each attempt's own
+            # meta (set above) needs its own publish, or a tool's --live-state
+            # node sits as {"value": null, "meta": {}} for its whole run (#634).
+            store.publish_or_finalize(self.defn.name, node)
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
             result: ToolResult | None = None
