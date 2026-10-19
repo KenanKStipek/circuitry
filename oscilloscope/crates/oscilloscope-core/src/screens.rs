@@ -532,12 +532,26 @@ fn node_for<'a>(row: &Row, flat: &'a BTreeMap<String, NodeMeta>) -> Option<&'a N
     flat.get(&row.path)
 }
 
-fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> bool {
-    row.kind == RowKind::Tool
-        && node_for(row, flat)
-            .and_then(|n| n.meta.get("provider"))
-            .and_then(Value::as_str)
-            .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+/// Issue #635: carries `render::build_token_bar`'s own plan-
+/// `provider` fallback over to the selected pane -- a tree-loop
+/// pass's or `use` child's `agent` tool step has no state node (and
+/// so no `meta.provider`) for as long as it runs, so without the
+/// fallback it would never read as an agent here even though the
+/// token bar already counts it as one.
+fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> bool {
+    if row.kind != RowKind::Tool {
+        return false;
+    }
+    let provider = node_for(row, flat)
+        .and_then(|n| n.meta.get("provider"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            plan.match_path(&row.path)
+                .and_then(|m| m.entries.first())
+                .and_then(|e| e.provider.clone())
+        });
+    provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"))
 }
 
 fn build_focused_step(
@@ -562,7 +576,7 @@ fn build_focused_step(
         .as_deref()
         .and_then(|start| duration_seconds(start, now));
     let details = details_for(&row.path, plan, model, state);
-    let agent = is_agent_row(row, flat);
+    let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
         let meta = node.map(|n| &n.meta);
         FocusDetail::Agent {
@@ -1535,11 +1549,14 @@ mod tests {
         );
         let folded = crate::fold::fold_rows(rows, true, &Default::default());
         let strip = build_phase_strip(&folded);
-        // `check › taken` folds into one top-level row (single-child
-        // wrapper), so the strip has two top-level rows: `plan` and
-        // `check › taken`, not three.
+        // Issue #635: a named `if` is no longer breadcrumb-eligible, so
+        // `check` no longer folds with its own single child `taken`
+        // (which drops to depth 2, out of the phase strip entirely) --
+        // the strip has two top-level rows, `plan` and `check` on its
+        // own, neither carrying a › breadcrumb.
         assert_eq!(strip.len(), 2);
-        assert!(strip.iter().any(|s| s.label.contains("\u{203a}")));
+        assert!(strip.iter().any(|s| s.label == "check"));
+        assert!(!strip.iter().any(|s| s.label.contains('\u{203a}')));
     }
 
     #[test]
