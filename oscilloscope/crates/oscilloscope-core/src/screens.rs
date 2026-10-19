@@ -948,24 +948,32 @@ pub struct CostScreen {
     pub tokens_over_time: Vec<(String, Vec<u64>)>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_cost_screen(
     rows: &[Row],
     header: &crate::render::Header,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, crate::model::RowStatus>,
+    kinds: &BTreeMap<String, RowKind>,
     state: Option<&Value>,
     measure: crate::treemap::Measure,
     now: &str,
 ) -> CostScreen {
     let (tree, stores_without_measure) =
-        crate::treemap::build_tree_for_measure("prime", flat, statuses, measure);
-    let stores = crate::cost::largest_stores("prime", flat, statuses, state);
+        crate::treemap::build_tree_for_measure("prime", flat, statuses, kinds, measure);
+    let stores = crate::cost::largest_stores("prime", flat, statuses, kinds, state);
     let phases: Vec<(String, String)> = build_phase_strip(rows)
         .into_iter()
         .map(|p| (p.path, p.label))
         .collect();
+    // DESIGN.md: the chart spans "the run's start to now (or to its
+    // end)" -- once the run has actually finished, `run_end_ts` is
+    // that fixed end, so a finished run's chart (`osi watch` on a
+    // document that is done) stops growing new buckets as real clock
+    // time keeps advancing underneath it.
+    let end = header.run_end_ts.as_deref().unwrap_or(now);
     let tokens_over_time =
-        crate::cost::tokens_over_time_by_phase(header.run_start_ts.as_deref(), now, flat, &phases);
+        crate::cost::tokens_over_time_by_phase(header.run_start_ts.as_deref(), end, flat, &phases);
     CostScreen {
         measure,
         tree,

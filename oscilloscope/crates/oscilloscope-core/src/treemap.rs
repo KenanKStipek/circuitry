@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 
 use crate::model::StatusKind;
+use crate::render::RowKind;
 
 /// One key's own input to the treemap: its total (area-determining)
 /// weight, a status to colour it by, and its own children, if any
@@ -506,14 +507,19 @@ fn direct_children_of(path: &str, flat: &BTreeMap<String, crate::model::NodeMeta
 /// under this measure at all (DESIGN.md's `3 stores without cost`
 /// footer) -- a store still running never counts there, since it
 /// always gets a cell of its own via [`RUNNING_PLACEHOLDER_WEIGHT`].
+/// `kinds` is a path's own [`RowKind`] where one is known -- the
+/// same map [`fold_single_child`] needs to apply the orchestration
+/// pane's own breadcrumb-eligibility rule to a store, rather than a
+/// narrower copy of it.
 pub fn build_tree_for_measure(
     root_path: &str,
     flat: &BTreeMap<String, crate::model::NodeMeta>,
     statuses: &BTreeMap<String, crate::model::RowStatus>,
+    kinds: &BTreeMap<String, RowKind>,
     measure: Measure,
 ) -> (Vec<TreemapNode>, u64) {
     let mut excluded = 0u64;
-    let root = build_node_for_measure(root_path, flat, statuses, measure, &mut excluded);
+    let root = build_node_for_measure(root_path, flat, statuses, kinds, measure, &mut excluded);
     (root.map(|r| r.children).unwrap_or_default(), excluded)
 }
 
@@ -521,63 +527,38 @@ fn build_node_for_measure(
     path: &str,
     flat: &BTreeMap<String, crate::model::NodeMeta>,
     statuses: &BTreeMap<String, crate::model::RowStatus>,
+    kinds: &BTreeMap<String, RowKind>,
     measure: Measure,
     excluded: &mut u64,
 ) -> Option<TreemapNode> {
     let status = statuses.get(path).map(|s| s.kind);
     let direct_children = direct_children_of(path, flat);
     if direct_children.is_empty() {
-        // A true leaf: the only way `direct_children_of` is ever
-        // empty for a path this function was actually called on (the
-        // top call aside, which checks its own result) is that
-        // nothing starts with `path.` in `flat` at all -- and this
-        // function only ever recurses into a path that does, so a
-        // leaf reached here always has its own real `{value, meta}`
-        // entry to read.
-        let node = flat.get(path)?;
-        let running = node.completed_at.is_none();
-        if running {
-            if !is_token_bearing_kind(&node.meta) {
-                return None;
-            }
-            let total = own_measure_value(node, measure).max(RUNNING_PLACEHOLDER_WEIGHT);
-            let key = path.rsplit('.').next().unwrap_or(path).to_string();
-            return Some(TreemapNode {
-                key,
-                path: path.to_string(),
-                total,
-                status,
-                children: Vec::new(),
-            });
-        }
-        let (sent, received) = crate::model::node_tokens(&node.meta);
-        let has_cost = node.meta.get("cost_usd").is_some();
-        if sent == 0 && received == 0 && !has_cost {
-            // Never reported anything at all under any measure -- not
-            // a store this screen tracks, so not counted either.
-            return None;
-        }
-        let total = own_measure_value(node, measure);
-        if total == 0 {
-            *excluded += 1;
-            return None;
-        }
-        let key = path.rsplit('.').next().unwrap_or(path).to_string();
-        return Some(TreemapNode {
-            key,
-            path: path.to_string(),
-            total,
-            status,
-            children: Vec::new(),
-        });
+        return leaf_node_for_measure(path, flat, status, measure, excluded);
     }
-    let children: Vec<TreemapNode> = direct_children
+    let mut children: Vec<TreemapNode> = direct_children
         .into_iter()
         .filter_map(|child_path| {
-            build_node_for_measure(&child_path, flat, statuses, measure, excluded)
+            build_node_for_measure(&child_path, flat, statuses, kinds, measure, excluded)
         })
-        .map(fold_single_child)
+        .map(|child| fold_single_child(child, kinds))
         .collect();
+    // A `while: mode: model` loop writes its own `tokens_sent_total`/
+    // `tokens_received_total` (and, for `Measure::Cost`, its own
+    // `cost_usd`) onto *this* container's meta, every pass, never a
+    // null placeholder here (`docs/orchestration-reference.md`'s own
+    // `while.template` row) -- a container that reports a value of
+    // its own is a store in exactly the same sense its children are,
+    // so it gets a leaf tile of its own alongside them rather than
+    // vanishing into an unexplained gap between this screen's total
+    // and `runtime.last_run.totals`.
+    if let Some(own_leaf) = leaf_node_for_measure(path, flat, status, measure, &mut 0) {
+        children.push(TreemapNode {
+            key: "check".to_string(),
+            ..own_leaf
+        });
+    }
+    boost_running_placeholders(&mut children);
     let total: u64 = children.iter().map(|c| c.total).sum();
     if total == 0 {
         return None;
@@ -592,23 +573,136 @@ fn build_node_for_measure(
     })
 }
 
-/// Issue #632's own chain folding, by the same safety rule
+/// The leaf-building half of [`build_node_for_measure`], shared with
+/// a container's own leaf tile (the `while: mode: model` case
+/// above) -- `excluded` is passed `&mut 0` for that second use, since
+/// a container already left out of the tree for scoring zero under
+/// `measure` is counted once, as a container, by its own caller, not
+/// a second time for an own-value leaf that was never added at all.
+fn leaf_node_for_measure(
+    path: &str,
+    flat: &BTreeMap<String, crate::model::NodeMeta>,
+    status: Option<StatusKind>,
+    measure: Measure,
+    excluded: &mut u64,
+) -> Option<TreemapNode> {
+    let node = flat.get(path)?;
+    let running = node.completed_at.is_none();
+    let key = path.rsplit('.').next().unwrap_or(path).to_string();
+    if running {
+        // A running leaf has not reported any tokens/cost of its own
+        // yet, so (unlike the finished branch below) there is
+        // nothing in its own numbers to filter a plain tool out by --
+        // only its *kind* can: without this, a running plain tool
+        // would get a placeholder cell too, though it will never
+        // report one.
+        if !is_token_bearing_kind(&node.meta) {
+            return None;
+        }
+        let total = own_measure_value(node, measure).max(RUNNING_PLACEHOLDER_WEIGHT);
+        return Some(TreemapNode {
+            key,
+            path: path.to_string(),
+            total,
+            status,
+            children: Vec::new(),
+        });
+    }
+    let (sent, received) = crate::model::node_tokens(&node.meta);
+    let has_cost = node.meta.get("cost_usd").is_some();
+    if sent == 0 && received == 0 && !has_cost {
+        // Never reported anything at all under any measure -- not
+        // a store this screen tracks, so not counted either.
+        return None;
+    }
+    let total = own_measure_value(node, measure);
+    if total == 0 {
+        *excluded += 1;
+        return None;
+    }
+    Some(TreemapNode {
+        key,
+        path: path.to_string(),
+        total,
+        status,
+        children: Vec::new(),
+    })
+}
+
+/// A median of `totals` (ties rounded down to the lower of the two
+/// middle values, same as a plain sorted index lookup) -- `None` for
+/// `&[]`.
+fn median_total(totals: &[u64]) -> Option<u64> {
+    if totals.is_empty() {
+        return None;
+    }
+    let mut sorted = totals.to_vec();
+    sorted.sort_unstable();
+    Some(sorted[sorted.len() / 2])
+}
+
+/// A running leaf's own weight, [`RUNNING_PLACEHOLDER_WEIGHT`], is
+/// too small to survive squarify at all next to siblings with real
+/// token counts in the thousands or millions -- it rounds to under
+/// 2×1 and silently folds into the `…` merged bucket, so DESIGN.md's
+/// own "a tile for a step that is still running ... reads `tokens
+/// when done`" never actually shows, and the same happens one level
+/// up to a container whose entire subtree is still just that one
+/// placeholder (a loop with a single running pass, say) -- its own
+/// `total` is the placeholder value unchanged, bubbled straight up
+/// through however many containers wrap it, however far from its own
+/// real siblings that puts it. This boosts *any* child still sitting
+/// at the bare placeholder weight -- leaf or container, whatever its
+/// own status -- to its siblings' own median total above that floor,
+/// which [`layout`] then treats the same as any other real weight: a
+/// visible share of the row, never a number a front end actually
+/// shows (gated on `status`/`has_children` alone, same as every
+/// other running leaf). A sibling group with nothing above the floor
+/// either (every child still running, or genuinely all at 1 token)
+/// gets no boost at all -- there is nothing realer to measure against
+/// yet.
+fn boost_running_placeholders(children: &mut [TreemapNode]) {
+    let real_totals: Vec<u64> = children
+        .iter()
+        .map(|c| c.total)
+        .filter(|&t| t > RUNNING_PLACEHOLDER_WEIGHT)
+        .collect();
+    let Some(median) = median_total(&real_totals) else {
+        return;
+    };
+    for child in children.iter_mut() {
+        if child.total <= RUNNING_PLACEHOLDER_WEIGHT {
+            child.total = median;
+        }
+    }
+}
+
+/// Issue #632's own chain folding, by the exact same rule
 /// `fold::fold_node`'s breadcrumbs use for the orchestration pane's
-/// rows ("folding a container with its one child is only safe when
-/// their statuses actually agree"): a node with exactly one child
-/// folds with it into one tile, `outer › inner`, keeping the child's
-/// own path (so zoom and selection still target it) and status. A
-/// per-store node has no `RowKind` of its own to exclude a loop or a
-/// quick-steps summary by -- those are row-list concepts, not
-/// per-store ones -- so this is status agreement alone, including
-/// both being *known* (`Some`), never a bare `None == None`. Applied
-/// to each of a container's own children as they're collected
+/// rows: a node with exactly one child folds with it into one tile,
+/// `outer › inner`, only once both sides are `fold::breadcrumb_
+/// eligible` (neither is the document root, a loop container or a
+/// quick-steps summary, and neither's own status is still
+/// `Pending`) and their statuses actually agree -- a `use` whose
+/// `expect` fails after its one child succeeded must not show `✓`,
+/// and a still-running container whose only child has already
+/// finished must not show done. `kinds` supplies each side's own
+/// `RowKind` (`None` for a path with no row of its own, which is
+/// never eligible either) since a [`TreemapNode`] does not carry one
+/// itself. The fold keeps the child's own path (so zoom and
+/// selection still target it) and status. Applied to each of a
+/// container's own children as they're collected
 /// ([`build_node_for_measure`]), never to the node the caller itself
 /// just built -- that's what keeps the top root (`build_tree_for_
 /// measure`'s own `root_path`) from ever folding its single child
 /// away into itself: nothing above the top call ever folds it.
-fn fold_single_child(node: TreemapNode) -> TreemapNode {
-    if node.children.len() == 1 && node.status.is_some() && node.status == node.children[0].status {
+fn fold_single_child(node: TreemapNode, kinds: &BTreeMap<String, RowKind>) -> TreemapNode {
+    if node.children.len() == 1
+        && store_breadcrumb_eligible(&node, kinds)
+        && store_breadcrumb_eligible(&node.children[0], kinds)
+        && node.status.is_some()
+        && node.status == node.children[0].status
+    {
         let child = node.children.into_iter().next().expect("checked len == 1");
         return TreemapNode {
             key: format!("{} \u{203a} {}", node.key, child.key),
@@ -619,6 +713,22 @@ fn fold_single_child(node: TreemapNode) -> TreemapNode {
         };
     }
     node
+}
+
+/// `fold::kind_breadcrumb_eligible`, for a store rather than a row --
+/// `kinds.get(path)` is `None` for a store with no row of its own at
+/// all (e.g. `fold_single_child`'s own synthetic `"check"` leaf,
+/// which shares its container's path and so is never itself a
+/// distinct row), which is never eligible either, same as a known
+/// but still-`Pending` one.
+fn store_breadcrumb_eligible(node: &TreemapNode, kinds: &BTreeMap<String, RowKind>) -> bool {
+    let Some(status) = node.status else {
+        return false;
+    };
+    let Some(kind) = kinds.get(&node.path).copied() else {
+        return false;
+    };
+    crate::fold::kind_breadcrumb_eligible(kind, status)
 }
 
 #[cfg(test)]
@@ -755,7 +865,9 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, excluded) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         // Issue #632: no single `prime` wrapping cell any more -- the
         // top-level tiles are `prime`'s own children directly.
         assert_eq!(top.len(), 1);
@@ -777,7 +889,9 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, excluded) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert!(top.is_empty());
         assert_eq!(excluded, 0);
     }
@@ -812,10 +926,14 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let (total, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
-        let (input, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::In);
-        let (output, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Out);
-        let (cost, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Cost);
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (total, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        let (input, _) = build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::In);
+        let (output, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Out);
+        let (cost, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Cost);
         assert_eq!(total[0].total, 150);
         assert_eq!(input[0].total, 100);
         assert_eq!(output[0].total, 50);
@@ -852,6 +970,12 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let mut statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = [
+            ("prime.plan".to_string(), RowKind::Use),
+            ("prime.plan.agent".to_string(), RowKind::Prompt),
+        ]
+        .into_iter()
+        .collect();
         statuses.insert(
             "prime.plan".to_string(),
             crate::model::RowStatus {
@@ -868,7 +992,8 @@ mod tests {
                 retrying: false,
             },
         );
-        let (top, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].key, "plan \u{203a} agent");
         assert_eq!(top[0].path, "prime.plan.agent");
@@ -887,6 +1012,7 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let mut statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         statuses.insert(
             "prime.plan".to_string(),
             crate::model::RowStatus {
@@ -903,7 +1029,8 @@ mod tests {
                 retrying: false,
             },
         );
-        let (top, _) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].key, "plan");
         assert_eq!(top[0].children.len(), 1);
@@ -920,6 +1047,7 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let mut statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         statuses.insert(
             "prime.agent".to_string(),
             crate::model::RowStatus {
@@ -928,7 +1056,8 @@ mod tests {
                 retrying: false,
             },
         );
-        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let (top, excluded) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].status, Some(StatusKind::Running));
         assert!(top[0].total > 0, "a running store still gets a cell");
@@ -945,6 +1074,7 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let mut statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         statuses.insert(
             "prime.build".to_string(),
             crate::model::RowStatus {
@@ -953,7 +1083,8 @@ mod tests {
                 retrying: false,
             },
         );
-        let (top, excluded) = build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+        let (top, excluded) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert!(top.is_empty());
         assert_eq!(excluded, 0);
     }
@@ -970,13 +1101,149 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         let (top_total, excluded_total) =
-            build_tree_for_measure("prime", &flat, &statuses, Measure::Total);
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
         assert_eq!(top_total.len(), 1);
         assert_eq!(excluded_total, 0);
         let (top_cost, excluded_cost) =
-            build_tree_for_measure("prime", &flat, &statuses, Measure::Cost);
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Cost);
         assert!(top_cost.is_empty());
         assert_eq!(excluded_cost, 1);
+    }
+
+    #[test]
+    fn a_running_leaf_next_to_large_finished_siblings_still_gets_a_drawable_cell() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // `big` and `bigger` dwarf a running leaf's own placeholder
+        // weight of 1 by six orders of magnitude -- without boosting,
+        // the running leaf's own share of a typical pane rounds under
+        // 2x1 and silently folds into the merged "..." bucket, so
+        // "tokens when done" never actually appears anywhere.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "big": prompt_node(900_000, 400_000, None, false),
+            "bigger": prompt_node(1_300_000, 600_000, None, false),
+            "fan": {"value": null, "meta": {"completed_at": null},
+                "nap": prompt_node(0, 0, None, true)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            "prime.fan.nap".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        let nap = top
+            .iter()
+            .flat_map(|n| n.children.iter().chain(std::iter::once(n)))
+            .find(|n| n.path == "prime.fan.nap")
+            .expect("the running leaf is still in the tree");
+        assert_eq!(nap.status, Some(StatusKind::Running));
+        let cells = layout(&top, 0, 0, 120, 24);
+        let nap_cell = cells
+            .iter()
+            .find(|c| c.path.as_deref() == Some("prime.fan.nap"))
+            .unwrap_or_else(|| panic!("the running leaf folded away: {cells:#?}"));
+        assert!(!nap_cell.merged, "cells were {cells:#?}");
+        assert!(nap_cell.rect.w >= 2 && nap_cell.rect.h >= 1, "{nap_cell:?}");
+    }
+
+    #[test]
+    fn a_while_model_loops_own_check_tokens_get_a_leaf_alongside_its_passes() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // A `while: mode: model` loop writes its own `tokens_sent_
+        // total`/`tokens_received_total` directly onto the loop's own
+        // meta, every pass, alongside its real children (`iter_0`,
+        // `iter_1`, ...) -- those tokens must not vanish into an
+        // unexplained gap between this tree and the run's own totals.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "fan": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": "t1",
+                "adapter": "scripted", "tokens_sent_total": 40, "tokens_received_total": 10
+            },
+                "iter_0": {"value": null, "meta": {"completed_at": "t1"},
+                    "nap": prompt_node(100, 50, None, false)
+                }
+            }
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        let fan = &top[0];
+        assert_eq!(fan.key, "fan");
+        assert_eq!(fan.total, 200, "the loop's own 50 tokens plus nap's 150");
+        let check = fan
+            .children
+            .iter()
+            .find(|c| c.key == "check")
+            .expect("the loop's own tokens get a leaf of their own");
+        assert_eq!(check.path, "prime.fan");
+        assert_eq!(check.total, 50);
+
+        let stores = crate::cost::largest_stores("prime", &flat, &statuses, &kinds_map, None);
+        assert!(
+            stores
+                .rows
+                .iter()
+                .any(|r| r.path == "prime.fan" && r.tokens_sent == 40),
+            "the table must also carry the loop's own row: {:#?}",
+            stores.rows
+        );
+    }
+
+    #[test]
+    fn chain_folding_follows_the_breadcrumb_eligibility_rule_not_status_agreement_alone() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        // `fan` is a loop container (`RowKind::Loop`): even though its
+        // one real child (`iter_0`'s own folded `nap`) shares its
+        // status, a loop's own `n/total` progress must not vanish into
+        // a breadcrumb -- the orchestration pane never folds a loop
+        // row away either.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null},
+                "iter_0": {"value": null, "meta": {"completed_at": null},
+                    "nap": prompt_node(10, 5, None, true)
+                }
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        let running = crate::model::RowStatus {
+            kind: StatusKind::Running,
+            skip_reason: None,
+            retrying: false,
+        };
+        statuses.insert("prime.fan".to_string(), running.clone());
+        statuses.insert("prime.fan.iter_0".to_string(), running.clone());
+        statuses.insert("prime.fan.iter_0.nap".to_string(), running);
+        let mut kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        kinds_map.insert("prime.fan".to_string(), RowKind::Loop);
+        kinds_map.insert("prime.fan.iter_0".to_string(), RowKind::Pass);
+        kinds_map.insert("prime.fan.iter_0.nap".to_string(), RowKind::Prompt);
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        // `fan` itself (a loop) must survive as its own tile, never
+        // folded away with its single pass -- only the pass and its
+        // own single child (both eligible) fold together.
+        assert_eq!(top[0].key, "fan");
+        assert_eq!(top[0].children.len(), 1);
+        assert_eq!(top[0].children[0].key, "iter_0 \u{203a} nap");
     }
 }

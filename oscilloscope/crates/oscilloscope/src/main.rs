@@ -1586,11 +1586,18 @@ fn build_cost_screen_if_active(
             .iter()
             .map(|r| (r.path.clone(), r.status.clone()))
             .collect();
+    let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+        render_state
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.kind))
+            .collect();
     Some(oscilloscope_core::screens::build_cost_screen(
         &render_state.rows,
         &render_state.header,
         &flat,
         &statuses,
+        &kinds,
         state,
         app.cost_measure,
         now,

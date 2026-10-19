@@ -1743,9 +1743,9 @@ fn draw_cost_treemap(
             frame.render_widget(block, rect);
         } else {
             // Same "fill is the area" rule screen 2's old treemap used
-            // (DESIGN.md §6.3, finding F10): a leaf (or a merged `…`
-            // bucket) has no border, so its own background fill reads
-            // as an area at all.
+            // (DESIGN.md §6.3): a leaf (or a merged `…` bucket) has no
+            // border, so its own background fill reads as an area at
+            // all.
             let fill = Style::default().bg(color);
             let fill = if is_selected {
                 fill.add_modifier(Modifier::REVERSED)
@@ -3074,11 +3074,17 @@ mod golden_tests {
             .iter()
             .map(|r| (r.path.clone(), r.status.clone()))
             .collect();
+        let kinds: std::collections::BTreeMap<_, _> = rendered
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.kind))
+            .collect();
         let cost_screen = oscilloscope_core::screens::build_cost_screen(
             &rendered.rows,
             &rendered.header,
             &flat,
             &statuses,
+            &kinds,
             state,
             Measure::Total,
             "2026-01-01T00:05:00Z",
@@ -4578,12 +4584,18 @@ mod golden_tests {
             .iter()
             .map(|r| (r.path.clone(), r.status.clone()))
             .collect();
+        let kinds: std::collections::BTreeMap<_, _> = rendered
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.kind))
+            .collect();
         let cost_start = std::time::Instant::now();
         let cost_screen = oscilloscope_core::screens::build_cost_screen(
             &rendered.rows,
             &rendered.header,
             &flat,
             &statuses,
+            &kinds,
             Some(&state),
             Measure::Total,
             "t2001",

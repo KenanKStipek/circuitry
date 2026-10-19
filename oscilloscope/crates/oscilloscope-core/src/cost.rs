@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::model::{NodeMeta, RowStatus, StatusKind, node_tokens, run_totals};
+use crate::render::RowKind;
 use crate::treemap::{Measure, TreemapNode, build_tree_for_measure};
 
 /// One row of the "largest stores" table (DESIGN.md: "path, tokens
@@ -93,9 +94,11 @@ pub fn largest_stores(
     root_path: &str,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
+    kinds: &BTreeMap<String, RowKind>,
     state: Option<&Value>,
 ) -> LargestStores {
-    let (tree, _excluded) = build_tree_for_measure(root_path, flat, statuses, Measure::Total);
+    let (tree, _excluded) =
+        build_tree_for_measure(root_path, flat, statuses, kinds, Measure::Total);
     let mut rows = Vec::new();
     flatten_leaves_into(&tree, flat, &mut rows);
     rows.sort_by(|a, b| {
@@ -182,13 +185,19 @@ fn flatten_leaves_into(
 
 /// The overview's own cost card (DESIGN.md: "the overview's cost card
 /// stays as a summary that agrees with the Cost screen's ranking") --
-/// the single largest leaf store by total tokens, read straight from
+/// the single largest store by total tokens, read straight from
 /// `flat` without building the by-store tree at all (the performance
 /// rule: the tree is built only while the Cost screen is actually on
-/// display). Correct by the same invariant [`largest_stores`] relies
-/// on: a container's own tokens are always null (DESIGN.md §1.2), so
-/// any node with nonzero tokens of its own is necessarily a leaf —
-/// this never needs to check for children to confirm that.
+/// display). Every `flat` entry with nonzero tokens of its own is a
+/// store the table also surfaces as a leaf row, whether it is a true
+/// leaf or a `while: mode: model` loop reporting its own tokens
+/// alongside its children's (DESIGN.md's gap note) -- [`largest_
+/// stores`]' own by-store tree gives such a container a leaf tile of
+/// its own for exactly this reason. Ties break the same way the
+/// table's own sort does, lowest path first (`largest_stores`' own
+/// `rows.sort_by`), not merely "the last one found" -- `BTreeMap`'s
+/// ascending iteration order makes those two tie-break rules the
+/// same rule only if this reads it that way explicitly.
 pub fn top_store(flat: &BTreeMap<String, NodeMeta>) -> Option<(String, u64)> {
     flat.iter()
         .filter_map(|(path, node)| {
@@ -196,7 +205,17 @@ pub fn top_store(flat: &BTreeMap<String, NodeMeta>) -> Option<(String, u64)> {
             let total = sent + received;
             (total > 0).then(|| (path.clone(), total))
         })
-        .max_by_key(|(_, total)| *total)
+        .fold(
+            None,
+            |best: Option<(String, u64)>, (path, total)| match &best {
+                Some((best_path, best_total))
+                    if *best_total > total || (*best_total == total && best_path <= &path) =>
+                {
+                    best
+                }
+                _ => Some((path, total)),
+            },
+        )
 }
 
 /// How many equal clock-time buckets the "tokens over time" chart
@@ -290,6 +309,12 @@ mod tests {
         });
         let flat = flatten_state(&state);
         let mut statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = [
+            ("prime.plan".to_string(), RowKind::Use),
+            ("prime.plan.agent".to_string(), RowKind::Prompt),
+        ]
+        .into_iter()
+        .collect();
         let done = crate::model::RowStatus {
             kind: StatusKind::Done,
             skip_reason: None,
@@ -297,7 +322,7 @@ mod tests {
         };
         statuses.insert("prime.plan".to_string(), done.clone());
         statuses.insert("prime.plan.agent".to_string(), done);
-        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         assert_eq!(result.rows.len(), 2);
         assert_eq!(result.rows[0].path, "prime.plan.agent");
         assert_eq!(result.rows[0].label, "plan \u{203a} agent");
@@ -322,7 +347,8 @@ mod tests {
         });
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.footer.gap_tokens, 150);
     }
@@ -335,7 +361,8 @@ mod tests {
         }});
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let table = largest_stores("prime", &flat, &statuses, Some(&state));
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let table = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         let top = top_store(&flat).expect("a top store");
         assert_eq!(top.0, table.rows[0].path);
         assert_eq!(
@@ -422,7 +449,8 @@ mod tests {
         });
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         assert_eq!(result.rows.len(), 3);
         assert_eq!(result.footer.cost_reporting, 2);
         assert_eq!(result.footer.cost_stores, 3);
@@ -442,7 +470,8 @@ mod tests {
         });
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         assert_eq!(result.footer.cost_label(), Some("$1.50".to_string()));
     }
 
@@ -455,7 +484,8 @@ mod tests {
         });
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         assert_eq!(result.footer.cost_label(), None);
     }
 
@@ -468,7 +498,8 @@ mod tests {
         let state = retried_prompt_state();
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
-        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].tokens_sent, 16);
         assert_eq!(result.rows[0].tokens_received, 29);
