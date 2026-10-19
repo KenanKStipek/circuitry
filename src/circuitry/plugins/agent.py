@@ -15,14 +15,21 @@ this module adds the session's contract on top:
   ``result_file``, ``value`` is the final assistant text.
 * ``raw``: ``engine``, ``session_id``, ``turns``, ``tool_calls``,
   ``tokens`` (``sent``/``received``), ``cost`` when the CLI reports one,
-  ``repair_turn``, and ``transcript`` — the path of a compact log this
-  plugin writes (one line per tool call and per reply; ``params['transcript']``
+  ``repair_turn``, ``context_tokens``, ``context_window``, ``tool_counts``,
+  ``turn_tokens``, ``files_changed``, ``lines_added``, ``lines_removed``,
+  and ``transcript`` — the path of a compact log this plugin writes, one
+  JSON line per turn header, tool call and reply (``params['transcript']``
   says where, see below). The transcript itself never goes into state.
   Claude Code adds ``permission_mode``, ``project_settings`` and
   ``project_instructions``. ``meta.tokens_sent``, ``meta.tokens_received``
   and ``meta.cost_usd`` hold the same totals as ``raw.tokens``/``raw.cost``
   (the session's usage over every turn, including a repair turn), so the
   run's totals and the ``dynamic`` tree's token sums count this effect.
+* ``meta.live``: a summary of the session published while it runs, through
+  :mod:`circuitry.agent_live` (#636) — numbers, times, ids, the model name
+  and tool names only, never prompt/reply/thinking text, tool arguments,
+  tool output, file contents or the environment. See
+  ``docs/plugins/agent.md``.
 * A turn that fails (the CLI errors, or times out) after the session has an
   id or an earlier turn has completed ends the effect as an error (``ok:
   false``, so ``on_error`` and retries behave as for any other tool

@@ -1694,6 +1694,23 @@ With [`runtime.state.prompt_sent: sha256`](#recording-the-prompt-text-runtimesta
     cwd: {from: input.work_dir}
 ```
 
+**The `agent` tool's live progress.** While the session's CLI is running,
+its node gains `meta.live`: a summary (numbers, times, ids, the model
+name and tool names only — never prompt/reply/thinking text, tool
+arguments, tool output, file contents or the environment), published
+through `Store.set` the same way `meta.waiting_for` is, so it reaches
+`--live-state` at most once a second with no new event type. It is
+removed once the attempt ends, success or failure, except when the run
+itself is interrupted, when it is left as the only record of that
+attempt's session id and transcript. A retried attempt gets a fresh one,
+carrying `earlier_attempts: {tokens_sent, tokens_received}` from before
+it; the repair turn continues the same one. The compact transcript
+(`meta.raw.transcript`) is JSONL, written as the session goes rather than
+only after each turn, and `meta.raw` gains `context_tokens`,
+`context_window`, `tool_counts`, `turn_tokens`, `files_changed`,
+`lines_added` and `lines_removed` once the attempt ends. See
+[`docs/plugins/agent.md`](./plugins/agent.md#live-progress-while-the-session-runs).
+
 ---
 
 ## Concurrency Limits
