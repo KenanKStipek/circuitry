@@ -465,18 +465,17 @@ impl App {
                                 Pane::Details
                             }
                         }
-                        // Finding 12's own rule, same reason: the
-                        // story pane isn't drawn at all below the
-                        // three-pane layout, so `tab` must not land
-                        // on it with nothing to show or scroll.
+                        // The story pane isn't drawn at all below
+                        // the three-pane layout, so `tab` must not
+                        // land on it with nothing to show or scroll.
                         Pane::Details | Pane::State if self.story_viewport > 0 => Pane::Story,
                         Pane::Details | Pane::State | Pane::Story => Pane::Tree,
                     }
                 } else {
-                    // Finding 12: on a small terminal the state pane
-                    // isn't drawn at all (`tui::draw` zeroes
-                    // `state_viewport` the same frame) — `tab` must not
-                    // focus a pane with nothing to show or scroll.
+                    // On a small terminal the state pane isn't drawn
+                    // at all (`tui::draw` zeroes `state_viewport` the
+                    // same frame) — `tab` must not focus a pane with
+                    // nothing to show or scroll.
                     match self.pane {
                         Pane::Tree => Pane::Details,
                         Pane::Details if self.state_viewport > 0 => Pane::State,
@@ -502,6 +501,18 @@ impl App {
             // full log). Both no-ops on any other screen.
             KeyCode::Char('s') if self.screen == Screen::Flow => {
                 self.flow_selected_shows_state = !self.flow_selected_shows_state;
+                // Toggling back to the step view must not leave the
+                // selected pane still showing (or focused on) the
+                // state tree `s` had swapped in: `details_source`
+                // stays whatever the state pane's own navigation last
+                // set it to, and `pane` itself can still be `State`,
+                // which is no longer drawn at all once this flips.
+                if !self.flow_selected_shows_state {
+                    self.details_source = Pane::Tree;
+                    if self.pane == Pane::State {
+                        self.pane = Pane::Details;
+                    }
+                }
             }
             KeyCode::Char('l') if self.screen == Screen::Flow => {
                 self.flow_story_shows_log = !self.flow_story_shows_log;
@@ -883,6 +894,32 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
         out.push(row);
     }
     out
+}
+
+/// `visible_rows`, further narrowed to exactly what the Flow screen's
+/// own pane draws (issue #635's P0): a path the Flow screen hides
+/// entirely (the untaken branch's own real steps) or merges away (a
+/// single-pass loop's own pass) never appears in `flow_rows` under
+/// its own path at all, so filtering by "does a real row in
+/// `flow_rows` still have this path" drops exactly those, leaving
+/// `j`/`k`/PgUp/PgDn/Home/End to move over the same rows the pane
+/// itself draws, in the same order -- without needing a second,
+/// `FlowRow`-shaped movement implementation alongside the real-`Row`
+/// one every other screen already shares.
+pub fn visible_rows_for_flow<'a>(
+    rows: &'a [Row],
+    flow_rows: &[oscilloscope_core::flow::FlowRow],
+    app: &App,
+) -> Vec<&'a Row> {
+    let selectable: std::collections::BTreeSet<&str> = flow_rows
+        .iter()
+        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+        .map(|r| r.path.as_str())
+        .collect();
+    visible_rows(rows, app)
+        .into_iter()
+        .filter(|r| selectable.contains(r.path.as_str()))
+        .collect()
 }
 
 fn matches_or_has_match(rows: &[Row], row: &Row, pred: &dyn Fn(&Row) -> bool) -> bool {
@@ -1549,9 +1586,9 @@ mod tests {
         assert_eq!(app.pane, Pane::Tree);
     }
 
-    /// Finding 12: a small terminal drops the state pane entirely
-    /// (`tui::draw` zeroes `state_viewport` that same frame) — `tab`
-    /// must skip straight from details back to the orchestration pane.
+    /// A small terminal drops the state pane entirely (`tui::draw`
+    /// zeroes `state_viewport` that same frame) — `tab` must skip
+    /// straight from details back to the orchestration pane.
     #[test]
     fn tab_skips_the_state_pane_when_it_is_not_drawn() {
         let rows = [row("prime.a", 1, StatusKind::Done)];

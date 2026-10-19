@@ -154,17 +154,19 @@ decision: a named `if` gets a row of its own, `◆ <name> → then`/`→ else`
 branch as one dim line underneath (`· else: <its first step>`, `(+N more)`,
 or `· else: nothing` when it's empty) — never a row per untaken step. An
 unnamed `if` writes no node and fires no event, so its own row
-(`◆ if → then`) is inferred instead: once any step of either branch has
-appeared, that branch is read as taken; with no `else`, it reads
-`◆ if → else (nothing ran)` once the enclosing step has finished with
-nothing from either branch having started; until either happens, it reads
-`◆ if …`. When both branches would read as the same step names, it reads
-`◆ if → ?` instead of guessing. At 100 columns and wider, a decision's own
-condition (the CEL expression, or a model-mode template's first line, cut
-with `…`) is a dim second line under it; narrower, it's in the selected
-pane only. A named loop with exactly one pass so far merges into one row,
-`⟲ <name>  pass N of M`; more than one pass keeps one row each, as
-before. Two or more consecutive, finished, sub-second tool steps still
+(`◆ if <condition, cut short> → then`) is inferred instead: once any step
+of either branch has appeared, that branch is read as taken; with no
+`else`, it reads `◆ if … → else (nothing ran)` once the enclosing step
+has finished, or once a later step in the same chain has started, with
+nothing from either branch having started; until either happens, it
+reads `◆ if …`. When both branches would read as the same step names, it
+reads `◆ if → ?` instead of guessing. At 100 columns and wider, a
+decision's own condition (the CEL expression, or a model-mode template's
+first line, cut with `…`) is a dim second line under it; narrower, it's
+in the selected pane only. A named loop with a known total of exactly
+one pass, or an unsettled (`dynamic`) total once the loop itself has
+finished with only one pass observed, merges into one row, `⟲ <name>
+pass N of M`; more than one pass keeps one row each, as before. Two or more consecutive, finished, sub-second tool steps still
 fold into one `N quick steps` row (`⏎` expands it in place), and the
 pane's own footer totals every quick step in the run
 (`quick steps folded: 9 · 2.1s`) and gives a health line

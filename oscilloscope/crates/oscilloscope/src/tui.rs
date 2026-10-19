@@ -677,6 +677,7 @@ fn focus_step_lines(
                 engine,
                 model,
                 note,
+                ..
             } => {
                 let mut parts = Vec::new();
                 if let Some(engine) = engine {
@@ -2157,9 +2158,10 @@ fn draw_dialog_overlay(
 /// and label, the loop-progress/duration/dim-provider fragments every
 /// ordinary row already has, plus the Flow screen's own additions --
 /// a decision's `→ then`/`→ else`, the untaken-branch summary's own
-/// dim styling, and the start/tokens/cost columns, right-aligned and
-/// dropped narrowest-first. `show_condition` is `FLOW_CONDITION_LINE_
-/// MIN_WIDTH` already checked by the caller once for the whole pane.
+/// dim styling, and the start/tokens/cost columns, appended after the
+/// label and dropped narrowest-first. `show_condition` is `FLOW_
+/// CONDITION_LINE_MIN_WIDTH` already checked by the caller once for
+/// the whole pane.
 fn flow_row_lines(
     row: &oscilloscope_core::flow::FlowRow,
     columns: FlowColumns,
@@ -2223,7 +2225,7 @@ fn flow_row_lines(
                 ));
             }
         }
-        FlowRowKind::UntakenBranch => {
+        FlowRowKind::UntakenBranch { .. } => {
             spans.push(Span::styled(
                 format!("{indent}· {}", row.label),
                 Style::default().fg(ctx.theme.dim),
@@ -2297,6 +2299,41 @@ fn flow_columns_for_width(width: u16) -> FlowColumns {
     }
 }
 
+/// Resolves `app.selected_path` (set by an ordinary move, or by
+/// follow/`⏎`-on-overview picking a real tree path directly) to
+/// the Flow pane's own drawn row (issue #635's P0): a path under a
+/// single-pass loop's own merged pass maps to that loop's row, and a
+/// path hidden entirely under a decision's untaken branch maps to
+/// that branch's own dim summary line -- `rows` is checked for an
+/// exact match first, so an ordinary selection (already a real,
+/// drawn row's own path) never takes either fallback.
+fn flow_selected_row_path(
+    rows: &[&oscilloscope_core::flow::FlowRow],
+    selected: &str,
+) -> Option<String> {
+    if let Some(row) = rows.iter().find(|r| r.path == selected) {
+        return Some(row.path.clone());
+    }
+    if let Some(row) = rows
+        .iter()
+        .find(|r| r.merged_pass && selected.starts_with(&format!("{}.iter_", r.path)))
+    {
+        return Some(row.path.clone());
+    }
+    rows.iter().find_map(|r| match &r.kind {
+        oscilloscope_core::flow::FlowRowKind::UntakenBranch { paths } => {
+            is_under_any_untaken_path(selected, paths).then(|| r.path.clone())
+        }
+        _ => None,
+    })
+}
+
+fn is_under_any_untaken_path(path: &str, roots: &[String]) -> bool {
+    roots
+        .iter()
+        .any(|root| path == root || path.starts_with(&format!("{root}.")))
+}
+
 /// The flow pane (issue #635's left pane): today's orchestration-pane
 /// keys (`↑↓`/`jk`, `PgUp`/`PgDn`, collapse, follow, `z`, `e`, `/`,
 /// `⏎` on a quick-steps row) still act on the real `Row`s
@@ -2324,11 +2361,6 @@ fn draw_flow_pane(
     let footer_lines = 3u16;
     let viewport = area.height.saturating_sub(2 + footer_lines) as usize;
     app.tree_viewport = viewport;
-    let selected_idx = app
-        .selected_path
-        .as_deref()
-        .and_then(|p| visible.iter().position(|r| r.path == p));
-    app.tree_scroll = clamp_scroll(app.tree_scroll, selected_idx, visible.len(), viewport);
 
     let columns = if one_column {
         FlowColumns {
@@ -2342,42 +2374,58 @@ fn draw_flow_pane(
     let show_condition = frame_width >= thresholds::FLOW_CONDITION_LINE_MIN_WIDTH;
     let visible_paths: std::collections::BTreeSet<&str> =
         visible.iter().map(|r| r.path.as_str()).collect();
+    // Issue #635's P0: the one list of drawn lines, in the exact
+    // order they're drawn -- a real row collapse/filter/errors-only
+    // would hide, by the same rule `visible_paths` already applies
+    // elsewhere; the synthetic rows this module invents (an unnamed
+    // decision, `inferred: true`; an untaken branch's summary line)
+    // carry no real path for that state to hide at all, so they're
+    // always drawn. Scrolling and selection both move over exactly
+    // this list, never the orchestration pane's own `visible` -- that
+    // list still has the untaken branch's own hidden real rows (never
+    // drawn here at all) and the pass a single-pass loop merged away
+    // (drawn as the loop row instead), so clamping or indexing
+    // against it directly could point `j`/`k`/the scrollbar at a
+    // position nothing here actually shows.
+    let drawable: Vec<&oscilloscope_core::flow::FlowRow> = screen
+        .rows
+        .iter()
+        .filter(|row| {
+            !oscilloscope_core::flow::is_real_flow_row(&row.kind)
+                || visible_paths.contains(row.path.as_str())
+        })
+        .collect();
+    let selected_key = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| flow_selected_row_path(&drawable, p));
+    let selected_idx = selected_key
+        .as_deref()
+        .and_then(|key| drawable.iter().position(|r| r.path == key));
+    app.tree_scroll = clamp_scroll(app.tree_scroll, selected_idx, drawable.len(), viewport);
+
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut shown = 0usize;
-    for row in &screen.rows {
-        // Only a row that shares a real tree node's own path is
-        // ever hidden by collapse/filter/errors-only -- the
-        // synthetic rows this module invents (an unnamed decision,
-        // `inferred: true`; an untaken branch's summary line) carry
-        // no such path, and are always drawn.
-        let is_real = !matches!(
-            row.kind,
-            oscilloscope_core::flow::FlowRowKind::UntakenBranch
-                | oscilloscope_core::flow::FlowRowKind::Decision { inferred: true, .. }
-        );
-        if is_real && !visible_paths.contains(row.path.as_str()) {
-            continue;
-        }
-        if shown < app.tree_scroll {
-            if is_real {
-                shown += 1;
-            }
-            continue;
-        }
-        if is_real {
-            shown += 1;
-        }
-        let selected = is_real && app.selected_path.as_deref() == Some(row.path.as_str());
+    for (idx, row) in drawable.iter().enumerate().skip(app.tree_scroll) {
+        let selected = selected_key.as_deref() == Some(row.path.as_str());
         lines.extend(flow_row_lines(row, columns, show_condition, selected, ctx));
-        if lines.len() >= viewport.saturating_add(app.tree_scroll).saturating_add(4) {
+        if lines.len() >= viewport.saturating_add(4) {
             // A generous overshoot margin, trimmed by the `List`
             // widget's own area -- this just stops building lines
             // for an arbitrarily long run far past what fits.
             break;
         }
+        let _ = idx;
     }
 
-    let more_planned = visible
+    let selectable: Vec<&oscilloscope_core::flow::FlowRow> = drawable
+        .iter()
+        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+        .copied()
+        .collect();
+    let selectable_idx = selected_key
+        .as_deref()
+        .and_then(|key| selectable.iter().position(|r| r.path == key));
+    let more_planned = drawable
         .iter()
         .skip(app.tree_scroll + viewport)
         .filter(|r| r.status.kind == oscilloscope_core::model::StatusKind::Pending)
@@ -2407,7 +2455,7 @@ fn draw_flow_pane(
         title.push_str("(following) ");
     }
     title.push_str("◆ decision ⟲ loop ▶ running");
-    match scroll_indicator(selected_idx, visible.len(), viewport) {
+    match scroll_indicator(selectable_idx, selectable.len(), viewport) {
         Some(indicator) => title.push_str(&indicator),
         None => title.push(' '),
     }
@@ -2540,7 +2588,8 @@ fn flow_selected_step_lines(
     let asked = match &step.detail {
         FocusDetail::Prompt { snippet, .. } => snippet.clone(),
         FocusDetail::Tool { command } => command.clone(),
-        FocusDetail::Agent { .. } | FocusDetail::Plain => None,
+        FocusDetail::Agent { command, .. } => command.clone(),
+        FocusDetail::Plain => None,
     };
     if let Some(asked) = asked {
         lines.push(Line::styled("asked:", dim));
@@ -2576,7 +2625,8 @@ fn flow_selected_step_lines(
             engine,
             model,
             note,
-        } => {
+            ..
+        } if running => {
             let mut parts = Vec::new();
             if let Some(engine) = engine {
                 parts.push(engine.clone());
@@ -2617,8 +2667,7 @@ fn flow_selected_step_lines(
                     }
                 }
             }
-            FocusDetail::Agent { .. } => {}
-            FocusDetail::Tool { .. } | FocusDetail::Plain => {
+            FocusDetail::Agent { .. } | FocusDetail::Tool { .. } | FocusDetail::Plain => {
                 if let Some(value) = &step.value {
                     if !value.is_empty() {
                         produced.push(Line::from(value.clone()));

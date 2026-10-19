@@ -10,7 +10,7 @@ expression: text
 "│ok                                                                  │"
 "│                                                                    │"
 "└────────────────────────────────────────────────────────────────────┘"
-"┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running 4/9 ─────────────┐"
+"┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running ─────────────────┐"
 "│✓ prime   2.0s                                                      │"
 "│  ✓ 2 quick steps   0.4s                                            │"
 "│  ◆ gate  → then   0.0s                                             │"

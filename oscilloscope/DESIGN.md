@@ -538,10 +538,12 @@ reach: a top-level unnamed `if`, one directly under a tree `dynamic`'s
 `Parallel` branches, and one inside a named loop's own pass body (its
 `iter_*` placeholder resolved against the real pass paths the rows
 actually have). Two branches that would read as the same step names
-read `◆ if → ?` rather than guessing. A named loop with exactly one
-observed pass merges its own container row with that one pass row into
-a single `⟲ <name>  pass N of M` line; more than one pass keeps one
-row per pass, as the orchestration pane already did. The pane's own
+read `◆ if → ?` rather than guessing. A named loop with a known total of
+exactly one pass, or an unsettled (`dynamic`) total once the loop
+itself has finished with only one pass observed, merges its own
+container row with that one pass row into a single `⟲ <name>  pass N
+of M` line; more than one pass keeps one row per pass, as the
+orchestration pane already did. The pane's own
 footer totals every quick step in the run (from `unfolded_rows`, the
 same way the overview's own flow card already counts them) and a
 health line (failed/retrying/warning counts, read off the already-
@@ -564,9 +566,12 @@ capped at 2,000 lines, filtered to `LogKind::{RunStart, RunEnd,
 Decision, Report, Failure}` — every other kind, such as a plain `Start`/
 `End`, is pushed to `--log`/the log pane same as ever but never enters
 the story) and every unnamed `if`'s own inferred decision this same
-build resolved, sorted by each entry's own raw timestamp (RFC-3339
-sorts correctly as a plain string within one run). `l` swaps it for
-the full log instead (`App::flow_story_shows_log`).
+build resolved, sorted by each entry's own parsed instant (never a
+plain string compare -- an `--events` line's own millisecond
+timestamp and a state-sourced one's microsecond one aren't
+lexicographically comparable at all), with a missing timestamp
+sorting last. `l` swaps it for the full log instead (`App::flow_
+story_shows_log`).
 
 **The header line (issue #626).** One line, shared by every screen,
 replacing the three-row header above: the scope icon's own trace (one

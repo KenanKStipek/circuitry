@@ -410,6 +410,11 @@ pub enum FocusDetail {
     Agent {
         engine: Option<String>,
         model: Option<String>,
+        /// The same `params_rendered.command` an ordinary tool step's
+        /// own [`FocusDetail::Tool::command`] reads -- an agent step
+        /// is still a `tool` leaf underneath, so its own invocation
+        /// is "asked" the same way.
+        command: Option<String>,
         note: &'static str,
     },
     Plain,
@@ -609,6 +614,11 @@ fn build_focused_step(
                 .and_then(|m| m.get("model"))
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            command: details
+                .meta_summary
+                .iter()
+                .find(|(k, _)| k == "command")
+                .map(|(_, v)| v.clone()),
             note: AGENT_LIVE_DATA_NOTE,
         }
     } else if row.kind == RowKind::Tool {

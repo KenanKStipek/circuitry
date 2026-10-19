@@ -2027,8 +2027,12 @@ fn run_tui(
 
         // K4: a full rebuild is forced at least once a second even
         // with nothing else dirty, so the header's own elapsed time
-        // still visibly ticks while the run is otherwise quiet.
-        if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
+        // still visibly ticks while the run is otherwise quiet --
+        // once the engine process has exited, that elapsed time is
+        // frozen at its own final value, so forcing a rebuild with
+        // nothing changed would only cost cycles (the Flow screen's
+        // own model among them) for no visible difference at all.
+        if exit_status.is_none() && last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
             needs_rebuild = true;
             needs_draw = true;
         }
@@ -2127,7 +2131,18 @@ fn run_tui(
         // only and the selection itself can change on a key alone),
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
-        let visible = keys::visible_rows(&render_state.rows, &app);
+        // Issue #635's P0: on the Flow screen, movement must land only
+        // on a row the Flow pane actually draws, never on a step
+        // hidden under an untaken branch or merged into its own
+        // single-pass loop row -- `visible_rows_for_flow` narrows the
+        // same real-`Row` list every other screen moves over to
+        // exactly those.
+        let visible = match &flow_screen {
+            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            _ => keys::visible_rows(&render_state.rows, &app),
+        };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
         // Third finding: never call into
@@ -3207,8 +3222,12 @@ fn run_tui_watch(
             }
         }
 
-        // K4, same as `run_tui`.
-        if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
+        // K4, same as `run_tui`: forced only while the run itself
+        // is still going, since a finished run's own elapsed time is
+        // frozen and a forced rebuild past that point would only
+        // cost cycles (the Flow screen's own model among them) for no
+        // visible difference at all.
+        if !ended && last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
             needs_rebuild = true;
             needs_draw = true;
         }
@@ -3303,7 +3322,14 @@ fn run_tui_watch(
                 &now_str,
             );
         }
-        let visible = keys::visible_rows(&render_state.rows, &app);
+        // Issue #635's P0: same narrowing as `osi <doc>`'s own main
+        // loop -- see the comment there.
+        let visible = match &flow_screen {
+            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            _ => keys::visible_rows(&render_state.rows, &app),
+        };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
         // Third finding: never call into
