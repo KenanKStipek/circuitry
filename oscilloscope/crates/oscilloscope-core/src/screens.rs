@@ -946,6 +946,15 @@ pub struct CostScreen {
     /// One series per top-level phase, in the phase strip's own
     /// order (DESIGN.md: "one band per top-level step").
     pub tokens_over_time: Vec<(String, Vec<u64>)>,
+    /// The exact start/end the chart's own buckets span -- the same
+    /// pair [`tokens_over_time_by_phase`](crate::cost::tokens_over_time_by_phase)
+    /// was built from, so a front end's own clock-axis labels always
+    /// name the span the bars actually cover, never a separate
+    /// "now" of its own that could disagree with it. `chart_start_ts`
+    /// is `None` only before the run has a start time at all, in
+    /// which case every bucket is already empty too.
+    pub chart_start_ts: Option<String>,
+    pub chart_end_ts: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -980,6 +989,8 @@ pub fn build_cost_screen(
         stores_without_measure,
         stores,
         tokens_over_time,
+        chart_start_ts: header.run_start_ts.clone(),
+        chart_end_ts: end.to_string(),
     }
 }
 
