@@ -25,9 +25,17 @@
 //! underlying `HashMap` directly ([`cel::objects::Map`]'s own `map`
 //! field, already public — `equality.rs`'s own map-equality arm reads
 //! it the same way), bypassing [`Map::get`](cel::objects::Map::get)
-//! specifically to avoid that cross-conversion. A `bool` key against an
-//! `int`/`uint` lookup (or the reverse) is a narrower, asymmetric
-//! divergence this doesn't close — see [`python_index`]'s own doc
+//! specifically to avoid that cross-conversion. An `int`/`uint` probe
+//! against a `bool`-keyed entry (or the reverse: a `bool` probe
+//! against an `int`/`uint`-keyed entry) is celpy's own real asymmetry,
+//! reproduced too — `BoolType` has no `__eq__` override in celpy, so a
+//! plain dict lookup with an `int`/`uint` probe finds a `bool`-keyed
+//! entry (hashing and comparing through the plain `int` `BoolType`
+//! subclasses), but a `bool` probe against an `int`/`uint`-keyed entry
+//! still raises (`IntType`/`UintType.__eq__`'s own `@type_matched`
+//! has no exemption for the reverse direction) — confirmed against the
+//! real evaluator, not assumed from the value arm above. See
+//! [`python_index`]'s own doc
 //! comment.
 //!
 //! [`paths::rewrite`](crate::paths::rewrite) substitutes [`strict_index_fn`]
@@ -39,9 +47,12 @@
 //! help).
 
 use cel::common::ast::operators;
-use cel::extractors::Arguments;
-use cel::objects::Key;
-use cel::{Context, ExecutionError, Value};
+use cel::common::types::{
+    CelBytes as BorrowedBytes, CelList as BorrowedList, CelMap as BorrowedMap,
+    CelMapKey as BorrowedMapKey, CelString as BorrowedString,
+};
+use cel::common::value::Val;
+use cel::{Context, ExecutionError, FunctionContext, Value};
 
 const STRICT_INDEX: &str = "__electricity_python_index";
 
@@ -82,60 +93,96 @@ fn python_sequence_index(index: &Value, len: usize) -> Result<usize, ()> {
 }
 
 /// celpy's `list`/`str`/`bytes.__getitem__`, and a strict (non-
-/// cross-converting) map lookup — `Err(())` for an index with no CEL
-/// [`Key`] counterpart, out of range, or a container that isn't a
-/// `list`/`map`/`string`/`bytes` at all.
-fn python_index(container: &Value, index: &Value) -> Result<Value, ()> {
-    match container {
-        Value::List(items) => {
-            let idx = python_sequence_index(index, items.len())?;
-            Ok(items[idx].clone())
+/// cross-converting) map lookup, on a borrowed container rather than
+/// one `strict_index_fn` has already fully converted into an owned
+/// [`Value`] — `Err(())` for an index with no CEL key counterpart, out
+/// of range, or a container that isn't a `list`/`map`/`string`/`bytes`
+/// at all. Only the single looked-up element is ever converted via
+/// [`Value::try_from`], not the whole container (issue #400): a `list`
+/// index copies just that one element, out of a `DefaultList` whose own
+/// elements `cel` already stores as individually boxed `Val`s, rather
+/// than rebuilding every element into an owned `Value::List` only to
+/// throw away every one but the indexed element, paid again on every
+/// pass of a comprehension like `state.l.filter(x, state.l[0] == 0)`.
+fn python_index(container: &dyn Val, index: &Value) -> Result<Value, ()> {
+    if let Some(items) = container.downcast_ref::<BorrowedList>() {
+        let idx = python_sequence_index(index, items.inner().len())?;
+        return Value::try_from(items.inner()[idx].as_ref()).map_err(|_| ());
+    }
+    if let Some(s) = container.downcast_ref::<BorrowedString>() {
+        // Python indexes a `str` by Unicode code point, not by byte —
+        // `s.inner().chars()` is the Rust equivalent. Collects only the
+        // characters, never the whole container's `Value` tree.
+        let chars: Vec<char> = s.inner().chars().collect();
+        let idx = python_sequence_index(index, chars.len())?;
+        return Ok(Value::String(std::sync::Arc::new(chars[idx].to_string())));
+    }
+    if let Some(b) = container.downcast_ref::<BorrowedBytes>() {
+        // Python's `bytes.__getitem__` with a plain (non-slice) index
+        // returns the byte as an `int`, not a length-1 `bytes`.
+        let bytes = b.inner();
+        let idx = python_sequence_index(index, bytes.len())?;
+        return Ok(Value::Int(i64::from(bytes[idx])));
+    }
+    if let Some(map) = container.downcast_ref::<BorrowedMap>() {
+        return borrowed_map_index(map, index);
+    }
+    Err(())
+}
+
+/// [`python_index`]'s `map` arm: a strict (non-cross-converting) key
+/// match through the underlying `HashMap` directly -- celpy's own
+/// `MapType.__getitem__` raises on an `int`/`uint` key mismatch rather
+/// than finding the entry the way `cel`'s own, cross-converting
+/// [`cel::objects::Map::get`] does (module docs) -- reading only the
+/// one matched entry's value rather than every one in the map.
+fn borrowed_map_index(map: &BorrowedMap, index: &Value) -> Result<Value, ()> {
+    let key: Option<BorrowedMapKey> = match index {
+        Value::Int(n) => Some(BorrowedMapKey::from(*n)),
+        Value::UInt(n) => Some(BorrowedMapKey::from(*n)),
+        Value::String(s) => Some(BorrowedMapKey::from(s.as_str().to_string())),
+        Value::Bool(b) => Some(BorrowedMapKey::from(*b)),
+        _ => None,
+    };
+    if let Some(key) = key {
+        if let Some(value) = map.inner().get(&key) {
+            return Value::try_from(value.as_ref()).map_err(|_| ());
         }
-        Value::String(s) => {
-            // Python indexes a `str` by Unicode code point, not by byte
-            // — `s.chars()` is the Rust equivalent.
-            let chars: Vec<char> = s.chars().collect();
-            let idx = python_sequence_index(index, chars.len())?;
-            Ok(Value::String(std::sync::Arc::new(chars[idx].to_string())))
-        }
-        Value::Bytes(b) => {
-            // Python's `bytes.__getitem__` with a plain (non-slice)
-            // index returns the byte as an `int`, not a length-1
-            // `bytes`.
-            let idx = python_sequence_index(index, b.len())?;
-            Ok(Value::Int(i64::from(b[idx])))
-        }
-        Value::Map(map) => {
-            // `cel::objects::Map::get` cross-converts an int/uint key
-            // the way `cel`'s native map indexing always has; celpy's
-            // own `IntType`/`UintType.__eq__` is `@type_matched` and
-            // raises for the other one instead of finding it — this
-            // looks the key up directly through the underlying
-            // `HashMap`, matching celpy's own strict type match. A
-            // `bool` key is a narrower, asymmetric case this doesn't
-            // reproduce either way: celpy's own `BoolType`, lacking an
-            // `__eq__` override, lets an `int` *probe* find a `bool`
-            // *stored* key (`BoolType.__eq__` resolves through the
-            // plain `int` it subclasses), but not the reverse (an
-            // `int`-keyed entry has no overridden `__eq__` to fall back
-            // through for a `bool` probe, so `IntType`'s own
-            // `@type_matched` raises) — a correct implementation would
-            // have to know which side was the lookup key and which was
-            // already in the map, not just compare the two. Rare enough
-            // (fourth review finding 5) that this crate pins the
-            // current behaviour (`map.rs` test
-            // `bool_key_against_an_int_entry_is_a_known_divergence`)
-            // rather than reproducing it.
-            let key: Key = index.clone().try_into().map_err(|_| ())?;
-            map.map.get(&key).cloned().ok_or(())
-        }
-        _ => Err(()),
+    }
+    // celpy's own asymmetry (module docs): a plain dict lookup with an
+    // `int`/`uint` probe finds a `bool`-keyed entry (`BoolType` has no
+    // `__eq__` override, so it hashes and compares through the plain
+    // `int` it subclasses) even though the strict key match above never
+    // matches a bool key against an int/uint probe directly. Only tried
+    // for an `int`/`uint` probe that missed above — a `bool` probe keeps
+    // raising against an `int`/`uint`-keyed entry, since
+    // `IntType`/`UintType.__eq__`'s own `@type_matched` has no exemption
+    // for the reverse direction.
+    let bool_equivalent = match index {
+        Value::Int(n) if *n == 0 || *n == 1 => Some(*n == 1),
+        Value::UInt(n) if *n == 0 || *n == 1 => Some(*n == 1),
+        _ => None,
+    };
+    match bool_equivalent.and_then(|b| map.inner().get(&BorrowedMapKey::from(b))) {
+        Some(value) => Value::try_from(value.as_ref()).map_err(|_| ()),
+        None => Err(()),
     }
 }
 
-fn strict_index_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
-    python_index(&args[0], &args[1])
-        .map_err(|()| ExecutionError::UnsupportedIndex(args[1].clone(), args[0].clone()))
+fn strict_index_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
+    if ftx.args.len() != 2 {
+        return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
+    }
+    let container_ref = ftx.args[0].as_ref();
+    let index_ref = ftx.args[1].as_ref();
+    let index = Value::try_from(index_ref)?;
+    match python_index(container_ref, &index) {
+        Ok(value) => Ok(value),
+        Err(()) => Err(ExecutionError::UnsupportedIndex(
+            index,
+            Value::try_from(container_ref)?,
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -200,22 +247,37 @@ mod tests {
     }
 
     #[test]
-    fn bool_key_against_an_int_entry_is_a_known_divergence() {
-        // fourth review finding 5: `cel`'s own map indexing treats a
-        // `bool` key as entirely distinct from an `int`/`uint` one in
-        // both directions, so this always raises on a cross-type
-        // lookup. celpy's own asymmetry means that's only a real
-        // divergence one way — an `int`/`uint` probe *finds* a
-        // `bool`-keyed entry in celpy (confirmed against the real
-        // evaluator: `state.m[1] == 'a'` with `{m: {true: 'a'}}` is
-        // `true`), so this crate's raise here is pinned as a known
-        // divergence (`python_index`'s own doc comment). The reverse
-        // (a `bool` probe against an `int`/`uint`-keyed entry) raises in
-        // celpy too, so that assertion isn't a divergence at all — both
-        // are asserted here for the one behavior (always raise) that
-        // makes this crate's own rule simple to state.
-        assert!(eval("{true: 'a'}[1]").is_err());
+    fn int_or_uint_probe_finds_a_bool_keyed_entry() {
+        // celpy's own asymmetry (confirmed against the real evaluator:
+        // `state.m[1] == 'a'`/`state.m[1u] == 'a'` with `{m: {true:
+        // 'a'}}` are both `true`) — `BoolType` has no `__eq__` override,
+        // so a plain dict lookup with an `int`/`uint` probe resolves
+        // through the plain `int` it subclasses.
+        assert_eq!(
+            eval("{true: 'a'}[1]"),
+            Ok(Value::String(StdArc::new("a".into())))
+        );
+        assert_eq!(
+            eval("{true: 'a'}[1u]"),
+            Ok(Value::String(StdArc::new("a".into())))
+        );
+        assert_eq!(
+            eval("{false: 'a'}[0]"),
+            Ok(Value::String(StdArc::new("a".into())))
+        );
+        // A probe that isn't 0 or 1 never matches a `bool`-keyed entry,
+        // whether or not one is present.
+        assert!(eval("{true: 'a'}[2]").is_err());
+    }
+
+    #[test]
+    fn bool_probe_against_an_int_entry_still_raises() {
+        // The reverse direction is not a divergence at all: celpy's
+        // own `IntType`/`UintType.__eq__` is `@type_matched` with no
+        // exemption for a `bool` probe, so this raises in celpy too
+        // (confirmed against the real evaluator).
         assert!(eval("{1: 'a'}[true]").is_err());
+        assert!(eval("{1u: 'a'}[true]").is_err());
     }
 
     #[test]
@@ -238,6 +300,19 @@ mod tests {
         assert_eq!(eval("b'abc'[0]"), Ok(Value::Int(97)));
         assert_eq!(eval("b'abc'[-1]"), Ok(Value::Int(99)));
         assert!(eval("b'abc'[3]").is_err());
+    }
+
+    #[test]
+    fn out_of_range_index_raises_with_a_pinned_error_text() {
+        // The exact operand rendering this crate's own error text
+        // carries, not just whether it raised -- this is a Rust
+        // ExecutionError's own Debug-based Display, not celpy's,
+        // which the differential corpus never pins the text of either
+        // (DESIGN.md §1/§12, the third-party-library carve-out).
+        assert_eq!(
+            eval("[1][5]"),
+            Err("Cannot use value Int(5) to index List([Int(1)])".to_string())
+        );
     }
 
     #[test]

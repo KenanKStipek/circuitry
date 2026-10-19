@@ -13,10 +13,93 @@
 //! time, and a genuinely malformed expression must still raise rather
 //! than silently resolve to "absent".
 
-use cel::common::ast::{EntryExpr, Expr, IdedExpr};
+use cel::common::ast::{EntryExpr, Expr, IdedExpr, operators};
 use electricity_value::{Dict, Value};
 
 use crate::{equality, indexing, macros, ordering};
+
+/// Whether *func_name* names one of this crate's own internal
+/// registered functions -- [`equality`], [`ordering`] and [`indexing`]'s
+/// own `__electricity_strict_*`/`__electricity_python_index`
+/// substitutions for `cel`'s native operators, and [`macros`]'s own
+/// `__electricity_false` marker for `has()` -- never a name a user
+/// expression could legitimately call directly (issue #400).
+fn is_reserved_name(func_name: &str) -> bool {
+    func_name.starts_with("__electricity_")
+}
+
+/// The first reserved-name call ([`is_reserved_name`]) a user wrote
+/// directly in *expr*'s own parse tree, or `None` if it contains none.
+///
+/// `cel`'s own macro expansion already ran by the time this crate ever
+/// sees a compiled [`IdedExpr`] -- `has(X)` has already become a call to
+/// [`macros`]'s own marker function, indistinguishable in shape from a
+/// user writing that same call out by hand -- so this recognizes
+/// exactly the one shape [`macros::has_macro_expander`] produces
+/// (`!@not_strictly_false(__electricity_false(X))`) and only descends
+/// into *X*, the user-authored part, rather than flagging the marker
+/// call itself. Every other occurrence of a reserved name anywhere in
+/// the tree -- including `__electricity_false` called outside that
+/// exact shape, and every `__electricity_strict_*`/
+/// `__electricity_python_index` call, which [`rewrite`] (below) never
+/// produces until *after* this runs -- is a direct user reference,
+/// caught here before [`crate::compile`] ever hands the tree to
+/// [`rewrite`] or to evaluation.
+pub fn reserved_call_name(expr: &IdedExpr) -> Option<String> {
+    find_reserved(&expr.expr)
+}
+
+fn find_reserved(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Call(call) => {
+            if call.target.is_none()
+                && call.func_name == operators::NOT_STRICTLY_FALSE
+                && call.args.len() == 1
+            {
+                if let Expr::Call(inner) = &call.args[0].expr {
+                    if inner.target.is_none()
+                        && macros::is_has_guard(&inner.func_name)
+                        && inner.args.len() == 1
+                    {
+                        return find_reserved(&inner.args[0].expr);
+                    }
+                }
+            }
+            if is_reserved_name(&call.func_name) {
+                return Some(call.func_name.clone());
+            }
+            if let Some(target) = &call.target {
+                if let Some(found) = find_reserved(&target.expr) {
+                    return Some(found);
+                }
+            }
+            call.args.iter().find_map(|arg| find_reserved(&arg.expr))
+        }
+        Expr::Select(select) => find_reserved(&select.operand.expr),
+        Expr::Comprehension(c) => find_reserved(&c.iter_range.expr)
+            .or_else(|| find_reserved(&c.accu_init.expr))
+            .or_else(|| find_reserved(&c.loop_cond.expr))
+            .or_else(|| find_reserved(&c.loop_step.expr))
+            .or_else(|| find_reserved(&c.result.expr)),
+        Expr::List(list) => list
+            .elements
+            .iter()
+            .find_map(|item| find_reserved(&item.expr)),
+        Expr::Map(map) => map.entries.iter().find_map(|entry| {
+            let EntryExpr::MapEntry(e) = &entry.expr else {
+                return None;
+            };
+            find_reserved(&e.key.expr).or_else(|| find_reserved(&e.value.expr))
+        }),
+        Expr::Struct(s) => s.entries.iter().find_map(|entry| {
+            let EntryExpr::StructField(f) = &entry.expr else {
+                return None;
+            };
+            find_reserved(&f.value.expr)
+        }),
+        Expr::Ident(_) | Expr::Literal(_) | Expr::Unspecified => None,
+    }
+}
 
 /// A `state.`-rooted dotted read the parse tree contains, and whether it
 /// is guarded by `has(...)`.

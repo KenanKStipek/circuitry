@@ -164,6 +164,47 @@ def condition(
     }
 
 
+def divergent_condition(
+    expr: str,
+    state: dict,
+    *,
+    electricity_result: bool,
+    strict: bool = False,
+) -> dict:
+    """A documented, permanent divergence (issue #400): both engines
+    evaluate *expr* without ever raising, but to different `bool`
+    results -- the one case shape `condition`/`expect` above can't
+    express, since each only pins what *one* side's own outcome is.
+    *electricity_result* is this crate's own, hand-stated outcome,
+    checked against the real Rust evaluator by `golden_corpus.rs`
+    itself; the Python side is never hand-written -- `python_result`
+    still comes from an actual call into `evaluate_cel`, which this
+    function asserts succeeds (a case written with this helper is, by
+    definition, one where Circuitry itself never raises). Also asserts
+    *python_result* actually differs from *electricity_result* -- a
+    case where both engines agree, written with this helper by mistake,
+    would otherwise pass silently rather than failing loudly: that
+    shape belongs to `condition()`, not this one.
+    """
+    python_result = evaluate_cel(expr, state, strict=strict)
+    if python_result == electricity_result:
+        raise ValueError(
+            f"divergent_condition({expr!r}, ...): both engines agree "
+            f"({python_result!r}) -- this isn't a divergence, use condition() instead"
+        )
+    return {
+        "mode": "condition",
+        "expr": expr,
+        "strict": strict,
+        "state": encode(state),
+        "outcome": {
+            "kind": "both",
+            "python_result": python_result,
+            "electricity_result": electricity_result,
+        },
+    }
+
+
 def expect(
     expr: str,
     *,
@@ -631,15 +672,77 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- re-review of #379, finding 6 (declined, documented in
-    # electricity-cel's `lib.rs` crate docs instead of fixed): a
-    # `Value::Dict` key with no CEL `Key` counterpart collapses, in
-    # Python, into a single `null` key holding the last value written --
-    # `cel::objects::Key` cannot represent `null` as a map key at all, so
-    # electricity-cel drops every such entry instead of colliding them
-    # into one. Deliberately NOT a corpus case: pinning it here would
-    # assert parity on a documented, permanent divergence rather than a
-    # bug this crate can fix.
+    # --- issue #400: a dict key that converts to Python's `None` in
+    # `_to_cel` (a bare `None` key, or a bare `date`, never a
+    # `datetime.datetime`) collapses into a single `null` key holding
+    # the last value written -- fixed, not just documented: electricity
+    # routes every such key to one reserved sentinel `Key::String`
+    # (`convert::NULL_KEY_SENTINEL`), so `size()` and `null in ...`
+    # both match.
+    cases += [
+        condition(
+            "size(state.m) == 1",
+            {"m": {None: "n", datetime.date(2020, 1, 1): "d"}},
+        ),
+        condition(
+            "null in state.m",
+            {"m": {None: "n", datetime.date(2020, 1, 1): "d"}},
+        ),
+    ]
+
+    # --- issue #400: a `map`/`exists`/`all`/`filter` comprehension's
+    # own loop variable, iterating the collapsed `None`/bare-`date` key
+    # slot, is bound to Circuitry's real `None` in Python but to
+    # electricity's own internal sentinel string (not `null`) here --
+    # `k == null` is `true` in Python, `false` here, a divergence the
+    # `in`/`size()` fix above does not reach, since that is `cel`'s own
+    # map-comprehension machinery iterating its keys, not this crate's
+    # own code.
+    cases += [
+        divergent_condition(
+            "state.m.exists(k, k == null)",
+            {"m": {None: "n"}},
+            electricity_result=False,
+        ),
+    ]
+
+    # --- issue #400: a key that keeps its own, real CEL value in
+    # Python instead of becoming `None` -- a `float` key is kept as its
+    # own `DoubleType`, reachable through `in`/`size()`, never
+    # collapsing with a `None` key the way the case above does -- is a
+    # known, permanent divergence (`lib.rs`'s crate docs): dropped
+    # here, because `cel::objects::Key` has no `float` variant at all,
+    # unlike the `None`/bare-`date` case above, which needed no new
+    # `Key` variant to fix. Pinned with [`divergent_condition`] (issue
+    # #400's new corpus case kind) rather than left undocumented in the
+    # corpus: both engines succeed, but electricity's own map is one
+    # entry short of Circuitry's real one.
+    cases += [
+        divergent_condition(
+            "size(state.m) == 1",
+            {"m": {2.5: "f"}},
+            electricity_result=False,
+        ),
+        divergent_condition(
+            "2.5 in state.m",
+            {"m": {2.5: "f"}},
+            electricity_result=False,
+        ),
+        # A `datetime.datetime`/`bytes` key keeps its own, real CEL
+        # value the same way a `float` key does above -- `cel::objects
+        # ::Key` has no `Timestamp`/`Bytes` variant either, so the same
+        # divergence applies.
+        divergent_condition(
+            "size(state.m) == 1",
+            {"m": {datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc): "t"}},
+            electricity_result=False,
+        ),
+        divergent_condition(
+            "size(state.m) == 1",
+            {"m": {b"k": "b"}},
+            electricity_result=False,
+        ),
+    ]
 
     # --- third review of #379, finding 1: `in` must decide `false` on a
     # type mismatch that doesn't actually raise in celpy (a plain Python
@@ -768,6 +871,23 @@ def build_corpus() -> list[dict]:
     # `cel`'s own cross-converting map indexing does.
     cases += [
         condition("state.m[1u] == 'a'", {"m": {1: "a"}}),
+    ]
+
+    # --- issue #400: celpy's own asymmetry between a `bool` key and an
+    # `int`/`uint` lookup, now reproduced -- `BoolType` has no
+    # `__eq__` override, so a plain dict lookup with an `int`/`uint`
+    # probe resolves through the plain `int` it subclasses and finds a
+    # `bool`-keyed entry, while the reverse (a `bool` probe against an
+    # `int`/`uint`-keyed entry) still raises either way.
+    cases += [
+        condition("state.m[1] == 'a'", {"m": {True: "a"}}),
+        condition("state.m[1u] == 'a'", {"m": {True: "a"}}),
+        condition("state.m[0] == 'a'", {"m": {False: "a"}}),
+        # The reverse direction is not a divergence at all: a `bool`
+        # probe still raises against an `int`/`uint`-keyed entry, since
+        # `IntType`/`UintType.__eq__`'s own `@type_matched` has no
+        # exemption for it either way.
+        condition("state.m[true] == 'a'", {"m": {1: "a"}}),
     ]
 
     # --- fourth review of #379: shapes the third review's own list of
@@ -911,6 +1031,77 @@ def build_corpus() -> list[dict]:
         # beyond 1 on a type mismatch, not a recursion limit.
         condition("size(state)", [1, 2, 3]),
         condition("size(size(state))", [1, 2, 3]),
+    ]
+
+    # --- issue #400: the `==`/`!=` short-circuit for a container
+    # against a scalar, `null`, or a container of the other kind, and
+    # ordering raising for the same shapes -- celpy's own top-level
+    # override never crosses a container with anything but its own
+    # kind, and never orders one at all.
+    cases += [
+        condition("state.l == 1", {"l": [1]}),
+        condition("1 == state.l", {"l": [1]}),
+        condition("state.l == null", {"l": []}),
+        condition("state.m != null", {"m": {}}),
+        condition("state.l == state.m", {"l": [], "m": {}}),
+        condition("[1.0] == 1", {}),
+        condition("state.l < 1", {"l": [1]}),
+        condition("state.m <= state.m", {"m": {}}),
+        condition("[1] < [2]", {}),
+    ]
+
+    # --- issue #400: a representative subset of `in`'s remaining gaps
+    # against a non-container, mixed-numeric and bool/int map keys, and
+    # a `null` probe against a map that holds no None/bare-date key
+    # slot for it to match (the sentinel case is pinned above).
+    cases += [
+        condition("1 in state.n", {"n": 1}),
+        condition("1u in state.m", {"m": {1: "a"}}),
+        condition("1 in state.m", {"m": {True: "a"}}),
+        condition("true in state.m", {"m": {1: "a"}}),
+        condition("null in state.l", {"l": [None]}),
+        condition("null in state.m", {"m": {"a": 1}}),
+        condition("null in state.m", {"m": {1: "a"}}),
+        condition("[1] in state.l", {"l": [[1]]}),
+    ]
+
+    # --- issue #400: a representative subset of indexing's remaining
+    # gaps -- out of range, a uint index (in range and absurdly out of
+    # it), a wrong index type, a non-container operand, a missing map
+    # key outside `has()`, a non-ASCII string index, bytes out of
+    # range, and indexing a comprehension's own result.
+    cases += [
+        condition("state.l[5] == 1", {"l": [1]}),
+        condition("state.l[18446744073709551615u] == 1", {"l": [1]}),
+        condition("state.l[0u] == 1", {"l": [1]}),
+        condition("state.l['a'] == 1", {"l": [1]}),
+        condition("state.m[1.0] == 'a'", {"m": {"a": "a"}}),
+        condition("state.n[0] == 1", {"n": 1}),
+        condition("state.m['missing'] == 1", {"m": {"a": 1}}),
+        condition("state.s[1] == '\u00e9'", {"s": "h\u00e9llo"}),
+        condition("state.b[-4] == 97", {"b": b"abc"}),
+        condition("state.l.map(x, x)[0] == 1", {"l": [1]}),
+    ]
+
+    # --- issue #400: ordering's remaining gaps -- string/string
+    # (bytes/bytes is already pinned above), a computed duration
+    # against another (celpy's own `DurationType` has no state-side
+    # tagged encoding of its own, so both sides are built inside the
+    # expression itself, the same way the existing duration-truthiness
+    # cases already do), `-0.0`, and `inf` against a large int.
+    inf_base = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+    cases += [
+        condition("state.a < state.b", {"a": "abc", "b": "abd"}),
+        condition(
+            "(state.b - state.a) < (state.c - state.b)",
+            {
+                "a": inf_base,
+                "b": inf_base + datetime.timedelta(seconds=5),
+                "c": inf_base + datetime.timedelta(seconds=25),
+            },
+        ),
+        condition("state.f <= 0.0", {"f": -0.0}),
+        condition("state.f > state.n", {"f": float("inf"), "n": 2**62}),
     ]
 
     return cases

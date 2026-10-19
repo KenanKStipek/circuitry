@@ -38,8 +38,8 @@
 use std::cmp::Ordering;
 
 use cel::common::ast::operators;
-use cel::extractors::Arguments;
-use cel::{Context, ExecutionError, Value};
+use cel::common::types::Kind;
+use cel::{Context, ExecutionError, FunctionContext, Value};
 
 const STRICT_LT: &str = "__electricity_strict_lt";
 const STRICT_LE: &str = "__electricity_strict_le";
@@ -192,28 +192,62 @@ fn strict_cmp(a: &Value, b: &Value) -> Result<Option<Ordering>, ExecutionError> 
     }
 }
 
-fn strict_lt(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
+/// Whether *kind* never orders at all, in `cel` or in celpy — `null`, a
+/// `list`/`map`/`struct`. Every registered function below checks this
+/// against both arguments' [`Kind`]s, cheap to read off a borrowed
+/// `&dyn Val` with no conversion, *before* ever calling
+/// [`Value::try_from`] on either one (issue #400): a container operand
+/// always raises here regardless of its contents, so there is never a
+/// reason to pay for converting one, let alone the whole thing, just to
+/// find that out.
+fn never_orders(kind: Kind) -> bool {
+    matches!(kind, Kind::NullType | Kind::List | Kind::Map | Kind::Struct)
+}
+
+/// [`strict_cmp`], reading both arguments directly off *ftx* rather than
+/// through the `cel` crate's own `Arguments` extractor, which would
+/// convert both eagerly through [`Value::try_from`] — expensive for a
+/// `list`/`map` — even though [`never_orders`] already decides a
+/// container operand without looking at it at all.
+fn strict_cmp_from_context(ftx: &FunctionContext) -> Result<Option<Ordering>, ExecutionError> {
+    if ftx.args.len() != 2 {
+        return Err(ExecutionError::invalid_argument_count(2, ftx.args.len()));
+    }
+    let a_ref = ftx.args[0].as_ref();
+    let b_ref = ftx.args[1].as_ref();
+    if never_orders(a_ref.get_type().kind()) || never_orders(b_ref.get_type().kind()) {
+        return Err(not_comparable(
+            &Value::try_from(a_ref)?,
+            &Value::try_from(b_ref)?,
+        ));
+    }
+    let a = Value::try_from(a_ref)?;
+    let b = Value::try_from(b_ref)?;
+    strict_cmp(&a, &b)
+}
+
+fn strict_lt(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
     Ok(Value::Bool(
-        strict_cmp(&args[0], &args[1])? == Some(Ordering::Less),
+        strict_cmp_from_context(ftx)? == Some(Ordering::Less),
     ))
 }
 
-fn strict_le(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
+fn strict_le(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
     Ok(Value::Bool(matches!(
-        strict_cmp(&args[0], &args[1])?,
+        strict_cmp_from_context(ftx)?,
         Some(Ordering::Less) | Some(Ordering::Equal)
     )))
 }
 
-fn strict_gt(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
+fn strict_gt(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
     Ok(Value::Bool(
-        strict_cmp(&args[0], &args[1])? == Some(Ordering::Greater),
+        strict_cmp_from_context(ftx)? == Some(Ordering::Greater),
     ))
 }
 
-fn strict_ge(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
+fn strict_ge(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
     Ok(Value::Bool(matches!(
-        strict_cmp(&args[0], &args[1])?,
+        strict_cmp_from_context(ftx)?,
         Some(Ordering::Greater) | Some(Ordering::Equal)
     )))
 }

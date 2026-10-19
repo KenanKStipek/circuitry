@@ -5224,6 +5224,274 @@
     "strict": true
   },
   {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": "n"
+                }
+              ],
+              [
+                {
+                  "t": "date",
+                  "v": "2020-01-01"
+                },
+                {
+                  "t": "str",
+                  "v": "d"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "null in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": "n"
+                }
+              ],
+              [
+                {
+                  "t": "date",
+                  "v": "2020-01-01"
+                },
+                {
+                  "t": "str",
+                  "v": "d"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m.exists(k, k == null)",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": "n"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "bits": "4004000000000000",
+                  "t": "float"
+                },
+                {
+                  "t": "str",
+                  "v": "f"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "2.5 in state.m",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "bits": "4004000000000000",
+                  "t": "float"
+                },
+                {
+                  "t": "str",
+                  "v": "f"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "naive": "2020-01-01T00:00:00.000000",
+                  "offset_seconds": 0,
+                  "t": "datetime"
+                },
+                {
+                  "t": "str",
+                  "v": "t"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bytes",
+                  "v": "6b"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
     "expr": "'b' in state.tags",
     "mode": "condition",
     "outcome": {
@@ -5944,6 +6212,146 @@
   },
   {
     "expr": "state.m[1u] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[1] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[1u] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[0] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": false
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[true] == 'a'",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7313,6 +7721,912 @@
           "t": "int",
           "v": "3"
         }
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "1 == state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l == null",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m != null",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l == state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": []
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "[1.0] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l < 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m <= state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "[1] < [2]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "1 in state.n",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "1u in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "1 in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "true in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "null in state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "none"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "null in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "null in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "[1] in state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "list",
+                "v": [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l[5] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l[18446744073709551615u] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l[0u] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l['a'] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[1.0] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.n[0] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m['missing'] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.s[1] == 'é'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "s"
+          },
+          {
+            "t": "str",
+            "v": "héllo"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.b[-4] == 97",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "bytes",
+            "v": "616263"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.l.map(x, x)[0] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.a < state.b",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "abc"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "str",
+            "v": "abd"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "(state.b - state.a) < (state.c - state.b)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "naive": "2020-01-01T00:00:00.000000",
+            "offset_seconds": 0,
+            "t": "datetime"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "naive": "2020-01-01T00:00:05.000000",
+            "offset_seconds": 0,
+            "t": "datetime"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "c"
+          },
+          {
+            "naive": "2020-01-01T00:00:25.000000",
+            "offset_seconds": 0,
+            "t": "datetime"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.f <= 0.0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "f"
+          },
+          {
+            "bits": "8000000000000000",
+            "t": "float"
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.f > state.n",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "f"
+          },
+          {
+            "bits": "7ff0000000000000",
+            "t": "float"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "4611686018427387904"
+          }
+        ]
       ]
     },
     "strict": false

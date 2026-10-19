@@ -1,0 +1,17 @@
+name: c400-if-cel-overflow
+effects:
+  - type: tool
+    name: big
+    provider: json
+    params: {mode: parse, input: "1180591620717411303424"}
+  - type: if
+    name: gate
+    on_error: fail
+    if:
+      mode: cel
+      expr: "state.prime.big.value > 0"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}

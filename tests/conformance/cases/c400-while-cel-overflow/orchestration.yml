@@ -1,0 +1,15 @@
+name: c400-while-cel-overflow
+effects:
+  - type: tool
+    name: big
+    provider: json
+    params: {mode: parse, input: "1180591620717411303424"}
+  - type: loop
+    name: w
+    max_iterations: 3
+    while: {mode: cel, expr: "state.prime.big.value > 0"}
+    body:
+      - type: tool
+        name: noop
+        provider: json
+        params: {mode: stringify, input: {branch: "body"}}

@@ -31,17 +31,18 @@
 //! expression *does* read is `ValueError("overflow")`, wrapped into
 //! `CelEvaluationError` the same as any other evaluation failure.
 //!
-//! For [`evaluate_expect`] this is a deliberate, evidence-backed
-//! deviation, not parity: `evaluate_cel_expect` in `core/cel_eval.py`
-//! converts `value`/`meta`/`state` *before* its own `try`/`except`, so
-//! the matching `ValueError` escapes **uncaught** — it is not a
+//! For [`evaluate_expect`] this crate still raises a `CelError` — the
+//! same shape [`evaluate_condition`] already uses for its own overflow
+//! — but `evaluate_cel_expect` in `core/cel_eval.py` converts
+//! `value`/`meta`/`state` *before* its own `try`/`except`, so in Python
+//! the matching `ValueError` escapes **uncaught**: it is not a
 //! `CelEvaluationError`, and the two call sites that invoke
 //! `core.expect` handle that raw `ValueError` differently from each
 //! other and from a failed expectation:
 //!
 //! - `core.tool`'s attempt loop (`tool.py`) catches every exception from
 //!   the attempt, `ValueError` included: the attempt fails and is
-//!   retried up to the step's `retry:` policy, `meta.error` becomes
+//!   retried up to the step's `retries:` policy, `meta.error` becomes
 //!   `"overflow"`, and `meta.expect` is never set (a failed expectation
 //!   sets it). `on_error: fail` then re-raises the bare `ValueError`.
 //! - `core.use` (`use.py`) catches it too, but re-raises a `ValueError`
@@ -50,34 +51,44 @@
 //!
 //! Both differ from a genuinely failed expectation (`meta.expect.error`
 //! set, `meta.error` becoming `"expect failed: <summary>"`, retried up
-//! to `max_attempts` for `use`). This crate raises a `CelError` here —
-//! the same shape [`evaluate_condition`] already uses for its own
-//! overflow — rather than reproducing either Python outcome exactly;
-//! [`CelError::is_overflow`] lets a future caller distinguish this case
-//! and reproduce whichever of the two Python behaviours it is wiring up
-//! to (tool vs. use) if that parity ever matters, rather than baking in
-//! a guess now.
+//! to `max_attempts` for `use`). [`CelError::is_overflow`] is exactly
+//! what lets `electricity-vm`'s own `tool`/`use` dispatch
+//! (`exec/tool.rs`, `exec/use_.rs`) reproduce both outcomes exactly,
+//! rather than treating this `CelError` as an ordinary evaluation
+//! failure the way `if`/`while` CEL (below) already can: it branches on
+//! `is_overflow()` before deciding how to report the failure, instead
+//! of always wrapping it the same way every other `CelError` gets
+//! wrapped.
 //!
-//! Known divergence: a `Value::Dict` key with no CEL
-//! [`cel::objects::Key`] counterpart (anything other than
-//! `bool`/`int`/`string` — a `float`, a `None`, a bare `date`, a nested
-//! `list`/`dict`) is **dropped** by `convert::to_cel` rather than mapped
-//! to some placeholder. This is reachable from an ordinary
-//! orchestration, not just a key buried deep in `value`/`meta`: a YAML
-//! input file's `2026-01-01: x` is a date key, and PyYAML resolves an
-//! unquoted float- or null-looking key the same way, so `state.input`
-//! can hold any of them directly. Circuitry's own `_to_cel`
-//! (`core/cel_eval.py`) instead converts such a key to `None` (or keeps
-//! a float/datetime key as its own CEL-less type) —
-//! `celtypes.MapType.__setitem__` never validates keys — so several
-//! date keys collapse into a single `null` key holding the last value,
-//! and `size()` counts it. `cel::objects::Key` cannot represent `null`
-//! (or a float, or a nested container) as a map key at all, so
-//! reproducing Python's collapse-to-one-null-key behavior isn't an
-//! option here; dropping the entry is the least-wrong of the choices
-//! actually available. A `Value::Int` too large for `i64` as a dict key
-//! raises `convert::ConvertError::Overflow` instead of being dropped, matching every
-//! other big-int read.
+//! A `Value::Dict` key that converts, in Circuitry's own `_to_cel`
+//! (`core/cel_eval.py`), to Python's `None` — a bare `Value::None` key,
+//! or a bare `Value::Date` (never a `datetime.datetime`, the only
+//! date/time type `_to_cel` special-cases) — collapses the same way in
+//! this crate: `convert::to_cel` routes every such key to one reserved
+//! sentinel [`cel::objects::Key::String`] (`convert::NULL_KEY_SENTINEL`),
+//! so a plain `HashMap::insert` collapses them exactly like Python's own
+//! dict assignment does (last value wins), `size()` counts the slot
+//! once, and `null in state.m` finds it (`equality`'s own `in` arm
+//! special-cases the sentinel back into a `null` match). This is
+//! reachable from an ordinary orchestration, not just a key buried deep
+//! in `value`/`meta`: a YAML input file's `2026-01-01: x` is a date key,
+//! and PyYAML resolves an unquoted null-looking key (`~:`/`null:`) the
+//! same way, so `state.input` can hold either directly. A literal
+//! `state.m[null]` still raises either way: `cel::Value::Null` has no
+//! `Key` conversion at all, matching `celtypes.MapType`'s own key-type
+//! check, which rejects `None` too.
+//!
+//! Known divergence, not reproduced: a key that keeps its own, real CEL
+//! value in Python instead of becoming `None` — a `float`
+//! (`celtypes.DoubleType`), a `datetime.datetime` (`celtypes.
+//! TimestampType`), `bytes`, or a nested `list`/`dict` — is still
+//! **dropped** by `convert::to_cel` rather than mapped to some
+//! placeholder, because `cel::objects::Key` has no variant for any of
+//! them: `Key` is `Int`/`Uint`/`Bool`/`String` only, so there is no way
+//! to keep such a key's own distinct identity the way the `null`
+//! sentinel above keeps `None`'s. A `Value::Int` too large for `i64` as
+//! a dict key raises `convert::ConvertError::Overflow` instead of being
+//! dropped or collapsed, matching every other big-int read.
 //!
 //! `has(X)` is rewritten, at parse time, into
 //! `!@not_strictly_false(__electricity_false(X))` (`macros` module
@@ -104,12 +115,17 @@
 //! (non-cross-converting) key match, unlike `cel`'s own
 //! [`cel::objects::Map::get`]: celpy's own `MapType.__getitem__` raises
 //! on an int/uint key mismatch rather than finding the entry
-//! (`indexing` module docs). One narrower case stays a known,
-//! documented divergence: a `bool` key against an `int`/`uint` lookup
-//! (or the reverse) doesn't reproduce celpy's own asymmetry — found
-//! only when an `int`/`uint` probes a `bool`-keyed entry, not the
-//! reverse (`indexing` module docs, pinned by a Rust unit test rather
-//! than the differential corpus, which can't express it either).
+//! (`indexing` module docs). celpy's own asymmetry between a `bool`
+//! key and an `int`/`uint` lookup is reproduced too: an `int`/`uint`
+//! probe finds a `bool`-keyed entry (`BoolType` has no `__eq__`
+//! override, so a plain dict lookup resolves through the plain `int`
+//! it subclasses), but a `bool` probe against an `int`/`uint`-keyed
+//! entry still raises, matching celpy exactly in both directions
+//! (`indexing` module docs). Both directions are pinned by the
+//! differential corpus, each its own case; the one shape the corpus
+//! can't express -- a map *literal* with both an `int`/`uint` *and* a
+//! `bool` key reaching the same slot -- stays a Rust unit test
+//! instead.
 //!
 //! `in` over a bare `string`/`bytes` operand iterates its characters or
 //! bytes, matching celpy's own `for c in container`; `cel`'s own `@in`
@@ -239,10 +255,11 @@ impl CelError {
 
     /// Whether this is a big-int-overflow failure (`convert::ConvertError::Overflow`)
     /// rather than a parse/compile/evaluation failure — see the module
-    /// docs' note on [`evaluate_expect`]'s big-int deviation: a future
-    /// caller that wants to reproduce Circuitry's own `core.tool`/
-    /// `core.use` handling of that specific case, rather than treating
-    /// it like any other `CelError`, can branch on this.
+    /// docs' note on [`evaluate_expect`]'s big-int deviation: this is
+    /// what `electricity-vm`'s own `tool`/`use` dispatch branches on to
+    /// reproduce Circuitry's own `core.tool`/`core.use` handling of
+    /// that specific case, rather than treating it like any other
+    /// `CelError`.
     pub fn is_overflow(&self) -> bool {
         self.overflow
     }
@@ -444,6 +461,34 @@ fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
     })
 }
 
+/// The inner text (no `"CEL evaluation failed for ..."` wrapper) for a
+/// direct user call to one of this crate's own reserved
+/// `__electricity_*` names, if *original* (the tree [`compile`]
+/// returned, *before* [`paths::rewrite`]'s own substitutions run --
+/// those substitutions produce exactly these names themselves, so
+/// checking the rewritten tree here would flag its own output) has one
+/// ([`paths::reserved_call_name`], issue #400) -- worded like `cel`'s
+/// own evaluator words any other undeclared function, rather than
+/// reaching one of `equality`/`ordering`/`indexing`'s own registered
+/// handlers, which assume only [`paths::rewrite`]'s own substitutions
+/// and `has()`'s own macro expansion ever call them. Checked right
+/// where [`evaluate_condition`]/[`evaluate_expect`] would otherwise call
+/// `cel::Value::resolve` -- celpy's own equivalent failure (a plain
+/// `KeyError` resolving the name) only ever surfaces at that same
+/// point, `compiled.runner.evaluate`, never at `_compile`'s own parse
+/// step, so a reserved-name call that also reads an unresolved `state.`
+/// path must lose to [`evaluate_condition`]'s own absent-path
+/// short-circuit exactly as it would in Python -- never checked any
+/// earlier. Callers build the same `"CEL evaluation failed for
+/// ..."`-wrapped [`CelError`] every other evaluation failure gets;
+/// [`evaluate_condition`]'s own call site also logs this inner text,
+/// the same way `cel::Value::resolve`'s own failure right below it
+/// does.
+fn reserved_call_message(original: &cel::common::ast::IdedExpr) -> Option<String> {
+    let name = paths::reserved_call_name(original)?;
+    Some(format!("Undeclared reference to '{name}'"))
+}
+
 /// `core/cel_eval.py`'s `ValueError("overflow")` for a `Value::Int` too
 /// large for CEL's 64-bit `int`, wrapped the same way a genuine
 /// evaluation failure is.
@@ -585,10 +630,34 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     equality::register(&mut ctx);
     indexing::register(&mut ctx);
     macros::register(&mut ctx);
-    ctx.add_variable_from_value(
-        "state",
-        convert::to_cel(&projected_state).map_err(|e| convert_err(expr, e))?,
-    );
+    let converted_state = convert::to_cel(&projected_state).map_err(|e| {
+        // `core/cel_eval.py::evaluate_cel`'s own `compiled.context(ctx)`
+        // (which calls `_to_cel`, raising on a big int the expression
+        // actually reads) runs *inside* the same `try` block as the
+        // evaluation below, under the same `logger.error("... %s",
+        // expr, exc)` -- logged from the *raw* cause (`exc`), not the
+        // wrapped exception, so this logs `e` itself, not the
+        // `CelError` it becomes, to avoid doubling the `"CEL evaluation
+        // failed for ..."` prefix.
+        log::error!("CEL evaluation failed for expr {}: {e}", py_repr(expr));
+        convert_err(expr, e)
+    })?;
+    ctx.add_variable_from_value("state", converted_state);
+    if let Some(message) = reserved_call_message(program.expression()) {
+        // Same `logger.error` celpy's own evaluation failure below gets
+        // (module docs on `reserved_call_message`): celpy's undeclared-
+        // reference `KeyError` only ever surfaces from
+        // `compiled.runner.evaluate`, the same call the genuine
+        // `Value::resolve` failure right below is caught from.
+        log::error!(
+            "CEL evaluation failed for expr {}: {message}",
+            py_repr(expr)
+        );
+        return Err(CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {message}", py_repr(expr)),
+        ));
+    }
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
         // evaluation failed for expr %r: %s", expr, exc)` -- an `if`/
@@ -657,6 +726,15 @@ pub fn evaluate_expect(
         "state",
         convert::to_cel(state).map_err(|e| convert_err(expr, e))?,
     );
+    // No logging here either, matching `evaluate_condition`'s own
+    // check right before `cel::Value::resolve` below: celpy's
+    // `evaluate_cel_expect` never calls `logger.error`.
+    if let Some(message) = reserved_call_message(program.expression()) {
+        return Err(CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {message}", py_repr(expr)),
+        ));
+    }
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         CelError::new(
             expr,
@@ -1060,6 +1138,34 @@ mod tests {
         assert_eq!(evaluate_condition("1 == true", &state, false), Ok(false));
         assert_eq!(evaluate_condition("1 == 1.0", &state, false), Ok(true));
         assert_eq!(evaluate_condition("'a' == 1", &state, false), Ok(false));
+    }
+
+    #[test]
+    fn none_and_date_dict_keys_collapse_and_stay_reachable_via_in() {
+        // Matches `_to_cel`'s own collapse (confirmed against the real
+        // evaluator): a `None` key and a bare `date` key both convert
+        // to Python's `None`, so a plain dict assignment overwrites
+        // down to one entry -- `size()` counts it once, `null in m` is
+        // `true`, and a literal `m[null]` still raises (`cel::Value::
+        // Null` has no `Key` conversion, matching `celtypes.MapType`'s
+        // own key-type check).
+        use chrono::NaiveDate;
+        let mut d = Dict::new();
+        d.insert(Value::None, Value::from(1_i64));
+        d.insert(
+            Value::Date(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()),
+            Value::from(2_i64),
+        );
+        let state = dict(vec![("m", Value::Dict(d))]);
+        assert_eq!(
+            evaluate_condition("size(state.m) == 1", &state, false),
+            Ok(true)
+        );
+        assert_eq!(
+            evaluate_condition("null in state.m", &state, false),
+            Ok(true)
+        );
+        assert!(evaluate_condition("state.m[null] == 2", &state, false).is_err());
     }
 
     #[test]

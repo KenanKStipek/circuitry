@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #400",
+  "description": "A `use` effect's `expect:` CEL expression reads a JSON-parsed integer too large for CEL's 64-bit `int` -- the same `ValueError(\"overflow\")` escaping `evaluate_cel_expect` uncaught as the tool case, but `core/use.py`'s own `except (ValueError, RecursionError)` re-raises it immediately, with no retry regardless of `retries.max_attempts`: `meta.error` reads \"overflow\", `meta.expect` is never set, and `retries_used` never appears. `on_error: fail` wraps it as `\"use '<name>' -> <label>: overflow\"`.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}
