@@ -158,6 +158,19 @@ pub fn is_quick_step(row: &Row) -> bool {
         && row.kind == RowKind::Tool
         && row.status.kind == StatusKind::Done
         && row.duration_s.is_some_and(|secs| secs < 1.0)
+        // A pass whose own body is a single leaf step shares that
+        // leaf's own path (DESIGN.md's Flow section: a loop's single
+        // pass merges into one row, never a quick step one) -- its
+        // `kind` reads as the leaf's own (`render::row_kind_for`
+        // reads the plan ahead of the `RowKind::Pass` fallback), so
+        // this is told apart from an ordinary tool step by its own
+        // path shape instead, the same test `flow::` uses for
+        // exactly this reason.
+        && !row
+            .path
+            .rsplit('.')
+            .next()
+            .is_some_and(|seg| seg.starts_with("iter_"))
 }
 
 /// Merges a run of two or more consecutive [`is_quick_step`] siblings

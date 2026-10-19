@@ -324,7 +324,7 @@ its own footer total, and the story:
 │                                                            ││                                    │
 │                                                            ││                                    │
 │                                                            ││                                    │
-│quick steps folded: 5 · 1.3s                                ││                                    │
+│quick steps folded: 4 · 0.9s                                ││                                    │
 │health: 0 failed · 0 retries · 0 warnings                   ││                                    │
 │                                                            ││                                    │
 └────────────────────────────────────────────────────────────┘└────────────────────────────────────┘
