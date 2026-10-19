@@ -1559,6 +1559,8 @@ fn draw_overlay(
 // with no allowance for that, cut off "press any key to close" at
 // the bottom.
 const HELP_TEXT: &[&str] = &[
+    "0            overview",
+    "2            flow (today's layout)",
     "↑↓ / j k     move (the focused pane)",
     "PgUp PgDn    move a page",
     "Home End     jump to the first / last row",

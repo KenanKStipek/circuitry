@@ -458,6 +458,7 @@ oscilloscope/
       diff.rs      # snapshot diff -> Vec<LogLine>, events -> Vec<LogLine>, time-sorted by meta timestamps
       engine.rs    # trait Engine { fn command(&RunSpec) -> Command; fn caps() }: CofEngine, ElectricityEngine
       supervise.rs # spawn (process_group 0, stdin null, pipes), signal forwarding, exit status
+      screens.rs   # Screen, header_line (the one source for the TUI header and --glance), the overview's model
     oscilloscope/                 # binary `osi`: ratatui + crossterm TUI and --log plain mode
   tests/fixtures/                 # recorded runs (scrubbed): plan, snapshots, events, stdout/stderr, exit code
 ```
@@ -500,8 +501,9 @@ squarified treemap layout itself (`treemap::layout`, below) is pure
 integer geometry, deterministic for the same input, computed in
 `oscilloscope-core` and only ever drawn, never computed, by `tui.rs`.
 
-**Layout.** A header across the full width (the scope icon, below, to its
-left on a wide enough terminal); a left column of the details pane over
+**Layout** (screen 2, `Flow` — §6.3a below covers the screens this
+language switches between and the one-line header every one of them
+shares). Below the header line: a left column of the details pane over
 the orchestration pane; a right column of the `tokens by key` treemap,
 the state pane and the log pane; and the token bar across the full
 bottom width. Every split, at every level, is the golden section, 62/38
@@ -533,32 +535,43 @@ disappear:
    nested top to bottom (the details-plus-tree block takes the larger
    share over the log pane, then splits again into details, the
    smaller share, over the orchestration pane) — details still sits
-   above the orchestration pane here too. The scope icon is not drawn
-   below this same width threshold; the header takes the full width
-   instead.
+   above the orchestration pane here too.
 
-**Header:** document, engine, run state (running / ok / failed
-/ cancelled / aborted), elapsed time, effects done out of planned, tokens
-↑↓, and the ETA of the innermost running loop. There is no run-level
-ETA: plans have data-dependent loops. The run ID shows once `--events`
-has carried a `run_start`; state alone never has one.
+**The header line (issue #626).** One line, shared by every screen,
+replacing the three-row header above: the scope icon's own trace (one
+animated braille row, about 8 cells, at the start of the line, coloured
+by run state as the old 3-row bezel icon was — a static `◉` with
+`--no-animation`), the document, `♥` while the engine process is alive
+(the one osi started, or, for `osi watch`, the pid `--events`' own
+`run_start` carried), run state, elapsed time, the current clock time
+(the same `now` every other time in the frame uses, §6.3's own "one
+clock"), and the innermost running loop's ETA. There is no run-level
+ETA: plans have data-dependent loops. `oscilloscope_core::screens::
+header_line` builds this from a `Header` and a `now`, with no terminal
+code — the one source for both the TUI header and `--glance`'s own
+line, so the two can never disagree about what it says. The run ID
+moves to the root row's own details (and to `--log`'s `■ run started`
+line, §2.4); it never appears in the header line at all. The effects
+count and tokens that used to live here moved to the overview's own
+flow and cost cards, and to screen 2's own orchestration pane title
+(effects) and token bar (tokens) — below.
 
 **Reports (#605/#610).** Once a `report` effect's own event (§3) has
-arrived, the header shows the latest one's message in that same
-trailing slot instead — `▸ <message>`, or `▸ warning: <message>` for
-`level: warning`, styled in the theme's own warning colour — for the
-rest of the run; the run ID moves to the root row's own details (and
-to `--log`'s `■ run started` line, §2.4). When space is short, the
-document path and the report's own message truncate before status,
-elapsed, effects or tokens ever do — document first, down to its own
-floor, then the message, collapsing to a bare `▸` once fewer than
-about 8 columns are left for it at all. Before any report, the header
-is exactly as above. A new report counts as its own header change for
-update-highlighting (`header:report`, never folded into
-`header:status`) even when it repeats the previous one's own level and
-message word for word -- each sighting carries its own `ts`, so a
-repeated "chain pass" on every loop pass still flashes every time, not
-just the first; elapsed time still never highlights.
+arrived, the header shows the latest one's message instead, after the
+clock time and before the screen tabs — `▸ <message>`, or `▸ warning:
+<message>` for `level: warning`, styled in the theme's own warning
+colour — for the rest of the run. **Truncation order** (issue #626),
+when the line is short of room: the tabs shrink to their own numbers
+first (`[0 overview]  2 flow` → `[0]  2`); then the report truncates,
+down to a bare `▸` once fewer than about 8 columns are left for it at
+all; then the document (keeping its own tail); then the ETA is dropped
+entirely. Status, elapsed and the clock never truncate. A new report
+counts as its own header change for update-highlighting (`header:
+report`, never folded into `header:status`) even when it repeats the
+previous one's own level and message word for word -- each sighting
+carries its own `ts`, so a repeated "chain pass" on every loop pass
+still flashes every time, not just the first; elapsed time still never
+highlights.
 
 Issue #613's "one clock": elapsed is measured from the run's own start
 -- the first `--events` `run_start`'s own `ts`, else the earliest
@@ -1182,6 +1195,98 @@ greyscale ramp, picking whichever is closer); 16 colours falls back to
 `terminal` with one log line saying so; `NO_COLOR` always wins, over any
 theme, resetting every role to the terminal's own default — structure
 still reads from glyphs and modifiers, never colour alone.
+
+### 6.3a Screens, the overview and `--glance` (issue #626)
+
+`oscilloscope_core::screens::Screen` names the four screens osi
+switches between with `0`-`3`: `Overview` (`0`, the default for both
+`osi <doc>` and `osi watch`), `Time` (`1`), `Flow` (`2`, §6.3's own
+layout above, unchanged apart from the header) and `Cost` (`3`). Only
+`Overview` and `Flow` have a screen built yet — `Screen::is_available`
+says so, `Screen::from_key` refuses `1`/`3` on that basis alone, and
+neither gets a tab in the header line. Selection, follow, folding,
+filters and collapsed rows all live on `keys::App` outside the
+`screen` field, so switching never touches any of them.
+
+**The overview's model** (`oscilloscope_core::screens::Overview`,
+`build_overview`) is built from exactly the same inputs `render::build`
+already has — the live state, `--events` (through `RunModel`), the
+compiled plan and `runtime.last_run.totals` — no engine change needed.
+A caller builds it only while the overview is actually on display
+(`main.rs`'s own `build_overview_if_active`), right after the existing
+rebuild: one rebuild of a 2,000-node state stays well under the redraw
+interval, and nothing here is built at all for a screen not shown.
+
+- **Phase strip:** the document's own top-level rows (depth 1 in the
+  already-folded `rows` `render::build_folded` produced, so a single-
+  child wrapper chain is already one breadcrumb row by the time this
+  sees it), each with its own status, start time (`created_at`) and
+  duration (ticking while it runs, same as an orchestration-pane row).
+  How many fit a given width, and the `○ N more` for the rest, is
+  `tui.rs`'s own `draw_phase_strip`, not this model — core stays
+  width-agnostic.
+- **Now pane:** the step follow selects — the row matching the shared
+  `selected_path` if it's running, else the deepest running row (the
+  same tie-break `keys::App::follow_target` uses; the document root
+  itself is excluded from both this pick and the "+N more running"
+  count, since it's running for the whole run and would otherwise
+  inflate that count by one permanently). A prompt's own focus detail
+  carries its `sent` token count (actual or the in-flight estimate)
+  and a snippet; a tool's its rendered command; an agent's (a tool
+  whose own `meta.provider` is `"agent"`) its `engine`/`model` when the
+  node happens to carry them, plus a fixed note
+  (`AGENT_LIVE_DATA_NOTE`) that live session data isn't available yet
+  — #612's live-agent-data lane is a later issue. With nothing
+  running, the last finished row (by `completed_at`); once the run has
+  ended (`header.status != Running`), the outcome, start/end and
+  totals instead.
+- **Time card:** the run's own start/end, elapsed, ETA, a bar of the
+  phase strip's own durations and its slowest *finished* entry.
+- **Flow card:** `header.effects_done`/`effects_planned` (moved here
+  from the header line) and a failure count; the latest two decisions
+  (a named `if`'s own `meta.branch`, keyed by its own path's last
+  segment, sorted by `completed_at`/`created_at` descending) padded
+  with the latest report when fewer than two decisions exist; every
+  named loop row's own progress; the first `Pending` row in document
+  order; and the count/total duration of every `fold::is_quick_step`
+  row in the *unfolded* tree (not however this frame's own folding
+  happened to group them).
+- **Cost card:** tokens (moved here from the header line too), cost
+  once `runtime.last_run.totals.cost_usd` (or, in principle, a single
+  effect's own `meta.cost_usd`) actually reports one — never shown as
+  `$0.00` in the meantime — the treemap's own highest-token leaf, and
+  `render::token_bar_in_flight_line`'s own text (shared with screen
+  2's token bar, so the two can't disagree about what's running).
+
+A tokens-over-time sparkline and run-history figures (`vs usual`, an
+ETA for the whole run) are listed in the issue's own mockup but need
+no new data this lane has: the first needs a retained time series this
+milestone doesn't keep yet, and the second needs run history (a later
+issue, §“What osi needs” above). Below 80×20, the overview keeps its
+same panes, just smaller, rather than the stacked/single-summary-line
+redesign the issue's own mockup sketches for that size — a later
+refinement, not a change in what any of the panes show.
+
+**`--glance`.** `osi <doc> --glance` and `osi watch <dir> --glance`
+show only the header line (`current: None` in `header_line`, so no
+tabs at all), rewritten in place about once a second
+(`GLANCE_INTERVAL`) over `\r` plus a clear-to-end-of-line, with the
+final line kept on screen (its own trailing newline) once the run
+ends. Signals and exit codes work exactly as `--log`'s own
+`supervise_plain`/`finish_run` do — `run_glance`/`watch_glance` mirror
+their forwarding and kill-deadline logic, just never printing a diff
+line. `--log` and `--glance` can't be combined (a usage error, exit
+2). `osi watch <dir> --glance --once` skips the loop entirely: one
+read of whatever's on disk right now, one line, exit 0 — for a tmux
+status line that runs its own command on a timer instead of leaving
+one process attached; `--once` needs `--glance` (a usage error
+otherwise). When stdout isn't a terminal, only the final line is ever
+written, never the intermediate rewrites. `osi watch` names the
+document from the watched run's own `runtime.last_run.
+orchestration_path` once a live-state write has it (`model::
+orchestration_path`), not from the directory or file it was pointed
+at — `watch_document_name` recomputes this every rebuild, since the
+first write to come may predate the document name landing at all.
 
 ### 6.4 Tests
 
