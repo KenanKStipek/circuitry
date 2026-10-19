@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -241,6 +241,7 @@ def run_agent_cli(
     timeout_seconds: float,
     input: str = "",
     cwd: str | None = None,
+    on_line: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` to completion in its own process group and return it,
     whatever its exit code.
@@ -250,6 +251,9 @@ def run_agent_cli(
     raises ``RunCancelledBySignal``. Raises :class:`AgentCliTimeout` after
     ``timeout_seconds`` (the group is killed first) and
     :class:`AgentCliError` when the binary cannot be started.
+
+    ``on_line``, when given, sees each line of stdout as it arrives (#636) --
+    see :func:`circuitry.core.cancellation.run_tracked`.
     """
     name = os.path.basename(cmd[0])
     try:
@@ -260,6 +264,7 @@ def run_agent_cli(
             cwd=cwd,
             env=dict(env),
             new_session=True,
+            on_line=on_line,
         )
     except subprocess.TimeoutExpired as exc:
         raise AgentCliTimeout(
