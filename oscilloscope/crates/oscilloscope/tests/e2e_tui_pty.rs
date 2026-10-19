@@ -16,7 +16,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1050,13 +1050,30 @@ printf '%s' "$OSI_DOUBLE_STATE" > "$out"
 exit "${OSI_DOUBLE_EXIT:-0}"
 "#;
 
-/// Writes [`ENGINE_DOUBLE_SCRIPT`] to `bin_dir/name`, executable.
+/// Writes [`ENGINE_DOUBLE_SCRIPT`] to `bin_dir/name`, executable. A
+/// short-lived child process writes it, so this test process never
+/// holds it open for writing: a fork from another test thread would
+/// keep such a handle until its own exec, and starting the double
+/// meanwhile fails with ETXTBSY on Linux (#623).
 fn write_engine_double(bin_dir: &Path, name: &str) -> PathBuf {
     let path = bin_dir.join(name);
-    std::fs::write(&path, ENGINE_DOUBLE_SCRIPT).expect("write engine double");
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
+    let mut writer = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("cat > \"$1\" && chmod 755 \"$1\"")
+        .arg("sh")
+        .arg(&path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the engine double's writer");
+    std::io::Write::write_all(
+        &mut writer.stdin.take().unwrap(),
+        ENGINE_DOUBLE_SCRIPT.as_bytes(),
+    )
+    .expect("write engine double");
+    assert!(
+        writer.wait().unwrap().success(),
+        "writing the engine double failed"
+    );
     path
 }
 
