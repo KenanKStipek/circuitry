@@ -3730,6 +3730,94 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// Issue #635: "it keeps at most 2,000 lines" -- pushing well
+    /// past that cap must leave the buffer at exactly
+    /// `MAX_STORY_LINES`, having dropped the *oldest* lines first,
+    /// never the newest.
+    #[test]
+    fn push_story_line_caps_the_buffer_at_2000_lines_dropping_the_oldest() {
+        let mut story = Vec::new();
+        for i in 0..MAX_STORY_LINES + 10 {
+            push_story_line(
+                &mut story,
+                oscilloscope_core::diff::LogLine {
+                    ts: None,
+                    text: format!("▸ report {i}"),
+                    kind: oscilloscope_core::diff::LogKind::Report,
+                    path: None,
+                },
+            );
+        }
+        assert_eq!(story.len(), MAX_STORY_LINES);
+        assert_eq!(story.first().unwrap().text, "▸ report 10");
+        assert_eq!(
+            story.last().unwrap().text,
+            format!("▸ report {}", MAX_STORY_LINES + 9)
+        );
+    }
+
+    /// A line whose own `kind` isn't one of the story's
+    /// (`Start`/`End`/`Progress`/`Retry`, DESIGN.md) never enters the
+    /// buffer at all.
+    #[test]
+    fn push_story_line_drops_a_non_story_kind() {
+        let mut story = Vec::new();
+        push_story_line(
+            &mut story,
+            oscilloscope_core::diff::LogLine {
+                ts: None,
+                text: "start".to_string(),
+                kind: oscilloscope_core::diff::LogKind::Start,
+                path: None,
+            },
+        );
+        assert!(story.is_empty());
+    }
+
+    /// Issue #635: the live story gets the run-end line as soon as
+    /// state reads as ended, through a *clone* of `differ` -- the
+    /// real one's own one-shot `run_line_emitted` latch must stay
+    /// untripped, so `--log`'s own authoritative call (`finish_run`/
+    /// `finish_watch`, after the TUI has closed) still prints it
+    /// exactly once of its own.
+    #[test]
+    fn push_run_end_story_line_leaves_the_real_differ_to_still_print_once_after() {
+        let mut differ = oscilloscope_core::diff::Differ::new();
+        let model = RunModel::new();
+        let state = serde_json::json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "error": null}}
+        });
+        let mut clock = Clock::new();
+        let mut log_lines = Vec::new();
+        let mut next_log_seq = 0u64;
+        let mut story = Vec::new();
+        let run_dir = Path::new("/does/not/exist");
+        push_run_end_story_line(
+            &differ,
+            Some(&state),
+            run_dir,
+            &model,
+            &mut clock,
+            &mut log_lines,
+            &mut next_log_seq,
+            &mut story,
+        );
+        assert!(
+            !story.is_empty(),
+            "the live story must get the run-end line while still running"
+        );
+        assert!(
+            !differ.run_line_emitted(),
+            "the real differ's own latch must stay untripped"
+        );
+        let final_line = differ.finish(&state, None);
+        assert!(
+            final_line.is_some(),
+            "--log's own authoritative call must still print exactly once"
+        );
+    }
+
     fn args(words: &[&str]) -> Vec<String> {
         std::iter::once("osi".to_string())
             .chain(words.iter().map(|w| w.to_string()))

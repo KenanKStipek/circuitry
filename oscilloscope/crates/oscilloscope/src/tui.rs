@@ -2299,6 +2299,47 @@ fn flow_columns_for_width(width: u16) -> FlowColumns {
     }
 }
 
+#[cfg(test)]
+mod flow_columns_tests {
+    use super::*;
+
+    /// DESIGN.md: "narrow panes drop columns in this order: cost,
+    /// start, tokens. Duration always stays" -- duration itself has
+    /// no threshold of its own at all (`flow_row_lines` always draws
+    /// it), so this only ever needs to check the three that do.
+    #[test]
+    fn narrower_than_every_threshold_drops_cost_start_and_tokens() {
+        let columns = flow_columns_for_width(thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH - 1);
+        assert!(!columns.cost);
+        assert!(!columns.start);
+        assert!(!columns.tokens);
+    }
+
+    #[test]
+    fn wide_enough_for_tokens_alone_keeps_only_tokens() {
+        let columns = flow_columns_for_width(thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH);
+        assert!(!columns.cost);
+        assert!(!columns.start);
+        assert!(columns.tokens);
+    }
+
+    #[test]
+    fn wide_enough_for_start_keeps_tokens_and_start_but_not_cost() {
+        let columns = flow_columns_for_width(thresholds::FLOW_START_COLUMN_MIN_WIDTH);
+        assert!(!columns.cost);
+        assert!(columns.start);
+        assert!(columns.tokens);
+    }
+
+    #[test]
+    fn wide_enough_for_cost_keeps_every_column() {
+        let columns = flow_columns_for_width(thresholds::FLOW_COST_COLUMN_MIN_WIDTH);
+        assert!(columns.cost);
+        assert!(columns.start);
+        assert!(columns.tokens);
+    }
+}
+
 /// Resolves `app.selected_path` (set by an ordinary move, or by
 /// follow/`⏎`-on-overview picking a real tree path directly) to
 /// the Flow pane's own drawn row (issue #635's P0): a path under a
@@ -4924,6 +4965,41 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// [`sample_plan`]'s own `a` is a tool, not a prompt -- selecting
+    /// it here would read as `RowKind::Tool` regardless of any
+    /// `prompt_sent`/`tokens_*` meta the state carries, since the
+    /// plan always wins over a meta-shape guess, leaving this golden
+    /// with no `sent`/`received` blocks to actually show at all. A
+    /// plan whose `a` really is a prompt is the one thing this test
+    /// needs beyond `sample_plan`'s own shape.
+    fn prompt_a_tool_b_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let b_path = root_path.clone().push_name("b");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![prompt(a_path, "a"), tool(b_path, "b", OnError::Continue)],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
     /// Finding F6/M1: a selected, finished prompt at 120×40 -- the
     /// `sent`/`received` blocks must land right after `path`/`type`,
     /// before `plan`/the meta list, and each snippet must cap at
@@ -4932,7 +5008,7 @@ mod golden_tests {
     /// details pane's own golden-section height.
     #[test]
     fn full_layout_with_a_selected_finished_prompts_sent_received_blocks() {
-        let plan = sample_plan();
+        let plan = prompt_a_tool_b_plan();
         let mut model = RunModel::new();
         let long_prompt = "summarize the quarterly report and call out every risk factor you can find in the appendix tables, in plain prose, no bullet points";
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
@@ -4948,6 +5024,34 @@ mod golden_tests {
             "prime.a",
             &[],
         );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #635: a selected prompt that hasn't replied yet shows
+    /// `asked:` with its own sent snippet, then `doing:` with
+    /// "waiting for the reply" and its own in-flight token count --
+    /// `produced:` reads "(when done)" rather than any real value,
+    /// since nothing has come back yet.
+    #[test]
+    fn full_layout_with_a_selected_running_prompt_shows_asked_and_waiting_for_the_reply() {
+        let plan = prompt_a_tool_b_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted",
+                "prompt_sent": "summarize the quarterly report", "tokens_sent_total": 42}}
+        }});
+        let text = snapshot_full_layout(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &[],
+        );
+        assert!(text.contains("asked:"), "{text}");
+        assert!(text.contains("waiting for the reply"), "{text}");
+        assert!(text.contains("(when done)"), "{text}");
         insta::assert_snapshot!(text);
     }
 
@@ -5317,7 +5421,69 @@ mod golden_tests {
         root.insert("prime".to_string(), Value::Object(prime));
         let state = Value::Object(root);
 
-        let plan = PlanTree::empty();
+        // Issue #635: a real plan with an unnamed `if` of its own
+        // (never `PlanTree::empty()`, which skips `build_flow_rows`'
+        // own decision-inference work entirely, timing nothing of it
+        // at all) -- its own `then`/`else` paths don't need to match
+        // any of the 2,000 `n{i}` nodes below for the timing to be
+        // real, only for `unnamed_if_decisions` to have something in
+        // it for `resolve_unnamed_decisions`/`push_unnamed_decision`
+        // to actually walk.
+        let plan = {
+            let root_path = EffectPath::root();
+            let if_path = root_path.clone();
+            let foo_path = if_path.clone().push_name("foo");
+            let root = Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: if_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "true".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool(foo_path, "foo", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            else_: None,
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            };
+            PlanTree::from_program(&Program {
+                root,
+                prompts: Default::default(),
+                effect_names: Default::default(),
+                document: None,
+                runtime_block: None,
+                interface: None,
+                adapter: None,
+                model: None,
+            })
+        };
+        // Issue #635: a real 2,000-line story -- `build_story`'s own
+        // sort (`build_flow_rows` is timed together with it below) is
+        // the other thing an empty story timed nothing of at all.
+        let story_2000: Vec<oscilloscope_core::diff::LogLine> = (0..2000)
+            .map(|i| oscilloscope_core::diff::LogLine {
+                ts: Some(format!("2026-01-01T00:00:{:02}Z", i % 60)),
+                text: format!("▸ report {i}"),
+                kind: oscilloscope_core::diff::LogKind::Report,
+                path: None,
+            })
+            .collect();
         let mut model = RunModel::new();
         let rendered = render::build(
             "do-thing.yml",
@@ -5361,7 +5527,7 @@ mod golden_tests {
             &plan,
             &model,
             Some(&state),
-            &[],
+            &story_2000,
             Some("n0"),
             &test_zone(),
             "t2001",
