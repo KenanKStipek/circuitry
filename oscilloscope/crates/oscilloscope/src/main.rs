@@ -1260,6 +1260,39 @@ fn push_log_line(log_lines: &mut Vec<String>, next_seq: &mut u64, line: String) 
     }
 }
 
+/// The Flow screen's own story buffer (issue #635: "it keeps at most
+/// 2,000 lines") -- a separate, bounded buffer from the TUI's own
+/// `log_lines` (`MAX_LOG_LINES`), since the story is a small, curated
+/// subset (run start/end, decision, report, failure) a much longer
+/// run could otherwise scroll a 10,000-line log buffer past.
+const MAX_STORY_LINES: usize = 2_000;
+
+/// Pushes one line onto the story buffer when its own `kind` is one
+/// of the story's (issue #635), then trims it back to
+/// `MAX_STORY_LINES` -- every other line (`Start`/`End`/`Progress`/
+/// `Retry`) is silently dropped here, never entering the story at
+/// all, though it still went into `--log`/`log_lines` same as always.
+fn push_story_line(
+    story: &mut Vec<oscilloscope_core::diff::LogLine>,
+    line: oscilloscope_core::diff::LogLine,
+) {
+    use oscilloscope_core::diff::LogKind;
+    if !matches!(
+        line.kind,
+        LogKind::RunStart
+            | LogKind::RunEnd
+            | LogKind::Decision
+            | LogKind::Report
+            | LogKind::Failure
+    ) {
+        return;
+    }
+    story.push(line);
+    if story.len() > MAX_STORY_LINES {
+        story.drain(0..story.len() - MAX_STORY_LINES);
+    }
+}
+
 /// Update highlights (DESIGN.md §6.3, issue #535): computes what
 /// changed between the previous render state and this one
 /// (`oscilloscope_core::changes::diff`, front-end independent) and
@@ -1606,6 +1639,39 @@ fn build_cost_screen_if_active(
     ))
 }
 
+/// Screen 2's own model (issue #635), built only while it's actually
+/// on display -- the same performance rule `build_overview_if_active`/
+/// `build_cost_screen_if_active` already follow.
+#[allow(clippy::too_many_arguments)]
+fn build_flow_screen_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    plan: &oscilloscope_core::plan::PlanTree,
+    model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
+    story: &[oscilloscope_core::diff::LogLine],
+    now: &str,
+) -> Option<oscilloscope_core::screens::FlowScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Flow {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    let selected_path = details_selection_path(app);
+    Some(oscilloscope_core::screens::build_flow_screen(
+        &render_state.rows,
+        &render_state.unfolded_rows,
+        &flat,
+        plan,
+        model,
+        state,
+        story,
+        selected_path.as_deref(),
+        &LocalZone,
+        now,
+    ))
+}
+
 fn details_selection_path(app: &App) -> Option<String> {
     if app.details_source == keys::Pane::State {
         if let Some(p) = &app.state_selected_path {
@@ -1680,6 +1746,11 @@ fn run_tui(
     // line's own highlight key is this sequence number, never its
     // position in `log_lines` itself.
     let mut next_log_seq: u64 = 0;
+    // The Flow screen's own story (issue #635), bounded by
+    // `MAX_STORY_LINES` -- a separate buffer from `log_lines`, kept
+    // in `diff::LogLine`'s own raw-timestamp shape so the story can
+    // merge in an inferred decision at the right clock time.
+    let mut story: Vec<oscilloscope_core::diff::LogLine> = Vec::new();
     let mut current_state: Option<serde_json::Value> = None;
     let start = Instant::now();
 
@@ -1817,6 +1888,15 @@ fn run_tui(
     );
     let mut cost_screen =
         build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+    let mut flow_screen = build_flow_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        current_state.as_ref(),
+        &story,
+        &now_str,
+    );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
     // `current_state: None`, before the loop has polled anything),
@@ -1900,6 +1980,7 @@ fn run_tui(
                     &mut next_log_seq,
                     format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                 );
+                push_story_line(&mut story, line.clone());
             }
             if let Some(state) = state {
                 current_state = Some(state);
@@ -2143,6 +2224,15 @@ fn run_tui(
                             current_state.as_ref(),
                             &now_str,
                         );
+                        flow_screen = build_flow_screen_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            current_state.as_ref(),
+                            &story,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -2213,6 +2303,7 @@ fn run_tui(
                     &now_str,
                     overview.as_ref(),
                     cost_screen.as_ref(),
+                    flow_screen.as_ref(),
                     &mut cost_layout,
                 );
             });
@@ -2259,6 +2350,7 @@ fn run_tui(
                         &mut next_log_seq,
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
+                    push_story_line(&mut story, line.clone());
                 }
                 if let Some(state) = out_state.or(last_live) {
                     current_state = Some(state);
@@ -2801,6 +2893,8 @@ fn run_tui_watch(
     let mut log_lines: Vec<String> = Vec::new();
     // Finding 4: see `run_tui`'s own `next_log_seq`.
     let mut next_log_seq: u64 = 0;
+    // See `run_tui`'s own `story` (issue #635).
+    let mut story: Vec<oscilloscope_core::diff::LogLine> = Vec::new();
     let mut last_state: Option<serde_json::Value> = None;
     let mut warned_no_events = false;
     let events_path = run_dir.join("events.jsonl");
@@ -2925,6 +3019,15 @@ fn run_tui_watch(
     );
     let mut cost_screen =
         build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+    let mut flow_screen = build_flow_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &story,
+        &now_str,
+    );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
@@ -2961,6 +3064,7 @@ fn run_tui_watch(
                     &mut next_log_seq,
                     format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                 );
+                push_story_line(&mut story, line.clone());
             }
             if let Some(state) = state {
                 last_state = Some(state);
@@ -3028,6 +3132,7 @@ fn run_tui_watch(
                         &mut next_log_seq,
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
+                    push_story_line(&mut story, line.clone());
                 }
                 if let Some(state) = out_state.or(last_live) {
                     last_state = Some(state);
@@ -3233,6 +3338,15 @@ fn run_tui_watch(
                             last_state.as_ref(),
                             &now_str,
                         );
+                        flow_screen = build_flow_screen_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            last_state.as_ref(),
+                            &story,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -3292,6 +3406,7 @@ fn run_tui_watch(
                     &now_str,
                     overview.as_ref(),
                     cost_screen.as_ref(),
+                    flow_screen.as_ref(),
                     &mut cost_layout,
                 );
             });
