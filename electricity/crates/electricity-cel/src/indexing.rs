@@ -25,9 +25,17 @@
 //! underlying `HashMap` directly ([`cel::objects::Map`]'s own `map`
 //! field, already public — `equality.rs`'s own map-equality arm reads
 //! it the same way), bypassing [`Map::get`](cel::objects::Map::get)
-//! specifically to avoid that cross-conversion. A `bool` key against an
-//! `int`/`uint` lookup (or the reverse) is a narrower, asymmetric
-//! divergence this doesn't close — see [`python_index`]'s own doc
+//! specifically to avoid that cross-conversion. An `int`/`uint` probe
+//! against a `bool`-keyed entry (or the reverse: a `bool` probe
+//! against an `int`/`uint`-keyed entry) is celpy's own real asymmetry,
+//! reproduced too — `BoolType` has no `__eq__` override in celpy, so a
+//! plain dict lookup with an `int`/`uint` probe finds a `bool`-keyed
+//! entry (hashing and comparing through the plain `int` `BoolType`
+//! subclasses), but a `bool` probe against an `int`/`uint`-keyed entry
+//! still raises (`IntType`/`UintType.__eq__`'s own `@type_matched`
+//! has no exemption for the reverse direction) — confirmed against the
+//! real evaluator, not assumed from the value arm above. See
+//! [`python_index`]'s own doc
 //! comment.
 //!
 //! [`paths::rewrite`](crate::paths::rewrite) substitutes [`strict_index_fn`]
@@ -111,23 +119,31 @@ fn python_index(container: &Value, index: &Value) -> Result<Value, ()> {
             // own `IntType`/`UintType.__eq__` is `@type_matched` and
             // raises for the other one instead of finding it — this
             // looks the key up directly through the underlying
-            // `HashMap`, matching celpy's own strict type match. A
-            // `bool` key is a narrower, asymmetric case this doesn't
-            // reproduce either way: celpy's own `BoolType`, lacking an
-            // `__eq__` override, lets an `int` *probe* find a `bool`
-            // *stored* key (`BoolType.__eq__` resolves through the
-            // plain `int` it subclasses), but not the reverse (an
-            // `int`-keyed entry has no overridden `__eq__` to fall back
-            // through for a `bool` probe, so `IntType`'s own
-            // `@type_matched` raises) — a correct implementation would
-            // have to know which side was the lookup key and which was
-            // already in the map, not just compare the two. Rare enough
-            // (fourth review finding 5) that this crate pins the
-            // current behaviour (`map.rs` test
-            // `bool_key_against_an_int_entry_is_a_known_divergence`)
-            // rather than reproducing it.
+            // `HashMap`, matching celpy's own strict type match.
             let key: Key = index.clone().try_into().map_err(|_| ())?;
-            map.map.get(&key).cloned().ok_or(())
+            if let Some(value) = map.map.get(&key) {
+                return Ok(value.clone());
+            }
+            // celpy's own asymmetry (module docs): a plain dict lookup
+            // with an `int`/`uint` probe finds a `bool`-keyed entry
+            // (`BoolType` has no `__eq__` override, so it hashes and
+            // compares through the plain `int` it subclasses) even
+            // though the strict key match above never matches
+            // `Key::Bool` against `Key::Int`/`Key::Uint` directly. Only
+            // tried for an `int`/`uint` probe that missed above — a
+            // `bool` probe keeps raising against an `int`/`uint`-keyed
+            // entry, since `IntType`/`UintType.__eq__`'s own
+            // `@type_matched` has no exemption for the reverse
+            // direction.
+            let bool_equivalent = match index {
+                Value::Int(n) if *n == 0 || *n == 1 => Some(*n == 1),
+                Value::UInt(n) if *n == 0 || *n == 1 => Some(*n == 1),
+                _ => None,
+            };
+            match bool_equivalent.and_then(|b| map.map.get(&Key::Bool(b))) {
+                Some(value) => Ok(value.clone()),
+                None => Err(()),
+            }
         }
         _ => Err(()),
     }
@@ -200,22 +216,37 @@ mod tests {
     }
 
     #[test]
-    fn bool_key_against_an_int_entry_is_a_known_divergence() {
-        // fourth review finding 5: `cel`'s own map indexing treats a
-        // `bool` key as entirely distinct from an `int`/`uint` one in
-        // both directions, so this always raises on a cross-type
-        // lookup. celpy's own asymmetry means that's only a real
-        // divergence one way — an `int`/`uint` probe *finds* a
-        // `bool`-keyed entry in celpy (confirmed against the real
-        // evaluator: `state.m[1] == 'a'` with `{m: {true: 'a'}}` is
-        // `true`), so this crate's raise here is pinned as a known
-        // divergence (`python_index`'s own doc comment). The reverse
-        // (a `bool` probe against an `int`/`uint`-keyed entry) raises in
-        // celpy too, so that assertion isn't a divergence at all — both
-        // are asserted here for the one behavior (always raise) that
-        // makes this crate's own rule simple to state.
-        assert!(eval("{true: 'a'}[1]").is_err());
+    fn int_or_uint_probe_finds_a_bool_keyed_entry() {
+        // celpy's own asymmetry (confirmed against the real evaluator:
+        // `state.m[1] == 'a'`/`state.m[1u] == 'a'` with `{m: {true:
+        // 'a'}}` are both `true`) — `BoolType` has no `__eq__` override,
+        // so a plain dict lookup with an `int`/`uint` probe resolves
+        // through the plain `int` it subclasses.
+        assert_eq!(
+            eval("{true: 'a'}[1]"),
+            Ok(Value::String(StdArc::new("a".into())))
+        );
+        assert_eq!(
+            eval("{true: 'a'}[1u]"),
+            Ok(Value::String(StdArc::new("a".into())))
+        );
+        assert_eq!(
+            eval("{false: 'a'}[0]"),
+            Ok(Value::String(StdArc::new("a".into())))
+        );
+        // A probe that isn't 0 or 1 never matches a `bool`-keyed entry,
+        // whether or not one is present.
+        assert!(eval("{true: 'a'}[2]").is_err());
+    }
+
+    #[test]
+    fn bool_probe_against_an_int_entry_still_raises() {
+        // The reverse direction is not a divergence at all: celpy's
+        // own `IntType`/`UintType.__eq__` is `@type_matched` with no
+        // exemption for a `bool` probe, so this raises in celpy too
+        // (confirmed against the real evaluator).
         assert!(eval("{1: 'a'}[true]").is_err());
+        assert!(eval("{1u: 'a'}[true]").is_err());
     }
 
     #[test]

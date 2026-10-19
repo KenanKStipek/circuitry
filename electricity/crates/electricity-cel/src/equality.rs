@@ -259,27 +259,72 @@ fn strict_ne_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
 fn strict_in_fn(Arguments(args): Arguments) -> Result<Value, ExecutionError> {
     let item = &args[0];
     let container = &args[1];
-    let elements: Vec<Value> = match container {
-        Value::List(items) => items.iter().cloned().collect(),
-        Value::Map(map) => map.map.keys().map(Value::from).collect(),
-        Value::String(s) => s
-            .chars()
-            .map(|c| Value::String(std::sync::Arc::new(c.to_string())))
-            .collect(),
-        Value::Bytes(b) => b.iter().map(|byte| Value::Int(i64::from(*byte))).collect(),
+    // `convert.rs`'s own null-key sentinel: a `null` probe against a
+    // map holding the collapsed `None`/bare-`date` key slot matches,
+    // the same way `None in {<a None or date key>: ...}` does in
+    // Python (confirmed against the real evaluator) -- the sentinel
+    // itself is never exposed as a `Value::String` match for any other
+    // probe, including a literal string equal to it, which this
+    // crate's own module docs on `convert::NULL_KEY_SENTINEL` already
+    // call out as a (vanishingly unlikely) risk rather than something
+    // this check also needs to special-case.
+    if matches!(item, Value::Null)
+        && let Value::Map(map) = container
+        && map.map.keys().any(crate::convert::is_null_key_sentinel)
+    {
+        return Ok(Value::Bool(true));
+    }
+    // Scans *container*'s own elements by reference -- never collecting
+    // them into a fresh `Vec<Value>` first (issue #400): `cel` itself
+    // passes this function's own arguments as owned values no matter
+    // what, but that clone is `Arc::clone` for `Value::List`/`Value::
+    // Map` (O(1), whatever the container's size), unlike a `Vec<Value>`
+    // built fresh on every call, which is a real, size-proportional copy
+    // -- paid again on every macro iteration for `state.l.filter(x, x in
+    // state.l)`, the shape that makes it quadratic overall.
+    let mut had_error = false;
+    match container {
+        Value::List(items) => {
+            for element in items.iter() {
+                match strict_eq(element, item) {
+                    Ok(true) => return Ok(Value::Bool(true)),
+                    Ok(false) => {}
+                    Err(()) => had_error = true,
+                }
+            }
+        }
+        Value::Map(map) => {
+            for key in map.map.keys() {
+                match strict_eq(&Value::from(key), item) {
+                    Ok(true) => return Ok(Value::Bool(true)),
+                    Ok(false) => {}
+                    Err(()) => had_error = true,
+                }
+            }
+        }
+        Value::String(s) => {
+            for c in s.chars() {
+                match strict_eq(&Value::String(std::sync::Arc::new(c.to_string())), item) {
+                    Ok(true) => return Ok(Value::Bool(true)),
+                    Ok(false) => {}
+                    Err(()) => had_error = true,
+                }
+            }
+        }
+        Value::Bytes(b) => {
+            for byte in b.iter() {
+                match strict_eq(&Value::Int(i64::from(*byte)), item) {
+                    Ok(true) => return Ok(Value::Bool(true)),
+                    Ok(false) => {}
+                    Err(()) => had_error = true,
+                }
+            }
+        }
         _ => {
             return Err(ExecutionError::ValuesNotComparable(
                 item.clone(),
                 container.clone(),
             ));
-        }
-    };
-    let mut had_error = false;
-    for element in &elements {
-        match strict_eq(element, item) {
-            Ok(true) => return Ok(Value::Bool(true)),
-            Ok(false) => {}
-            Err(()) => had_error = true,
         }
     }
     if had_error {

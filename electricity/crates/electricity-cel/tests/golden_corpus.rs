@@ -6,6 +6,19 @@
 //! regenerates it with Python 3.11 and fails the build if it differs
 //! (`.github/workflows/electricity.yml`), so this test only needs to
 //! trust the committed file.
+//!
+//! Most cases assert [`Outcome::Ok`] (both engines agree on the same
+//! result) or [`Outcome::Error`] (both fail, Circuitry's own case
+//! derived from a real `CelEvaluationError`). [`Outcome::Both`] is the
+//! third, narrower kind: a documented, permanent divergence where
+//! *neither* engine raises but they disagree on the value -- something
+//! `Ok`/`Error` could not express on their own (one can pin "Circuitry
+//! succeeds, electricity fails" or vice versa, never "both succeed,
+//! differently"). `electricity_result` is still checked against this
+//! crate's own real evaluator below, same as every other case;
+//! `python_result` is recorded for documentation only, since the
+//! generator already got it from a real call into Circuitry's own
+//! evaluator, not a guess.
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
 use electricity_cel::{evaluate_condition, evaluate_expect};
@@ -96,8 +109,25 @@ enum Mode {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Outcome {
-    Ok { result: bool },
-    Error { message: Option<String> },
+    Ok {
+        result: bool,
+    },
+    Error {
+        message: Option<String>,
+    },
+    /// Both engines evaluate without raising, but to different `bool`
+    /// results -- a documented, permanent divergence (issue #400): a
+    /// case kind the corpus previously had no way to express, since
+    /// `Ok`/`Error` above can each only pin one side's own outcome, not
+    /// "both succeed, differently." *python_result* is Circuitry's own
+    /// real outcome (recorded for documentation, carrying no assertion
+    /// of its own here since the Python side already generated it by
+    /// actually calling the real evaluator); *electricity_result* is
+    /// the one this test asserts against this crate's own evaluator.
+    Both {
+        python_result: bool,
+        electricity_result: bool,
+    },
 }
 
 #[derive(Deserialize)]
@@ -184,6 +214,34 @@ fn golden_corpus_matches_circuitrys_real_cel_evaluator() {
             }
             (Outcome::Error { .. }, Ok(actual)) => failures.push(format!(
                 "case {i}: expected an error for {:?}, got Ok({actual})",
+                case.expr
+            )),
+            (
+                Outcome::Both {
+                    electricity_result, ..
+                },
+                Ok(actual),
+            ) if electricity_result == actual => {}
+            (
+                Outcome::Both {
+                    python_result,
+                    electricity_result,
+                },
+                Ok(actual),
+            ) => failures.push(format!(
+                "case {i}: documented divergence for {:?} expected Ok({electricity_result}) \
+                 (Circuitry: Ok({python_result})), got Ok({actual})",
+                case.expr
+            )),
+            (
+                Outcome::Both {
+                    python_result,
+                    electricity_result,
+                },
+                Err(err),
+            ) => failures.push(format!(
+                "case {i}: documented divergence for {:?} expected Ok({electricity_result}) \
+                 (Circuitry: Ok({python_result})), got Err({err})",
                 case.expr
             )),
         }

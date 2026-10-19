@@ -1529,13 +1529,34 @@ regardless of which underlying crate is used:
   directly, `dict`→`MapType`, `list/tuple/set`→`ListType`, `datetime`→`TimestampType`,
   `timedelta`→`DurationType`; anything with no CEL counterpart maps to `null` — never the raw
   value, which is the sandbox boundary (no expression can reach an attribute/method/class
-  through state). Two values this doesn't hold for, both documented (not just in the PR) as known
-  divergences in `electricity-cel`'s own crate docs: an `int` too large for CEL's 64-bit `int`
-  raises (`ValueError("overflow")` in cel-python, `convert::ConvertError::Overflow` here) rather than becoming
-  `null`, read directly or as a dict key; and a dict key with no CEL key counterpart (a `float`,
-  `None`, a bare `date` — reachable from an ordinary YAML input file, not just data buried in
-  `value`/`meta`) is **dropped** here, where cel-python converts it to `None` and so collapses
-  several such keys into one.
+  through state). An `int` too large for CEL's 64-bit `int` raises (`ValueError("overflow")` in
+  cel-python, `convert::ConvertError::Overflow`/`CelError::is_overflow` here) rather than becoming
+  `null`, read directly or as a dict key; the VM reproduces every one of Circuitry's own
+  per-call-site outcomes for that case, not just the raise itself (below). A dict key that
+  converts to Python's `None` in cel-python's own `_to_cel` (a bare `None` key, or a bare `date`,
+  never a `datetime.datetime` — reachable from an ordinary YAML input file, not just data buried
+  in `value`/`meta`) collapses here too, into one reserved sentinel key, matching cel-python's own
+  collapse-to-one-`null`-key behavior for `size()`, `in` and a literal `null` lookup alike
+  (`convert::NULL_KEY_SENTINEL`). A key that keeps its own, real CEL value in cel-python instead
+  of becoming `None` — a `float`, a `datetime.datetime`, `bytes`, or a nested `list`/`dict` — is
+  still a known, documented divergence: it is **dropped** here, because `cel::objects::Key` has
+  no variant for any of them, unlike the `None`/bare-`date` case above, which needed no new `Key`
+  variant to fix.
+
+  **Overflow end to end**: `CelError::is_overflow()` lets a caller outside this crate reproduce
+  Circuitry's own per-call-site handling of a `ValueError("overflow")`, which Circuitry's own
+  `evaluate_cel_expect` raises *uncaught* — not a `CelEvaluationError` — because `core/cel_eval.py`
+  converts `value`/`meta`/`state` before its own `try`/`except`. `core/tool.py`'s attempt loop
+  catches every exception alike, overflow included: the attempt fails and retries up to the
+  step's own `retries:` policy, `meta.error` reads `"overflow"`, and `meta.expect` is never set
+  (a failed, non-raising expectation sets it; this never reaches that code). `core/use.py` also
+  catches it, but its own `except (ValueError, RecursionError)` re-raises immediately, with no
+  retry regardless of which attempt this is, wrapped as `"use '<name>' -> <label>: overflow"`
+  under `on_error: fail`. `electricity-vm`'s own `tool`/`use` dispatch (`exec/tool.rs`,
+  `exec/use_.rs`) branches on `is_overflow()` to reproduce both outcomes exactly; `if`/`while`
+  CEL (`exec/conditional.rs`, `exec/loop_.rs`) needs no such branch, because `evaluate_cel`'s own
+  conversion happens *inside* its `try`/`except`, so overflow there is wrapped as an ordinary
+  `CelEvaluationError` already — exactly what `evaluate_condition` already does.
 - **Heterogeneous equality** (runtime-semantics §4.3): cross-type `==` between non-numeric types
   is `False`, never an error; `int`/`uint`/`double` are one numeric family and compare across
   subtype at the top level (`1.0 == 1` → `True`). This is the opposite of Rust's/Python's native
@@ -1552,10 +1573,13 @@ regardless of which underlying crate is used:
   or by byte the same way, something `cel`'s own `_[_]` has no indexer for at all. Map indexing
   needs its own strict (non-cross-converting) key match: cel-python's own `IntType`/
   `UintType.__eq__` raises on the *other* integer type as a key rather than finding the entry
-  the way `cel`'s own, cross-converting map indexing does; a `bool` key against an `int`/`uint`
-  lookup (or the reverse) is a narrower, known divergence this does not reproduce either way
-  (electricity-cel's own crate docs; pinned by a Rust unit test, since the differential corpus
-  can't express an intentional non-match).
+  the way `cel`'s own, cross-converting map indexing does. celpy's own asymmetry between a
+  `bool` key and an `int`/`uint` lookup is reproduced too: an `int`/`uint` probe finds a
+  `bool`-keyed entry (`BoolType` has no `__eq__` override, so a plain dict lookup resolves
+  through the plain `int` it subclasses), but a `bool` probe against an `int`/`uint`-keyed entry
+  still raises, matching celpy in both directions (electricity-cel's own crate docs; pinned by a
+  Rust unit test, since the differential corpus can't express a map literal with both an
+  `int`/`uint` *and* a `bool` key reaching the same slot).
 - **`has(X)`** is rewritten, at parse time, into `!@not_strictly_false(__electricity_false(X))`:
   `@not_strictly_false` is one of `cel`'s own built-in operators, never raising itself, true
   unless its argument evaluates (without error) to the literal `false`; a *registered* function's
@@ -1576,6 +1600,18 @@ regardless of which underlying crate is used:
   error-absorbing `&&`, where a `false` element anywhere wins over a raising one anywhere else,
   and a `map` comparison checks both sides hold the same key set before comparing any value, so
   neither result can depend on a `HashMap`'s own unspecified iteration order.
+- **`in`/`==`/`!=`/indexing scan the container they're given, never a fresh copy of it first.**
+  The `cel` crate always hands a registered function its arguments as owned [`cel::Value`]s, but
+  cloning `Value::List`/`Value::Map` itself is `Arc::clone` — O(1) regardless of size — so that
+  much is already cheap. What was **not** cheap: `in`'s own scan used to collect every element
+  into a freshly allocated `Vec<Value>` before comparing any of them, an allocation proportional
+  to the container's size on *every single call*, paid again on every one of a macro's own `N`
+  iterations (`state.l.filter(x, x in state.l)`). `in`'s own scan (and indexing's single-element
+  lookup, and `==`/`!=`'s own element-by-element fold) now walk the container by reference
+  instead, with no such copy — the scan itself is still `O(container size)` per call, same as
+  cel-python's own linear `in` (CEL equality isn't a pure hash equality, so neither engine can
+  use a hash set here without changing what some comparisons mean), just without an extra,
+  avoidable allocation stacked on top of it.
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
   the parse tree for every dotted `state.` read before evaluating, and makes the whole expression

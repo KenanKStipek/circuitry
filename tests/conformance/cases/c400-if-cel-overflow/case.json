@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #400",
+  "description": "An `if` condition reads a JSON-parsed integer too large for CEL's 64-bit `int`. Unlike `expect:`, `evaluate_cel`'s own conversion happens *inside* its `try`/`except`, so this is an ordinary `CelEvaluationError` (`CEL evaluation failed for '...': overflow`), propagated bare the same as any other condition evaluation failure -- no tool/use-style retry or `meta.error: \"overflow\"` special-casing applies here.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

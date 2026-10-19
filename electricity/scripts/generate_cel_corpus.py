@@ -164,6 +164,38 @@ def condition(
     }
 
 
+def divergent_condition(
+    expr: str,
+    state: dict,
+    *,
+    electricity_result: bool,
+    strict: bool = False,
+) -> dict:
+    """A documented, permanent divergence (issue #400): both engines
+    evaluate *expr* without ever raising, but to different `bool`
+    results -- the one case shape `condition`/`expect` above can't
+    express, since each only pins what *one* side's own outcome is.
+    *electricity_result* is this crate's own, hand-stated outcome,
+    checked against the real Rust evaluator by `golden_corpus.rs`
+    itself; the Python side is never hand-written -- `python_result`
+    still comes from an actual call into `evaluate_cel`, which this
+    function asserts succeeds (a case written with this helper is, by
+    definition, one where Circuitry itself never raises).
+    """
+    python_result = evaluate_cel(expr, state, strict=strict)
+    return {
+        "mode": "condition",
+        "expr": expr,
+        "strict": strict,
+        "state": encode(state),
+        "outcome": {
+            "kind": "both",
+            "python_result": python_result,
+            "electricity_result": electricity_result,
+        },
+    }
+
+
 def expect(
     expr: str,
     *,
@@ -631,15 +663,47 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- re-review of #379, finding 6 (declined, documented in
-    # electricity-cel's `lib.rs` crate docs instead of fixed): a
-    # `Value::Dict` key with no CEL `Key` counterpart collapses, in
-    # Python, into a single `null` key holding the last value written --
-    # `cel::objects::Key` cannot represent `null` as a map key at all, so
-    # electricity-cel drops every such entry instead of colliding them
-    # into one. Deliberately NOT a corpus case: pinning it here would
-    # assert parity on a documented, permanent divergence rather than a
-    # bug this crate can fix.
+    # --- issue #400: a dict key that converts to Python's `None` in
+    # `_to_cel` (a bare `None` key, or a bare `date`, never a
+    # `datetime.datetime`) collapses into a single `null` key holding
+    # the last value written -- fixed, not just documented: electricity
+    # routes every such key to one reserved sentinel `Key::String`
+    # (`convert::NULL_KEY_SENTINEL`), so `size()` and `null in ...`
+    # both match.
+    cases += [
+        condition(
+            "size(state.m) == 1",
+            {"m": {None: "n", datetime.date(2020, 1, 1): "d"}},
+        ),
+        condition(
+            "null in state.m",
+            {"m": {None: "n", datetime.date(2020, 1, 1): "d"}},
+        ),
+    ]
+
+    # --- issue #400: a key that keeps its own, real CEL value in
+    # Python instead of becoming `None` -- a `float` key is kept as its
+    # own `DoubleType`, reachable through `in`/`size()`, never
+    # collapsing with a `None` key the way the case above does -- is a
+    # known, permanent divergence (`lib.rs`'s crate docs): dropped
+    # here, because `cel::objects::Key` has no `float` variant at all,
+    # unlike the `None`/bare-`date` case above, which needed no new
+    # `Key` variant to fix. Pinned with [`divergent_condition`] (issue
+    # #400's new corpus case kind) rather than left undocumented in the
+    # corpus: both engines succeed, but electricity's own map is one
+    # entry short of Circuitry's real one.
+    cases += [
+        divergent_condition(
+            "size(state.m) == 1",
+            {"m": {2.5: "f"}},
+            electricity_result=False,
+        ),
+        divergent_condition(
+            "2.5 in state.m",
+            {"m": {2.5: "f"}},
+            electricity_result=False,
+        ),
+    ]
 
     # --- third review of #379, finding 1: `in` must decide `false` on a
     # type mismatch that doesn't actually raise in celpy (a plain Python
@@ -768,6 +832,18 @@ def build_corpus() -> list[dict]:
     # `cel`'s own cross-converting map indexing does.
     cases += [
         condition("state.m[1u] == 'a'", {"m": {1: "a"}}),
+    ]
+
+    # --- issue #400: celpy's own asymmetry between a `bool` key and an
+    # `int`/`uint` lookup, now reproduced -- `BoolType` has no
+    # `__eq__` override, so a plain dict lookup with an `int`/`uint`
+    # probe resolves through the plain `int` it subclasses and finds a
+    # `bool`-keyed entry, while the reverse (a `bool` probe against an
+    # `int`/`uint`-keyed entry) still raises either way.
+    cases += [
+        condition("state.m[1] == 'a'", {"m": {True: "a"}}),
+        condition("state.m[1u] == 'a'", {"m": {True: "a"}}),
+        condition("state.m[0] == 'a'", {"m": {False: "a"}}),
     ]
 
     # --- fourth review of #379: shapes the third review's own list of

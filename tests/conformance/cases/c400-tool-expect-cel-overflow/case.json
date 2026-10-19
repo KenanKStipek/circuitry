@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #400",
+  "description": "A tool's `expect:` CEL expression reads a JSON-parsed integer too large for CEL's 64-bit `int` (`_to_cel`'s own `ValueError(\"overflow\")`, raised uncaught by `evaluate_cel_expect` -- not a `CelEvaluationError`). `core/tool.py`'s attempt loop catches it exactly like any other attempt exception: the attempt fails and retries up to `retries.max_attempts`, `meta.error` reads \"overflow\" (not \"expect failed: ...\"), and `meta.expect` is never set on the failed attempt (a failed, non-raising expectation sets it; this never reaches that code). The exhausted last attempt's bare `ValueError` propagates through `on_error: fail` with no extra wrapping of its own.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

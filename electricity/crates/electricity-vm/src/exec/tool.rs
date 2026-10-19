@@ -1040,6 +1040,32 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                                 );
                                                             }
                                                         }
+                                                        // `core/cel_eval.py::evaluate_cel_expect`
+                                                        // converts `value`/`meta`/`state` before
+                                                        // its own `try`/`except`, so the matching
+                                                        // `ValueError("overflow")` reaches
+                                                        // `core/tool.py` uncaught -- never a
+                                                        // `CelEvaluationError`, never a failed
+                                                        // expectation. `core/tool.py`'s own
+                                                        // `except Exception as expect_exc:
+                                                        // failure = expect_exc` catches it exactly
+                                                        // like any other attempt failure (retried
+                                                        // up to this step's own `retries:`
+                                                        // policy), but `meta.expect` is never set
+                                                        // (the escape happens before
+                                                        // `core/expect.py` would set it) and
+                                                        // `meta.error`/the bare, uncaught
+                                                        // `ValueError` an exhausted `on_error:
+                                                        // fail` re-raises both read "overflow",
+                                                        // not "expect failed: ...".
+                                                        Err(cel_err) if cel_err.is_overflow() => {
+                                                            expect_failed = true;
+                                                            failure = Some(electricity_tools::ToolError {
+                                                                py_class: electricity_tools::PyExc::ValueError,
+                                                                message: "overflow".to_string(),
+                                                                cause: electricity_tools::ErrorCause::None,
+                                                            });
+                                                        }
                                                         Err(cel_err) => {
                                                             expect_meta.insert(
                                                                 Value::from("error"),
@@ -1805,6 +1831,75 @@ mod tests {
             expect_meta.get(&Value::from("result")),
             Some(&Value::Bool(false))
         );
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overflowing_cel_expect_retries_then_fails_with_overflow_text() {
+        // Issue #400: `value` itself is too large for CEL's 64-bit
+        // `int` -- `evaluate_cel_expect`'s own `_to_cel` conversion
+        // raises a bare `ValueError("overflow")` before Circuitry's own
+        // `evaluate_expect` ever gets a `CelEvaluationError` to catch,
+        // so `core/tool.py`'s attempt loop sees it exactly like any
+        // other attempt exception: retried like normal, `meta.error`
+        // reads "overflow" (not "expect failed: ..."), and `meta.expect`
+        // is never set at all (a failed, non-raising expectation sets
+        // it; this never reaches that code).
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("1180591620717411303424"));
+        let mut tool = tool_op(params);
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == value".to_string(),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Skip)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from("overflow"))
+        );
+        assert!(!meta.contains_key(&Value::from("expect")));
         assert_eq!(
             meta.get(&Value::from("retries_used")),
             Some(&Value::from(1i64))

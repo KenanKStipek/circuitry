@@ -58,26 +58,35 @@
 //! to (tool vs. use) if that parity ever matters, rather than baking in
 //! a guess now.
 //!
-//! Known divergence: a `Value::Dict` key with no CEL
-//! [`cel::objects::Key`] counterpart (anything other than
-//! `bool`/`int`/`string` — a `float`, a `None`, a bare `date`, a nested
-//! `list`/`dict`) is **dropped** by `convert::to_cel` rather than mapped
-//! to some placeholder. This is reachable from an ordinary
-//! orchestration, not just a key buried deep in `value`/`meta`: a YAML
-//! input file's `2026-01-01: x` is a date key, and PyYAML resolves an
-//! unquoted float- or null-looking key the same way, so `state.input`
-//! can hold any of them directly. Circuitry's own `_to_cel`
-//! (`core/cel_eval.py`) instead converts such a key to `None` (or keeps
-//! a float/datetime key as its own CEL-less type) —
-//! `celtypes.MapType.__setitem__` never validates keys — so several
-//! date keys collapse into a single `null` key holding the last value,
-//! and `size()` counts it. `cel::objects::Key` cannot represent `null`
-//! (or a float, or a nested container) as a map key at all, so
-//! reproducing Python's collapse-to-one-null-key behavior isn't an
-//! option here; dropping the entry is the least-wrong of the choices
-//! actually available. A `Value::Int` too large for `i64` as a dict key
-//! raises `convert::ConvertError::Overflow` instead of being dropped, matching every
-//! other big-int read.
+//! A `Value::Dict` key that converts, in Circuitry's own `_to_cel`
+//! (`core/cel_eval.py`), to Python's `None` — a bare `Value::None` key,
+//! or a bare `Value::Date` (never a `datetime.datetime`, the only
+//! date/time type `_to_cel` special-cases) — collapses the same way in
+//! this crate: `convert::to_cel` routes every such key to one reserved
+//! sentinel [`cel::objects::Key::String`] (`convert::NULL_KEY_SENTINEL`),
+//! so a plain `HashMap::insert` collapses them exactly like Python's own
+//! dict assignment does (last value wins), `size()` counts the slot
+//! once, and `null in state.m` finds it (`equality`'s own `in` arm
+//! special-cases the sentinel back into a `null` match). This is
+//! reachable from an ordinary orchestration, not just a key buried deep
+//! in `value`/`meta`: a YAML input file's `2026-01-01: x` is a date key,
+//! and PyYAML resolves an unquoted null-looking key (`~:`/`null:`) the
+//! same way, so `state.input` can hold either directly. A literal
+//! `state.m[null]` still raises either way: `cel::Value::Null` has no
+//! `Key` conversion at all, matching `celtypes.MapType`'s own key-type
+//! check, which rejects `None` too.
+//!
+//! Known divergence, not reproduced: a key that keeps its own, real CEL
+//! value in Python instead of becoming `None` — a `float`
+//! (`celtypes.DoubleType`), a `datetime.datetime` (`celtypes.
+//! TimestampType`), `bytes`, or a nested `list`/`dict` — is still
+//! **dropped** by `convert::to_cel` rather than mapped to some
+//! placeholder, because `cel::objects::Key` has no variant for any of
+//! them: `Key` is `Int`/`Uint`/`Bool`/`String` only, so there is no way
+//! to keep such a key's own distinct identity the way the `null`
+//! sentinel above keeps `None`'s. A `Value::Int` too large for `i64` as
+//! a dict key raises `convert::ConvertError::Overflow` instead of being
+//! dropped or collapsed, matching every other big-int read.
 //!
 //! `has(X)` is rewritten, at parse time, into
 //! `!@not_strictly_false(__electricity_false(X))` (`macros` module
@@ -104,12 +113,15 @@
 //! (non-cross-converting) key match, unlike `cel`'s own
 //! [`cel::objects::Map::get`]: celpy's own `MapType.__getitem__` raises
 //! on an int/uint key mismatch rather than finding the entry
-//! (`indexing` module docs). One narrower case stays a known,
-//! documented divergence: a `bool` key against an `int`/`uint` lookup
-//! (or the reverse) doesn't reproduce celpy's own asymmetry — found
-//! only when an `int`/`uint` probes a `bool`-keyed entry, not the
-//! reverse (`indexing` module docs, pinned by a Rust unit test rather
-//! than the differential corpus, which can't express it either).
+//! (`indexing` module docs). celpy's own asymmetry between a `bool`
+//! key and an `int`/`uint` lookup is reproduced too: an `int`/`uint`
+//! probe finds a `bool`-keyed entry (`BoolType` has no `__eq__`
+//! override, so a plain dict lookup resolves through the plain `int`
+//! it subclasses), but a `bool` probe against an `int`/`uint`-keyed
+//! entry still raises, matching celpy exactly in both directions
+//! (`indexing` module docs, pinned by a Rust unit test rather than
+//! the differential corpus, which can't express a map literal with
+//! both an `int`/`uint` *and* a `bool` key reaching the same slot).
 //!
 //! `in` over a bare `string`/`bytes` operand iterates its characters or
 //! bytes, matching celpy's own `for c in container`; `cel`'s own `@in`
@@ -585,10 +597,19 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     equality::register(&mut ctx);
     indexing::register(&mut ctx);
     macros::register(&mut ctx);
-    ctx.add_variable_from_value(
-        "state",
-        convert::to_cel(&projected_state).map_err(|e| convert_err(expr, e))?,
-    );
+    let converted_state = convert::to_cel(&projected_state).map_err(|e| {
+        // `core/cel_eval.py::evaluate_cel`'s own `compiled.context(ctx)`
+        // (which calls `_to_cel`, raising on a big int the expression
+        // actually reads) runs *inside* the same `try` block as the
+        // evaluation below, under the same `logger.error("... %s",
+        // expr, exc)` -- logged from the *raw* cause (`exc`), not the
+        // wrapped exception, so this logs `e` itself, not the
+        // `CelError` it becomes, to avoid doubling the `"CEL evaluation
+        // failed for ..."` prefix.
+        log::error!("CEL evaluation failed for expr {}: {e}", py_repr(expr));
+        convert_err(expr, e)
+    })?;
+    ctx.add_variable_from_value("state", converted_state);
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
         // evaluation failed for expr %r: %s", expr, exc)` -- an `if`/
@@ -1060,6 +1081,34 @@ mod tests {
         assert_eq!(evaluate_condition("1 == true", &state, false), Ok(false));
         assert_eq!(evaluate_condition("1 == 1.0", &state, false), Ok(true));
         assert_eq!(evaluate_condition("'a' == 1", &state, false), Ok(false));
+    }
+
+    #[test]
+    fn none_and_date_dict_keys_collapse_and_stay_reachable_via_in() {
+        // Matches `_to_cel`'s own collapse (confirmed against the real
+        // evaluator): a `None` key and a bare `date` key both convert
+        // to Python's `None`, so a plain dict assignment overwrites
+        // down to one entry -- `size()` counts it once, `null in m` is
+        // `true`, and a literal `m[null]` still raises (`cel::Value::
+        // Null` has no `Key` conversion, matching `celtypes.MapType`'s
+        // own key-type check).
+        use chrono::NaiveDate;
+        let mut d = Dict::new();
+        d.insert(Value::None, Value::from(1_i64));
+        d.insert(
+            Value::Date(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()),
+            Value::from(2_i64),
+        );
+        let state = dict(vec![("m", Value::Dict(d))]);
+        assert_eq!(
+            evaluate_condition("size(state.m) == 1", &state, false),
+            Ok(true)
+        );
+        assert_eq!(
+            evaluate_condition("null in state.m", &state, false),
+            Ok(true)
+        );
+        assert!(evaluate_condition("state.m[null] == 2", &state, false).is_err());
     }
 
     #[test]

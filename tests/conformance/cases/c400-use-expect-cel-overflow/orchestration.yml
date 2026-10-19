@@ -1,0 +1,20 @@
+name: c400-use-expect-cel-overflow
+effects:
+  - type: tool
+    name: big
+    provider: json
+    params: {mode: parse, input: "1180591620717411303424"}
+  - type: use
+    name: checked
+    on_error: fail
+    expect: "value.result == state.prime.big.value"
+    retries: {max_attempts: 3, backoff_ms: 1}
+    outputs:
+      result:
+        path: prime.result.value
+    inline: |
+      effects:
+        - type: tool
+          name: result
+          provider: json
+          params: {mode: parse, input: "1"}

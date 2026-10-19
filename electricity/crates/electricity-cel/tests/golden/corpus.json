@@ -5224,6 +5224,166 @@
     "strict": true
   },
   {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": "n"
+                }
+              ],
+              [
+                {
+                  "t": "date",
+                  "v": "2020-01-01"
+                },
+                {
+                  "t": "str",
+                  "v": "d"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "null in state.m",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "str",
+                  "v": "n"
+                }
+              ],
+              [
+                {
+                  "t": "date",
+                  "v": "2020-01-01"
+                },
+                {
+                  "t": "str",
+                  "v": "d"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "size(state.m) == 1",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "bits": "4004000000000000",
+                  "t": "float"
+                },
+                {
+                  "t": "str",
+                  "v": "f"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "2.5 in state.m",
+    "mode": "condition",
+    "outcome": {
+      "electricity_result": false,
+      "kind": "both",
+      "python_result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "bits": "4004000000000000",
+                  "t": "float"
+                },
+                {
+                  "t": "str",
+                  "v": "f"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
     "expr": "'b' in state.tags",
     "mode": "condition",
     "outcome": {
@@ -5964,6 +6124,111 @@
                 {
                   "t": "int",
                   "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[1] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[1u] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false
+  },
+  {
+    "expr": "state.m[0] == 'a'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "bool",
+                  "v": false
                 },
                 {
                   "t": "str",

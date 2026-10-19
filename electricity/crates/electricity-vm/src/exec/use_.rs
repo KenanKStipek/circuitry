@@ -1063,6 +1063,22 @@ async fn attempt_once<R: ParamsCtx>(
                             });
                         }
                     }
+                    Err(cel_err) if cel_err.is_overflow() => {
+                        // `core/cel_eval.py::evaluate_cel_expect` converts
+                        // `value`/`meta`/`state` before its own `try`/
+                        // `except`, so the matching `ValueError("overflow")`
+                        // reaches `core/use.py` uncaught -- never a
+                        // `CelEvaluationError`, never a failed expectation.
+                        // `meta.expect` is never set (the escape happens
+                        // before `core/expect.py` would set it), and
+                        // `core/use.py`'s own `except (ValueError,
+                        // RecursionError)` re-raises immediately, with no
+                        // retry, regardless of which attempt this is.
+                        return Err(AttemptProblem::NotRetried {
+                            message: "overflow".to_string(),
+                            py_class: PyExc::ValueError,
+                        });
+                    }
                     Err(cel_err) => {
                         expect_meta.insert(
                             Value::from("error"),
@@ -1749,6 +1765,121 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 .borrow()
                 .contains_key(&Value::Str("inner".to_string())),
             "the collected record must be the real child node, graftable by the caller"
+        );
+    }
+
+    /// Issue #400: `value.result` is too large for CEL's 64-bit `int`
+    /// -- `evaluate_cel_expect`'s own `_to_cel` conversion raises a bare
+    /// `ValueError("overflow")` before Circuitry's own `evaluate_expect`
+    /// ever gets a `CelEvaluationError` to catch, and `core/use.py`'s
+    /// own `except (ValueError, RecursionError)` re-raises it
+    /// immediately, with no retry regardless of `retries.max_attempts` --
+    /// unlike `core/tool.py`'s attempt loop, which retries the same
+    /// exception like any other.
+    #[tokio::test]
+    async fn an_overflowing_cel_expect_is_not_retried() {
+        let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: parse, input: \"1180591620717411303424\"}\n";
+        let mut outputs = indexmap::IndexMap::new();
+        outputs.insert("result".to_string(), "prime.inner.value".to_string());
+        let use_op = UseOp {
+            parent_trusted: false,
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                inline_yaml.to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: None,
+            outputs: Some(outputs),
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 3,
+                backoff_ms: 0,
+            },
+            expect: Some(ExpectCondition::Cel {
+                expr: "value.result == value.result".to_string(),
+            }),
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+
+        let store = Store::new();
+        let effect_node = store
+            .ensure_dict(&store.root, Value::Str("step".to_string()))
+            .unwrap();
+        set_leaf(&store, &effect_node, "value", Value::None);
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::Str("meta".to_string()))
+            .unwrap();
+
+        let mut registry = electricity_tools::ToolRegistry::new();
+        registry.register(Box::new(electricity_tools::json::JsonTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = ComplexitySettings::default();
+        let orchestration_dir = std::path::Path::new(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "",
+            adapter: "_noop",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+        let mut label = "inline".to_string();
+
+        let result = attempt_once(
+            &op,
+            &use_op,
+            "step",
+            &effect_node,
+            &meta_node,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+            &store,
+            &mut label,
+            false,
+        )
+        .await;
+
+        let AttemptProblem::NotRetried { message, py_class } =
+            result.expect_err("an overflowing expect must be an AttemptProblem")
+        else {
+            panic!("expected AttemptProblem::NotRetried");
+        };
+        assert_eq!(message, "overflow");
+        assert_eq!(py_class, electricity_tools::PyExc::ValueError);
+        assert!(
+            !meta_node
+                .borrow()
+                .contains_key(&Value::Str("expect".to_string())),
+            "meta.expect must never be set for an overflowing expect"
         );
     }
 

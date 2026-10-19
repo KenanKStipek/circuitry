@@ -134,17 +134,12 @@ fn int_to_cel(i: &IntValue) -> Result<cel::Value, ConvertError> {
     }
 }
 
-/// A `Value` dict key with no CEL [`Key`] counterpart (anything other than
-/// `str`/`int`/`bool` — e.g. a `float`, `None`, or a nested `list`/`dict`
-/// key) drops that entry rather than mapping it to some placeholder key:
-/// CEL map keys must be `bool`/`int`/`uint`/`string`, and there is no
-/// value in that set that represents "no counterpart" the way `null` does
-/// for a value position. This is a known divergence from Circuitry's own
-/// `_to_cel`, documented (with its reachability — a plain YAML date key
-/// under `state.input` triggers it, not just data buried in `value`/
-/// `meta`) in `lib.rs`'s crate docs. A key too large for `i64` raises
-/// [`ConvertError::Overflow`] instead of being dropped, matching every
-/// other big-int read.
+/// A `Value` dict key with no CEL [`Key`] counterpart drops that entry,
+/// with one exception ([`NULL_KEY_SENTINEL`] below): CEL map keys must
+/// be `bool`/`int`/`uint`/`string`, and there is no value in that set
+/// that represents "no counterpart" the way `null` does for a value
+/// position. A key too large for `i64` raises [`ConvertError::Overflow`]
+/// instead of being dropped, matching every other big-int read.
 fn dict_to_cel(entries: &electricity_value::Dict, depth: usize) -> Result<CelMap, ConvertError> {
     let mut map = HashMap::with_capacity(entries.len());
     for (key, value) in entries {
@@ -155,12 +150,55 @@ fn dict_to_cel(entries: &electricity_value::Dict, depth: usize) -> Result<CelMap
     Ok(CelMap { map: Arc::new(map) })
 }
 
+/// Stands in for every dict key `_to_cel` (`core/cel_eval.py`) converts
+/// to Python's own `None` because it is not one of the types that
+/// function special-cases: a plain `Value::None` key, and a bare
+/// `Value::Date` (never a `datetime.datetime`, the only date/time type
+/// `_to_cel` special-cases; a bare `date` falls through to that
+/// function's final "no CEL counterpart, exposing it as null" branch,
+/// same as any value in that position). A plain Python dict assignment
+/// then collapses every such key into the *same* `None` key, last value
+/// wins — reachable from an ordinary orchestration, not just data
+/// buried in `value`/`meta`: a YAML input file's `2026-01-01: x` is a
+/// date key, and PyYAML resolves an unquoted `null`-looking key
+/// (`~:`/`null:`) as `None` directly.
+///
+/// `cel::objects::Key` cannot represent `null` as a map key at all, so
+/// this sentinel string stands in for that one collapsed slot instead —
+/// a key no real orchestration will ever write, chosen so [`to_cel_key`]
+/// can route every `None`/bare-`date` key to the *same* [`Key`], giving
+/// [`dict_to_cel`]'s own `map.insert` the same last-value-wins collapse
+/// Python's dict assignment gets for free, and so `size()` (which reads
+/// the `HashMap`'s own length, needing no help here) counts the
+/// collapsed slot once rather than the entries silently vanishing.
+/// `equality.rs`'s own `in` arm special-cases this sentinel back into a
+/// `null` match; direct indexing (`m[null]`) still raises either way —
+/// `cel::Value::Null` has no [`Key`] conversion at all, matching
+/// `celtypes.MapType`'s own key-type check, which rejects `None` too.
+pub(crate) const NULL_KEY_SENTINEL: &str = "\u{0}electricity-cel: key with no CEL counterpart, collapsed like Circuitry's own null key\u{0}";
+
+/// Whether *key* is [`NULL_KEY_SENTINEL`] — the slot `equality.rs`'s own
+/// `in` arm treats as matching a `null` probe.
+pub(crate) fn is_null_key_sentinel(key: &Key) -> bool {
+    matches!(key, Key::String(s) if s.as_str() == NULL_KEY_SENTINEL)
+}
+
 fn to_cel_key(key: &Value) -> Result<Option<Key>, ConvertError> {
     match key {
         Value::Bool(b) => Ok(Some(Key::Bool(*b))),
         Value::Int(IntValue::Small(n)) => Ok(Some(Key::Int(*n))),
         Value::Int(IntValue::Big(_)) => Err(ConvertError::Overflow),
         Value::Str(s) => Ok(Some(Key::String(Arc::new(s.clone())))),
+        Value::None | Value::Date(_) => {
+            Ok(Some(Key::String(Arc::new(NULL_KEY_SENTINEL.to_string()))))
+        }
+        // A `float`/`datetime`/`bytes`/nested `list`/`dict` key keeps
+        // its own, real CEL value in Python (`DoubleType`/
+        // `TimestampType`/...), reachable through `in`, never
+        // collapsing with a `None` key the way the two cases above do
+        // — `cel::objects::Key` has no variant for any of them, so
+        // this crate still drops the entry; a known, documented
+        // divergence (`lib.rs`'s crate docs).
         _ => Ok(None),
     }
 }
@@ -202,14 +240,38 @@ mod tests {
     }
 
     #[test]
-    fn dict_drops_keys_with_no_cel_counterpart() {
+    fn dict_drops_a_float_key_with_no_cel_counterpart() {
+        // Unlike `None`/a bare `date` key (collapsed into the null
+        // sentinel below), a `float` key keeps its own real CEL value
+        // in Python, which `cel::objects::Key` still has no variant
+        // for -- a known, documented divergence this crate doesn't fix.
         let mut d: Dict = Dict::new();
         d.insert(Value::Str("a".into()), Value::from(1_i64));
-        d.insert(Value::None, Value::from(2_i64));
+        d.insert(Value::Float(2.5), Value::from(2_i64));
         let cel::Value::Map(map) = to_cel(&Value::Dict(d)).unwrap() else {
             panic!("expected a map");
         };
         assert_eq!(map.map.len(), 1);
+    }
+
+    #[test]
+    fn none_and_date_keys_collapse_into_the_same_null_sentinel() {
+        // Matches `_to_cel`'s own collapse: a plain Python dict
+        // assignment with two keys that both convert to `None`
+        // overwrites, leaving one entry holding the last value.
+        let mut d: Dict = Dict::new();
+        d.insert(Value::Str("a".into()), Value::from(1_i64));
+        d.insert(Value::None, Value::from(2_i64));
+        d.insert(
+            Value::Date(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()),
+            Value::from(3_i64),
+        );
+        let cel::Value::Map(map) = to_cel(&Value::Dict(d)).unwrap() else {
+            panic!("expected a map");
+        };
+        assert_eq!(map.map.len(), 2);
+        let sentinel = map.map.keys().find(|k| is_null_key_sentinel(k)).unwrap();
+        assert_eq!(map.map.get(sentinel), Some(&cel::Value::Int(3)));
     }
 
     #[test]
