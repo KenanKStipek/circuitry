@@ -915,7 +915,7 @@ fn build_cost_card(
         // the Cost screen's own by-store tree, which (DESIGN.md's
         // performance rule) is built only while that screen is
         // actually on display.
-        top_store: crate::cost::top_store(flat),
+        top_store: crate::cost::top_store(flat, "prime"),
         in_flight: token_bar_in_flight_line(token_bar),
     }
 }

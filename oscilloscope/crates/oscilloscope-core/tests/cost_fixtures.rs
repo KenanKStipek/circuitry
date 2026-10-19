@@ -36,7 +36,7 @@ fn load_final_state(name: &str) -> Value {
 /// state's own `runtime.last_run.totals`, and that the footer's gap
 /// is *expected_gap* -- 0 for every fixture here, none of which has a
 /// declared-outputs `use` child whose effects complete without
-/// landing in the final state tree (DESIGN.md \u00a71.2, the one case
+/// landing in the final state tree (DESIGN.md §1.2, the one case
 /// the footer's gap exists to surface).
 fn assert_totals_match(name: &str, expected_gap: u64) {
     let state = load_final_state(name);
@@ -97,6 +97,22 @@ fn prompt_tree_loop_concurrency_fixture_totals_match_the_run() {
     assert_totals_match("prompt_tree_loop_concurrency", 0);
 }
 
+/// *name*'s own `prime.ask` -- the retried prompt in both
+/// `prompt_retried_*` fixtures -- really did retry, not merely that
+/// its tokens happen to add up: `assert_totals_match` alone can't
+/// tell a retry's extra tokens apart from two effects that simply
+/// both succeeded on the first attempt.
+fn assert_the_retry_happened(name: &str) {
+    let state = load_final_state(name);
+    let retries_used = state["prime"]["ask"]["meta"]["retries_used"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{name}: prime.ask has no retries_used"));
+    assert_eq!(
+        retries_used, 1,
+        "{name}: prime.ask must have actually retried once"
+    );
+}
+
 #[test]
 fn prompt_retried_cof_fixture_totals_match_the_run() {
     // A real `cof run` of a `prompt_type: json` effect that fails
@@ -106,6 +122,7 @@ fn prompt_retried_cof_fixture_totals_match_the_run() {
     // `cost.rs::retried_prompt_state`'s hand-written state already
     // covers, now against a real recorded run.
     assert_totals_match("prompt_retried_cof", 0);
+    assert_the_retry_happened("prompt_retried_cof");
 }
 
 #[test]
@@ -115,4 +132,5 @@ fn prompt_retried_electricity_fixture_totals_match_the_run() {
     // recording on every field the Cost screen reads (tokens,
     // `_total`s, `retries_used`, `runtime.last_run.totals`).
     assert_totals_match("prompt_retried_electricity", 0);
+    assert_the_retry_happened("prompt_retried_electricity");
 }

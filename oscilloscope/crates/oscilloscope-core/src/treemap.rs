@@ -1410,13 +1410,27 @@ mod tests {
         assert_eq!(check.total, 50);
 
         let stores = crate::cost::largest_stores("prime", &flat, &statuses, &kinds_map, None);
-        assert!(
-            stores
-                .rows
-                .iter()
-                .any(|r| r.path == "prime.fan" && r.tokens_sent == 40),
-            "the table must also carry the loop's own row: {:#?}",
-            stores.rows
+        let check_row = stores
+            .rows
+            .iter()
+            .find(|r| r.path == "prime.fan" && r.tokens_sent == 40)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the table must also carry the loop's own row: {:#?}",
+                    stores.rows
+                )
+            });
+        assert_eq!(
+            check_row.label, "fan › check",
+            "unzoomed, the loop's own row reads as its check leaf, not the loop itself"
+        );
+
+        // Zoomed into the loop itself, the row's own path equals the
+        // zoom root, so there is no prefix left to strip -- the label
+        // must still read `check`, never the unstripped full path.
+        assert_eq!(
+            crate::cost::zoomed_row_label(check_row, "prime.fan"),
+            "check"
         );
     }
 

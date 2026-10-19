@@ -163,7 +163,7 @@ pub fn largest_stores(
             // Mid-run, before `runtime.last_run.totals` exists: the
             // same `_total`-first fallback `render::build_header`
             // itself uses, so the footer's own "run totals" agree
-            // with the header's `\u2191`/`\u2193` the whole time, not only
+            // with the header's `↑`/`↓` the whole time, not only
             // once the run has ended.
             let (sent, received, cost) =
                 flat.values().fold((0u64, 0u64, 0.0f64), |(s, r, c), node| {
@@ -211,8 +211,30 @@ fn flatten_leaves_into(
             if let Some(n) = flat.get(&node.path) {
                 let (tokens_sent, tokens_received) = node_tokens(&n.meta);
                 let cost_usd = n.meta.get("cost_usd").and_then(Value::as_f64);
+                // A `while: mode: model` loop's own "check" leaf
+                // (`treemap::build_node_for_measure`) shares its path
+                // with the container itself -- `path_breadcrumb_
+                // relative_to` alone would read as the container's
+                // own row (`fan`), indistinguishable from a tile that
+                // doesn't exist. Appending `check` by hand, and
+                // reading it bare once the container *is* the root
+                // (zoomed into the loop itself, so there is nothing
+                // left to strip a prefix off of), keeps this leaf
+                // reading as the loop's own tokens, not the loop.
+                let label = if node.key == "check" {
+                    if node.path == root_path {
+                        "check".to_string()
+                    } else {
+                        format!(
+                            "{} › check",
+                            path_breadcrumb_relative_to(&node.path, root_path)
+                        )
+                    }
+                } else {
+                    path_breadcrumb_relative_to(&node.path, root_path)
+                };
                 out.push(StoreRow {
-                    label: path_breadcrumb_relative_to(&node.path, root_path),
+                    label,
                     path: node.path.clone(),
                     tokens_sent,
                     tokens_received,
@@ -239,6 +261,22 @@ pub fn path_breadcrumb_relative_to(path: &str, ancestor_path: &str) -> String {
     let prefix = format!("{ancestor_path}.");
     let relative = path.strip_prefix(prefix.as_str()).unwrap_or(path);
     relative.replace('.', " › ")
+}
+
+/// A table row's own label once zoomed into some ancestor store,
+/// matching the tile the row has in the treemap there -- a `while:
+/// mode: model` loop's own "check" row shares its path with the
+/// zoomed-into container itself, so [`path_breadcrumb_relative_to`]
+/// has no prefix left to strip and would otherwise read back as the
+/// container's own unstripped path. The same special case
+/// [`flatten_leaves_into`] already applies building the row's own
+/// root-relative label, read here instead relative to `zoom_root`.
+pub fn zoomed_row_label(row: &StoreRow, zoom_root: &str) -> String {
+    if row.path == zoom_root {
+        "check".to_string()
+    } else {
+        path_breadcrumb_relative_to(&row.path, zoom_root)
+    }
 }
 
 /// Shortens a " › "-joined breadcrumb to at most `max_width` columns
@@ -279,9 +317,15 @@ pub fn shorten_breadcrumb_from_left(label: &str, max_width: usize) -> String {
 /// table's own sort does, lowest path first (`largest_stores`' own
 /// `rows.sort_by`), not merely "the last one found" -- `BTreeMap`'s
 /// ascending iteration order makes those two tie-break rules the
-/// same rule only if this reads it that way explicitly.
-pub fn top_store(flat: &BTreeMap<String, NodeMeta>) -> Option<(String, u64)> {
+/// same rule only if this reads it that way explicitly. `root_path`
+/// is excluded the same way [`build_tree_for_measure`] excludes it
+/// from the Cost screen's own top-level tiles -- the run's own root
+/// carries an `adapter`-bearing meta like any other node and, when it
+/// reports tokens of its own, must not surface as "the largest store"
+/// in its own run.
+pub fn top_store(flat: &BTreeMap<String, NodeMeta>, root_path: &str) -> Option<(String, u64)> {
     flat.iter()
+        .filter(|(path, _)| path.as_str() != root_path)
         .filter_map(|(path, node)| {
             let (sent, received) = node_tokens(&node.meta);
             let total = sent + received;
@@ -418,7 +462,7 @@ mod tests {
     fn largest_stores_reports_a_gap_when_the_run_totals_exceed_the_table() {
         // A declared-outputs `use` child's own effects count toward
         // the run's totals as they complete but never land in the
-        // final state tree at all (DESIGN.md \u00a71.2) -- the table can
+        // final state tree at all (DESIGN.md §1.2) -- the table can
         // only ever see what `flat` still has, so the footer's own
         // gap must say so rather than silently matching.
         let state = json!({
@@ -445,11 +489,33 @@ mod tests {
         let statuses = BTreeMap::new();
         let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         let table = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
-        let top = top_store(&flat).expect("a top store");
+        let top = top_store(&flat, "prime").expect("a top store");
         assert_eq!(top.0, table.rows[0].path);
         assert_eq!(
             top.1,
             table.rows[0].tokens_sent + table.rows[0].tokens_received
+        );
+    }
+
+    #[test]
+    fn top_store_never_picks_the_run_root_itself() {
+        // The root carries its own tokens the same way a `while:
+        // mode: model` loop's container does (`cost.rs`'s own gap
+        // note) -- without excluding it by path the way `build_tree_
+        // for_measure` excludes it from the Cost screen's own top-
+        // level tiles, a root reporting more tokens than any real
+        // store would win "the largest store" as itself.
+        let state = json!({"prime": {"value": null, "meta": {
+            "completed_at": "t1", "adapter": "scripted",
+            "tokens_sent_total": 900, "tokens_received_total": 400
+        },
+            "plan": prompt(10, 5, None, "t1"),
+        }});
+        let flat = flatten_state(&state);
+        let top = top_store(&flat, "prime").expect("a top store");
+        assert_eq!(
+            top.0, "prime.plan",
+            "the root itself must never win: {top:?}"
         );
     }
 
@@ -537,7 +603,7 @@ mod tests {
         let statuses = BTreeMap::new();
         let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         let table = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
-        let top = top_store(&flat).expect("a top store");
+        let top = top_store(&flat, "prime").expect("a top store");
         assert_eq!(top.0, "prime.alpha", "the lowest path wins the tie");
         assert_eq!(top.0, table.rows[0].path);
     }
