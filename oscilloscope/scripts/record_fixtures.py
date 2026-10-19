@@ -437,6 +437,46 @@ effects:
     ),
 ]
 
+# The Cost screen's own fixture pair (issue #632): a run with a
+# retried prompt, recorded against both engines the same way
+# PARITY_CASES is, so `cost_fixtures.rs` can load each engine's real
+# final state instead of a hand-written one. `backoff_ms: 1`, not `0`:
+# both engines' own retries compiler treats a falsy `backoff_ms`
+# (`0` included) as unset and substitutes the 1000ms default
+# (`core/compiler.py::_compile_prompt`'s own `or 1000`, ported as-is
+# by `electricity-compiler`), so `0` would make this recording spend
+# a real second in that backoff sleep for no reason.
+COST_FIXTURE_CASES: list[Case] = [
+    Case(
+        name="prompt_retried",
+        doc="""\
+effects:
+  - name: ask
+    type: prompt
+    template: "Ask something."
+    prompt_type: json
+    schema: {type: object, required: ["ans"]}
+    retries: {max_attempts: 2, backoff_ms: 1}
+  - name: thank
+    type: prompt
+    template: "Say thank you!"
+""",
+        replies="""\
+prime.ask:
+  - text: "not valid json"
+    tokens_sent: 5
+    tokens_received: 7
+  - text: '{"ans": "ok"}'
+    tokens_sent: 11
+    tokens_received: 22
+prime.thank:
+  - text: "you're welcome"
+    tokens_sent: 4
+    tokens_received: 3
+""",
+    ),
+]
+
 
 def record_one(
     case: Case,
@@ -766,6 +806,19 @@ def main() -> int:
     # tool (its own module docstring), not something CI re-runs.
     electricity_bin = shutil.which("electricity")
     for case in PARITY_CASES:
+        record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")
+        if electricity_bin is not None:
+            record_one(case, electricity_bin, engine="electricity", out_name=f"{case.name}_electricity")
+        else:
+            print(
+                f"record_fixtures.py: 'electricity' not found on PATH; "
+                f"skipping the electricity half of {case.name}",
+                file=sys.stderr,
+            )
+
+    # COST_FIXTURE_CASES (issue #632): same both-engines pairing as
+    # PARITY_CASES, for `cost_fixtures.rs` rather than `engine_parity.rs`.
+    for case in COST_FIXTURE_CASES:
         record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")
         if electricity_bin is not None:
             record_one(case, electricity_bin, engine="electricity", out_name=f"{case.name}_electricity")
