@@ -1195,3 +1195,88 @@ fn a_finished_runs_effects_count_matches_effects_run() {
     assert_eq!(rendered.header.effects_planned, Some(effects_run));
     assert_eq!(rendered.header.effects_done, effects_run);
 }
+
+/// Issue #626: `--glance` shows only the header line, with the final
+/// one kept on screen once the run ends -- mirrors `e2e_cof.rs`'s
+/// own `glance_keeps_the_final_line_and_exits_0`.
+#[test]
+fn glance_keeps_the_final_line_and_exits_0() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: json\n    params:\n      mode: parse\n      input: \"\\\"hi\\\"\"\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osi_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--glance")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(
+        status.success(),
+        "osi should exit 0, got {status:?}; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("ok"),
+        "the final --glance line should show the run as ok; got:\n{stdout:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// [`glance_keeps_the_final_line_and_exits_0`]: a forwarded SIGINT
+/// still exits 130, exactly as `--log` does.
+#[test]
+fn glance_forwards_sigint_and_exits_130() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path(), "do.yml", LONG_SLEEP_DOC);
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osi_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--glance")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let pid = child.id() as i32;
+
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    unsafe {
+        libc::kill(pid, libc::SIGINT);
+    }
+
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("cancelled") || stdout.contains("failed"),
+        "stdout:\n{stdout}"
+    );
+    assert_no_leftover_process(work.path());
+}

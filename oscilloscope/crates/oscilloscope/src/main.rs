@@ -77,6 +77,11 @@ struct RunArgs {
     /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY.
     #[arg(long)]
     log: bool,
+    /// Shows only the header line (issue #626), without the tabs,
+    /// rewritten in place about once a second -- for a tmux status
+    /// line. Can't be combined with `--log`.
+    #[arg(long)]
+    glance: bool,
     /// Switches off the update highlights and the scope icon's
     /// trace: both draw a still frame instead (DESIGN.md §6.3).
     #[arg(long)]
@@ -114,6 +119,16 @@ struct WatchArgs {
     /// makes.
     #[arg(long)]
     log: bool,
+    /// Shows only the header line (issue #626), without the tabs,
+    /// rewritten in place about once a second -- for a tmux status
+    /// line. Can't be combined with `--log`.
+    #[arg(long)]
+    glance: bool,
+    /// With `--glance`: prints the current line once and exits 0,
+    /// rather than watching -- for a tmux status line that runs its
+    /// own command on a timer instead of leaving one process attached.
+    #[arg(long)]
+    once: bool,
     /// Switches off the update highlights and the scope icon's
     /// trace: both draw a still frame instead (DESIGN.md §6.3).
     #[arg(long)]
@@ -445,6 +460,374 @@ fn supervise_plain(
     }
 }
 
+/// `--glance` rewrites the header line about once a second (issue
+/// #626) -- any wider than the real terminal would wrap in a tmux
+/// status line, so this reads the controlling terminal's own width
+/// when there is one, falling back to a generous default when stdout
+/// isn't a TTY at all (a tmux status line's own capture, say).
+fn glance_width() -> u16 {
+    crossterm::terminal::size().map(|(w, _)| w).unwrap_or(120)
+}
+
+/// Builds and writes one `--glance` line (issue #626) -- `header_
+/// line`'s own segments, as plain text, with no tabs (`current:
+/// None`). An intermediate line is rewritten in place (`\r`, then
+/// clears to the end of the line so a shorter new line doesn't leave
+/// a stale tail behind); the final line, once the run has ended,
+/// stays on screen with its own trailing newline instead -- and is
+/// the only line ever written at all when stdout isn't a terminal.
+#[allow(clippy::too_many_arguments)]
+fn write_glance_line(
+    out: &mut impl Write,
+    document: &str,
+    plan: &PlanTree,
+    model: &mut RunModel,
+    state: Option<&serde_json::Value>,
+    process: ProcessState,
+    elapsed_s: f64,
+    zone: &dyn oscilloscope_core::format::ClockZone,
+    no_animation: bool,
+    is_tty: bool,
+    final_line: bool,
+) {
+    if !is_tty && !final_line {
+        // DESIGN.md: "when stdout isn't a terminal, it prints one
+        // line when the run ends" -- no intermediate rewrites at all.
+        return;
+    }
+    let now = now_rfc3339();
+    let rendered = oscilloscope_core::render::build(
+        document,
+        "",
+        plan,
+        model,
+        state,
+        process,
+        elapsed_s,
+        &now,
+        &[],
+    );
+    let icon_frame = icon_frame_for(no_animation, Duration::from_secs_f64(elapsed_s));
+    let segments = oscilloscope_core::screens::header_line(
+        &rendered.header,
+        &now,
+        zone,
+        glance_width(),
+        !no_animation,
+        icon_frame,
+        None,
+    );
+    let text = oscilloscope_core::screens::header_line_text(&segments);
+    if final_line {
+        let _ = writeln!(out, "\r{text}\x1b[K");
+    } else {
+        let _ = write!(out, "\r{text}\x1b[K");
+    }
+    let _ = out.flush();
+}
+
+/// How often `--glance` rewrites its own line (DESIGN.md: "about
+/// once a second").
+const GLANCE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// `osi <doc> --glance` (issue #626): the engine runs exactly as it
+/// does under `--log`/the TUI, but the only thing ever written to
+/// stdout is the header line, rewritten in place. Signals and exit
+/// codes work exactly as `--log`'s own `supervise_plain`/`finish_run`
+/// pair already do -- this mirrors their forwarding and kill-deadline
+/// logic, without any of their per-line printing.
+#[allow(clippy::too_many_arguments)]
+fn run_glance(
+    mut child: SupervisedChild,
+    stderr_rx: std::sync::mpsc::Receiver<String>,
+    spec: RunSpec,
+    plan: PlanTree,
+    run_dir: PathBuf,
+    document: String,
+    mut signals: Option<SignalWatcher>,
+    no_animation: bool,
+) -> ExitCode {
+    let start = Instant::now();
+    let zone = LocalZone;
+    let is_tty = std::io::stdout().is_terminal();
+    let mut live_poller = LiveStatePoller::new(spec.live_state_path());
+    let mut events_tailer = EventsTailer::new(spec.events_path());
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut current_state: Option<serde_json::Value> = None;
+    let mut signal_count: u32 = 0;
+    let mut kill_deadline: Option<Instant> = None;
+    let mut last_write = Instant::now() - GLANCE_INTERVAL;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    let exit_status = loop {
+        if let Some(watcher) = signals.as_mut() {
+            for sig in watcher.pending() {
+                signal_count += 1;
+                child.forward(sig);
+                if signal_count == 2 {
+                    kill_deadline = Some(Instant::now() + std::time::Duration::from_secs(10));
+                }
+            }
+        }
+        if let Some(deadline) = kill_deadline {
+            if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
+                child.kill_group();
+                kill_deadline = None;
+            }
+        }
+        // `--glance` shows only the header line -- the engine's own
+        // stderr is still drained (so the pipe never blocks it), just
+        // never printed.
+        for _ in stderr_rx.try_iter() {}
+        let (_, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        if let Some(state) = state {
+            current_state = Some(state);
+        }
+
+        if let Ok(Some(status)) = child.try_wait() {
+            break status;
+        }
+        if last_write.elapsed() >= GLANCE_INTERVAL {
+            write_glance_line(
+                &mut out,
+                &document,
+                &plan,
+                &mut model,
+                current_state.as_ref(),
+                ProcessState::Running,
+                start.elapsed().as_secs_f64(),
+                &zone,
+                no_animation,
+                is_tty,
+                false,
+            );
+            last_write = Instant::now();
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let exit_status = child.wait().unwrap_or(exit_status);
+    for _ in stderr_rx.try_iter() {}
+    let (_, final_state, _) = drain_until_ended(
+        &spec.out_path(),
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+    );
+    // The authoritative final state once a run truly ended with one
+    // (DESIGN.md §2.1 rule 7) -- `None` both before any write and
+    // after a second-signal abort with no final write at all, in
+    // which case the last live snapshot stays, same as `finish_run`'s
+    // own summary falls back to it.
+    if final_state.is_some() {
+        current_state = final_state;
+    }
+
+    let process = ProcessState::Exited {
+        interrupted: signal_count > 0,
+        likely_failed: exit_status.code() == Some(1),
+        has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+        exited_at: Some(now_rfc3339()),
+    };
+    write_glance_line(
+        &mut out,
+        &document,
+        &plan,
+        &mut model,
+        current_state.as_ref(),
+        process,
+        start.elapsed().as_secs_f64(),
+        &zone,
+        no_animation,
+        is_tty,
+        true,
+    );
+
+    ExitCode::from(exit_code(exit_status) as u8)
+}
+
+/// `osi watch`'s own document name (issue #626): the watched run's
+/// own `runtime.last_run.orchestration_path` once a live-state write
+/// has it, else whatever the caller was pointed at.
+fn watch_document_name(state: Option<&serde_json::Value>, fallback: &str) -> String {
+    state
+        .and_then(oscilloscope_core::model::orchestration_path)
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// `osi watch <dir> --glance` (issue #626): the same stop conditions
+/// `supervise_plain_watch` already uses (a completed live-state
+/// write, an events `run_end`, or the watched pid going away), but
+/// rewriting the header line instead of printing diff lines --
+/// `osi watch` owns no engine to forward a signal to, so a local one
+/// just ends the watch, same as `q` does in the TUI (detaching, never
+/// an abort). `--once` skips the loop entirely: one read, one line,
+/// exit 0, for a tmux status line that runs its own command on a
+/// timer instead.
+fn watch_glance(
+    run_dir: PathBuf,
+    live_state_path: PathBuf,
+    plan: PlanTree,
+    fallback_document: String,
+    no_animation: bool,
+    once: bool,
+) -> ExitCode {
+    let start = Instant::now();
+    let zone = LocalZone;
+    let is_tty = std::io::stdout().is_terminal();
+    let mut live_poller = LiveStatePoller::new(&live_state_path);
+    let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut last_state: Option<serde_json::Value> = None;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    if once {
+        let (_, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        last_state = state;
+        let document = watch_document_name(last_state.as_ref(), &fallback_document);
+        let process = if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                exited_at: None,
+            }
+        } else {
+            ProcessState::Running
+        };
+        write_glance_line(
+            &mut out,
+            &document,
+            &plan,
+            &mut model,
+            last_state.as_ref(),
+            process,
+            start.elapsed().as_secs_f64(),
+            &zone,
+            no_animation,
+            true,
+            true,
+        );
+        return ExitCode::from(0);
+    }
+
+    let mut signals = SignalWatcher::new().ok();
+    let mut last_write = Instant::now() - GLANCE_INTERVAL;
+    let mut detached = false;
+    loop {
+        if let Some(watcher) = signals.as_mut() {
+            if watcher.pending().into_iter().next().is_some() {
+                detached = true;
+                break;
+            }
+        }
+        let (_, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        if state.is_some() {
+            last_state = state;
+        }
+        if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            break;
+        }
+        if model.run_ended_by_events() {
+            let (_, state) = observe_tick(
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+            );
+            if state.is_some() {
+                last_state = state;
+            }
+            break;
+        }
+        if let Some(pid) = model.run_start_pid() {
+            if !oscilloscope_core::supervise::process_alive(pid) {
+                break;
+            }
+        }
+        if last_write.elapsed() >= GLANCE_INTERVAL {
+            let document = watch_document_name(last_state.as_ref(), &fallback_document);
+            write_glance_line(
+                &mut out,
+                &document,
+                &plan,
+                &mut model,
+                last_state.as_ref(),
+                ProcessState::Running,
+                start.elapsed().as_secs_f64(),
+                &zone,
+                no_animation,
+                is_tty,
+                false,
+            );
+            last_write = Instant::now();
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    let document = watch_document_name(last_state.as_ref(), &fallback_document);
+    // Finding 15 (shared with `finish_watch`): a voluntary detach
+    // from a run that's still going is not an abort -- shown as
+    // still running, exactly as the TUI's own finished screen would
+    // leave it, rather than a synthetic "aborted" ending it never had.
+    let process = if detached {
+        ProcessState::Running
+    } else {
+        ProcessState::Exited {
+            interrupted: false,
+            likely_failed: model.run_end_ok() == Some(false),
+            has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
+            exited_at: None,
+        }
+    };
+    write_glance_line(
+        &mut out,
+        &document,
+        &plan,
+        &mut model,
+        last_state.as_ref(),
+        process,
+        start.elapsed().as_secs_f64(),
+        &zone,
+        no_animation,
+        is_tty,
+        true,
+    );
+    ExitCode::from(0)
+}
+
 fn do_run(args: RunArgs) -> ExitCode {
     // Issue #535: resolved before anything else runs, same spirit as
     // the signal watcher just below -- a bad `OSI_THEME` is a usage
@@ -458,6 +841,10 @@ fn do_run(args: RunArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if args.log && args.glance {
+        eprintln!("osi: --log and --glance can't be combined");
+        return ExitCode::from(2);
+    }
 
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
@@ -603,6 +990,21 @@ fn do_run(args: RunArgs) -> ExitCode {
                 return exit_early(1);
             }
         };
+
+    // Issue #626: `--glance` wins over both the TUI and `--log` --
+    // it shows only the header line, on any stdout, TTY or not.
+    if args.glance {
+        return run_glance(
+            child,
+            stderr_rx,
+            spec,
+            plan,
+            run_dir,
+            args.orchestration.clone(),
+            signals,
+            args.no_animation,
+        );
+    }
 
     // DESIGN.md §6.2/§6.3: a TTY gets the interactive TUI; `--log` or
     // any non-TTY stdout keeps this function's own plain-text stream
@@ -2096,6 +2498,14 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if args.log && args.glance {
+        eprintln!("osi: --log and --glance can't be combined");
+        return ExitCode::from(2);
+    }
+    if args.once && !args.glance {
+        eprintln!("osi: --once needs --glance");
+        return ExitCode::from(2);
+    }
 
     let target = PathBuf::from(&args.target);
     // P2-4: a typo'd path used to be silently treated as a direct
@@ -2151,6 +2561,19 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         },
         None => PlanTree::empty(),
     };
+
+    // Issue #626: `--glance` wins over both the TUI and `--log`,
+    // same as `osi <doc>`.
+    if args.glance {
+        return watch_glance(
+            run_dir,
+            live_state_path,
+            plan,
+            args.target.clone(),
+            args.no_animation,
+            args.once,
+        );
+    }
 
     // DESIGN.md §6.2/§6.3: same TTY/—log split as `osi <doc>`; `q` in
     // this one just detaches (§6.3), since watch owns no engine of
@@ -2226,7 +2649,7 @@ fn run_tui_watch(
     run_dir: PathBuf,
     live_state_path: PathBuf,
     plan: PlanTree,
-    document: String,
+    fallback_document: String,
     no_animation: bool,
     mut theme_name: theme::ThemeName,
 ) -> ExitCode {
@@ -2327,6 +2750,10 @@ fn run_tui_watch(
     // directory that has nothing left to say.
     let mut ended = false;
     let mut now_str = now_rfc3339();
+    // Issue #626: `osi watch` names the document from the run's own
+    // `runtime.last_run.orchestration_path` once a live-state write
+    // has it, not from the directory/file it was pointed at.
+    let mut document = watch_document_name(last_state.as_ref(), &fallback_document);
     let mut render_state = oscilloscope_core::render::build_folded(
         &document,
         "watch",
@@ -2487,6 +2914,7 @@ fn run_tui_watch(
                 ProcessState::Running
             };
             now_str = now_rfc3339();
+            document = watch_document_name(last_state.as_ref(), &fallback_document);
             render_state = oscilloscope_core::render::build_folded(
                 &document,
                 "watch",
@@ -3358,12 +3786,24 @@ mod tests {
         assert!(rendered.contains("Which engine runs the orchestration"));
         assert!(rendered.contains("Keeps the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
+        assert!(rendered.contains("Shows only the header line"));
         assert!(rendered.contains("Switches off the update highlights"));
         assert!(rendered.contains("The colour theme"));
         // Finding 10: `--theme`'s possible values (a derived
         // `ValueEnum`) are listed in `--help`, not just its own
         // description text.
         assert!(rendered.contains("dracula"), "{rendered}");
+    }
+
+    #[test]
+    fn watch_args_help_describes_glance_and_once() {
+        let err = WatchArgs::try_parse_from(
+            std::iter::once("osi watch".to_string()).chain(["--help".to_string()]),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("Shows only the header line"));
+        assert!(rendered.contains("prints the current line once and exits 0"));
     }
 
     #[test]

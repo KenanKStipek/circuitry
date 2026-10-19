@@ -308,7 +308,9 @@ fn draw_header_line(
         .iter()
         .map(|seg| {
             let style = match seg.role {
-                HeaderRole::Icon => Style::default().fg(crate::icon::trace_color(status, ctx.theme)),
+                HeaderRole::Icon => {
+                    Style::default().fg(crate::icon::trace_color(status, ctx.theme))
+                }
                 HeaderRole::Alive => Style::default().fg(ctx.theme.status_running),
                 HeaderRole::Status => Style::default().fg(run_status_color(status, ctx.theme)),
                 HeaderRole::Elapsed | HeaderRole::Clock => Style::default(),
@@ -442,7 +444,9 @@ fn draw_phase_strip(
             .start_ts
             .as_deref()
             .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-        let dur = step.duration_s.map(oscilloscope_core::format::format_duration);
+        let dur = step
+            .duration_s
+            .map(oscilloscope_core::format::format_duration);
         let label2 = match (&start, &dur) {
             (Some(s), Some(d)) => format!("{s} · {d}"),
             (Some(s), None) => s.clone(),
@@ -458,7 +462,10 @@ fn draw_phase_strip(
             line1.push(Span::raw("  →  "));
             line2.push(Span::raw("     "));
         }
-        line1.push(Span::styled(label1.clone(), status_style(step.status.kind, ctx.theme)));
+        line1.push(Span::styled(
+            label1.clone(),
+            status_style(step.status.kind, ctx.theme),
+        ));
         line2.push(Span::styled(
             format!("{label2:<col_width$}"),
             Style::default().fg(ctx.theme.dim),
@@ -478,7 +485,12 @@ fn draw_phase_strip(
 
 /// The now pane's own left (log) / right (focus) split, 62/38
 /// (DESIGN.md's two-way-split rule).
-fn draw_now_pane(frame: &mut Frame, area: Rect, pane: &oscilloscope_core::screens::NowPane, ctx: &DrawCtx) {
+fn draw_now_pane(
+    frame: &mut Frame,
+    area: Rect,
+    pane: &oscilloscope_core::screens::NowPane,
+    ctx: &DrawCtx,
+) {
     if area.height == 0 {
         return;
     }
@@ -492,10 +504,12 @@ fn draw_now_pane(frame: &mut Frame, area: Rect, pane: &oscilloscope_core::screen
         .iter()
         .map(|l| Line::from(l.clone()))
         .collect();
-    let log = Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
+    let log =
+        Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
     frame.render_widget(log, cols[0]);
 
-    let focus = Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
+    let focus =
+        Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
     frame.render_widget(focus, cols[1]);
 }
 
@@ -514,9 +528,18 @@ fn focus_lines(focus: &oscilloscope_core::screens::NowFocus, ctx: &DrawCtx) -> V
                 RunStatus::Aborted => ("aborted", ctx.theme.status_aborted),
                 RunStatus::Running => ("running", ctx.theme.status_running),
             };
-            let mut lines = vec![Line::from(Span::styled(status_text, Style::default().fg(color)))];
-            let start = summary.start_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-            let end = summary.end_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+            let mut lines = vec![Line::from(Span::styled(
+                status_text,
+                Style::default().fg(color),
+            ))];
+            let start = summary
+                .start_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+            let end = summary
+                .end_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
             if let (Some(start), Some(end)) = (start, end) {
                 lines.push(Line::from(format!("{start}–{end}")));
             }
@@ -542,67 +565,88 @@ fn focus_step_lines(
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
     {
-            let mut lines = vec![Line::from(step.breadcrumb.clone())];
-            let mut meta = vec![step.kind_label.to_string()];
-            if let Some(provider_or_model) = &step.provider_or_model {
-                meta.push(provider_or_model.clone());
+        let mut lines = vec![Line::from(step.breadcrumb.clone())];
+        let mut meta = vec![step.kind_label.to_string()];
+        if let Some(provider_or_model) = &step.provider_or_model {
+            meta.push(provider_or_model.clone());
+        }
+        lines.push(Line::from(Span::styled(
+            meta.join(" · "),
+            Style::default().fg(ctx.theme.dim),
+        )));
+        if let (Some(since), Some(elapsed)) = (
+            step.since_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+            step.elapsed_s,
+        ) {
+            lines.push(Line::from(format!(
+                "since {since} · {}",
+                oscilloscope_core::format::format_duration(elapsed)
+            )));
+        }
+        match &step.detail {
+            FocusDetail::Prompt {
+                tokens,
+                estimated,
+                snippet,
+            } => {
+                if let Some(tokens) = tokens {
+                    let prefix = if *estimated { "≈" } else { "" };
+                    lines.push(Line::from(format!(
+                        "{prefix}{}",
+                        oscilloscope_core::format::format_tokens(*tokens)
+                    )));
+                }
+                if let Some(snippet) = snippet {
+                    lines.push(Line::from(snippet.clone()));
+                }
             }
-            lines.push(Line::from(Span::styled(meta.join(" · "), Style::default().fg(ctx.theme.dim))));
-            if let (Some(since), Some(elapsed)) = (
-                step.since_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
-                step.elapsed_s,
-            ) {
-                lines.push(Line::from(format!(
-                    "since {since} · {}",
-                    oscilloscope_core::format::format_duration(elapsed)
+            FocusDetail::Tool { command } => {
+                if let Some(command) = command {
+                    lines.push(Line::from(command.clone()));
+                }
+            }
+            FocusDetail::Agent {
+                engine,
+                model,
+                note,
+            } => {
+                let mut parts = Vec::new();
+                if let Some(engine) = engine {
+                    parts.push(engine.clone());
+                }
+                if let Some(model) = model {
+                    parts.push(model.clone());
+                }
+                if !parts.is_empty() {
+                    lines.push(Line::from(parts.join(" · ")));
+                }
+                lines.push(Line::from(Span::styled(
+                    *note,
+                    Style::default().fg(ctx.theme.dim),
                 )));
             }
-            match &step.detail {
-                FocusDetail::Prompt { tokens, estimated, snippet } => {
-                    if let Some(tokens) = tokens {
-                        let prefix = if *estimated { "≈" } else { "" };
-                        lines.push(Line::from(format!(
-                            "{prefix}{}",
-                            oscilloscope_core::format::format_tokens(*tokens)
-                        )));
-                    }
-                    if let Some(snippet) = snippet {
-                        lines.push(Line::from(snippet.clone()));
-                    }
-                }
-                FocusDetail::Tool { command } => {
-                    if let Some(command) = command {
-                        lines.push(Line::from(command.clone()));
-                    }
-                }
-                FocusDetail::Agent { engine, model, note } => {
-                    let mut parts = Vec::new();
-                    if let Some(engine) = engine {
-                        parts.push(engine.clone());
-                    }
-                    if let Some(model) = model {
-                        parts.push(model.clone());
-                    }
-                    if !parts.is_empty() {
-                        lines.push(Line::from(parts.join(" · ")));
-                    }
-                    lines.push(Line::from(Span::styled(*note, Style::default().fg(ctx.theme.dim))));
-                }
-                FocusDetail::Plain => {}
-            }
-            if let Some(more) = more_running
-                && more > 0
-            {
-                lines.push(Line::from(format!("+{more} more running")));
-            }
-            lines
+            FocusDetail::Plain => {}
+        }
+        if let Some(more) = more_running
+            && more > 0
+        {
+            lines.push(Line::from(format!("+{more} more running")));
+        }
+        lines
     }
 }
 
 /// The overview's own three cards (issue #626) -- time, flow, cost,
 /// equal columns (DESIGN.md §12: "equal panes ... share space
 /// equally").
-fn draw_cards(frame: &mut Frame, area: Rect, overview: &oscilloscope_core::screens::Overview, ctx: &DrawCtx) {
+fn draw_cards(
+    frame: &mut Frame,
+    area: Rect,
+    overview: &oscilloscope_core::screens::Overview,
+    ctx: &DrawCtx,
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -620,17 +664,34 @@ fn draw_cards(frame: &mut Frame, area: Rect, overview: &oscilloscope_core::scree
     draw_cost_card(frame, cols[2], &overview.cost_card, ctx);
 }
 
-fn draw_time_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::screens::TimeCard, ctx: &DrawCtx) {
+fn draw_time_card(
+    frame: &mut Frame,
+    area: Rect,
+    card: &oscilloscope_core::screens::TimeCard,
+    ctx: &DrawCtx,
+) {
     let mut lines = Vec::new();
-    let start = card.start_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-    let end = card.end_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let start = card
+        .start_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let end = card
+        .end_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
     match (&start, &end) {
         (Some(s), Some(e)) => lines.push(Line::from(format!("{s}–{e}"))),
         (Some(s), None) => lines.push(Line::from(format!("{s} → now"))),
         _ => {}
     }
-    lines.push(Line::from(oscilloscope_core::format::format_duration(card.elapsed_s)));
-    if let Some(eta) = card.eta_ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)) {
+    lines.push(Line::from(oscilloscope_core::format::format_duration(
+        card.elapsed_s,
+    )));
+    if let Some(eta) = card
+        .eta_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+    {
         lines.push(Line::from(format!("ETA ~{}", &eta[..5.min(eta.len())])));
     }
     if let Some((label, secs)) = &card.slowest_finished {
@@ -639,25 +700,38 @@ fn draw_time_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::scree
             oscilloscope_core::format::format_duration(*secs)
         )));
     }
-    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" time "));
+    let paragraph =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" time "));
     frame.render_widget(paragraph, area);
 }
 
-fn draw_flow_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::screens::FlowCard, ctx: &DrawCtx) {
+fn draw_flow_card(
+    frame: &mut Frame,
+    area: Rect,
+    card: &oscilloscope_core::screens::FlowCard,
+    ctx: &DrawCtx,
+) {
     use oscilloscope_core::screens::FlowEvent;
     let mut lines = Vec::new();
     let effects = match card.effects_planned {
-        Some(planned) if card.effects_planned_is_lower_bound => format!("{}/{planned}+", card.effects_done),
+        Some(planned) if card.effects_planned_is_lower_bound => {
+            format!("{}/{planned}+", card.effects_done)
+        }
         Some(planned) => format!("{}/{planned}", card.effects_done),
         None => card.effects_done.to_string(),
     };
-    lines.push(Line::from(format!("{effects} effects · {} failed", card.failures)));
+    lines.push(Line::from(format!(
+        "{effects} effects · {} failed",
+        card.failures
+    )));
     for event in &card.recent {
         let (text, ts) = match event {
             FlowEvent::Decision { name, branch, ts } => (format!("{name} → {branch}"), ts),
             FlowEvent::Report { message, ts } => (message.clone(), ts),
         };
-        let clock = ts.as_deref().and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+        let clock = ts
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
         match clock {
             Some(clock) => lines.push(Line::from(format!("{clock}  {text}"))),
             None => lines.push(Line::from(text)),
@@ -684,11 +758,17 @@ fn draw_flow_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::scree
             oscilloscope_core::format::format_duration(secs)
         )));
     }
-    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" flow "));
+    let paragraph =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" flow "));
     frame.render_widget(paragraph, area);
 }
 
-fn draw_cost_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::screens::CostCard, ctx: &DrawCtx) {
+fn draw_cost_card(
+    frame: &mut Frame,
+    area: Rect,
+    card: &oscilloscope_core::screens::CostCard,
+    ctx: &DrawCtx,
+) {
     let mut lines = vec![Line::from(format!(
         "↑{} ↓{}",
         oscilloscope_core::format::format_tokens(card.tokens_sent),
@@ -705,7 +785,8 @@ fn draw_cost_card(frame: &mut Frame, area: Rect, card: &oscilloscope_core::scree
     }
     lines.push(Line::from(card.in_flight.clone()));
     let _ = ctx;
-    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" cost "));
+    let paragraph =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" cost "));
     frame.render_widget(paragraph, area);
 }
 
@@ -752,7 +833,10 @@ fn draw_tree(
     };
     // Issue #626: the effects count moved here from the header line,
     // which no longer shows it at all.
-    let mut title = format!(" orchestration {} ({effects})", orchestration_name(document));
+    let mut title = format!(
+        " orchestration {} ({effects})",
+        orchestration_name(document)
+    );
     if app.follow {
         title.push_str(" (following)");
     }
@@ -1420,8 +1504,10 @@ fn draw_token_bar(
             with_highlight(Style::default(), totals_highlight),
         ),
     ]);
-    let line2 = Line::from(oscilloscope_core::render::token_bar_in_flight_line(token_bar))
-        .style(with_highlight(Style::default(), tokenbar_highlight));
+    let line2 = Line::from(oscilloscope_core::render::token_bar_in_flight_line(
+        token_bar,
+    ))
+    .style(with_highlight(Style::default(), tokenbar_highlight));
     let paragraph = Paragraph::new(vec![line1, line2])
         .block(Block::default().borders(Borders::ALL).title(" tokens "));
     frame.render_widget(paragraph, area);
@@ -1553,7 +1639,7 @@ pub fn draw(
         area.width,
         !ctx.no_animation,
         icon_frame,
-        app.screen,
+        Some(app.screen),
     );
     draw_header_line(frame, sections[0], &segments, ctx);
 
@@ -1564,7 +1650,9 @@ pub fn draw(
                 draw_overview(frame, body, overview, ctx);
             }
         }
-        _ => draw_screen2(frame, area, body, state, details, log_lines, log_total, app, ctx),
+        _ => draw_screen2(
+            frame, area, body, state, details, log_lines, log_total, app, ctx,
+        ),
     }
 
     draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
@@ -3607,7 +3695,21 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app_t0, None, &ctx_t0, 0, "2026-01-01T00:00:00Z", None))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app_t0,
+                    None,
+                    &ctx_t0,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                )
+            })
             .unwrap();
         let buffer_t0 = terminal.backend().buffer().clone();
         let (x, y) = find_row_cell(&buffer_t0);
@@ -3678,7 +3780,21 @@ mod highlight_tests {
             let backend = TestBackend::new(width, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
-                .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        0,
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        "2026-01-01T00:00:00Z",
+                        None,
+                    )
+                })
                 .unwrap();
             terminal.backend().buffer()[(0, 0)].symbol() == " "
         };
@@ -3720,7 +3836,21 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                )
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         let needle: Vec<char> = "120".chars().collect();
@@ -3768,7 +3898,21 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                )
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, theme.background.unwrap());
@@ -3801,7 +3945,21 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                )
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(95, 0)].symbol(), " ");
@@ -3827,7 +3985,21 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0, "2026-01-01T00:00:00Z", None))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                )
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, Color::Reset);

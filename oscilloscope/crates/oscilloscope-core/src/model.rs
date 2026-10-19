@@ -161,6 +161,17 @@ pub fn run_totals(state: &Value) -> Option<Value> {
     state.pointer("/runtime/last_run/totals").cloned()
 }
 
+/// `osi watch`'s own document name (issue #626): the watched run's
+/// own `runtime.last_run.orchestration_path`, once a live-state
+/// write has it -- `osi watch` otherwise has no document of its own
+/// to name the header with at all, only the directory or file it was
+/// pointed at.
+pub fn orchestration_path(state: &Value) -> Option<&str> {
+    state
+        .pointer("/runtime/last_run/orchestration_path")
+        .and_then(Value::as_str)
+}
+
 /// The token rule (DESIGN.md §6.3, issue #527): one node's own
 /// `tokens_sent`/`tokens_received`, read from the `_total` field when
 /// it is present and falling back to the plain one otherwise. Both

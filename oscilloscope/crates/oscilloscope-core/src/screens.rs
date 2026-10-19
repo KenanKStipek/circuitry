@@ -150,7 +150,7 @@ pub fn header_line(
     width: u16,
     animate: bool,
     icon_frame: u64,
-    current: Screen,
+    current: Option<Screen>,
 ) -> Vec<HeaderSegment> {
     let running = matches!(header.status, RunStatus::Running);
     let icon_text = crate::icon::header_trace_text(icon_frame, running, animate);
@@ -188,58 +188,65 @@ pub fn header_line(
         .map(|&screen| (screen, format!("{} {}", screen.number(), screen.label())))
         .collect();
 
-    let build = |document: &str, report: Option<&str>, eta: Option<&str>, tabs: &[(Screen, String)]| {
-        let mut out = vec![seg(HeaderRole::Icon, icon_text.clone())];
-        out.push(seg(HeaderRole::Plain, " "));
-        out.push(seg(HeaderRole::Document, document.to_string()));
-        out.push(seg(HeaderRole::Plain, " \u{b7} "));
-        if header.engine_alive {
-            out.push(seg(HeaderRole::Alive, "\u{2665}"));
+    let build =
+        |document: &str, report: Option<&str>, eta: Option<&str>, tabs: &[(Screen, String)]| {
+            let mut out = vec![seg(HeaderRole::Icon, icon_text.clone())];
             out.push(seg(HeaderRole::Plain, " "));
-        }
-        out.push(seg(status_role, status_text));
-        out.push(seg(HeaderRole::Plain, " "));
-        out.push(seg(HeaderRole::Elapsed, elapsed_text.clone()));
-        out.push(seg(HeaderRole::Plain, " \u{b7} "));
-        out.push(seg(HeaderRole::Clock, clock_text.clone()));
-        if let Some(eta) = eta {
+            out.push(seg(HeaderRole::Document, document.to_string()));
             out.push(seg(HeaderRole::Plain, " \u{b7} "));
-            out.push(seg(HeaderRole::Eta, eta.to_string()));
-        }
-        if let Some(report_text) = report {
-            let (_, warning) = report_full.as_ref().expect("report text implies report_full");
-            out.push(seg(HeaderRole::Plain, " \u{b7} "));
-            out.push(seg(
-                if *warning {
-                    HeaderRole::Warning
-                } else {
-                    HeaderRole::Report
-                },
-                report_text.to_string(),
-            ));
-        }
-        out.push(seg(HeaderRole::Plain, "   "));
-        for (i, (screen, label)) in tabs.iter().enumerate() {
-            if i > 0 {
-                out.push(seg(HeaderRole::Plain, "  "));
+            if header.engine_alive {
+                out.push(seg(HeaderRole::Alive, "\u{2665}"));
+                out.push(seg(HeaderRole::Plain, " "));
             }
-            let active = *screen == current;
-            let text = if active {
-                format!("[{label}]")
-            } else {
-                label.clone()
-            };
-            out.push(seg(
-                if active {
-                    HeaderRole::TabActive
-                } else {
-                    HeaderRole::TabInactive
-                },
-                text,
-            ));
-        }
-        out
-    };
+            out.push(seg(status_role, status_text));
+            out.push(seg(HeaderRole::Plain, " "));
+            out.push(seg(HeaderRole::Elapsed, elapsed_text.clone()));
+            out.push(seg(HeaderRole::Plain, " \u{b7} "));
+            out.push(seg(HeaderRole::Clock, clock_text.clone()));
+            if let Some(eta) = eta {
+                out.push(seg(HeaderRole::Plain, " \u{b7} "));
+                out.push(seg(HeaderRole::Eta, eta.to_string()));
+            }
+            if let Some(report_text) = report {
+                let (_, warning) = report_full
+                    .as_ref()
+                    .expect("report text implies report_full");
+                out.push(seg(HeaderRole::Plain, " \u{b7} "));
+                out.push(seg(
+                    if *warning {
+                        HeaderRole::Warning
+                    } else {
+                        HeaderRole::Report
+                    },
+                    report_text.to_string(),
+                ));
+            }
+            // `--glance` (issue #626) shows the header line with no tabs
+            // at all -- `current: None`.
+            if let Some(current) = current {
+                out.push(seg(HeaderRole::Plain, "   "));
+                for (i, (screen, label)) in tabs.iter().enumerate() {
+                    if i > 0 {
+                        out.push(seg(HeaderRole::Plain, "  "));
+                    }
+                    let active = *screen == current;
+                    let text = if active {
+                        format!("[{label}]")
+                    } else {
+                        label.clone()
+                    };
+                    out.push(seg(
+                        if active {
+                            HeaderRole::TabActive
+                        } else {
+                            HeaderRole::TabInactive
+                        },
+                        text,
+                    ));
+                }
+            }
+            out
+        };
 
     let report_text = report_full.as_ref().map(|(text, _)| text.clone());
     let original_document = header.document.clone();
@@ -248,9 +255,10 @@ pub fn header_line(
     let mut eta = eta_text.clone();
     let target = width as usize;
 
-    let fits = |document: &str, report: Option<&str>, eta: Option<&str>, tabs: &[(Screen, String)]| {
-        segments_width(&build(document, report, eta, tabs)) <= target
-    };
+    let fits =
+        |document: &str, report: Option<&str>, eta: Option<&str>, tabs: &[(Screen, String)]| {
+            segments_width(&build(document, report, eta, tabs)) <= target
+        };
 
     if fits(&document, report.as_deref(), eta.as_deref(), &tabs) {
         return build(&document, report.as_deref(), eta.as_deref(), &tabs);
@@ -326,7 +334,10 @@ fn truncate_tail(label: &str, max: usize) -> String {
     }
     format!(
         "{}…",
-        label.chars().take(max.saturating_sub(1)).collect::<String>()
+        label
+            .chars()
+            .take(max.saturating_sub(1))
+            .collect::<String>()
     )
 }
 
@@ -609,7 +620,9 @@ fn build_now_pane(
                         .unwrap_or_default()
                 });
             match last_finished {
-                Some(row) => NowFocus::LastFinished(build_focused_step(row, flat, plan, model, state, now)),
+                Some(row) => {
+                    NowFocus::LastFinished(build_focused_step(row, flat, plan, model, state, now))
+                }
                 None => NowFocus::None,
             }
         }
@@ -637,10 +650,7 @@ fn fill_phase_start_times(steps: &mut [PhaseStep], flat: &BTreeMap<String, NodeM
     }
 }
 
-fn build_time_card(
-    header: &crate::render::Header,
-    phase_strip: &[PhaseStep],
-) -> TimeCard {
+fn build_time_card(header: &crate::render::Header, phase_strip: &[PhaseStep]) -> TimeCard {
     let bar = phase_strip
         .iter()
         .filter_map(|s| s.duration_s.map(|d| (s.label.clone(), d)))
@@ -669,7 +679,12 @@ fn build_flow_card(
 ) -> FlowCard {
     let failures = rows
         .iter()
-        .filter(|r| matches!(r.status.kind, StatusKind::Failed | StatusKind::FailedHandled))
+        .filter(|r| {
+            matches!(
+                r.status.kind,
+                StatusKind::Failed | StatusKind::FailedHandled
+            )
+        })
         .count() as u64;
 
     let mut decisions: Vec<(String, String, Option<String>)> = flat
@@ -677,7 +692,10 @@ fn build_flow_card(
         .filter_map(|(path, node)| {
             let branch = node.branch.as_ref()?;
             let name = path.rsplit('.').next().unwrap_or(path).to_string();
-            let ts = node.completed_at.clone().or_else(|| node.created_at.clone());
+            let ts = node
+                .completed_at
+                .clone()
+                .or_else(|| node.created_at.clone());
             Some((name, branch.clone(), ts))
         })
         .collect();
@@ -711,8 +729,14 @@ fn build_flow_card(
     let (count, total_s) = unfolded_rows
         .iter()
         .filter(|r| is_quick_step(r))
-        .fold((0u64, 0.0f64), |(c, s), r| (c + 1, s + r.duration_s.unwrap_or(0.0)));
-    let quick_steps = if count > 0 { Some((count, total_s)) } else { None };
+        .fold((0u64, 0.0f64), |(c, s), r| {
+            (c + 1, s + r.duration_s.unwrap_or(0.0))
+        });
+    let quick_steps = if count > 0 {
+        Some((count, total_s))
+    } else {
+        None
+    };
 
     FlowCard {
         effects_done: header.effects_done,
@@ -735,7 +759,9 @@ fn build_cost_card(
     fn top(nodes: &[TreemapNode]) -> Option<(String, u64)> {
         let mut best: Option<(String, u64)> = None;
         for node in nodes {
-            if node.children.is_empty() && best.as_ref().is_none_or(|(_, total)| node.total > *total) {
+            if node.children.is_empty()
+                && best.as_ref().is_none_or(|(_, total)| node.total > *total)
+            {
                 best = Some((node.path.clone(), node.total));
             }
             if let Some(child_best) = top(&node.children)
@@ -841,7 +867,15 @@ mod tests {
     #[test]
     fn header_line_has_no_truncation_at_120_columns() {
         let header = base_header();
-        let segments = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 120, true, 0, Screen::Overview);
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            120,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
         let text = header_line_text(&segments);
         assert!(text.contains("feature-0417.yml"));
         assert!(text.contains("running"));
@@ -861,7 +895,15 @@ mod tests {
             message: "fixing 1 blocker".to_string(),
             ts: "2026-10-08T11:52:00Z".to_string(),
         });
-        let segments = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 120, true, 0, Screen::Overview);
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            120,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
         let text = header_line_text(&segments);
         assert!(text.contains("\u{25b8} fixing 1 blocker"));
         assert!(!text.contains("run_id"));
@@ -870,9 +912,25 @@ mod tests {
     #[test]
     fn header_line_shrinks_tabs_to_numbers_first() {
         let header = base_header();
-        let wide = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 120, true, 0, Screen::Overview);
+        let wide = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            120,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
         let wide_text = header_line_text(&wide);
-        let narrow = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 100, true, 0, Screen::Overview);
+        let narrow = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            100,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
         let narrow_text = header_line_text(&narrow);
         assert!(narrow_text.chars().count() <= wide_text.chars().count());
         // Status/elapsed/clock survive even once the line had to
@@ -890,7 +948,15 @@ mod tests {
             message: "a somewhat long report message that will not fit".to_string(),
             ts: "2026-10-08T11:52:00Z".to_string(),
         });
-        let segments = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 80, true, 0, Screen::Overview);
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            80,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
         let text = header_line_text(&segments);
         assert!(text.contains("running"));
         assert!(text.contains("11:52:55"));
@@ -899,16 +965,46 @@ mod tests {
     #[test]
     fn header_line_drops_eta_before_status_at_50_columns() {
         let header = base_header();
-        let segments = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 50, true, 0, Screen::Overview);
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            50,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
         let text = header_line_text(&segments);
         assert!(text.contains("running"));
         assert!(text.contains("11:52:55"));
     }
 
     #[test]
+    fn header_line_with_no_screen_omits_the_tabs() {
+        let header = base_header();
+        let segments = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 120, true, 0, None);
+        let text = header_line_text(&segments);
+        assert!(!text.contains("overview"));
+        assert!(!text.contains("flow"));
+        assert!(
+            segments
+                .iter()
+                .all(|s| !matches!(s.role, HeaderRole::TabActive | HeaderRole::TabInactive))
+        );
+    }
+
+    #[test]
     fn header_line_no_animation_uses_a_static_dot() {
         let header = base_header();
-        let segments = header_line(&header, "2026-10-08T11:52:55Z", &utc(), 120, false, 7, Screen::Overview);
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            120,
+            false,
+            7,
+            Some(Screen::Overview),
+        );
         assert_eq!(segments[0].role, HeaderRole::Icon);
         assert_eq!(segments[0].text, "\u{25c9}");
     }
@@ -946,7 +1042,8 @@ mod tests {
 "#,
         )
         .unwrap();
-        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new()).expect("document compiles");
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
         std::fs::remove_dir_all(&tmp).ok();
         program
     }
@@ -972,7 +1069,15 @@ mod tests {
         let mut model = RunModel::new();
         let statuses = model.observe(&state, &plan, ProcessState::Running);
         let all_paths: BTreeMap<String, ()> = flat.keys().map(|k| (k.clone(), ())).collect();
-        let rows = crate::render::build_rows(&plan, &flat, &statuses, &all_paths, "2026-10-08T11:00:10Z", &model, None);
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
         let folded = crate::fold::fold_rows(rows, true, &Default::default());
         let strip = build_phase_strip(&folded);
         // `check › taken` folds into one top-level row (single-child
@@ -1020,7 +1125,16 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let header = base_header();
-        let pane = build_now_pane(&rows, &flat, &plan, &model, None, &header, &[], "2026-10-08T11:00:00Z");
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            None,
+            &header,
+            &[],
+            "2026-10-08T11:00:00Z",
+        );
         match pane.focus {
             NowFocus::Running(_, more) => assert_eq!(more, 1),
             other => panic!("expected Running, got {other:?}"),
@@ -1077,7 +1191,11 @@ mod tests {
                 has_children: false,
             }
         }
-        let unfolded = vec![quick_row("prime.a"), quick_row("prime.b"), quick_row("prime.c")];
+        let unfolded = vec![
+            quick_row("prime.a"),
+            quick_row("prime.b"),
+            quick_row("prime.c"),
+        ];
         let flat = BTreeMap::new();
         let model = RunModel::new();
         let header = base_header();
@@ -1091,7 +1209,12 @@ mod tests {
     fn cost_is_hidden_until_any_effect_reports_it() {
         let header = base_header();
         let token_bar = TokenBar::default();
-        let no_cost = build_cost_card(&header, Some(&json!({"runtime": {"last_run": {"totals": {}}}})), &[], &token_bar);
+        let no_cost = build_cost_card(
+            &header,
+            Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
+            &[],
+            &token_bar,
+        );
         assert_eq!(no_cost.cost_usd, None);
         let with_cost = build_cost_card(
             &header,
@@ -1111,7 +1234,16 @@ mod tests {
         let flat = BTreeMap::new();
         let plan = PlanTree::empty();
         let model = RunModel::new();
-        let pane = build_now_pane(&rows, &flat, &plan, &model, None, &header, &[], "2026-10-08T11:58:00Z");
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            None,
+            &header,
+            &[],
+            "2026-10-08T11:58:00Z",
+        );
         match pane.focus {
             NowFocus::Ended(summary) => assert_eq!(summary.outcome, RunStatus::Ok),
             other => panic!("expected Ended, got {other:?}"),
@@ -1127,7 +1259,16 @@ mod tests {
         let flat = BTreeMap::new();
         let plan = PlanTree::empty();
         let model = RunModel::new();
-        let pane = build_now_pane(&rows, &flat, &plan, &model, None, &header, &[], "2026-10-08T11:58:00Z");
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            None,
+            &header,
+            &[],
+            "2026-10-08T11:58:00Z",
+        );
         match pane.focus {
             NowFocus::Ended(summary) => assert_eq!(summary.outcome, RunStatus::Failed),
             other => panic!("expected Ended, got {other:?}"),
