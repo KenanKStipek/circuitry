@@ -53,18 +53,36 @@ def test_each_chain_loop_publishes_after_every_completed_pass() -> None:
     root = compile_orchestration(orch=orch, root_name="prime")
     DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
 
-    # iter_0 shows up in some snapshot before iter_1 ever does.
+    # iter_0 shows up in some snapshot before iter_1 ever does. The root
+    # container itself (`prime`) now fires its own start before `work`
+    # exists at all (#634); indexing through `.get()` tolerates that
+    # earlier, work-less snapshot the same way a real watcher would.
     first_with_iter0 = next(
-        i for i, s in enumerate(snapshots) if "iter_0" in s["prime"]["work"]
+        i
+        for i, s in enumerate(snapshots)
+        if "iter_0" in s.get("prime", {}).get("work", {})
     )
     first_with_iter1 = next(
-        i for i, s in enumerate(snapshots) if "iter_1" in s["prime"]["work"]
+        i
+        for i, s in enumerate(snapshots)
+        if "iter_1" in s.get("prime", {}).get("work", {})
     )
     assert first_with_iter0 < first_with_iter1
 
-    # And iter_0 is actually complete (not a partial write) by the time it
-    # first appears — the publish happens right after the pass completes.
-    assert snapshots[first_with_iter0]["prime"]["work"]["iter_0"]["step"]["value"] == "a"
+    # iter_0 first appears while its own body effect is still running (#634
+    # extended this loop's existing per-pass publish to publish at each
+    # body effect's own start too) -- and some later snapshot shows it
+    # complete.
+    assert (
+        snapshots[first_with_iter0]["prime"]["work"]["iter_0"]["step"]["value"]
+        is None
+    )
+    completed_values = [
+        s["prime"]["work"]["iter_0"]["step"]["value"]
+        for s in snapshots[first_with_iter0:]
+        if "iter_0" in s.get("prime", {}).get("work", {})
+    ]
+    assert "a" in completed_values
 
 
 def test_while_loop_publishes_after_every_completed_pass() -> None:
@@ -89,9 +107,13 @@ def test_while_loop_publishes_after_every_completed_pass() -> None:
     DynamicRuntime(root, adapter=EchoAdapter(), model="unit-test").execute(store=store)
 
     first_with_iter0 = next(
-        i for i, s in enumerate(snapshots) if "iter_0" in s["prime"]["work"]
+        i
+        for i, s in enumerate(snapshots)
+        if "iter_0" in s.get("prime", {}).get("work", {})
     )
     first_with_iter2 = next(
-        i for i, s in enumerate(snapshots) if "iter_2" in s["prime"]["work"]
+        i
+        for i, s in enumerate(snapshots)
+        if "iter_2" in s.get("prime", {}).get("work", {})
     )
     assert first_with_iter0 < first_with_iter2

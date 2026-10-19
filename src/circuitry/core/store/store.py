@@ -327,14 +327,28 @@ class Store:
         return f"{self._path_prefix}.{name}" if self._path_prefix else name
 
     def fire_effect_start(self, name: str, effect_node: dict[str, Any]) -> None:
-        """Notify ``effect_start`` (if set) that *name* is about to dispatch.
+        """Notify ``effect_start`` (if set) that *name* is about to dispatch,
+        and republish this store's own live view.
 
         The mirror of :meth:`fire_effect_complete`: same canonical dotted
         path, same callback shape. The payload is the effect's live state
         node as it stands *before* dispatch — meta the runtime has already
         recorded (adapter, model, and the complexity score when scoring is
         enabled) is therefore visible at start.
+
+        Also calls ``on_write`` (if set) with this store's own
+        ``root_state`` — every effect mutates its node directly rather than
+        through :meth:`set` (so the mirror never otherwise wakes while it
+        runs), and at the run's own root that direct mutation already lands
+        in the one shared state dict the mirror serialises, with no further
+        help needed. A tree-flow pass or a ``use`` child's root is an
+        *isolated* dict instead (``Store.parallel_branches``, ``use.py``'s
+        ``_child_on_write``) — nothing ever reads it until something
+        publishes a snapshot, so without this call a running effect inside
+        one stays invisible to ``--live-state`` until it finishes (#634).
         """
+        if self.on_write is not None:
+            self.on_write(self.root_state)
         if self.effect_start is None:
             return
         self.effect_start(self.effect_path(name), effect_node)

@@ -898,6 +898,13 @@ class UseRuntime:
         The child's snapshot arrives as the callback's argument rather than
         being read back off the child store, so a nested ``use`` — whose own
         wrapper has already mirrored *its* child in — composes to any depth.
+
+        Deep-copies the child's snapshot before grafting it in, the same
+        protection :meth:`Store.parallel_branches` gives a tree-flow pass's
+        own snapshot: this now fires on every nested effect's start as well
+        as every ``set`` (#634), so the published dict can outlive this call
+        by up to the mirror's coalescing interval while the child's own
+        thread keeps mutating its state underneath it.
         """
         parent_on_write = store.on_write
         if parent_on_write is None:
@@ -907,7 +914,9 @@ class UseRuntime:
 
         def _publish(child_snapshot: dict[str, Any]) -> None:
             parent_on_write(
-                _grafted_snapshot(root_state, node_path, node, child_snapshot)
+                _grafted_snapshot(
+                    root_state, node_path, node, copy.deepcopy(child_snapshot)
+                )
             )
 
         return _publish

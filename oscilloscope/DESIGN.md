@@ -89,8 +89,8 @@ These values were measured but were not what a reader would expect:
 | Situation | Visible in live state? |
 |---|---|
 | A running leaf in **chain** flow | **Only by accident.** Its node (`completed_at: null`) appears if a write happens while it runs. Seen in p2 (`prime.gate_taken.chosen` during its 1 s sleep). Not seen in p4: no write occurred during `flaky`'s 2 s retry window. |
-| A running branch or pass in **tree** flow (dynamic or `each`) | **Never.** Branches run in isolated stores. A leaf appears only when it completes, and a nested container inside a branch (`prime.fan.inner`) appears only when the whole container completes. The loop node's `progress.done` is the only live sign. |
-| A running child of a `use` | **Never in-flight.** The `use` node shows `completed_at: null`, and its children appear afterwards. |
+| A running branch or pass in **tree** flow (dynamic or `each`) | *(as measured against `cof` 0.1.0, before issue #634 fixed this.)* Branches ran in isolated stores that republished only once a branch finished, so a leaf appeared only when it completed, and a nested container inside a branch (`prime.fan.inner`) appeared only when the whole container completed; the loop node's `progress.done` was the only live sign. Both `cof` and electricity now republish a branch's own snapshot at every effect start inside it (and on every write, as any leaf already did), so a running leaf appears there the same way it does at the top level, within the mirror's usual coalescing interval. |
+| A running child of a `use` | *(as measured against `cof` 0.1.0, before issue #634 fixed this.)* The `use` node showed `completed_at: null`, but its children appeared only afterwards, all at once. Both engines now show a running child's own effect the same way, whether the `use` has declared `outputs:` or not -- a declared-outputs child's effects still disappear from the *finished* state once its mapped value lands, exactly as before. |
 | A queued branch (under `max_concurrency`) | No. Nothing tells a queued branch from a running one. |
 | A retry in progress | Tool: yes, from state alone — `completed_at` going back to `null` (running again) with the same `created_at` as the attempt that just failed (§2.1 rule 6, §2.4). A leaf that *completes* again with the same `created_at` as an earlier failure, with no running sighting in between, gets the same `↻` retroactively alongside its own end line. Prompt: no. |
 | A prompt in flight | Only as a chain-flow node with `completed_at: null`, and `prompt_sent` is already set. Model, adapter and the rendered prompt are visible. Elapsed time is not. |
@@ -224,10 +224,10 @@ Values are never logged in full: one line, with a character cap. The details pan
 
 ## 3. Engine addition: an `--events <file>` JSONL stream (recommended)
 
-**The problem.** Live state cannot answer "what is running now":
+**The problem.** Live state cannot answer "what is running now" precisely:
 
-- tree branches and `use` children are invisible while they run;
-- a chain leaf is visible only if a write happens to land while it runs;
+- tree branches and `use` children were invisible while they ran *(as measured against `cof` 0.1.0, before issue #634 fixed this; both engines now republish a branch's own snapshot at every effect start inside it)*;
+- a leaf is visible only within the mirror's own coalescing interval, never the instant it starts or ends;
 - writes are coalesced to every 0.5 s or more;
 - each write serialises the whole state.
 
@@ -238,8 +238,8 @@ The runtime already has exactly the right hooks (`on_effect_start`/`on_effect_co
 | Option | Why not |
 |---|---|
 | The `jsonl-file` runtime plugin | It needs a `plugins` entry in config, and osi passes configs unchanged. It has no start event. It reads `runtime_plugins.jsonl-file`, not `runtime.runtime_plugins` *(from code)*, and appends across runs by default. |
-| A start marker written into the live state | Tree branches live in isolated stores until they merge, so they would still be invisible. Adding one changes the state shape, which both engines must reproduce byte for byte. |
-| Flushing the mirror on start | Still misses tree branches and `use` children, and costs a full serialisation per start. |
+| A start marker written into the live state | *(before issue #634.)* Tree branches lived in isolated stores until they merged, so they would still have been invisible. Adding one also changes the state shape, which both engines must reproduce byte for byte. |
+| Flushing the mirror on start | Costs a full serialisation per start, for precision `--events` already gives for free. |
 
 **Format.** UTF-8 JSONL, one object per line, every line complete:
 
