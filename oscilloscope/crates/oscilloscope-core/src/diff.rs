@@ -385,6 +385,7 @@ const END_SUMMARY_MAX_WAIT: Duration = Duration::from_millis(2 * 500 + 100);
 /// state (#545) — held here, re-checked by
 /// [`Differ::settle_pending_ends`] every later tick, until either the
 /// state catches up or `END_SUMMARY_MAX_WAIT` runs out.
+#[derive(Clone)]
 struct PendingEnd {
     ts: String,
     path: String,
@@ -398,6 +399,14 @@ struct PendingEnd {
 /// Tracks each run's own progress across consecutive snapshots, so a
 /// transition (a node appearing, completing, or moving) can be told
 /// from the previous observation — DESIGN.md §2.4's diff table.
+///
+/// `Clone` exists for exactly one caller (issue #635): the TUI wants
+/// the run-end story line as soon as the engine exits, without
+/// retiring the real `Differ`'s own `run_line_emitted` latch before
+/// `--log`'s authoritative, one-time `finish` call after the TUI
+/// closes -- it calls `finish` on a clone instead, and throws the
+/// clone away.
+#[derive(Clone)]
 pub struct Differ {
     last: BTreeMap<String, NodeMeta>,
     run_line_emitted: bool,

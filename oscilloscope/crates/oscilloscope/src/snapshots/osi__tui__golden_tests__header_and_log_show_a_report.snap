@@ -3,12 +3,11 @@ source: crates/oscilloscope/src/tui.rs
 expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 0.0s · 00:00:00 · ▸ warning: running behind schedule   0  [2]  3  "
-"┌ flow (do-thing · 1/5+) ◆ decision ⟳ loop ▶ running ────────┐┌ selected ──────────────────────────┐"
+"┌ flow (do-thing · 1/5+) ◆ decision ⟲ loop ▶ running ────────┐┌ selected ──────────────────────────┐"
 "│◐ prime                                                     ││a                                   │"
 "│  ✓ a                                                       ││tool · shell                        │"
-"│  ◐ b                                                       ││                                    │"
-"│  · fan                                                     ││                                    │"
-"│                                                            ││                                    │"
+"│  ◐ b                                                       ││produced:                           │"
+"│  · fan                                                     ││ok                                  │"
 "│                                                            ││                                    │"
 "│                                                            ││                                    │"
 "│                                                            ││                                    │"
@@ -25,4 +24,5 @@ expression: text
 "│                                                            ││                                    │"
 "│quick steps folded: 0 · 0.0s                                ││                                    │"
 "│health: 0 failed · 0 retries · 0 warnings                   ││                                    │"
+"│                                                            ││                                    │"
 "└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘"

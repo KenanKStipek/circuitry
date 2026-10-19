@@ -18,7 +18,7 @@ use crate::format::{ClockZone, format_clock_time};
 use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind, run_totals};
 use crate::observe::duration_seconds;
 use crate::plan::PlanTree;
-use crate::render::{Row, RowKind, TokenBar, details_for, token_bar_in_flight_line};
+use crate::render::{Row, RowKind, TokenBar, TokenBlock, details_for, token_bar_in_flight_line};
 
 /// Which of the four screens is on display. `0`, `2` and `3` (issue
 /// #632) have a screen to show; `1` (time) doesn't yet, so its key
@@ -430,6 +430,27 @@ pub struct FocusedStep {
     pub since_ts: Option<String>,
     pub elapsed_s: Option<f64>,
     pub detail: FocusDetail,
+    /// The step's own status (issue #635's selected pane: "produced"
+    /// only shows once the step has actually finished, and a
+    /// running one reads "(when done)" instead) -- the overview's
+    /// own `NowFocus::Running`/`LastFinished` wrapper already carries
+    /// this distinction for its one caller, but the Flow screen's
+    /// selected pane shows whatever row is selected, running or not.
+    pub status: RowStatus,
+    /// Set once the step has failed (`render::Details::error`,
+    /// never read from `meta` directly, so #587's fix for an
+    /// unrecorded prompt flows through here unchanged).
+    pub error: Option<String>,
+    /// A tool step's own output value, truncated the same way
+    /// `Details::value` already is.
+    pub value: Option<String>,
+    /// A prompt's own reply block (`Details::received`) -- `None`
+    /// for a non-prompt step, or a prompt that hasn't replied yet.
+    pub received: Option<TokenBlock>,
+    /// `node_tokens`'s own sent-plus-received total, the same rule
+    /// [`crate::flow::FlowRow::tokens`] uses.
+    pub tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -617,6 +638,15 @@ fn build_focused_step(
         .dim
         .clone()
         .or_else(|| plan.prompt_model_or_provider(&row.path));
+    let tokens = node
+        .map(|n| crate::model::node_tokens(&n.meta))
+        .and_then(|(sent, received)| {
+            let total = sent + received;
+            (total > 0).then_some(total)
+        });
+    let cost_usd = node
+        .and_then(|n| n.meta.get("cost_usd"))
+        .and_then(Value::as_f64);
     FocusedStep {
         path: row.path.clone(),
         breadcrumb: row.label.clone(),
@@ -625,6 +655,12 @@ fn build_focused_step(
         since_ts,
         elapsed_s,
         detail,
+        status: row.status.clone(),
+        error: details.error.clone(),
+        value: details.value.clone(),
+        received: details.received.clone(),
+        tokens,
+        cost_usd,
     }
 }
 
@@ -1101,7 +1137,8 @@ pub fn build_flow_screen(
     zone: &dyn ClockZone,
     now: &str,
 ) -> FlowScreen {
-    let (flow_rows, footer) = crate::flow::build_flow_rows(rows, unfolded_rows, flat, plan);
+    let (flow_rows, footer) =
+        crate::flow::build_flow_rows(rows, unfolded_rows, flat, plan, story_lines);
     let story = crate::flow::build_story(story_lines, &flow_rows, zone);
     let mut selected = None;
     let mut selected_decision = None;

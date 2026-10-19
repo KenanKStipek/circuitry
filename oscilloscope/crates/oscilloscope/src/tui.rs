@@ -2168,8 +2168,13 @@ fn flow_row_lines(
     let mut spans = Vec::new();
     match &row.kind {
         FlowRowKind::Row(_) => {
+            let glyph = if row.merged_pass {
+                '⟲'
+            } else {
+                status_glyph(row.status.kind)
+            };
             spans.push(Span::styled(
-                format!("{indent}{} ", status_glyph(row.status.kind)),
+                format!("{indent}{glyph} "),
                 status_style(row.status.kind, ctx.theme),
             ));
             spans.push(Span::raw(row.label.clone()));
@@ -2292,7 +2297,7 @@ fn draw_flow_pane(
     frame_width: u16,
     ctx: &DrawCtx,
 ) {
-    let footer_lines = 2u16;
+    let footer_lines = 3u16;
     let viewport = area.height.saturating_sub(2 + footer_lines) as usize;
     app.tree_viewport = viewport;
     let selected_idx = app
@@ -2308,11 +2313,16 @@ fn draw_flow_pane(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut shown = 0usize;
     for row in &screen.rows {
-        // A real row not currently visible (collapsed, filtered,
-        // errors-only) stays out of the flow pane too -- a decision
-        // row anchored on it is skipped right along with it, same as
-        // every other descendant of a collapsed subtree already is.
-        let is_real = matches!(row.kind, oscilloscope_core::flow::FlowRowKind::Row(_));
+        // Only a row that shares a real tree node's own path is
+        // ever hidden by collapse/filter/errors-only -- the
+        // synthetic rows this module invents (an unnamed decision,
+        // `inferred: true`; an untaken branch's summary line) carry
+        // no such path, and are always drawn.
+        let is_real = !matches!(
+            row.kind,
+            oscilloscope_core::flow::FlowRowKind::UntakenBranch
+                | oscilloscope_core::flow::FlowRowKind::Decision { inferred: true, .. }
+        );
         if is_real && !visible_paths.contains(row.path.as_str()) {
             continue;
         }
@@ -2334,6 +2344,12 @@ fn draw_flow_pane(
             break;
         }
     }
+
+    let more_planned = visible
+        .iter()
+        .skip(app.tree_scroll + viewport)
+        .filter(|r| r.status.kind == oscilloscope_core::model::StatusKind::Pending)
+        .count() as u64;
 
     let border_style = if app.pane == Pane::Tree {
         Style::default().fg(ctx.theme.border_focused)
@@ -2358,7 +2374,7 @@ fn draw_flow_pane(
     if app.follow {
         title.push_str("(following) ");
     }
-    title.push_str("◆ decision ⟳ loop ▶ running");
+    title.push_str("◆ decision ⟲ loop ▶ running");
     match scroll_indicator(selected_idx, visible.len(), viewport) {
         Some(indicator) => title.push_str(&indicator),
         None => title.push(' '),
@@ -2371,7 +2387,7 @@ fn draw_flow_pane(
     );
     frame.render_widget(list, area);
 
-    draw_flow_footer(frame, area, &screen.footer, ctx);
+    draw_flow_footer(frame, area, &screen.footer, more_planned, ctx);
 }
 
 /// The flow pane's own footer, drawn as the bottom two rows inside
@@ -2381,9 +2397,10 @@ fn draw_flow_footer(
     frame: &mut Frame,
     area: Rect,
     footer: &oscilloscope_core::flow::FlowFooter,
+    more_planned: u64,
     ctx: &DrawCtx,
 ) {
-    if area.height < 4 {
+    if area.height < 5 {
         return;
     }
     let quick = format!(
@@ -2397,14 +2414,20 @@ fn draw_flow_footer(
     );
     let footer_area = Rect {
         x: area.x + 1,
-        y: area.y + area.height.saturating_sub(3),
+        y: area.y + area.height.saturating_sub(4),
         width: area.width.saturating_sub(2),
-        height: 2,
+        height: 3,
     };
-    let lines = vec![
+    let mut lines = vec![
         Line::styled(quick, Style::default().fg(ctx.theme.dim)),
         Line::styled(health, Style::default().fg(ctx.theme.dim)),
     ];
+    if more_planned > 0 {
+        lines.push(Line::styled(
+            format!("○ {more_planned} more planned"),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
     frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
 }
 
@@ -2427,7 +2450,7 @@ fn draw_flow_selected_pane(
     let lines = if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected {
-        focus_step_lines(step, None, ctx)
+        flow_selected_step_lines(step, ctx)
     } else {
         vec![Line::from("nothing selected")]
     };
@@ -2449,6 +2472,152 @@ fn draw_flow_selected_pane(
             .border_style(border_style),
     );
     frame.render_widget(paragraph, area);
+}
+
+/// The selected pane's own asked/doing/produced sections (issue
+/// #635) -- built from the same [`FocusedStep`]/[`FocusDetail`]
+/// model the overview's now pane uses (so issue #612's live agent
+/// data, once it lands, fills both panes at once), with the
+/// prompt text, the in-flight estimate and the reply read only
+/// through `Details::sent`/`received` (never `meta.prompt_sent` or
+/// `meta.answer` directly), so a later fix to either flows through
+/// here unchanged.
+fn flow_selected_step_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::model::StatusKind;
+    use oscilloscope_core::screens::FocusDetail;
+    let dim = Style::default().fg(ctx.theme.dim);
+    let mut lines = vec![Line::from(step.breadcrumb.clone())];
+    let mut meta = vec![step.kind_label.to_string()];
+    if let Some(provider_or_model) = &step.provider_or_model {
+        meta.push(provider_or_model.clone());
+    }
+    lines.push(Line::styled(meta.join(" · "), dim));
+
+    let running = matches!(
+        step.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
+    let finished = matches!(
+        step.status.kind,
+        StatusKind::Done | StatusKind::Failed | StatusKind::FailedHandled
+    );
+
+    let asked = match &step.detail {
+        FocusDetail::Prompt { snippet, .. } => snippet.clone(),
+        FocusDetail::Tool { command } => command.clone(),
+        FocusDetail::Agent { .. } | FocusDetail::Plain => None,
+    };
+    if let Some(asked) = asked {
+        lines.push(Line::styled("asked:", dim));
+        lines.push(Line::from(asked));
+    }
+
+    let mut doing = Vec::new();
+    match &step.detail {
+        FocusDetail::Prompt {
+            tokens, estimated, ..
+        } if running => {
+            let mut text = "waiting for the reply".to_string();
+            if let Some(tokens) = tokens {
+                let prefix = if *estimated { "≈" } else { "" };
+                text.push_str(&format!(
+                    " · {prefix}{} tokens sent",
+                    oscilloscope_core::format::format_tokens(*tokens)
+                ));
+            }
+            doing.push(Line::from(text));
+        }
+        FocusDetail::Tool { .. } if running => {
+            let text = match step.elapsed_s {
+                Some(elapsed) => format!(
+                    "running {}",
+                    oscilloscope_core::format::format_duration(elapsed)
+                ),
+                None => "running".to_string(),
+            };
+            doing.push(Line::from(text));
+        }
+        FocusDetail::Agent {
+            engine,
+            model,
+            note,
+        } => {
+            let mut parts = Vec::new();
+            if let Some(engine) = engine {
+                parts.push(engine.clone());
+            }
+            if let Some(model) = model {
+                parts.push(model.clone());
+            }
+            if !parts.is_empty() {
+                doing.push(Line::from(parts.join(" · ")));
+            }
+            if let (Some(since), Some(elapsed)) = (
+                step.since_ts
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+                step.elapsed_s,
+            ) {
+                doing.push(Line::from(format!(
+                    "since {since} · {}",
+                    oscilloscope_core::format::format_duration(elapsed)
+                )));
+            }
+            doing.push(Line::styled(*note, dim));
+        }
+        _ => {}
+    }
+    if !doing.is_empty() {
+        lines.push(Line::styled("doing:", dim));
+        lines.extend(doing);
+    }
+
+    let mut produced = Vec::new();
+    if finished {
+        match &step.detail {
+            FocusDetail::Prompt { .. } => {
+                if let Some(received) = &step.received {
+                    if let Some(snippet) = &received.snippet {
+                        produced.push(Line::from(snippet.clone()));
+                    }
+                }
+            }
+            FocusDetail::Agent { .. } => {}
+            FocusDetail::Tool { .. } | FocusDetail::Plain => {
+                if let Some(value) = &step.value {
+                    if !value.is_empty() {
+                        produced.push(Line::from(value.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(tokens) = step.tokens {
+            produced.push(Line::from(format!(
+                "tokens {}",
+                oscilloscope_core::format::format_tokens(tokens)
+            )));
+        }
+        if let Some(cost) = step.cost_usd {
+            produced.push(Line::from(format!("${cost:.2}")));
+        }
+        if let Some(error) = &step.error {
+            produced.push(Line::styled(
+                error.clone(),
+                Style::default().fg(ctx.theme.error),
+            ));
+        }
+    } else if running {
+        produced.push(Line::styled("(when done)", dim));
+    }
+    if !produced.is_empty() {
+        lines.push(Line::styled("produced:", dim));
+        lines.extend(produced);
+    }
+
+    lines
 }
 
 /// A decision row's own detail (issue #635: "a decision row shows its

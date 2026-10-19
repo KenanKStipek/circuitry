@@ -1293,6 +1293,42 @@ fn push_story_line(
     }
 }
 
+/// The run-end line, as soon as the TUI itself can show it (issue
+/// #635: the Flow screen's story has "run end with its totals") --
+/// `finish` is called on a *clone* of `differ`, never the real one,
+/// so this never trips its one-shot `run_line_emitted` latch ahead of
+/// `--log`'s own authoritative call in `finish_run`/`finish_watch`,
+/// after the TUI has already closed. Cheap to call on every poll
+/// that just saw the engine exit: `finish` itself is a no-op once
+/// the state doesn't yet read as ended.
+#[allow(clippy::too_many_arguments)]
+fn push_run_end_story_line(
+    differ: &Differ,
+    state: Option<&serde_json::Value>,
+    run_dir: &Path,
+    model: &RunModel,
+    clock: &mut Clock,
+    log_lines: &mut Vec<String>,
+    next_log_seq: &mut u64,
+    story: &mut Vec<oscilloscope_core::diff::LogLine>,
+) {
+    let Some(state) = state else {
+        return;
+    };
+    let Some(line) = differ
+        .clone()
+        .finish(state, failure_reason_fallback(run_dir, model).as_deref())
+    else {
+        return;
+    };
+    push_log_line(
+        log_lines,
+        next_log_seq,
+        format_log_line(clock, line.ts.as_deref(), &line.text),
+    );
+    push_story_line(story, line);
+}
+
 /// Update highlights (DESIGN.md §6.3, issue #535): computes what
 /// changed between the previous render state and this one
 /// (`oscilloscope_core::changes::diff`, front-end independent) and
@@ -2077,6 +2113,15 @@ fn run_tui(
             );
             cost_screen =
                 build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+            flow_screen = build_flow_screen_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                current_state.as_ref(),
+                &story,
+                &now_str,
+            );
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
@@ -2355,6 +2400,16 @@ fn run_tui(
                 if let Some(state) = out_state.or(last_live) {
                     current_state = Some(state);
                 }
+                push_run_end_story_line(
+                    &differ,
+                    current_state.as_ref(),
+                    &run_dir,
+                    &model,
+                    &mut clock,
+                    &mut log_lines,
+                    &mut next_log_seq,
+                    &mut story,
+                );
                 needs_rebuild = true;
                 needs_draw = true;
                 if leave_once_exited {
@@ -3137,6 +3192,16 @@ fn run_tui_watch(
                 if let Some(state) = out_state.or(last_live) {
                     last_state = Some(state);
                 }
+                push_run_end_story_line(
+                    &differ,
+                    last_state.as_ref(),
+                    &run_dir,
+                    &model,
+                    &mut clock,
+                    &mut log_lines,
+                    &mut next_log_seq,
+                    &mut story,
+                );
                 needs_rebuild = true;
                 needs_draw = true;
             }
@@ -3228,6 +3293,15 @@ fn run_tui_watch(
             );
             cost_screen =
                 build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+            flow_screen = build_flow_screen_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                last_state.as_ref(),
+                &story,
+                &now_str,
+            );
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);

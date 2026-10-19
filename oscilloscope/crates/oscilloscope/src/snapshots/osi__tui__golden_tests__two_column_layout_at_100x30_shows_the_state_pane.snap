@@ -3,11 +3,11 @@ source: crates/oscilloscope/src/tui.rs
 expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:00   0 overview  [2 flow]  3 cost                    "
-"┌ flow (do-thing · 1/8) ◆ decision ⟳ loop ▶ running ─────────┐┌ selected ──────────────────────────┐"
+"┌ flow (do-thing · 1/8) ◆ decision ⟲ loop ▶ running ─────────┐┌ selected ──────────────────────────┐"
 "│◐ prime                                                     ││a                                   │"
 "│  ✓ a                                                       ││tool · shell                        │"
-"│  ◐ fan  1/4                                                ││                                    │"
-"│    ◐ pass 1 of 4                                           ││                                    │"
+"│  ◐ fan  1/4                                                ││produced:                           │"
+"│    ◐ pass 1 of 4                                           ││ok                                  │"
 "│  ◐ b                                                       ││                                    │"
 "│                                                            ││                                    │"
 "│                                                            ││                                    │"
@@ -28,7 +28,7 @@ expression: text
 "│                                                            ││                                    │"
 "│                                                            ││                                    │"
 "│                                                            ││                                    │"
-"│                                                            ││                                    │"
 "│quick steps folded: 0 · 0.0s                                ││                                    │"
 "│health: 0 failed · 0 retries · 0 warnings                   ││                                    │"
+"│                                                            ││                                    │"
 "└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘"

@@ -450,14 +450,27 @@ impl App {
             }
             KeyCode::Tab => {
                 // Issue #635: the Flow screen's own cycle is flow →
-                // selected → story → flow -- it never visits the state
-                // pane via `tab` at all (`s` swaps the selected pane's
-                // own content instead).
+                // selected → story → flow. `s` swaps the selected
+                // pane's own *content* between the focused step and
+                // today's state tree, but the selected slot in this
+                // cycle must follow that swap too (#610) -- otherwise
+                // a state-tree report `s` just swapped in can never
+                // actually get focus, or its own `←`/`→`/`v`.
                 self.pane = if self.screen == Screen::Flow {
                     match self.pane {
-                        Pane::Tree => Pane::Details,
-                        Pane::Details => Pane::Story,
-                        Pane::Story | Pane::State => Pane::Tree,
+                        Pane::Tree => {
+                            if self.flow_selected_shows_state {
+                                Pane::State
+                            } else {
+                                Pane::Details
+                            }
+                        }
+                        // Finding 12's own rule, same reason: the
+                        // story pane isn't drawn at all below the
+                        // three-pane layout, so `tab` must not land
+                        // on it with nothing to show or scroll.
+                        Pane::Details | Pane::State if self.story_viewport > 0 => Pane::Story,
+                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
                     }
                 } else {
                     // Finding 12: on a small terminal the state pane
@@ -1444,6 +1457,7 @@ mod tests {
         let mut app = App::new(false);
         app.screen = Screen::Flow;
         app.state_viewport = 8;
+        app.story_viewport = 8;
         assert_eq!(app.pane, Pane::Tree);
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Details);
@@ -1451,6 +1465,46 @@ mod tests {
         assert_eq!(app.pane, Pane::Story);
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn after_s_tab_reaches_the_state_pane_and_arrow_keys_move_its_selection() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let state_rows = [state_row("a"), state_row("b")];
+        let state_visible: Vec<&StateRow> = state_rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.state_viewport = 8;
+        app.story_viewport = 8;
+        app.handle_key(
+            key(KeyCode::Char('s')),
+            &visible,
+            &state_visible,
+            false,
+            false,
+            &[],
+        );
+        assert!(app.flow_selected_shows_state);
+        app.handle_key(
+            key(KeyCode::Tab),
+            &visible,
+            &state_visible,
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(app.pane, Pane::State);
+        app.handle_key(
+            key(KeyCode::Down),
+            &visible,
+            &state_visible,
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(app.state_selected_path.as_deref(), Some("a"));
+        assert_eq!(app.details_source, Pane::State);
     }
 
     #[test]

@@ -13,11 +13,11 @@
 //! the row list at the position its own branches' first real step
 //! already occupies.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::diff::LogLine;
+use crate::diff::{LogKind, LogLine};
 use crate::fold::is_quick_step;
 use crate::format::{ClockZone, format_clock_time};
 use crate::model::{NodeMeta, RowStatus, StatusKind, node_tokens};
@@ -76,6 +76,12 @@ pub struct FlowRow {
     pub condition: Option<FlowCondition>,
     pub loop_progress: Option<LoopProgress>,
     pub has_children: bool,
+    /// Set only by [`merge_single_pass_loops`], on the loop row a
+    /// single observed pass merged into: the Flow pane draws `⟲`
+    /// in place of the status glyph, and skips the ordinary
+    /// `loop_progress` suffix, since the merged label already reads
+    /// `pass N of M`.
+    pub merged_pass: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -85,7 +91,6 @@ pub struct FlowFooter {
     pub failed: u64,
     pub retries: u64,
     pub warnings: u64,
-    pub more_planned: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -242,12 +247,19 @@ fn named_decision(node: Option<&NodeMeta>) -> (Option<String>, Option<String>) {
 /// the pass fallback, giving the pass row `RowKind::If` too even
 /// though there is no *named* decision there at all -- that one is
 /// inferred instead, through `PlanTree::unnamed_if_decisions`.
-fn is_named_if_path(plan: &PlanTree, path: &str) -> bool {
-    plan.match_path(path).is_some_and(|m| {
+fn is_named_if_path(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> bool {
+    let from_plan = plan.match_path(&row.path).is_some_and(|m| {
         m.entries
             .iter()
             .any(|e| matches!(&e.kind, crate::plan::PlanEntryKind::If { named: true, .. }))
-    })
+    });
+    // `osi watch` without `--plan` (issue #635): `PlanTree::empty()`
+    // has no entries at all, so a named `if`'s own row is told apart
+    // from an ordinary one by its own observed shape instead --
+    // `render::row_kind_for` already guesses `RowKind::If` from the
+    // node's own meta shape once there's no plan entry to read, and
+    // `meta.branch` is exact regardless of whether the plan is known.
+    from_plan || row.kind == RowKind::If || flat.get(&row.path).is_some_and(|n| n.branch.is_some())
 }
 
 fn condition_for_path(plan: &PlanTree, path: &str) -> Option<ConditionInfo> {
@@ -309,6 +321,7 @@ fn plain_flow_row(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> FlowRow {
         condition: None,
         loop_progress: row.loop_progress,
         has_children: row.has_children,
+        merged_pass: false,
     }
 }
 
@@ -322,57 +335,155 @@ fn plain_flow_row(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> FlowRow {
 /// counting): folding can merge or hide a quick-step run depending on
 /// `expanded_quick_steps`, but the footer's own total must count
 /// every quick step in the run regardless.
+/// Every path that lies under a decision's own untaken branch, once
+/// that decision has resolved which side ran -- a named `if` reads
+/// its branch from `meta.branch`, an unnamed one the same way
+/// [`push_unnamed_decision`] infers it. The untaken side gets exactly
+/// one dim summary line ([`untaken_branch_summary`]); its own real
+/// rows, still present in `rows` with [`StatusKind::Skipped`], are
+/// hidden from the flow pane entirely rather than drawn as a `↷` row
+/// each (DESIGN.md: "never a row per untaken step").
+fn untaken_root_paths(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    resolved_unnamed: &[UnnamedIfDecision],
+) -> BTreeSet<String> {
+    let mut hidden = BTreeSet::new();
+    for row in rows {
+        if !is_named_if_path(row, flat, plan) {
+            continue;
+        }
+        let (branch, _) = named_decision(flat.get(&row.path));
+        let (then_paths, else_paths) = branch_paths_for_path(plan, &row.path);
+        match branch.as_deref() {
+            Some("then") => hidden.extend(else_paths),
+            Some("else") => hidden.extend(then_paths),
+            _ => {}
+        }
+    }
+    for decision in resolved_unnamed {
+        let (branch, nothing_ran) = unnamed_branch_state(decision, rows);
+        match branch.as_deref() {
+            Some("then") => hidden.extend(decision.else_paths.clone()),
+            Some("else") if !nothing_ran => hidden.extend(decision.then_paths.clone()),
+            _ => {}
+        }
+    }
+    hidden
+}
+
+fn is_under_any(path: &str, roots: &BTreeSet<String>) -> bool {
+    roots
+        .iter()
+        .any(|root| path == root || path.starts_with(&format!("{root}.")))
+}
+
 pub fn build_flow_rows(
     rows: &[Row],
     unfolded_rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
+    story_lines: &[LogLine],
 ) -> (Vec<FlowRow>, FlowFooter) {
-    let resolved = resolve_unnamed_decisions(plan.unnamed_if_decisions(), rows);
-    // Each unresolved decision's own anchor: the first row position
-    // (by path) its own `then` branch would occupy, falling back to
-    // `else`, then to right after its own host row -- in that order,
-    // same priority the acceptance list's inference reads in.
+    let resolved = resolve_unnamed_decisions(plan.unnamed_if_decisions(), unfolded_rows);
+    // Each decision's own anchor: the first row position (by path)
+    // either branch actually has evidence for yet -- `then` or
+    // `else`, whichever comes first in the branches' own order --
+    // falling back to right *after* its own host row once neither
+    // has (a pass that hasn't started, an empty branch with no real
+    // path on either side, or a branch whose own first step folded
+    // away into an ancestor's breadcrumb, review finding 6). Evidence
+    // is read from `unfolded_rows`, never the folded `rows` this
+    // loop draws from: a breadcrumb keeps only its own leaf's path,
+    // and quick-step folding keeps only its run's first path, so
+    // either can make a branch's own first step vanish from `rows`
+    // well before the branch itself stops being real.
     let mut by_anchor: BTreeMap<String, Vec<&UnnamedIfDecision>> = BTreeMap::new();
+    let mut by_host_after: BTreeMap<String, Vec<&UnnamedIfDecision>> = BTreeMap::new();
     for decision in &resolved {
         let anchor = decision
             .then_paths
-            .first()
-            .or_else(|| decision.else_paths.first())
-            .cloned()
-            .unwrap_or_else(|| decision.host_path.clone());
-        by_anchor.entry(anchor).or_default().push(decision);
+            .iter()
+            .chain(decision.else_paths.iter())
+            .find(|p| unfolded_rows.iter().any(|r| &r.path == *p))
+            .cloned();
+        match anchor {
+            Some(anchor) => by_anchor.entry(anchor).or_default().push(decision),
+            None => by_host_after
+                .entry(decision.host_path.clone())
+                .or_default()
+                .push(decision),
+        }
     }
+    let hidden = untaken_root_paths(unfolded_rows, flat, plan, &resolved);
 
     let mut out = Vec::new();
     let mut footer = FlowFooter::default();
 
     for row in rows {
-        if let Some(decisions) = by_anchor.remove(&row.path) {
-            for decision in decisions {
-                push_unnamed_decision(&mut out, decision, rows, flat, row.depth);
+        if is_under_any(&row.path, &hidden) {
+            continue;
+        }
+        // An anchor path a breadcrumb or a quick-steps run folded
+        // away still has *some* surviving row at or under its own
+        // prefix (folding only ever merges into a descendant or a
+        // same-run sibling, never moves content outside its own
+        // subtree) -- `starts_with` catches the position the fold
+        // left it at.
+        let anchored_here: Vec<String> = by_anchor
+            .keys()
+            .filter(|anchor| row.path == **anchor || row.path.starts_with(&format!("{anchor}.")))
+            .cloned()
+            .collect();
+        for anchor in anchored_here {
+            if let Some(decisions) = by_anchor.remove(&anchor) {
+                for decision in decisions {
+                    push_unnamed_decision(&mut out, decision, unfolded_rows, flat, row.depth);
+                }
             }
         }
-        if is_named_if_path(plan, &row.path) {
-            push_named_decision(&mut out, row, rows, flat, plan);
+        if is_named_if_path(row, flat, plan) {
+            push_named_decision(&mut out, row, unfolded_rows, flat, plan);
         } else {
             out.push(plain_flow_row(row, flat));
         }
-        if row.status.kind == StatusKind::Failed || row.status.kind == StatusKind::FailedHandled {
-            footer.failed += 1;
+        if let Some(decisions) = by_host_after.remove(&row.path) {
+            for decision in decisions {
+                push_unnamed_decision(&mut out, decision, unfolded_rows, flat, row.depth + 1);
+            }
         }
         if row.status.retrying {
             footer.retries += 1;
         }
-        if row.status.kind == StatusKind::Pending {
-            footer.more_planned += 1;
-        }
     }
-    // Any decision whose own anchor path never appeared as a row at
-    // all (a pass that hasn't started, or an empty branch with no
-    // real path on either side) stays unresolved this frame -- never
-    // emitted with nothing to position it against.
+    // Any decision whose own host path never appeared as a row at
+    // all stays unresolved this frame -- never emitted with nothing
+    // to position it against.
     let _ = by_anchor;
+    let _ = by_host_after;
+
+    // The same leaf-only rule the overview's own flow card counts
+    // failures by (`screens::build_flow_card`): a container's status
+    // propagates from a failed descendant, so only the leaves (no
+    // failed descendant of their own) are real failures.
+    let failing: Vec<&Row> = rows
+        .iter()
+        .filter(|r| {
+            r.kind != RowKind::Root
+                && matches!(
+                    r.status.kind,
+                    StatusKind::Failed | StatusKind::FailedHandled
+                )
+        })
+        .collect();
+    footer.failed = failing
+        .iter()
+        .filter(|r| {
+            let prefix = format!("{}.", r.path);
+            !failing.iter().any(|other| other.path.starts_with(&prefix))
+        })
+        .count() as u64;
 
     footer.quick_steps_folded = unfolded_rows.iter().filter(|r| is_quick_step(r)).count() as u64;
     footer.quick_steps_duration_s = unfolded_rows
@@ -380,7 +491,10 @@ pub fn build_flow_rows(
         .filter(|r| is_quick_step(r))
         .filter_map(|r| r.duration_s)
         .sum();
-    footer.warnings = 0;
+    footer.warnings = story_lines
+        .iter()
+        .filter(|l| l.kind == LogKind::Report && l.text.contains("warning: "))
+        .count() as u64;
 
     merge_single_pass_loops(&mut out);
 
@@ -401,6 +515,28 @@ fn merge_single_pass_loops(out: &mut Vec<FlowRow>) {
             continue;
         }
         let loop_depth = out[i].depth;
+        // Whether this is genuinely a single-pass loop, not just a
+        // loop only one of whose M passes has run so far: a known
+        // total settles it outright, and an unknown total (a
+        // `dynamic` loop) settles it only once the loop itself has
+        // finished, since until then a second pass could still
+        // start.
+        let total = out[i].loop_progress.as_ref().and_then(|p| p.total);
+        let loop_settled = matches!(
+            out[i].status.kind,
+            StatusKind::Done
+                | StatusKind::Failed
+                | StatusKind::FailedHandled
+                | StatusKind::Cancelled
+        );
+        let single_pass = match total {
+            Some(total) => total == 1,
+            None => loop_settled,
+        };
+        if !single_pass {
+            i += 1;
+            continue;
+        }
         let Some(pass_idx) = out
             .iter()
             .enumerate()
@@ -412,7 +548,20 @@ fn merge_single_pass_loops(out: &mut Vec<FlowRow>) {
             i += 1;
             continue;
         };
-        if out[pass_idx].kind != FlowRowKind::Row(RowKind::Pass) {
+        // The pass row's own path, not its `kind`, is what marks it
+        // as a pass: a single-step pass body has a plan entry of its
+        // own at that same path, so `render::row_kind_for` gives it
+        // that step's kind (or, folded into a breadcrumb with its
+        // own one child, the breadcrumb's kind) well ahead of the
+        // `RowKind::Pass` fallback, the same way an unnamed `if`
+        // sharing the pass's path can give it `RowKind::If` instead
+        // (this module's own doc comment on `is_named_if_path`).
+        let is_pass_path = out[pass_idx]
+            .path
+            .rsplit('.')
+            .next()
+            .is_some_and(|seg| seg.starts_with("iter_"));
+        if !is_pass_path {
             i += 1;
             continue;
         }
@@ -434,6 +583,8 @@ fn merge_single_pass_loops(out: &mut Vec<FlowRow>) {
         out[i].status = pass_status;
         out[i].duration_s = pass_duration;
         out[i].start_ts = pass_start;
+        out[i].loop_progress = None;
+        out[i].merged_pass = true;
         out.remove(pass_idx);
         for row in out[pass_idx..].iter_mut() {
             if row.depth > loop_depth + 1 {
@@ -475,6 +626,7 @@ fn push_named_decision(
         condition,
         loop_progress: row.loop_progress,
         has_children: row.has_children,
+        merged_pass: false,
     });
     let untaken = match branch.as_deref() {
         Some("then") => Some(untaken_branch_summary(rows, "else", &else_paths)),
@@ -499,7 +651,42 @@ fn push_named_decision(
             condition: None,
             loop_progress: None,
             has_children: false,
+            merged_pass: false,
         });
+    }
+}
+
+/// An unnamed `if`'s own branch, inferred the same way regardless of
+/// whether the caller wants to draw its decision row
+/// ([`push_unnamed_decision`]) or just needs to know which side to
+/// hide ([`untaken_root_paths`]).
+fn unnamed_branch_state(decision: &UnnamedIfDecision, rows: &[Row]) -> (Option<String>, bool) {
+    let then_started = any_branch_started(rows, &decision.then_paths);
+    let else_started = any_branch_started(rows, &decision.else_paths);
+    // Any way the host scope can stop running settles "nothing ran"
+    // for a no-`else` `if`, not just a clean `Done` -- a `Failed`/
+    // `FailedHandled`/`Cancelled` host is just as settled that its
+    // own `then` never started.
+    let host_done = rows
+        .iter()
+        .find(|r| r.path == decision.host_path)
+        .is_some_and(|r| {
+            matches!(
+                r.status.kind,
+                StatusKind::Done
+                    | StatusKind::Failed
+                    | StatusKind::FailedHandled
+                    | StatusKind::Cancelled
+            )
+        });
+    if then_started && !else_started {
+        (Some("then".to_string()), false)
+    } else if else_started && !then_started {
+        (Some("else".to_string()), false)
+    } else if decision.else_paths.is_empty() && host_done {
+        (Some("else".to_string()), true)
+    } else {
+        (None, false)
     }
 }
 
@@ -510,19 +697,8 @@ fn push_unnamed_decision(
     flat: &BTreeMap<String, NodeMeta>,
     depth: usize,
 ) {
-    let then_started = any_branch_started(rows, &decision.then_paths);
-    let else_started = any_branch_started(rows, &decision.else_paths);
+    let (branch, nothing_ran) = unnamed_branch_state(decision, rows);
     let host_row = rows.iter().find(|r| r.path == decision.host_path);
-    let host_done = host_row.is_some_and(|r| r.status.kind == StatusKind::Done);
-    let (branch, nothing_ran) = if then_started && !else_started {
-        (Some("then".to_string()), false)
-    } else if else_started && !then_started {
-        (Some("else".to_string()), false)
-    } else if decision.else_paths.is_empty() && host_done {
-        (Some("else".to_string()), true)
-    } else {
-        (None, false)
-    };
     let same_names = !decision.then_paths.is_empty()
         && decision.then_paths == decision.else_paths
         && branch.is_none();
@@ -560,6 +736,7 @@ fn push_unnamed_decision(
         condition: decision.condition.clone(),
         loop_progress: None,
         has_children: false,
+        merged_pass: false,
     });
     let untaken = match branch.as_deref() {
         Some("then") => Some(untaken_branch_summary(rows, "else", &decision.else_paths)),
@@ -586,6 +763,7 @@ fn push_unnamed_decision(
             condition: None,
             loop_progress: None,
             has_children: false,
+            merged_pass: false,
         });
     }
 }
@@ -761,7 +939,7 @@ mod tests {
             "gate": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
         }});
         let (rows, flat) = rows_for(&plan, &state, "t1");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| r.path == "prime.gate")
@@ -788,7 +966,7 @@ mod tests {
             }
         }});
         let (rows, flat) = rows_for(&plan, &state, "t3");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let idx = flow_rows
             .iter()
             .position(|r| r.path == "prime.gate")
@@ -841,7 +1019,7 @@ mod tests {
             "then_branch": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
         }});
         let (rows, flat) = rows_for(&plan, &state, "t2");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
@@ -863,7 +1041,7 @@ mod tests {
         let state =
             json!({"prime": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"}}});
         let (rows, flat) = rows_for(&plan, &state, "t2");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
@@ -887,7 +1065,7 @@ mod tests {
         let state =
             json!({"prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}});
         let (rows, flat) = rows_for(&plan, &state, "t1");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }));
@@ -961,7 +1139,7 @@ mod tests {
             }
         }});
         let (rows, flat) = rows_for(&plan, &state, "t2");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
@@ -1024,7 +1202,7 @@ mod tests {
             }
         }});
         let (rows, flat) = rows_for(&plan, &state, "t2");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
@@ -1065,7 +1243,7 @@ mod tests {
             "chosen": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
         }});
         let (rows, flat) = rows_for(&plan, &state, "t2");
-        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         let decision = flow_rows
             .iter()
             .find(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
@@ -1095,7 +1273,7 @@ mod tests {
                 "created_at": "2026-01-01T00:00:00.300Z", "completed_at": "2026-01-01T00:00:00.600Z", "provider": "shell"}}
         }});
         let (rows, flat) = rows_for(&plan, &state, "2026-01-01T00:00:01Z");
-        let (_, footer) = build_flow_rows(&rows, &rows, &flat, &plan);
+        let (_, footer) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
         assert_eq!(footer.quick_steps_folded, 2);
     }
 
@@ -1157,6 +1335,7 @@ mod tests {
             condition: None,
             loop_progress: None,
             has_children: false,
+            merged_pass: false,
         };
         let entries = build_story(&real, &[inferred_row], &FixedZone);
         let texts: Vec<&str> = entries.iter().map(|e| e.text.as_str()).collect();
