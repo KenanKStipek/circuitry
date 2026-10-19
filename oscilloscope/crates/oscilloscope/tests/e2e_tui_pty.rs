@@ -674,6 +674,90 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #635: the Flow screen keeps rebuilding while it's on
+/// display, from the run's own state/event/log changes, not only
+/// from a key press -- `2` is pressed once, immediately, well before
+/// the `if` has even been reached, and every assertion after that
+/// waits for the screen to update entirely on its own.
+#[test]
+fn the_flow_screen_updates_live_without_a_further_key_press() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: gate\n    type: if\n    if:\n      mode: cel\n      expr: \"true\"\n    then:\n      - name: quick\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.3\"]\n          allowed_commands: [\"sleep\"]\n      - name: slow\n        type: tool\n        provider: shell\n        params:\n          command: tail\n          args: [\"-f\", \"/dev/null\"]\n          allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    // Pressed at once, before `gate` has even been reached (never
+    // `wait_for_step_start` first, the way the ordinary Flow-screen
+    // test above does) -- every assertion from here on checks that
+    // the screen already on display keeps catching up by itself.
+    send_bytes(&mut master, b"2");
+
+    let before_decision = captured_buf.lock().unwrap().len();
+    wait_for_pattern(&captured_buf, "→ then".as_bytes(), Duration::from_secs(20));
+    {
+        let after = captured_buf.lock().unwrap()[before_decision..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("◆"),
+            "expected the named if's own decision row to appear with no further key press; got:\n{rendered:?}"
+        );
+    }
+
+    // `quick` is the only step in this document that can ever
+    // finish (`slow` never does, and `gate` stays `Running` for as
+    // long as `slow` does) -- so ✓ (as its own three UTF-8 bytes,
+    // never split across writes even though a differential redraw
+    // can still put an SGR code on either side of it, the same
+    // reason `s`'s own assertion above checks for "tate" rather
+    // than "state") appearing anywhere at all is this document's own
+    // one unambiguous sign that `quick` turned ✓ with no further key
+    // press.
+    wait_for_pattern(&captured_buf, "✓".as_bytes(), Duration::from_secs(45));
+    {
+        let full = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&full);
+        assert!(
+            rendered.contains('✓'),
+            "expected the running `quick` step to turn ✓ with no further key press; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
 /// Issue #535: `--no-animation` still gives a real, running TUI (the
 /// same alternate-screen entry/exit and clean exit the plain run
 /// above gets) -- the flag only ever stops the highlight fade and
