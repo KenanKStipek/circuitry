@@ -489,6 +489,7 @@ fn write_glance_line(
     no_animation: bool,
     is_tty: bool,
     final_line: bool,
+    engine_alive_override: Option<bool>,
 ) {
     if !is_tty && !final_line {
         // DESIGN.md: "when stdout isn't a terminal, it prints one
@@ -496,7 +497,7 @@ fn write_glance_line(
         return;
     }
     let now = now_rfc3339();
-    let rendered = oscilloscope_core::render::build(
+    let mut rendered = oscilloscope_core::render::build(
         document,
         "",
         plan,
@@ -507,6 +508,14 @@ fn write_glance_line(
         &now,
         &[],
     );
+    // `osi watch` owns no process of its own for `render::build`'s
+    // own `engine_alive` (derived from `process`, which `watch_
+    // glance` always passes as `Running` while it's still watching)
+    // to read -- `♥` has to come from the watched run's own pid in
+    // `--events`' `run_start` instead, same as the TUI's watch loop.
+    if let Some(alive) = engine_alive_override {
+        rendered.header.engine_alive = alive;
+    }
     let icon_frame = icon_frame_for(no_animation, Duration::from_secs_f64(elapsed_s));
     let segments = oscilloscope_core::screens::header_line(
         &rendered.header,
@@ -518,10 +527,26 @@ fn write_glance_line(
         None,
     );
     let text = oscilloscope_core::screens::header_line_text(&segments);
-    if final_line {
-        let _ = writeln!(out, "\r{text}\x1b[K");
+    if is_tty {
+        // Rewritten in place: `\r` returns to the start of the line,
+        // then `\x1b[K` clears to its end so a shorter new line
+        // doesn't leave a stale tail of the previous, longer one
+        // behind.
+        if final_line {
+            let _ = writeln!(out, "\r{text}\x1b[K");
+        } else {
+            let _ = write!(out, "\r{text}\x1b[K");
+        }
     } else {
-        let _ = write!(out, "\r{text}\x1b[K");
+        // Not a terminal (a pipe, a file, a tmux `#(...)` capture):
+        // one plain line, no `\r`/`\x1b[K` -- there's no previous
+        // line on screen to overwrite, and a control code there would
+        // just be bytes in whatever's reading it.
+        debug_assert!(
+            final_line,
+            "the only line ever written when stdout isn't a terminal"
+        );
+        let _ = writeln!(out, "{text}");
     }
     let _ = out.flush();
 }
@@ -608,6 +633,7 @@ fn run_glance(
                 no_animation,
                 is_tty,
                 false,
+                None,
             );
             last_write = Instant::now();
         }
@@ -651,6 +677,7 @@ fn run_glance(
         no_animation,
         is_tty,
         true,
+        None,
     );
 
     ExitCode::from(exit_code(exit_status) as u8)
@@ -717,6 +744,11 @@ fn watch_glance(
         } else {
             ProcessState::Running
         };
+        let engine_alive = Some(
+            model
+                .run_start_pid()
+                .is_some_and(oscilloscope_core::supervise::process_alive),
+        );
         write_glance_line(
             &mut out,
             &document,
@@ -727,19 +759,20 @@ fn watch_glance(
             start.elapsed().as_secs_f64(),
             &zone,
             no_animation,
+            is_tty,
             true,
-            true,
+            engine_alive,
         );
         return ExitCode::from(0);
     }
 
     let mut signals = SignalWatcher::new().ok();
     let mut last_write = Instant::now() - GLANCE_INTERVAL;
-    let mut detached = false;
+    let mut local_signal: Option<ForwardSignal> = None;
     loop {
         if let Some(watcher) = signals.as_mut() {
-            if watcher.pending().into_iter().next().is_some() {
-                detached = true;
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                local_signal = Some(sig);
                 break;
             }
         }
@@ -779,6 +812,11 @@ fn watch_glance(
         }
         if last_write.elapsed() >= GLANCE_INTERVAL {
             let document = watch_document_name(last_state.as_ref(), &fallback_document);
+            let engine_alive = Some(
+                model
+                    .run_start_pid()
+                    .is_some_and(oscilloscope_core::supervise::process_alive),
+            );
             write_glance_line(
                 &mut out,
                 &document,
@@ -791,6 +829,7 @@ fn watch_glance(
                 no_animation,
                 is_tty,
                 false,
+                engine_alive,
             );
             last_write = Instant::now();
         }
@@ -798,11 +837,11 @@ fn watch_glance(
     }
 
     let document = watch_document_name(last_state.as_ref(), &fallback_document);
-    // Finding 15 (shared with `finish_watch`): a voluntary detach
-    // from a run that's still going is not an abort -- shown as
-    // still running, exactly as the TUI's own finished screen would
-    // leave it, rather than a synthetic "aborted" ending it never had.
-    let process = if detached {
+    // A voluntary detach from a run that's still going is not an
+    // abort -- shown as still running, exactly as the TUI's own
+    // finished screen would leave it, rather than a synthetic
+    // "aborted" ending it never had.
+    let process = if local_signal.is_some() {
         ProcessState::Running
     } else {
         ProcessState::Exited {
@@ -812,6 +851,11 @@ fn watch_glance(
             exited_at: None,
         }
     };
+    let engine_alive = Some(
+        model
+            .run_start_pid()
+            .is_some_and(oscilloscope_core::supervise::process_alive),
+    );
     write_glance_line(
         &mut out,
         &document,
@@ -824,8 +868,12 @@ fn watch_glance(
         no_animation,
         is_tty,
         true,
+        engine_alive,
     );
-    ExitCode::from(0)
+    // Signals and exit codes work exactly as `--log`'s own do
+    // (DESIGN.md) -- the same rule `finish_watch` uses, not a second
+    // copy of it.
+    ExitCode::from(watch_exit_code(local_signal, &model, &last_state))
 }
 
 fn do_run(args: RunArgs) -> ExitCode {
@@ -3295,6 +3343,23 @@ fn finish_watch(
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
 
+    watch_exit_code(local_signal, model, last_state)
+}
+
+/// `osi watch`'s own exit code (DESIGN.md §4.1), shared by `finish_
+/// watch`'s own `--log`/TUI ending above and `watch_glance`'s --
+/// "signals and exit codes work as with `--log`" means the exact
+/// same rule, not a second copy of it that can drift: a local signal
+/// (Ctrl-C, or one `osi watch` itself received) first, the watched
+/// run's own `run_end` signal next, then whether the last state it
+/// saw actually ended ok, falling back to `model.run_end_ok()` for an
+/// events-only run with no live-state write at all, and finally an
+/// abort (a dead pid with no clean completion either way).
+fn watch_exit_code(
+    local_signal: Option<ForwardSignal>,
+    model: &RunModel,
+    last_state: &Option<serde_json::Value>,
+) -> u8 {
     if let Some(sig) = local_signal {
         match sig {
             ForwardSignal::Int => 130,

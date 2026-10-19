@@ -1075,3 +1075,215 @@ fn watch_glance_once_prints_a_line_for_a_finished_run_and_exits_0() {
         "the --once line should show the finished run as ok; got:\n{stdout:?}"
     );
 }
+
+/// Piped output (not a terminal, same as this test's own captured
+/// pipe) is one plain line -- no `\r`/`\x1b[K` rewrite codes, which
+/// would just be bytes to whatever is actually reading it (a file, a
+/// tmux `#(...)` capture).
+#[test]
+fn glance_writes_plain_lines_with_no_control_codes_when_piped() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osi_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--glance")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+    assert!(status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        !stdout.contains('\x1b') && !stdout.contains('\r'),
+        "piped --glance output should contain no escape codes or carriage returns; got:\n{stdout:?}"
+    );
+
+    let watch_child = osi_command(&home)
+        .arg("watch")
+        .arg(&run_dir)
+        .arg("--glance")
+        .arg("--once")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi watch");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(watch_child, Duration::from_secs(10));
+    assert!(status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        !stdout.contains('\x1b') && !stdout.contains('\r'),
+        "piped --once output should contain no escape codes or carriage returns; got:\n{stdout:?}"
+    );
+}
+
+/// `osi watch <dir> --glance` (no `--once`) exits exactly as `--log`'s
+/// own watch does: 0 for a run that ended ok, matching `finish_watch`'s
+/// own exit-code rule rather than the always-0 `--once` shortcut.
+#[test]
+fn watch_glance_exits_0_for_an_ok_run() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let run_dir = work.path().join("run");
+    let child = osi_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+    assert!(status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let watch_child = osi_command(&home)
+        .arg("watch")
+        .arg(&run_dir)
+        .arg("--glance")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi watch");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(watch_child, Duration::from_secs(10));
+    assert!(
+        status.success(),
+        "watch --glance should exit 0 for an ok run; got {status:?}; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// [`watch_glance_exits_0_for_an_ok_run`]'s own counterpart: exit 1
+/// once the watched run ended failed.
+#[test]
+fn watch_glance_exits_1_for_a_failed_run() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: boom\n    type: tool\n    provider: shell\n    params:\n      command: false\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let run_dir = work.path().join("run");
+    let child = osi_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "the run itself should fail; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+
+    let watch_child = osi_command(&home)
+        .arg("watch")
+        .arg(&run_dir)
+        .arg("--glance")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi watch");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(watch_child, Duration::from_secs(10));
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "watch --glance should exit 1 for a failed run; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// [`watch_glance_exits_0_for_an_ok_run`]'s own signal counterpart: a
+/// local SIGINT exits 130, the same code a forwarded one does for
+/// `--log`'s own watch -- `osi watch` owns no engine of its own to
+/// forward it to, but the exit code is the same voluntary-detach
+/// contract either way.
+#[test]
+fn watch_glance_local_sigint_exits_130() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let run_dir = work.path().join("run");
+    let mut run_child = osi_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi");
+
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+
+    let watch_child = osi_command(&home)
+        .arg("watch")
+        .arg(&run_dir)
+        .arg("--glance")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi watch");
+    let watch_pid = watch_child.id() as i32;
+    std::thread::sleep(Duration::from_millis(500));
+    unsafe {
+        libc::kill(watch_pid, libc::SIGINT);
+    }
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(watch_child, Duration::from_secs(10));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "watch --glance should exit 130 on a local SIGINT; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+
+    unsafe {
+        libc::kill(run_child.id() as i32, libc::SIGINT);
+    }
+    let _ = run_child.wait();
+}

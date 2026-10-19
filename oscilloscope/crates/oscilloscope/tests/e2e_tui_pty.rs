@@ -439,7 +439,9 @@ fn screen_keys_switch_screens_during_a_live_run() {
     );
     std::thread::sleep(SIGNAL_DELAY);
 
-    // Default is the overview; this run is still live.
+    // Default is the overview; this run is still live. Checked
+    // against the whole buffer so far, since nothing has been sent
+    // yet for a key press to have changed anything after.
     {
         let captured = captured_buf.lock().unwrap().clone();
         let rendered = String::from_utf8_lossy(&captured);
@@ -449,22 +451,29 @@ fn screen_keys_switch_screens_during_a_live_run() {
         );
     }
 
+    // Every check from here on reads only what arrived *after* its
+    // own key -- "flow" is in the header's own tab on every screen,
+    // and "cost"/"now"/"time" were already drawn once by the overview
+    // above, so searching the whole cumulative buffer again could
+    // never actually fail, key press or not.
+    let before_2 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"2");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let captured = captured_buf.lock().unwrap().clone();
-        let rendered = String::from_utf8_lossy(&captured);
+        let after = captured_buf.lock().unwrap()[before_2..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
         assert!(
             rendered.contains("orchestration"),
             "expected screen 2's own orchestration pane after pressing 2; got:\n{rendered:?}"
         );
     }
 
+    let before_0 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"0");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let captured = captured_buf.lock().unwrap().clone();
-        let rendered = String::from_utf8_lossy(&captured);
+        let after = captured_buf.lock().unwrap()[before_0..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
         assert!(
             rendered.contains("flow") && rendered.contains("cost"),
             "expected the overview's own cards back after pressing 0; got:\n{rendered:?}"
@@ -1250,33 +1259,38 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
     // the fix's own drain every chance to have already run and the
     // TUI to have redrawn with it before this reads the pty's buffer.
     std::thread::sleep(Duration::from_millis(1500));
-    send_bytes(&mut master, b"q");
+    let rendered_before_switch = captured_buf.lock().unwrap().clone();
+    assert!(
+        !String::from_utf8_lossy(&rendered_before_switch).contains("aborted"),
+        "the TUI showed the finished run as aborted instead of ok; got:\n{:?}",
+        String::from_utf8_lossy(&rendered_before_switch)
+    );
 
+    // The effects count moved to screen 2's own orchestration pane
+    // title (issue #626): switching onto it repaints essentially
+    // every cell (a different screen entirely, not a small diff off
+    // the overview still on screen), so the final `2/2` lands in one
+    // contiguous burst a substring search can actually see -- unlike
+    // searching the overview's own already-drawn `done` digit, which
+    // a differential redraw only ever retransmits as a single cell
+    // (`\x1b[28;42H2` here), never the surrounding `/2 effects` text
+    // it sits inside.
+    let before_len = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"2");
+    std::thread::sleep(Duration::from_millis(300));
+    let after_switch = {
+        let buf = captured_buf.lock().unwrap();
+        buf[before_len..].to_vec()
+    };
+    let rendered_after_switch = String::from_utf8_lossy(&after_switch);
+    assert!(
+        rendered_after_switch.contains("2/2"),
+        "screen 2's own orchestration pane title never showed the real final count; got:\n{rendered_after_switch:?}"
+    );
+
+    send_bytes(&mut master, b"q");
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
-
-    std::thread::sleep(Duration::from_millis(200));
-    let captured = captured_buf.lock().unwrap().clone();
-    let rendered = String::from_utf8_lossy(&captured);
-    assert!(
-        !rendered.contains("aborted"),
-        "the TUI showed the finished run as aborted instead of ok; got:\n{rendered:?}"
-    );
-    // The root counts too (issue #620), alongside `hello`. The
-    // effects count moved to screen 2's own orchestration pane title
-    // and to the overview's flow card (issue #626), neither of which
-    // this assertion can check from the raw byte stream the way the
-    // old header line let it: once only the `done` digit itself
-    // differs between two redraws, the terminal only ever retransmits
-    // that one cell (`\x1b[28;42H2` here), never the surrounding
-    // `/2 effects` text it sits inside, so a plain substring search
-    // for `"2/2"` can no longer see it land. The initial draw (before
-    // any state has loaded) already shows the plan's own known total
-    // on its own.
-    assert!(
-        rendered.contains("0/2"),
-        "the TUI never showed the plan's own effects total; got:\n{rendered:?}"
-    );
 
     assert_no_leftover_process(work.path());
 }

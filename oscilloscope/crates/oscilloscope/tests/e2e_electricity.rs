@@ -1235,6 +1235,10 @@ fn glance_keeps_the_final_line_and_exits_0() {
         stdout.contains("ok"),
         "the final --glance line should show the run as ok; got:\n{stdout:?}"
     );
+    assert!(
+        !stdout.contains('\x1b') && !stdout.contains('\r'),
+        "piped --glance output should contain no escape codes or carriage returns; got:\n{stdout:?}"
+    );
     assert_no_leftover_process(work.path());
 }
 
