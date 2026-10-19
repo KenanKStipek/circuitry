@@ -1111,7 +1111,12 @@ the new one, keyed by stable strings (`row:<path>`, `state:<path>`,
 `:tokens`) — a row's status or loop progress changing, a state row that's
 new or whose status/dim meta/tokens changed, a treemap cell that's new
 or whose total grew (never a shrink), a new log line, the token bar, and
-the header's run state/effects/tokens. A treemap cell marks only when
+the run's own status/effects/tokens (`header:effects`/`:tokens` keep
+their names from when the header line itself showed those two — issue
+#626 moved them into the overview's own cards and screen 2's
+orchestration pane title, but the underlying change they mark, and
+`header:tokens`' own consumer in the token bar's totals line, are the
+same either way). A treemap cell marks only when
 its own total grew (or it's new) and no direct child's did too, since a
 container's total is always the sum of its children and tinting every
 ancestor whose own total rose along with a leaf's would point at
@@ -1143,25 +1148,26 @@ text (near the ramp's dark end, on a light one).
 `--no-animation` (both `osi <doc>` and `osi watch`) skips marking
 entirely, so `Tracker::has_active` never reports anything after it.
 
-**The oscilloscope icon** (`oscilloscope_core::icon` for the trace's own
-dot math, `oscilloscope`'s own `icon.rs` for the braille/bezel drawing,
-issue #535). Sits left of the header, 3 rows high (the header's own
-height) and 17 columns wide: one rounded bezel, split by a `┬`/`┴`
-divider into a 12-column braille screen (24×4 dots, `icon::
-trace_dots`) and a 2-column knob strip holding a single `◉` on the
-middle row — one device, not two boxes side by side. While the run is
-live, a sine-like wave scrolls
-one dot column per frame, a frame being the same `REDRAW_INTERVAL` tick
-the redraw rule above forces while live; once the run has ended (or
-with `--no-animation`, which freezes the frame at 0 while live), the
-trace is a single still, flat line — `osi watch` on an already-ended run
-shows the flat line from its own first frame. The trace's own colour
-follows run state through the active theme (`icon_trace_ok`/`_failed`/
-`_cancelled`); the bezel is always `icon_bezel` (dim). The icon is not
-drawn below the two-column width threshold (80 columns); the header
-takes the full width there instead. `trace_dots` takes its own frame
-index as a plain `u64`, never `Instant::now()`, so a test pins an exact
-frame.
+**The scope icon's own trace** (`oscilloscope_core::icon` for the
+trace's own dot math, issue #535; folded into the one-line header,
+issue #626). The header line's own first cells (`icon::
+header_trace_text`, `icon::TRACE_CELLS` — about 8 of them, one row of
+braille glyphs built from a 16×4 dot matrix, `icon::trace_dots`), no
+bezel or knob strip any more: a single device sharing the header's own
+row, not a box beside it. While the run is live, a sine-like wave
+scrolls one dot column per frame, a frame being the same
+`REDRAW_INTERVAL` tick the redraw rule above forces while live; once
+the run has ended, the trace is a single still, flat line — `osi
+watch` on an already-ended run shows the flat line from its own first
+frame. `--no-animation` skips the braille glyphs entirely and draws a
+static `◉` in their place instead (`header_trace_text`'s own
+`animate: false` branch), the same single glyph an ended run's still
+trace used to collapse to. The trace's own colour follows run state
+through the active theme (`icon_trace_ok`/`_failed`/`_cancelled`,
+`icon::trace_color`) — there is no separate bezel colour any more,
+nothing in the one-line header is ever drawn dim beside it. `trace_
+dots` takes its own frame index as a plain `u64`, never `Instant::
+now()`, so a test pins an exact frame.
 
 **Colour themes** (`oscilloscope`'s own `theme.rs`, issue #535). One
 `Theme` of named colour roles (background, text, border/focused border,
@@ -1241,7 +1247,9 @@ interval, and nothing here is built at all for a screen not shown.
   ended (`header.status != Running`), the outcome, start/end and
   totals instead.
 - **Time card:** the run's own start/end, elapsed, ETA, a bar of the
-  phase strip's own durations and its slowest *finished* entry.
+  phase strip's own durations (drawn as blocks scaled to the longest
+  one, `tui.rs`'s own `draw_time_card`) and its slowest *finished*
+  entry.
 - **Flow card:** `header.effects_done`/`effects_planned` (moved here
   from the header line) and a failure count; the latest two decisions
   (a named `if`'s own `meta.branch`, keyed by its own path's last
@@ -1251,21 +1259,34 @@ interval, and nothing here is built at all for a screen not shown.
   order; and the count/total duration of every `fold::is_quick_step`
   row in the *unfolded* tree (not however this frame's own folding
   happened to group them).
-- **Cost card:** tokens (moved here from the header line too), cost
-  once `runtime.last_run.totals.cost_usd` (or, in principle, a single
-  effect's own `meta.cost_usd`) actually reports one — never shown as
-  `$0.00` in the meantime — the treemap's own highest-token leaf, and
-  `render::token_bar_in_flight_line`'s own text (shared with screen
-  2's token bar, so the two can't disagree about what's running).
+- **Cost card:** tokens (moved here from the header line too); cost,
+  shown only once it's actually positive
+  (`screens::effective_cost_usd`, shared with the now pane's own
+  ended summary) — `runtime.last_run.totals.cost_usd` once cof has
+  written it, summed across every effect's own `meta.cost_usd`
+  before that (so it shows the moment any effect reports one, not
+  only once the run has ended); a sparkline
+  (`screens::build_tokens_over_time`) bucketing each effect's own
+  sent-plus-received tokens by its own `completed_at` into twelve
+  equal spans across the run so far; the treemap's own highest-token
+  leaf; and `render::token_bar_in_flight_line`'s own text (shared
+  with screen 2's token bar, so the two can't disagree about what's
+  running).
 
-A tokens-over-time sparkline and run-history figures (`vs usual`, an
-ETA for the whole run) are listed in the issue's own mockup but need
-no new data this lane has: the first needs a retained time series this
-milestone doesn't keep yet, and the second needs run history (a later
-issue, §“What osi needs” above). Below 80×20, the overview keeps its
-same panes, just smaller, rather than the stacked/single-summary-line
-redesign the issue's own mockup sketches for that size — a later
-refinement, not a change in what any of the panes show.
+Run-history figures (`vs usual`, an ETA for the whole run) need run
+history, a later issue (§“What osi needs” above). Below
+[`tui::thresholds::TWO_COLUMN_MIN_WIDTH`]/`_MIN_HEIGHT` (80×20, the
+same line screen 2's own two-column layout collapses at) the overview
+restacks instead of just shrinking: the phase strip drops to one
+line (status and label only, no start time or duration), the now
+pane stacks the step over the log lines instead of splitting them
+side by side, and the three cards become one plain summary line
+(elapsed, effects, failures, tokens and cost) in place of their own
+three bordered boxes. Below 100×30 with the three cards still shown
+separately, each card keeps its own order and loses lines from the
+bottom as height runs out, same as any other bordered pane here; a
+value too long for its own card's width ends in `…` rather than
+being clipped mid-word (`tui.rs`'s own `truncate_lines`).
 
 **`--glance`.** `osi <doc> --glance` and `osi watch <dir> --glance`
 show only the header line (`current: None` in `header_line`, so no

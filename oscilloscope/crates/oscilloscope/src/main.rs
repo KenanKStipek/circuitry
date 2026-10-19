@@ -3433,6 +3433,32 @@ mod tests {
             .collect()
     }
 
+    /// Issue #626: `osi watch` names the document from the watched
+    /// run's own `runtime.last_run.orchestration_path` once a
+    /// live-state write has it, not from whatever directory or file
+    /// it was pointed at -- the only document name `osi watch` ever
+    /// actually has of its own.
+    #[test]
+    fn watch_document_name_prefers_the_runs_own_orchestration_path() {
+        let state = serde_json::json!({
+            "runtime": {"last_run": {"orchestration_path": "do-thing.yml"}}
+        });
+        assert_eq!(
+            watch_document_name(Some(&state), "fallback.yml"),
+            "do-thing.yml"
+        );
+    }
+
+    #[test]
+    fn watch_document_name_falls_back_with_no_state_or_orchestration_path_yet() {
+        assert_eq!(watch_document_name(None, "fallback.yml"), "fallback.yml");
+        let state = serde_json::json!({"runtime": {"last_run": {}}});
+        assert_eq!(
+            watch_document_name(Some(&state), "fallback.yml"),
+            "fallback.yml"
+        );
+    }
+
     /// #610: a state-pane selection must stay what `Details` shows
     /// even once the user tabs away from `Pane::State` onto `Pane::
     /// Details` itself to scroll it -- the only way to ever actually

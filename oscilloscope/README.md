@@ -107,7 +107,7 @@ Every screen shares one header line: the scope icon's own animated
 trace (a static `◉` with `--no-animation`), the document, `♥` while
 the engine process is alive, the run's status and elapsed time, the
 current clock time, the innermost running loop's ETA, the latest report
-(in place of all of that once one arrives), and the screen tabs. When
+(#610, once one has arrived), and the screen tabs. When
 it's short of room: the tabs shrink to their own numbers first, then the
 report truncates (down to a bare `▸`), then the document (keeping its
 own tail), then the ETA goes — status, elapsed and the clock never

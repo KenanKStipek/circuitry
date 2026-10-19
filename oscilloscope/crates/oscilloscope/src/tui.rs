@@ -1219,6 +1219,47 @@ mod snippet_wrap_tests {
     }
 }
 
+#[cfg(test)]
+mod truncate_tests {
+    use super::*;
+
+    /// A card's own long value ends in `…` once it overflows its own
+    /// width (DESIGN.md: "long values truncate with …"), rather than
+    /// being clipped mid-word the way the terminal itself would clip
+    /// an over-wide line with no wrap.
+    #[test]
+    fn truncate_line_ends_in_an_ellipsis_once_it_overflows() {
+        let line = Line::from("a somewhat long value that will not fit");
+        let truncated = truncate_line(line, 10);
+        let text: String = truncated.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.chars().count(), 10);
+        assert!(text.ends_with('…'), "{text:?}");
+        assert_eq!(text, "a somewha…");
+    }
+
+    #[test]
+    fn truncate_line_leaves_a_line_that_already_fits_untouched() {
+        let line = Line::from("short");
+        let truncated = truncate_line(line, 10);
+        let text: String = truncated.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "short");
+    }
+
+    #[test]
+    fn truncate_line_keeps_each_spans_own_style_up_to_the_cut() {
+        let line = Line::from(vec![
+            Span::styled("abc", Style::default().fg(Color::Red)),
+            Span::styled("defgh", Style::default().fg(Color::Blue)),
+        ]);
+        let truncated = truncate_line(line, 5);
+        assert_eq!(truncated.spans[0].content.as_ref(), "abc");
+        assert_eq!(truncated.spans[0].style.fg, Some(Color::Red));
+        assert_eq!(truncated.spans[1].content.as_ref(), "d");
+        assert_eq!(truncated.spans[1].style.fg, Some(Color::Blue));
+        assert_eq!(truncated.spans[2].content.as_ref(), "…");
+    }
+}
+
 /// One `sent`/`received` block's own header line (issue #535):
 /// `sent  ↑ 1.2 kt` or `received  ↓ ≈567 t` (an estimate), formatted
 /// the same way every other token count in `osi` is.
@@ -1759,7 +1800,7 @@ const HELP_TEXT: &[&str] = &[
     "Home End     jump to the first / last row",
     "g G          same as Home / End",
     "← →          collapse / expand (orchestration or state)",
-    "⏎            expand a quick-steps row in place",
+    "⏎            overview: open flow; flow: expand quick steps",
     "z            fold on/off (breadcrumbs, quick steps)",
     "tab          orchestration → details → state",
     "f            follow the running row (on by default)",
@@ -1776,10 +1817,10 @@ const HELP_TEXT: &[&str] = &[
 ];
 
 /// Wide enough for every [`HELP_TEXT`] line with none of them
-/// wrapping (finding F7) — the longest (issue #535's own collapse/
-/// expand line) is 55 columns; 4 columns of margin plus the 2-column
-/// border leaves room to spare.
-const HELP_OVERLAY_WIDTH: u16 = 61;
+/// wrapping (finding F7) — the longest (issue #626's own ⏎ line) is
+/// 58 columns; 4 columns of margin plus the 2-column border leaves
+/// room to spare.
+const HELP_OVERLAY_WIDTH: u16 = 64;
 
 /// One redraw's whole layout (issue #626): a one-line header, shared
 /// by every screen (replacing the old three-row one), then the
@@ -3999,6 +4040,52 @@ mod golden_tests {
         assert!(
             elapsed < std::time::Duration::from_millis(500),
             "one TestBackend draw of a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
+
+        // The overview's own model is built (and drawn) only while
+        // it's actually on display -- so the same budget applies to
+        // it, on the same 2000-node state, not just to screen 2's.
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let overview_start = std::time::Instant::now();
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &rendered.token_bar,
+            &rendered.treemap,
+            &[],
+            Some("n0"),
+            "t2001",
+        );
+        let mut overview_app = App::new(false);
+        overview_app.screen = oscilloscope_core::screens::Screen::Overview;
+        let overview_backend = TestBackend::new(120, 40);
+        let mut overview_terminal = Terminal::new(overview_backend).unwrap();
+        overview_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut overview_app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    Some(&overview),
+                )
+            })
+            .unwrap();
+        let overview_elapsed = overview_start.elapsed();
+        assert!(
+            overview_elapsed < std::time::Duration::from_millis(500),
+            "building and drawing the overview for a 2000-node state took {overview_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
     }
 
