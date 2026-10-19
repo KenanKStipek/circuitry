@@ -1188,6 +1188,103 @@ fn osi_watch_renders_in_the_tui_and_exits_cleanly() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #632: `3` opens the Cost screen under `osi watch` too, not
+/// only a live `osi <doc>` run -- `osi watch` owns no engine of its
+/// own, so the run this attaches to is a separate, still-running
+/// `cof` process this test spawns and cleans up itself.
+#[test]
+fn pressing_3_during_osi_watch_of_a_live_run_opens_the_cost_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let events_path = run_dir.path().join("events.jsonl");
+
+    let mut cof = Command::new("cof");
+    cof.arg("run")
+        .arg(&doc)
+        .arg("--config")
+        .arg(&config)
+        .arg("--quiet")
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--events")
+        .arg(&events_path)
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        cof.env_remove(key);
+    }
+    let mut cof_child = cof.spawn().expect("spawn cof");
+
+    wait_for_step_start(&events_path, "prime.slow", Duration::from_secs(20));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let run_dir_arg = run_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let before_3 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"3");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_3..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("tokens by store"),
+            "expected the Cost screen's own treemap after pressing 3 under osi watch; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("largest stores"),
+            "expected the Cost screen's own table after pressing 3 under osi watch; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("ask"),
+            "expected the finished prompt's own store to show on the Cost screen; got:\n{rendered:?}"
+        );
+    }
+
+    // `q` under `osi watch` detaches immediately, no confirm needed
+    // (watch owns no engine to cancel) -- the still-running `cof`
+    // process is this test's own, cleaned up after.
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi watch should exit 0, got {status:?}");
+
+    let _ = cof_child.kill();
+    let _ = cof_child.wait();
+
+    assert_no_leftover_process(work.path());
+}
+
 /// A fake engine standing in for a real `cof`/`electricity`, used
 /// only by the two regression tests below (#494): parses out the one
 /// flag `osi` always passes regardless of engine or capability
