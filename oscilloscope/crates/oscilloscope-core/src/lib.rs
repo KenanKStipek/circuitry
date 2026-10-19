@@ -13,6 +13,7 @@ pub mod config_discovery;
 pub mod cost;
 pub mod diff;
 pub mod engine;
+pub mod flow;
 pub mod fold;
 pub mod format;
 pub mod icon;
