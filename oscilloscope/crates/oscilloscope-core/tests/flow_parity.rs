@@ -159,11 +159,33 @@ fn assert_gate_decision(
     }
     let gate_idx = screen.rows.iter().position(|r| r.label == "gate").unwrap();
     let untaken = &screen.rows[gate_idx + 1];
-    assert_eq!(untaken.kind, FlowRowKind::UntakenBranch, "{case}");
+    assert!(
+        matches!(untaken.kind, FlowRowKind::UntakenBranch { .. }),
+        "{case}"
+    );
     assert!(
         untaken.label.contains(expect_untaken),
         "{case}: untaken summary was {:?}",
         untaken.label
+    );
+    // `do.yml`'s own `then`/`else` both name their one step `chosen`
+    // (the parity case) -- the taken side's own row must still be
+    // real, never hidden alongside the untaken side's own identical
+    // path.
+    let chosen = screen
+        .rows
+        .iter()
+        .find(|r| r.label == "chosen" && matches!(r.kind, FlowRowKind::Row(_)))
+        .unwrap_or_else(|| {
+            panic!(
+                "{case}: the taken branch's own 'chosen' row is missing: {:#?}",
+                screen.rows
+            )
+        });
+    assert_ne!(
+        chosen.status.kind,
+        oscilloscope_core::model::StatusKind::Skipped,
+        "{case}: 'chosen' is the taken step, not the hidden untaken one"
     );
 }
 

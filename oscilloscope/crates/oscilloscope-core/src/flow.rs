@@ -53,8 +53,29 @@ pub enum FlowRowKind {
     },
     /// The untaken branch's own dim summary line (DESIGN.md: "one
     /// dim line, `· else: <its first step>` (`+N more`, or `nothing`
-    /// if it's empty), never a row per untaken step").
-    UntakenBranch,
+    /// if it's empty), never a row per untaken step"). `paths` is the
+    /// untaken side's own real root paths (never drawn, since
+    /// [`untaken_root_paths`] hides them) -- a caller mapping a
+    /// selection that fell on one of them (issue #635's P0: follow,
+    /// or a stale manual selection, can both land on a hidden
+    /// untaken step) back onto something actually drawn needs exactly
+    /// these.
+    UntakenBranch { paths: Vec<String> },
+}
+
+/// Whether `kind` is a real orchestration-pane row -- one the
+/// overview's own collapse/filter/errors-only state can hide, and
+/// `keys::visible_rows` already knows about (issue #635's P0): a
+/// named `if`'s decision row counts (it shares that `if`'s own real
+/// path), but the untaken branch's dim summary and an unnamed `if`'s
+/// synthesised decision never do -- neither has a path of its own in
+/// the real tree, and (the Flow screen's own follow-up 1) an
+/// inferred decision row can't be selected at all yet.
+pub fn is_real_flow_row(kind: &FlowRowKind) -> bool {
+    !matches!(
+        kind,
+        FlowRowKind::UntakenBranch { .. } | FlowRowKind::Decision { inferred: true, .. }
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +185,11 @@ fn resolve_unnamed_decisions(
                     .collect(),
                 else_paths: decision
                     .else_paths
+                    .iter()
+                    .map(|p| p.replacen("iter_*", &pass, 1))
+                    .collect(),
+                later_siblings: decision
+                    .later_siblings
                     .iter()
                     .map(|p| p.replacen("iter_*", &pass, 1))
                     .collect(),
@@ -361,17 +387,38 @@ fn untaken_root_paths(
         }
         let (branch, _) = named_decision(flat.get(&row.path));
         let (then_paths, else_paths) = branch_paths_for_path(plan, &row.path);
+        // A branch that reuses the other side's own step name (the
+        // parity case: `then`/`else` both run a step called
+        // `chosen`) must never hide the side that actually ran just
+        // because its path also appears on the untaken side's own
+        // list.
         match branch.as_deref() {
-            Some("then") => hidden.extend(else_paths),
-            Some("else") => hidden.extend(then_paths),
+            Some("then") => {
+                hidden.extend(else_paths.into_iter().filter(|p| !then_paths.contains(p)))
+            }
+            Some("else") => {
+                hidden.extend(then_paths.into_iter().filter(|p| !else_paths.contains(p)))
+            }
             _ => {}
         }
     }
     for decision in resolved_unnamed {
         let (branch, nothing_ran) = unnamed_branch_state(decision, rows);
         match branch.as_deref() {
-            Some("then") => hidden.extend(decision.else_paths.clone()),
-            Some("else") if !nothing_ran => hidden.extend(decision.then_paths.clone()),
+            Some("then") => hidden.extend(
+                decision
+                    .else_paths
+                    .iter()
+                    .filter(|p| !decision.then_paths.contains(p))
+                    .cloned(),
+            ),
+            Some("else") if !nothing_ran => hidden.extend(
+                decision
+                    .then_paths
+                    .iter()
+                    .filter(|p| !decision.else_paths.contains(p))
+                    .cloned(),
+            ),
             _ => {}
         }
     }
@@ -382,6 +429,43 @@ fn is_under_any(path: &str, roots: &BTreeSet<String>) -> bool {
     roots
         .iter()
         .any(|root| path == root || path.starts_with(&format!("{root}.")))
+}
+
+/// The quick-steps summary row `anchor` folded into, when `anchor`
+/// isn't that run's own first step (issue #635, follow-up 2): the
+/// run's own representative path is its *first* step's
+/// (`fold::merge_quick_steps`), a sibling of `anchor` rather than an
+/// ancestor, so the ordinary breadcrumb-style `starts_with` check
+/// above can never find it. `unfolded_rows` is a depth-first list, so
+/// a maximal run of consecutive, same-depth `is_quick_step` rows
+/// ending at `anchor` is exactly the run `fold::merge_quick_steps`
+/// itself would have grouped; `rows` (the already-folded tree) is
+/// then checked for a surviving `QuickSteps` row at that run's own
+/// first path -- absent when the run was expanded in place (⏎),
+/// which this must leave alone, since `anchor` is then still a real
+/// row of its own.
+fn quick_steps_row_covering(rows: &[Row], unfolded_rows: &[Row], anchor: &str) -> Option<String> {
+    let idx = unfolded_rows.iter().position(|r| r.path == anchor)?;
+    if !is_quick_step(&unfolded_rows[idx]) {
+        return None;
+    }
+    let depth = unfolded_rows[idx].depth;
+    let mut start = idx;
+    while start > 0
+        && unfolded_rows[start - 1].depth == depth
+        && is_quick_step(&unfolded_rows[start - 1])
+    {
+        start -= 1;
+    }
+    if start == idx {
+        // Already the run's own first step -- the ordinary anchor
+        // match above already covers this position.
+        return None;
+    }
+    let rep_path = &unfolded_rows[start].path;
+    rows.iter()
+        .any(|r| r.kind == RowKind::QuickSteps && &r.path == rep_path)
+        .then(|| rep_path.clone())
 }
 
 pub fn build_flow_rows(
@@ -430,15 +514,22 @@ pub fn build_flow_rows(
         if is_under_any(&row.path, &hidden) {
             continue;
         }
-        // An anchor path a breadcrumb or a quick-steps run folded
-        // away still has *some* surviving row at or under its own
-        // prefix (folding only ever merges into a descendant or a
-        // same-run sibling, never moves content outside its own
-        // subtree) -- `starts_with` catches the position the fold
-        // left it at.
+        // An anchor path a breadcrumb folded away still has *some*
+        // surviving row at or under its own prefix (a breadcrumb
+        // only ever merges into a descendant, never moves content
+        // outside its own subtree) -- `starts_with` catches the
+        // position the fold left it at. A quick-steps run folds its
+        // own *siblings* together instead, so an anchor folded into
+        // one that isn't the run's own first step needs
+        // `quick_steps_row_covering`'s own matching, not `starts_with`.
         let anchored_here: Vec<String> = by_anchor
             .keys()
-            .filter(|anchor| row.path == **anchor || row.path.starts_with(&format!("{anchor}.")))
+            .filter(|anchor| {
+                row.path == **anchor
+                    || row.path.starts_with(&format!("{anchor}."))
+                    || quick_steps_row_covering(rows, unfolded_rows, anchor).as_deref()
+                        == Some(row.path.as_str())
+            })
             .cloned()
             .collect();
         for anchor in anchored_here {
@@ -496,9 +587,14 @@ pub fn build_flow_rows(
         .filter(|r| is_quick_step(r))
         .filter_map(|r| r.duration_s)
         .sum();
+    // `diff::Differ` always renders a report's own warning level as
+    // the line's own leading glyph (`"▸ warning: "`, never buried
+    // mid-sentence) -- `starts_with` so a report whose own message
+    // happens to quote the word "warning" elsewhere never counts
+    // twice as loosely as `contains` would.
     footer.warnings = story_lines
         .iter()
-        .filter(|l| l.kind == LogKind::Report && l.text.contains("warning: "))
+        .filter(|l| l.kind == LogKind::Report && l.text.starts_with("▸ warning: "))
         .count() as u64;
 
     merge_single_pass_loops(&mut out);
@@ -507,7 +603,7 @@ pub fn build_flow_rows(
 }
 
 /// A named loop with exactly one observed pass shows as one row
-/// (DESIGN.md: "a loop and its single pass show as one row, `⟳ <name>
+/// (DESIGN.md: "a loop and its single pass show as one row, `⟲ <name>
 /// pass N of M`") -- the loop container row and its lone pass row
 /// merge into one, and that pass's own children shift up one depth
 /// to sit directly under it. A loop with more passes keeps one row
@@ -644,17 +740,32 @@ fn push_named_decision(
         has_children: row.has_children,
         merged_pass: false,
     });
-    let untaken = match branch.as_deref() {
-        Some("then") => Some(untaken_branch_summary(rows, "else", &else_paths)),
-        Some("else") => Some(untaken_branch_summary(rows, "then", &then_paths)),
-        _ => None,
+    // `osi watch` without `--plan` (issue #635): with no plan at all,
+    // `branch_paths_for_path` already returns empty for both sides,
+    // which must read as "the untaken branch isn't known", never as
+    // a real, empty `else`/`then` -- checking `plan.match_path`
+    // directly tells the two apart.
+    let untaken = if plan.match_path(&row.path).is_some() {
+        match branch.as_deref() {
+            Some("then") => Some((
+                untaken_branch_summary(rows, "else", &else_paths),
+                else_paths,
+            )),
+            Some("else") => Some((
+                untaken_branch_summary(rows, "then", &then_paths),
+                then_paths,
+            )),
+            _ => None,
+        }
+    } else {
+        None
     };
-    if let Some(summary) = untaken {
+    if let Some((summary, paths)) = untaken {
         out.push(FlowRow {
             path: format!("{}.__untaken", row.path),
             depth: row.depth + 1,
             label: summary,
-            kind: FlowRowKind::UntakenBranch,
+            kind: FlowRowKind::UntakenBranch { paths },
             status: RowStatus {
                 kind: StatusKind::Skipped,
                 skip_reason: None,
@@ -695,11 +806,19 @@ fn unnamed_branch_state(decision: &UnnamedIfDecision, rows: &[Row]) -> (Option<S
                     | StatusKind::Cancelled
             )
         });
+    // The spec rule (issue #635): an `if` with no `else` reads
+    // "nothing ran" once a *later* step in the same chain has
+    // started, not only once this `if`'s own enclosing scope has
+    // finished -- the host can still be `Running` (further `then`
+    // branches of other decisions, or siblings before this one are
+    // still going) while a later sibling already proves this one's
+    // own `then` never will.
+    let later_sibling_started = any_branch_started(rows, &decision.later_siblings);
     if then_started && !else_started {
         (Some("then".to_string()), false)
     } else if else_started && !then_started {
         (Some("else".to_string()), false)
-    } else if decision.else_paths.is_empty() && host_done {
+    } else if decision.else_paths.is_empty() && (host_done || later_sibling_started) {
         (Some("else".to_string()), true)
     } else {
         (None, false)
@@ -776,18 +895,22 @@ fn push_unnamed_decision(
         merged_pass: false,
     });
     let untaken = match branch.as_deref() {
-        Some("then") => Some(untaken_branch_summary(rows, "else", &decision.else_paths)),
-        Some("else") if !nothing_ran => {
-            Some(untaken_branch_summary(rows, "then", &decision.then_paths))
-        }
+        Some("then") => Some((
+            untaken_branch_summary(rows, "else", &decision.else_paths),
+            decision.else_paths.clone(),
+        )),
+        Some("else") if !nothing_ran => Some((
+            untaken_branch_summary(rows, "then", &decision.then_paths),
+            decision.then_paths.clone(),
+        )),
         _ => None,
     };
-    if let Some(summary) = untaken {
+    if let Some((summary, paths)) = untaken {
         out.push(FlowRow {
             path: format!("{}.__untaken", decision.host_path),
             depth: depth + 1,
             label: summary,
-            kind: FlowRowKind::UntakenBranch,
+            kind: FlowRowKind::UntakenBranch { paths },
             status: RowStatus {
                 kind: StatusKind::Skipped,
                 skip_reason: None,
@@ -1049,7 +1172,7 @@ mod tests {
             other => panic!("expected Decision, got {other:?}"),
         }
         let summary = &flow_rows[idx + 1];
-        assert_eq!(summary.kind, FlowRowKind::UntakenBranch);
+        assert!(matches!(summary.kind, FlowRowKind::UntakenBranch { .. }));
         assert!(summary.label.contains("other"), "{}", summary.label);
     }
 

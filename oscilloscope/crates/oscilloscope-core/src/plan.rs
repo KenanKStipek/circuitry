@@ -248,6 +248,16 @@ pub struct UnnamedIfDecision {
     pub condition: Option<ConditionInfo>,
     pub then_paths: Vec<String>,
     pub else_paths: Vec<String>,
+    /// Every real path the same chain has *after* this `if`
+    /// (`Region::Block`'s own declaration order) -- empty when this
+    /// `if` wasn't reached through `walk_block` at all (a tree
+    /// `Parallel` branch, or directly under a named loop's body with
+    /// no enclosing chain), since "a later sibling started" has no
+    /// meaning there. An `if` with no `else` reads "nothing ran" once
+    /// any of these has started, not only once its own host has
+    /// finished (issue #635: a later chain member starting already
+    /// proves this one's own `then` never will).
+    pub later_siblings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -717,31 +727,7 @@ fn condition_info(cond: &electricity_bytecode::Condition) -> ConditionInfo {
 /// `earlier`'s own entries already follow.
 fn collect_branch_paths(region: &Region, graft: Option<&EffectPath>) -> Vec<String> {
     match region {
-        Region::Block { ops, .. } => {
-            let mut out = Vec::new();
-            for op in ops {
-                if is_report(op) {
-                    continue;
-                }
-                if is_transparent(op) {
-                    match &op.kind {
-                        NodeKind::Control(Region::If { then_, else_, .. }) => {
-                            out.extend(collect_branch_paths(then_, graft));
-                            if let Some(else_) = else_ {
-                                out.extend(collect_branch_paths(else_, graft));
-                            }
-                        }
-                        NodeKind::Control(Region::Loop { body, .. }) => {
-                            out.extend(collect_branch_paths(body, graft));
-                        }
-                        _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
-                    }
-                } else {
-                    out.push(display_path(&effective_path(&op.path, graft)));
-                }
-            }
-            out
-        }
+        Region::Block { ops, .. } => collect_block_paths(ops, graft),
         Region::Parallel { branches, .. } => branches
             .iter()
             .filter(|op| !is_report(op))
@@ -755,6 +741,36 @@ fn collect_branch_paths(region: &Region, graft: Option<&EffectPath>) -> Vec<Stri
         // changing silently.
         Region::If { .. } => Vec::new(),
     }
+}
+
+/// `collect_branch_paths`'s own `Region::Block` case, factored out so
+/// `walk_block` can reuse it directly on a bare slice of ops (its own
+/// chain's *later* members, issue #635's `UnnamedIfDecision::later_
+/// siblings`) without having to wrap them back into a `Region` first.
+fn collect_block_paths(ops: &[Op], graft: Option<&EffectPath>) -> Vec<String> {
+    let mut out = Vec::new();
+    for op in ops {
+        if is_report(op) {
+            continue;
+        }
+        if is_transparent(op) {
+            match &op.kind {
+                NodeKind::Control(Region::If { then_, else_, .. }) => {
+                    out.extend(collect_branch_paths(then_, graft));
+                    if let Some(else_) = else_ {
+                        out.extend(collect_branch_paths(else_, graft));
+                    }
+                }
+                NodeKind::Control(Region::Loop { body, .. }) => {
+                    out.extend(collect_branch_paths(body, graft));
+                }
+                _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
+            }
+        } else {
+            out.push(display_path(&effective_path(&op.path, graft)));
+        }
+    }
+    out
 }
 
 /// An unnamed `if`/loop contributes no path segment of its own
@@ -882,6 +898,11 @@ fn record_op_entry(
             condition: condition.clone(),
             then_paths: then_paths.clone(),
             else_paths: else_paths.clone(),
+            // Filled in by `walk_block` itself, right after this
+            // call, when (and only when) a chain actually reached
+            // this `if` -- `record_op_entry` has no `earlier`/`ops`
+            // list of its own to compute it from here.
+            later_siblings: Vec::new(),
         });
     }
     ctx.all_paths.push(display);
@@ -1006,9 +1027,22 @@ fn walk_block(
     trie: &mut TrieNode,
     ctx: &mut WalkCtx,
 ) {
-    for op in ops {
+    for (i, op) in ops.iter().enumerate() {
         if is_transparent(op) {
             record_op_entry(op, graft, Some(Flow::Chain), trie, ctx);
+            // Issue #635: an `if`'s own `later_siblings` is set here,
+            // against *this* `ops` slice, right after `record_op_
+            // entry` pushed its decision and before recursing into
+            // either branch -- a nested transparent `if` inside
+            // `then_`/`else_` pushes its own decision afterwards, at
+            // a higher index, so fixing this one's index now keeps it
+            // correct regardless.
+            if matches!(&op.kind, NodeKind::Control(Region::If { .. })) {
+                if let Some(decision_idx) = ctx.unnamed_if_decisions.len().checked_sub(1) {
+                    ctx.unnamed_if_decisions[decision_idx].later_siblings =
+                        collect_block_paths(&ops[i + 1..], graft);
+                }
+            }
             match &op.kind {
                 NodeKind::Control(Region::If { then_, else_, .. }) => {
                     let before = earlier.clone();
