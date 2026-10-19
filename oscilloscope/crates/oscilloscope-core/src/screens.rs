@@ -1056,6 +1056,93 @@ pub fn build_overview(
     }
 }
 
+/// A decision row's own detail, for the selected pane when the
+/// flow pane's own selection is a `◆`/untaken-branch row rather than
+/// an ordinary step (issue #635: "a decision row shows its condition,
+/// its mode, the branch it took, and the model's answer for a
+/// model-mode condition").
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedDecision {
+    pub label: String,
+    pub condition: Option<crate::plan::ConditionInfo>,
+    pub branch: Option<String>,
+    pub inferred: bool,
+    pub nothing_ran: bool,
+    pub answer: Option<String>,
+}
+
+/// Screen 2's own model (issue #635, part of #612) -- built only
+/// while the Flow screen is actually on display, the same
+/// performance rule `build_cost_screen` already follows for screen
+/// 3. `rows`/`footer`/`story` are `crate::flow::build_flow_rows`'s
+/// and `build_story`'s own outputs; `selected`/`selected_decision`
+/// pick whichever of the two the current selection actually is --
+/// never both, since a flow-pane selection is always exactly one
+/// kind of row at a time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowScreen {
+    pub rows: Vec<crate::flow::FlowRow>,
+    pub footer: crate::flow::FlowFooter,
+    pub story: Vec<crate::flow::StoryEntry>,
+    pub selected: Option<FocusedStep>,
+    pub selected_decision: Option<SelectedDecision>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_flow_screen(
+    rows: &[Row],
+    unfolded_rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    state: Option<&Value>,
+    story_lines: &[crate::diff::LogLine],
+    selected_path: Option<&str>,
+    zone: &dyn ClockZone,
+    now: &str,
+) -> FlowScreen {
+    let (flow_rows, footer) = crate::flow::build_flow_rows(rows, unfolded_rows, flat, plan);
+    let story = crate::flow::build_story(story_lines, &flow_rows, zone);
+    let mut selected = None;
+    let mut selected_decision = None;
+    if let Some(path) = selected_path {
+        // A named `if`'s own decision row shares its real `Row`'s own
+        // path, so `flow_rows` is checked first -- `rows` is only the
+        // fallback for an ordinary step, which never has a `Decision`
+        // entry of its own in `flow_rows` at all.
+        let flow_row = flow_rows.iter().find(|r| r.path == path);
+        match flow_row.map(|r| &r.kind) {
+            Some(crate::flow::FlowRowKind::Decision {
+                branch,
+                inferred,
+                nothing_ran,
+                answer,
+            }) => {
+                selected_decision = Some(SelectedDecision {
+                    label: flow_row.unwrap().label.clone(),
+                    condition: flow_row.unwrap().condition.clone(),
+                    branch: branch.clone(),
+                    inferred: *inferred,
+                    nothing_ran: *nothing_ran,
+                    answer: answer.clone(),
+                });
+            }
+            _ => {
+                if let Some(row) = rows.iter().find(|r| r.path == path) {
+                    selected = Some(build_focused_step(row, flat, plan, model, state, now));
+                }
+            }
+        }
+    }
+    FlowScreen {
+        rows: flow_rows,
+        footer,
+        story,
+        selected,
+        selected_decision,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,6 +1606,66 @@ mod tests {
             }
             other => panic!("expected Running, got {other:?}"),
         }
+    }
+
+    /// Issue #635: selecting a decision row on the Flow screen gives
+    /// the selected pane the condition/branch detail instead of an
+    /// ordinary `FocusedStep` -- `check` is a named `if` here, so it
+    /// still has a real row of its own to select by path.
+    #[test]
+    fn build_flow_screen_selected_decision_reads_the_condition_and_branch() {
+        let plan = PlanTree::from_program(&program_with_ifs());
+        let state = json!({
+            "prime": {
+                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
+                "plan": {"value": "x", "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:05Z"}},
+                "check": {
+                    "value": {"branch": "then"}, "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:06Z", "branch": "then"},
+                    "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:06Z", "completed_at": "2026-10-08T11:00:06Z"}}
+                }
+            }
+        });
+        let flat = flat_from(state.clone());
+        let mut model = RunModel::new();
+        let statuses = model.observe(&state, &plan, ProcessState::Running);
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
+        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
+        let screen = build_flow_screen(
+            &folded,
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            Some("prime.check"),
+            &utc(),
+            "2026-10-08T11:00:10Z",
+        );
+        assert!(screen.selected.is_none());
+        let decision = screen.selected_decision.expect("a decision selection");
+        assert_eq!(decision.branch.as_deref(), Some("then"));
+        assert!(!decision.inferred);
+        assert_eq!(
+            decision.condition,
+            Some(crate::plan::ConditionInfo {
+                mode: crate::plan::ConditionMode::Cel,
+                text: "true".to_string()
+            })
+        );
     }
 
     #[test]
