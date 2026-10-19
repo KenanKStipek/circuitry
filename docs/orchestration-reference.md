@@ -290,7 +290,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
-- `tree` — parallel: all effects execute concurrently against the same input snapshot; none see each other's outputs. Each branch reports `on_effect_start` / `on_effect_complete` from its own worker thread as it dispatches and lands — `cof run --events <file>` streams both live. `--live-state` only ever shows a branch once it has finished; a still-running branch has no node there yet.
+- `tree` — parallel: all effects execute concurrently against the same input snapshot; none see each other's outputs. Each branch reports `on_effect_start` / `on_effect_complete` from its own worker thread as it dispatches and lands — `cof run --events <file>` streams both live, and `--live-state` shows a still-running branch's own node the same way it shows a running chain leaf, within the mirror's usual coalescing interval.
 
 **Example — chain (sequential pipeline):**
 ```yaml
@@ -520,7 +520,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 # prime.draft_effects.collected.value → [block_0, block_1, ...]  (order preserved)
 ```
 
-Each iteration writes into its own isolated state, merged back in index order when the loop finishes, but observers see it while it runs: every effect inside reports `on_effect_start` / `on_effect_complete` at its full path (`prime.draft_effects.iter_3.draft_effect`) from the worker thread running it, and `--live-state` shows each iteration's finished steps before the loop completes.
+Each iteration writes into its own isolated state, merged back in index order when the loop finishes, but observers see it while it runs: every effect inside reports `on_effect_start` / `on_effect_complete` at its full path (`prime.draft_effects.iter_3.draft_effect`) from the worker thread running it, and `--live-state` shows each iteration's own steps — running or finished — before the loop completes.
 
 **While loop example:**
 ```yaml
@@ -1327,7 +1327,7 @@ rather than a plain, written-down value — only a literal list counts. See
 
 Runs another orchestration as an isolated sub-step. State is fully isolated: declared `inputs` are passed in as initial state; the parent does not see the child's working state directly. Outputs land at `prime.<name>` according to the namespacing mode (see below).
 
-Isolated state, shared observation: the child's effects are reported to the parent run's observers — the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete`, and `cof run --events <file>` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). `--live-state` shows each child effect only once it finishes — like a tree branch, never while it runs, not even by chance, since the child runs in its own isolated store until it merges — so a child still running has no node there yet; what actually lands in parent state is still exactly what the namespacing mode below says.
+Isolated state, shared observation: the child's effects are reported to the parent run's observers — the TUI, every runtime plugin's `on_effect_start` / `on_effect_complete`, and `cof run --events <file>` — at paths namespaced under the use node (`prime.<name>.<child_effect>`, nesting further for a `use` inside a `use`). `--live-state` shows a still-running child effect the same way it shows a running chain leaf — within the mirror's usual coalescing interval, even though the child runs in its own isolated store until it merges — and what actually lands in parent *state* is still exactly what the namespacing mode below says: in declared-outputs mode, a child effect visible there while it runs is gone again once the `use` finishes, unless `record_children` keeps it (see below).
 
 Config inheritance: the child executes with the exact same resolved `runtime.*` config as the parent run — adapters, tool plugins (including MCP servers), complexity settings — never re-resolved from disk. The child's own `runtime:` and `plugins:` keys are not read at all, so a composed child can change even less than a root document can. See point 30 under "Composition via `use`" below for the one case (a parent-level `runtime:` block of its own) where that can still surprise you.
 
@@ -1434,8 +1434,8 @@ child a value as it is (an array, an object, a number, a boolean) write `{from: 
 #### Complete record (opt-in)
 
 In declared-outputs mode only the declared values land at `prime.<name>.value`; what the
-child did (its commands, answers, decisions) is visible in `--live-state` as each child effect
-finishes, then dropped when the `use` completes. Set `runtime.state.record_children: true` (in config, or in the orchestration's
+child did (its commands, answers, decisions) is visible in `--live-state` while each child
+effect runs and once it finishes, then dropped when the `use` completes. Set `runtime.state.record_children: true` (in config, or in the orchestration's
 own `runtime:` block) to keep it: each `use` node keeps its child's effects beside its
 `value` and `meta`, in the same shape live state shows them, at every depth of `use`, and a
 failed child keeps whatever it got to. The run's `--out` file then holds the whole run.
@@ -2192,11 +2192,12 @@ outer binding of the same name.
 
 `cof run --events <file>` (also on `cof run-library`) writes a JSONL stream of
 effect starts and ends as the run goes — one complete JSON line per event,
-created or truncated before the first effect. `--live-state` only ever shows
-a tree branch or a `use` child once it finishes, and shows a running chain
-leaf only if a coalesced write happens to land while it runs (writes are at
-least 0.5 s apart). `--events` reports every one of them the instant it
-starts, from whichever worker thread runs it:
+created or truncated before the first effect. `--live-state` shows a running
+effect anywhere — a tree branch, a `use` child or a chain leaf — within its
+own 0.5 s mirror interval of it starting: every effect republishes the live
+state the moment it starts, not only when something it writes happens to
+coincide with a coalesced write. `--events` reports every one of them the
+instant it starts, from whichever worker thread runs it:
 
 ```json
 {"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}

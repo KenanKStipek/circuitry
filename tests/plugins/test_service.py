@@ -969,6 +969,10 @@ def test_finally_stop_runs_on_ctrl_c(tmp_path: Path, started_groups: list[int]) 
             value = state["prime"]["with_web"]["start_web"]["value"]
         except (OSError, ValueError, KeyError, TypeError):
             return False
+        # `None` while the step is still running (#634 made it show up this
+        # early, not just once it finishes) -- not started yet, not an error.
+        if value is None:
+            return False
         started_groups.append(value["pgid"])
         return True
 
