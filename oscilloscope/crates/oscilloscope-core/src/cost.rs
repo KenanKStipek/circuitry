@@ -49,6 +49,30 @@ pub struct StoresFooter {
     /// but never landing in the final state tree for the table to see
     /// at all, DESIGN.md §1.2), never exceed them.
     pub gap_tokens: u64,
+    /// How many of the table's own stores actually reported a cost
+    /// (DESIGN.md's Cost section: "when only some effects report a
+    /// cost, the figure is marked as partial") -- `cost_reporting ==
+    /// cost_stores` means every store did, never more.
+    pub cost_reporting: u64,
+    pub cost_stores: u64,
+}
+
+impl StoresFooter {
+    /// `$4.20`, or `$4.20 (from 3 of 9 stores)` once some stores
+    /// never reported a cost at all -- `None` when nothing has
+    /// reported one yet, same as [`crate::screens::effective_cost_
+    /// usd`]'s own "never shown as $0.00" rule.
+    pub fn cost_label(&self) -> Option<String> {
+        let cost = self.run_cost_usd?;
+        if self.cost_reporting < self.cost_stores {
+            Some(format!(
+                "${cost:.2} (from {} of {} stores)",
+                self.cost_reporting, self.cost_stores
+            ))
+        } else {
+            Some(format!("${cost:.2}"))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -102,13 +126,21 @@ pub fn largest_stores(
             // itself uses, so the footer's own "run totals" agree
             // with the header's `\u2191`/`\u2193` the whole time, not only
             // once the run has ended.
-            let (sent, received) = flat.values().fold((0u64, 0u64), |(s, r), node| {
-                let (ns, nr) = node_tokens(&node.meta);
-                (s + ns, r + nr)
-            });
-            (sent, received, None)
+            let (sent, received, cost) =
+                flat.values().fold((0u64, 0u64, 0.0f64), |(s, r, c), node| {
+                    let (ns, nr) = node_tokens(&node.meta);
+                    let nc = node
+                        .meta
+                        .get("cost_usd")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0);
+                    (s + ns, r + nr, c + nc)
+                });
+            (sent, received, (cost > 0.0).then_some(cost))
         });
     let gap_tokens = (run_sent + run_received).saturating_sub(table_tokens);
+    let cost_reporting = rows.iter().filter(|r| r.cost_usd.is_some()).count() as u64;
+    let cost_stores = rows.len() as u64;
 
     LargestStores {
         rows,
@@ -117,6 +149,8 @@ pub fn largest_stores(
             run_tokens_received: run_received,
             run_cost_usd,
             gap_tokens,
+            cost_reporting,
+            cost_stores,
         },
     }
 }
@@ -374,6 +408,55 @@ mod tests {
                 ]
             }}}
         })
+    }
+
+    #[test]
+    fn the_cost_label_marks_itself_partial_when_not_every_store_reported_one() {
+        let state = json!({
+            "prime": {"value": null, "meta": {"completed_at": "t1"},
+                "plan": prompt(100, 50, Some(1.5), "t1"),
+                "review": prompt(10, 5, Some(1.2), "t1"),
+                "polish": prompt(10, 5, None, "t1")
+            },
+            "runtime": {"last_run": {"totals": {"tokens_sent": 120, "tokens_received": 60, "cost_usd": 2.7}}}
+        });
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.footer.cost_reporting, 2);
+        assert_eq!(result.footer.cost_stores, 3);
+        assert_eq!(
+            result.footer.cost_label(),
+            Some("$2.70 (from 2 of 3 stores)".to_string())
+        );
+    }
+
+    #[test]
+    fn the_cost_label_has_no_coverage_note_once_every_store_reported_one() {
+        let state = json!({
+            "prime": {"value": null, "meta": {"completed_at": "t1"},
+                "plan": prompt(100, 50, Some(1.5), "t1")
+            },
+            "runtime": {"last_run": {"totals": {"tokens_sent": 100, "tokens_received": 50, "cost_usd": 1.5}}}
+        });
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        assert_eq!(result.footer.cost_label(), Some("$1.50".to_string()));
+    }
+
+    #[test]
+    fn the_cost_label_is_none_before_any_store_has_reported_one() {
+        let state = json!({
+            "prime": {"value": null, "meta": {"completed_at": "t1"},
+                "plan": prompt(100, 50, None, "t1")
+            }
+        });
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let result = largest_stores("prime", &flat, &statuses, Some(&state));
+        assert_eq!(result.footer.cost_label(), None);
     }
 
     #[test]

@@ -1928,8 +1928,9 @@ fn draw_cost_table(
         oscilloscope_core::format::format_tokens(footer.run_tokens_sent),
         oscilloscope_core::format::format_tokens(footer.run_tokens_received),
     );
-    if let Some(cost) = footer.run_cost_usd {
-        footer_line.push_str(&format!("  ${cost:.2}"));
+    if let Some(cost_label) = footer.cost_label() {
+        footer_line.push_str("  ");
+        footer_line.push_str(&cost_label);
     }
     lines.push(Line::styled(
         footer_line,
