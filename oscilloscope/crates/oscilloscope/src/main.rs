@@ -1198,6 +1198,8 @@ fn finish_run(
                     run_dir,
                     model,
                 ),
+                kind: oscilloscope_core::diff::LogKind::RunEnd,
+                path: None,
             })
         });
     if let Some(line) = summary {
@@ -3421,6 +3423,8 @@ fn finish_watch(
                     run_dir,
                     model,
                 ),
+                kind: oscilloscope_core::diff::LogKind::RunEnd,
+                path: None,
             })
         });
     if let Some(line) = summary {

@@ -18,11 +18,35 @@ use crate::plan::PlanTree;
 /// One line of the `--log` stream (DESIGN.md §2.4, §6.2). `ts` is the
 /// event's own timestamp (`meta.created_at`/`completed_at`, never when
 /// osi noticed the change) — `None` only for the final run-summary
-/// line when no timestamp is available at all.
+/// line when no timestamp is available at all. `--log` itself prints
+/// only `ts`/`text`, byte for byte as before (issue #635) — `kind`
+/// and `path` exist purely for a front end (the Flow screen's story)
+/// to classify a line without re-parsing `text`'s own glyph prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogLine {
     pub ts: Option<String>,
     pub text: String,
+    pub kind: LogKind,
+    /// The line's own dotted path, when it has one — `None` for a
+    /// run-start/run-end line, which names no step.
+    pub path: Option<String>,
+}
+
+/// A [`LogLine`]'s own category (issue #635's story: "run start, each
+/// decision, each report, each failure, run end", oldest first) —
+/// every other kind (`Start`/`End`/`Progress`/`Retry`) still gets a
+/// `LogLine` for `--log`, just never one the story keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogKind {
+    RunStart,
+    RunEnd,
+    Start,
+    End,
+    Failure,
+    Decision,
+    Progress,
+    Retry,
+    Report,
 }
 
 /// Parses an RFC-3339 timestamp from either source format this crate
@@ -522,6 +546,8 @@ impl Differ {
                         pending_end.duration,
                         result_summary(node)
                     ),
+                    kind: LogKind::End,
+                    path: Some(pending_end.path.clone()),
                 });
                 continue;
             }
@@ -529,6 +555,8 @@ impl Differ {
                 resolved.push(LogLine {
                     ts: Some(pending_end.ts),
                     text: format!("✓ {}  {}  ok", pending_end.path, pending_end.duration),
+                    kind: LogKind::End,
+                    path: Some(pending_end.path.clone()),
                 });
                 continue;
             }
@@ -563,6 +591,8 @@ impl Differ {
             resolved.push(LogLine {
                 ts: Some(pending_end.ts),
                 text,
+                kind: LogKind::End,
+                path: Some(pending_end.path.clone()),
             });
         }
         resolved
@@ -623,6 +653,8 @@ impl Differ {
                 vec![LogLine {
                     ts: Some(ts.clone()),
                     text: format!("▶ {path}  {summary}"),
+                    kind: LogKind::Start,
+                    path: Some(path.clone()),
                 }]
             }
             Event::End {
@@ -667,6 +699,8 @@ impl Differ {
                         return vec![LogLine {
                             ts: Some(ts.clone()),
                             text: format!("✗ {path}  {}", truncate_chars(message, 120)),
+                            kind: LogKind::Failure,
+                            path: Some(path.clone()),
                         }];
                     }
                     return Vec::new();
@@ -679,6 +713,8 @@ impl Differ {
                         return vec![LogLine {
                             ts: Some(ts.clone()),
                             text: format!("✓ {path}  {duration}  {}", result_summary(node)),
+                            kind: LogKind::End,
+                            path: Some(path.clone()),
                         }];
                     }
                     // Neither `last` nor `preview` has this path's
@@ -705,6 +741,8 @@ impl Differ {
                         truncate_chars(message, 120),
                         on_error_suffix(path, plan)
                     ),
+                    kind: LogKind::Failure,
+                    path: Some(path.clone()),
                 }]
             }
             Event::Report {
@@ -719,11 +757,15 @@ impl Differ {
                 vec![LogLine {
                     ts: Some(ts.clone()),
                     text: report_line(*level, message, data.as_ref(), *data_truncated),
+                    kind: LogKind::Report,
+                    path: Some(path.clone()),
                 }]
             }
             Event::RunStart { ts, run_id, .. } => vec![LogLine {
                 ts: Some(ts.clone()),
                 text: format!("■ run started  {run_id}"),
+                kind: LogKind::RunStart,
+                path: None,
             }],
             Event::RunEnd { .. } => Vec::new(),
             _ => Vec::new(),
@@ -799,6 +841,8 @@ impl Differ {
         Some(LogLine {
             ts: run_ts,
             text: format!("■ run {status_text}{totals_text}"),
+            kind: LogKind::RunEnd,
+            path: None,
         })
     }
 
@@ -884,6 +928,8 @@ impl Differ {
                             lines.push(LogLine {
                                 ts: node.created_at.clone(),
                                 text: format!("◆ {path} → {branch}"),
+                                kind: LogKind::Decision,
+                                path: Some(path.clone()),
                             });
                         }
                         if let (Some(done), Some(total)) = (node.progress_done, node.progress_total)
@@ -898,6 +944,8 @@ impl Differ {
                                     .clone()
                                     .or_else(|| node.created_at.clone()),
                                 text: format!("⟳ {path} pass {done}/{total}  ETA {eta}"),
+                                kind: LogKind::Progress,
+                                path: Some(path.clone()),
                             });
                         }
                         continue;
@@ -910,11 +958,15 @@ impl Differ {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
                             text: format!("▶ {path}  {}", summary_for(node, path, plan)),
+                            kind: LogKind::Start,
+                            path: Some(path.clone()),
                         });
                     } else {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
                             text: format!("▶ {path}  {}", summary_for(node, path, plan)),
+                            kind: LogKind::Start,
+                            path: Some(path.clone()),
                         });
                         lines.push(end_line(path, node, plan));
                     }
@@ -936,6 +988,8 @@ impl Differ {
                                         "▶ {path} #{pass}  {}",
                                         summary_for(node, path, plan)
                                     ),
+                                    kind: LogKind::Start,
+                                    path: Some(path.clone()),
                                 });
                                 lines.push(end_line_numbered(path, node, plan, *pass));
                             } else if prev.completed_at != node.completed_at {
@@ -949,6 +1003,8 @@ impl Differ {
                                 lines.push(LogLine {
                                     ts: prev.completed_at.clone(),
                                     text: format!("↻ {path} retry"),
+                                    kind: LogKind::Retry,
+                                    path: Some(path.clone()),
                                 });
                                 lines.push(end_line(path, node, plan));
                             }
@@ -974,6 +1030,8 @@ impl Differ {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
                             text: format!("↻ {path} retry"),
+                            kind: LogKind::Retry,
+                            path: Some(path.clone()),
                         });
                     }
                     // The current rule (#421): created_at never moves between
@@ -989,6 +1047,8 @@ impl Differ {
                         lines.push(LogLine {
                             ts: prev.completed_at.clone(),
                             text: format!("↻ {path} retry"),
+                            kind: LogKind::Retry,
+                            path: Some(path.clone()),
                         });
                     }
 
@@ -996,6 +1056,8 @@ impl Differ {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
                             text: format!("◆ {path} → {}", node.branch.as_deref().unwrap_or("")),
+                            kind: LogKind::Decision,
+                            path: Some(path.clone()),
                         });
                     }
 
@@ -1012,6 +1074,8 @@ impl Differ {
                                     .clone()
                                     .or_else(|| node.created_at.clone()),
                                 text: format!("⟳ {path} pass {done}/{total}  ETA {eta}"),
+                                kind: LogKind::Progress,
+                                path: Some(path.clone()),
                             });
                         }
                     }
@@ -1044,6 +1108,8 @@ impl Differ {
                                 "✗ {path}  {}",
                                 truncate_chars(node.error.as_deref().unwrap_or(""), 120)
                             ),
+                            kind: LogKind::Failure,
+                            path: Some(path.clone()),
                         });
                     }
                 }
@@ -1075,6 +1141,7 @@ fn end_line_numbered(path: &str, node: &NodeMeta, plan: &PlanTree, pass: u32) ->
 
 fn end_line_impl(path: &str, node: &NodeMeta, plan: &PlanTree, pass: Option<u32>) -> LogLine {
     let suffix = pass.map(|p| format!(" #{p}")).unwrap_or_default();
+    let failed = node.error.is_some();
     let text = if let Some(error) = &node.error {
         format!(
             "✗ {path}{suffix}  {}{}",
@@ -1091,6 +1158,12 @@ fn end_line_impl(path: &str, node: &NodeMeta, plan: &PlanTree, pass: Option<u32>
     LogLine {
         ts: node.completed_at.clone(),
         text,
+        kind: if failed {
+            LogKind::Failure
+        } else {
+            LogKind::End
+        },
+        path: Some(path.to_string()),
     }
 }
 
@@ -1198,7 +1271,9 @@ mod tests {
             lines,
             vec![LogLine {
                 ts: Some("t".to_string()),
-                text: "■ run started  abc123".to_string()
+                text: "■ run started  abc123".to_string(),
+                kind: LogKind::RunStart,
+                path: None,
             }]
         );
     }
@@ -2330,10 +2405,40 @@ mod tests {
             }
         }});
         let lines = differ.diff(&state, &PlanTree::empty());
-        assert!(
-            lines.iter().any(|l| l.text == "◆ prime.gate → then"),
-            "{lines:?}"
-        );
+        let decision = lines
+            .iter()
+            .find(|l| l.text == "◆ prime.gate → then")
+            .unwrap_or_else(|| panic!("{lines:?}"));
+        assert_eq!(decision.kind, LogKind::Decision);
+        assert_eq!(decision.path.as_deref(), Some("prime.gate"));
+    }
+
+    /// Issue #635: every `LogLine` carries a `kind`/`path` the story
+    /// can classify without reparsing `text`'s own glyph, but `--log`
+    /// itself still prints only `ts`/`text` (`print_line` in osi's
+    /// own `main.rs`), so this never changes `--log`'s own output.
+    #[test]
+    fn log_lines_carry_their_own_kind_and_path_for_start_end_and_failure() {
+        let mut differ = Differ::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let lines = differ.diff(&state, &PlanTree::empty());
+        let start = lines.iter().find(|l| l.text.starts_with('▶')).unwrap();
+        assert_eq!(start.kind, LogKind::Start);
+        assert_eq!(start.path.as_deref(), Some("prime.a"));
+        let end = lines.iter().find(|l| l.text.starts_with('✓')).unwrap();
+        assert_eq!(end.kind, LogKind::End);
+        assert_eq!(end.path.as_deref(), Some("prime.a"));
+
+        let mut differ2 = Differ::new();
+        let failing = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+        }});
+        let fail_lines = differ2.diff(&failing, &PlanTree::empty());
+        let failure = fail_lines.iter().find(|l| l.text.starts_with('✗')).unwrap();
+        assert_eq!(failure.kind, LogKind::Failure);
+        assert_eq!(failure.path.as_deref(), Some("prime.a"));
     }
 
     #[test]

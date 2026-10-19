@@ -127,7 +127,7 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diff::LogLine;
+    use crate::diff::{LogKind, LogLine};
     use crate::model::{ProcessState, RunModel, StatusKind};
     use crate::plan::PlanTree;
     use serde_json::json;
@@ -337,6 +337,8 @@ mod tests {
             &[LogLine {
                 ts: None,
                 text: "first".into(),
+                kind: LogKind::Report,
+                path: None,
             }],
         );
         let new = crate::render::build(
@@ -352,10 +354,14 @@ mod tests {
                 LogLine {
                     ts: None,
                     text: "first".into(),
+                    kind: LogKind::Report,
+                    path: None,
                 },
                 LogLine {
                     ts: None,
                     text: "second".into(),
+                    kind: LogKind::Report,
+                    path: None,
                 },
             ],
         );

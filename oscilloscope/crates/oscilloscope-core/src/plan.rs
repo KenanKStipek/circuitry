@@ -2615,10 +2615,7 @@ mod tests {
     }
 
     fn block(ops: Vec<Op>) -> Region {
-        Region::Block {
-            ops,
-            overlay: true,
-        }
+        Region::Block { ops, overlay: true }
     }
 
     fn program_with_root(root: Op) -> Program {
