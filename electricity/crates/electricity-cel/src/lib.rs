@@ -451,28 +451,40 @@ fn check_parity_nesting(expr: &str) -> Result<(), CelError> {
 }
 
 fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
-    let program = env.compile(expr).map_err(|e| {
+    env.compile(expr).map_err(|e| {
         CelError::new(
             expr,
             format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
         )
-    })?;
-    // A direct user call to one of this crate's own reserved
-    // `__electricity_*` names (issue #400) -- fails the same way `cel`'s
-    // own evaluator fails any other undeclared function, rather than
-    // reaching one of `equality`/`ordering`/`indexing`'s own registered
-    // handlers, which assume only `paths::rewrite`'s own substitutions
-    // and `has()`'s own macro expansion ever call them.
-    if let Some(name) = paths::reserved_call_name(program.expression()) {
-        return Err(CelError::new(
-            expr,
-            format!(
-                "CEL evaluation failed for {}: Undeclared reference to '{name}'",
-                py_repr(expr)
-            ),
-        ));
-    }
-    Ok(program)
+    })
+}
+
+/// The inner text (no `"CEL evaluation failed for ..."` wrapper) for a
+/// direct user call to one of this crate's own reserved
+/// `__electricity_*` names, if *original* (the tree [`compile`]
+/// returned, *before* [`paths::rewrite`]'s own substitutions run --
+/// those substitutions produce exactly these names themselves, so
+/// checking the rewritten tree here would flag its own output) has one
+/// ([`paths::reserved_call_name`], issue #400) -- worded like `cel`'s
+/// own evaluator words any other undeclared function, rather than
+/// reaching one of `equality`/`ordering`/`indexing`'s own registered
+/// handlers, which assume only [`paths::rewrite`]'s own substitutions
+/// and `has()`'s own macro expansion ever call them. Checked right
+/// where [`evaluate_condition`]/[`evaluate_expect`] would otherwise call
+/// `cel::Value::resolve` -- celpy's own equivalent failure (a plain
+/// `KeyError` resolving the name) only ever surfaces at that same
+/// point, `compiled.runner.evaluate`, never at `_compile`'s own parse
+/// step, so a reserved-name call that also reads an unresolved `state.`
+/// path must lose to [`evaluate_condition`]'s own absent-path
+/// short-circuit exactly as it would in Python -- never checked any
+/// earlier. Callers build the same `"CEL evaluation failed for
+/// ..."`-wrapped [`CelError`] every other evaluation failure gets;
+/// [`evaluate_condition`]'s own call site also logs this inner text,
+/// the same way `cel::Value::resolve`'s own failure right below it
+/// does.
+fn reserved_call_message(original: &cel::common::ast::IdedExpr) -> Option<String> {
+    let name = paths::reserved_call_name(original)?;
+    Some(format!("Undeclared reference to '{name}'"))
 }
 
 /// `core/cel_eval.py`'s `ValueError("overflow")` for a `Value::Int` too
@@ -629,6 +641,21 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
         convert_err(expr, e)
     })?;
     ctx.add_variable_from_value("state", converted_state);
+    if let Some(message) = reserved_call_message(program.expression()) {
+        // Same `logger.error` celpy's own evaluation failure below gets
+        // (module docs on `reserved_call_message`): celpy's undeclared-
+        // reference `KeyError` only ever surfaces from
+        // `compiled.runner.evaluate`, the same call the genuine
+        // `Value::resolve` failure right below is caught from.
+        log::error!(
+            "CEL evaluation failed for expr {}: {message}",
+            py_repr(expr)
+        );
+        return Err(CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {message}", py_repr(expr)),
+        ));
+    }
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
         // evaluation failed for expr %r: %s", expr, exc)` -- an `if`/
@@ -697,6 +724,15 @@ pub fn evaluate_expect(
         "state",
         convert::to_cel(state).map_err(|e| convert_err(expr, e))?,
     );
+    // No logging here either, matching `evaluate_condition`'s own
+    // check right before `cel::Value::resolve` below: celpy's
+    // `evaluate_cel_expect` never calls `logger.error`.
+    if let Some(message) = reserved_call_message(program.expression()) {
+        return Err(CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {message}", py_repr(expr)),
+        ));
+    }
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
         CelError::new(
             expr,

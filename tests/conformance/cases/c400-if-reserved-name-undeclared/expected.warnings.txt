@@ -1,0 +1,2 @@
+ERROR: <THIRD_PARTY_TEXT>
+WARNING: Conditional 'gate': condition failed (<THIRD_PARTY_TEXT>
