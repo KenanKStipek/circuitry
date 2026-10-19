@@ -121,6 +121,18 @@ pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
     Some(zone.local(utc).format("%H:%M:%S").to_string())
 }
 
+/// The midpoint between `start_ts` and `end_ts`, formatted the same
+/// way [`format_clock_time`] formats either end (the Cost screen's
+/// own chart axis, DESIGN.md: "a clock axis from the run's start to
+/// now") -- `None` when either timestamp fails to parse.
+pub fn midpoint_clock_time(start_ts: &str, end_ts: &str, zone: &dyn ClockZone) -> Option<String> {
+    let start = chrono::DateTime::parse_from_rfc3339(start_ts).ok()?;
+    let end = chrono::DateTime::parse_from_rfc3339(end_ts).ok()?;
+    let mid = start + (end - start) / 2;
+    let utc = mid.with_timezone(&chrono::Utc);
+    Some(zone.local(utc).format("%H:%M:%S").to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +278,23 @@ mod tests {
     fn clock_time_rejects_unparseable_timestamps() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
         assert_eq!(format_clock_time("not a timestamp", &utc), None);
+    }
+
+    #[test]
+    fn midpoint_clock_time_halves_the_span() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        assert_eq!(
+            midpoint_clock_time("2026-10-08T11:00:00Z", "2026-10-08T12:00:00Z", &utc).unwrap(),
+            "11:30:00"
+        );
+    }
+
+    #[test]
+    fn midpoint_clock_time_rejects_unparseable_timestamps() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        assert_eq!(
+            midpoint_clock_time("not a timestamp", "2026-10-08T12:00:00Z", &utc),
+            None
+        );
     }
 }

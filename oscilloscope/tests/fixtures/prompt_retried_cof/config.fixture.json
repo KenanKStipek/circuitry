@@ -1,0 +1,1 @@
+{"default_adapter": "scripted", "default_model": "scripted-model", "runtime": {"adapters": {"scripted": {"replies_file": "replies.yaml"}}}}

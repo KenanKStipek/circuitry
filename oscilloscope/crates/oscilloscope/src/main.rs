@@ -1554,9 +1554,52 @@ fn build_overview_if_active(
         model,
         state,
         &render_state.token_bar,
-        &render_state.treemap,
         log_lines,
         app.selected_path.as_deref(),
+        now,
+    ))
+}
+
+/// Screen 3's own model (issue #632), built only while it's actually
+/// on display -- the same performance rule `build_overview_if_active`
+/// follows, and rebuilt at the same points that one is (a rebuild, or
+/// a key that could have changed the screen, the measure or the
+/// zoom). `statuses` comes straight from `render_state.unfolded_rows`
+/// rather than a second `RunModel::observe` call: every path the
+/// by-store tree could ever ask about already has a row (and so a
+/// status) there, since `render::build_rows` walks the identical
+/// path universe.
+fn build_cost_screen_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    state: Option<&serde_json::Value>,
+    now: &str,
+) -> Option<oscilloscope_core::screens::CostScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Cost {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    let statuses: std::collections::BTreeMap<String, oscilloscope_core::model::RowStatus> =
+        render_state
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.status.clone()))
+            .collect();
+    let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+        render_state
+            .unfolded_rows
+            .iter()
+            .map(|r| (r.path.clone(), r.kind))
+            .collect();
+    Some(oscilloscope_core::screens::build_cost_screen(
+        &render_state.rows,
+        &render_state.header,
+        &flat,
+        &statuses,
+        &kinds,
+        state,
+        app.cost_measure,
         now,
     ))
 }
@@ -1639,6 +1682,7 @@ fn run_tui(
     let start = Instant::now();
 
     let mut app = App::new(false);
+    let mut cost_layout = tui::CostLayoutCache::default();
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
 
@@ -1769,6 +1813,8 @@ fn run_tui(
         &log_lines,
         &now_str,
     );
+    let mut cost_screen =
+        build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
     // `current_state: None`, before the loop has polled anything),
@@ -1946,6 +1992,8 @@ fn run_tui(
                 &log_lines,
                 &now_str,
             );
+            cost_screen =
+                build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
@@ -1977,12 +2025,17 @@ fn run_tui(
                             )
                             .is_some()
                         });
+                        let cost_tree: &[oscilloscope_core::treemap::TreemapNode] = cost_screen
+                            .as_ref()
+                            .map(|c| c.tree.as_slice())
+                            .unwrap_or(&[]);
                         match app.handle_key(
                             key,
                             &visible,
                             &state_visible,
                             running,
                             has_prompt_sent,
+                            cost_tree,
                         ) {
                             keys::Action::Cancel => {
                                 cancel_once(
@@ -2082,6 +2135,12 @@ fn run_tui(
                             &log_lines,
                             &now_str,
                         );
+                        cost_screen = build_cost_screen_if_active(
+                            &app,
+                            &render_state,
+                            current_state.as_ref(),
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -2151,6 +2210,8 @@ fn run_tui(
                     icon_frame,
                     &now_str,
                     overview.as_ref(),
+                    cost_screen.as_ref(),
+                    &mut cost_layout,
                 );
             });
             last_draw = Instant::now();
@@ -2749,6 +2810,7 @@ fn run_tui_watch(
     let start = Instant::now();
 
     let mut app = App::new(true);
+    let mut cost_layout = tui::CostLayoutCache::default();
 
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
@@ -2859,6 +2921,8 @@ fn run_tui_watch(
         &log_lines,
         &now_str,
     );
+    let mut cost_screen =
+        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
@@ -3055,6 +3119,8 @@ fn run_tui_watch(
                 &log_lines,
                 &now_str,
             );
+            cost_screen =
+                build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
@@ -3086,8 +3152,18 @@ fn run_tui_watch(
                             )
                             .is_some()
                         });
-                        match app.handle_key(key, &visible, &state_visible, false, has_prompt_sent)
-                        {
+                        let cost_tree: &[oscilloscope_core::treemap::TreemapNode] = cost_screen
+                            .as_ref()
+                            .map(|c| c.tree.as_slice())
+                            .unwrap_or(&[]);
+                        match app.handle_key(
+                            key,
+                            &visible,
+                            &state_visible,
+                            false,
+                            has_prompt_sent,
+                            cost_tree,
+                        ) {
                             keys::Action::Quit => {
                                 // Finding 15: `q` while the watched
                                 // run is still going is a voluntary
@@ -3149,6 +3225,12 @@ fn run_tui_watch(
                             &log_lines,
                             &now_str,
                         );
+                        cost_screen = build_cost_screen_if_active(
+                            &app,
+                            &render_state,
+                            last_state.as_ref(),
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -3207,6 +3289,8 @@ fn run_tui_watch(
                     icon_frame,
                     &now_str,
                     overview.as_ref(),
+                    cost_screen.as_ref(),
+                    &mut cost_layout,
                 );
             });
             last_draw = Instant::now();
@@ -3502,6 +3586,7 @@ mod tests {
             &[&status_row],
             true,
             false,
+            &[],
         );
         assert_eq!(
             details_selection_path(&app).as_deref(),
