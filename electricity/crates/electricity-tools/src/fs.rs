@@ -631,7 +631,7 @@ pub(crate) fn py_is_file(path: &Path, display: &str) -> Result<bool, ToolError> 
 /// `Path.mkdir(parents=True, exist_ok=True)` (CPython's own
 /// `pathlib._local.Path.mkdir`), ported exactly so a failure names the
 /// *directory that actually failed* rather than always the original
-/// write's own leaf path (issue #460's own fix-pass finding 7): try
+/// write's own leaf path (issue #460's own fix pass): try
 /// creating *path* itself first; on `ENOENT` (a missing parent),
 /// recurse into the parent and retry; on any other `OSError`, swallow
 /// it only if *path* already is a directory (the race-safe `exist_ok`

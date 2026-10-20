@@ -8,7 +8,7 @@
 //! that happens one layer up, in `electricity_vm::exec::tool::
 //! execute_tool`'s own dispatch `select!`, which drops the in-flight
 //! call's own future the instant the token is cancelled rather than
-//! waiting for it to finish (PR #441 review finding 12 corrected this
+//! waiting for it to finish (PR #441 corrected this
 //! doc comment's own earlier, wrong claim that a signal lets the call
 //! run to completion -- `exec/tool.rs`'s own `select!` around
 //! `run_tool` is the real behaviour). `finally:` still runs afterwards

@@ -591,7 +591,7 @@ async fn connect_tunnel(
 /// own per-phase deadlines of the same duration -- each phase alone
 /// can never exceed the total, and this outer wrapper is what catches
 /// several phases each individually under the limit but summing past
-/// it (issue #485 review finding 13; this lane's own caller,
+/// it (issue #485; this lane's own caller,
 /// `src/http.rs`, never builds `Total`, only lane F2's adapters do).
 pub async fn send(
     client: &HttpClient,

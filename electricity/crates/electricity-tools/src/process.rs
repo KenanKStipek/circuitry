@@ -719,8 +719,8 @@ pub fn which(name: &str) -> Option<String> {
 }
 
 /// `shutil.which`'s own `_access_check`: exists, `os.access(path,
-/// os.X_OK)`, and not a directory -- `os.access` (review finding 7 on
-/// PR #467), not a manual permission-bit check: it asks the kernel
+/// os.X_OK)`, and not a directory -- `os.access` (PR #467),
+/// not a manual permission-bit check: it asks the kernel
 /// directly, honouring ACLs/setuid/filesystem mount flags a plain
 /// `mode & 0o111` check can't see.
 fn is_executable_file(path: &std::path::Path) -> bool {

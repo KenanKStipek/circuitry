@@ -32,7 +32,7 @@ const DEFAULT_MAX_ERRORS: i64 = 20;
 /// CPython's own `ValueError` (`day is out of range for month`, ...)
 /// escape uncaught, since it is never a `yaml.YAMLError` that
 /// `_validate_document`'s `except yaml.YAMLError` could catch
-/// (review finding 5 on PR #524).
+/// (PR #524).
 fn validate_document(document: &str, run_compile: bool) -> Result<Vec<String>, ToolError> {
     if electricity_value::pycompat::py_strip(document).is_empty() {
         return Ok(vec![

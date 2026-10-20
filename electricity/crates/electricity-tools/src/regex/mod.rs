@@ -32,7 +32,7 @@
 //!   position of a search, not just the eventual match, and so used
 //!   to fail ordinary multi-hundred-KB inputs through the lookarounds
 //!   this translator emits for `\b`/`\B`/non-MULTILINE `$`/lookbehind
-//!   (PR #480 review, finding R8) even though the real per-character
+//!   (PR #480's review) even though the real per-character
 //!   cost is tiny;
 //! - IGNORECASE: `fancy-regex`'s own Unicode case folding is used
 //!   directly for everything this translator doesn't expand itself

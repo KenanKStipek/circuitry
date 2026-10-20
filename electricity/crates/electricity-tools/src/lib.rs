@@ -51,7 +51,7 @@ pub mod validate_yaml;
 
 /// The one canonical Python-exception-class-name enum every crate that
 /// needs to report one shares -- `electricity_value::pycompat::PyExc`'s
-/// own doc comment; review finding 1 on PR #454: this crate and
+/// own doc comment; PR #454: this crate and
 /// `electricity-vm::adapter` each used to keep their own copy.
 pub use electricity_value::pycompat::PyExc;
 pub use registry::{build_plugin, supported_names};
