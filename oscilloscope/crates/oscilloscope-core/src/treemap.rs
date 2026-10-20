@@ -646,6 +646,17 @@ fn leaf_node_for_measure(
         // when done" from a leaf whose `total` is honestly zero never
         // has to subtract this floor back out again.
         let total = own_measure_value(node, measure);
+        // Issue #637: a running agent's own live token count
+        // (`meta.live.tokens_sent`, the one figure the agent tool
+        // reports continuously) replaces the placeholder floor for
+        // `Measure::Total`/`Measure::In` -- `tokens_sent` is "input
+        // tokens" either way, so it is the right figure under both.
+        // Other measures (`Out`/`Cost`) have no live equivalent
+        // (`docs/plugins/agent.md`) and keep the placeholder.
+        let live_tokens = matches!(measure, Measure::Total | Measure::In)
+            .then(|| node.live.as_ref().and_then(|live| live.tokens_sent))
+            .flatten();
+        let total = live_tokens.map_or(total, |live_tokens| total.max(live_tokens));
         let weight = total.max(RUNNING_PLACEHOLDER_WEIGHT);
         return Some(TreemapNode {
             key,
@@ -1277,6 +1288,48 @@ mod tests {
             "nothing reported yet is honestly zero, not a boosted number"
         );
         assert_eq!(excluded, 0, "a running store is never counted as excluded");
+    }
+
+    /// Issue #637: a running agent's own tile sizes itself from
+    /// `meta.live.tokens_sent`, not the bare placeholder floor -- the
+    /// one figure `docs/plugins/agent.md`'s live summary reports
+    /// continuously.
+    #[test]
+    fn a_running_agents_tile_sizes_from_its_own_live_tokens_sent() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fix": {"value": null, "meta": {
+                "created_at": "t0",
+                "completed_at": serde_json::Value::Null,
+                "provider": "agent",
+                "live": {"tokens_sent": 2_100_000},
+            }},
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        statuses.insert(
+            "prime.fix".to_string(),
+            crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+        );
+        let (top, excluded) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].total, 2_100_000, "sizes from the live figure, not 0");
+        assert_eq!(excluded, 0);
+
+        // `Measure::Out` has no live equivalent (`docs/plugins/
+        // agent.md`): the running tile stays at the placeholder,
+        // honestly reporting nothing yet, same as before this issue.
+        let (out_top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Out);
+        assert_eq!(out_top[0].total, 0);
     }
 
     #[test]
