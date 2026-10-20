@@ -367,7 +367,34 @@ pub fn build_time_rows(
             // event-sourced end of its own, which a `use` step right
             // after it could, by a few milliseconds of clock skew
             // between the two logs, start running before.
-            let unnamed_loop_body = model.has_events() && plan.is_unnamed_loop_body_path(&row.path);
+            // Issue #654: a single pass attempt at this path (one
+            // finished interval, nothing else open) is no pass count
+            // of its own, just the one time this path happened to
+            // run so far (`if: then: [loop: [a]] else: [a]` taking
+            // `else` must not read `a` as `⟲ 1/1`) -- the same
+            // "more than one" rule `loop_is_expandable` already
+            // requires, widened to count a currently open pass too
+            // (a second pass already running, with the first
+            // finished, is still genuinely more than one, same as
+            // `expand_unnamed_loop`'s own "one row per logged
+            // interval, plus one more for each pass currently open"
+            // already treats it). `row.kind != RowKind::Loop` is what
+            // keeps a *named* loop directly inside the unnamed one's
+            // own body (sharing its path with the body, same as any
+            // other leaf would) from having its own real `⟲` count
+            // replaced by the outer loop's -- only a genuine
+            // unnamed-loop body row, never a named loop's own
+            // container row, ever takes this path at all.
+            let unnamed_loop_body = row.kind != RowKind::Loop
+                && model.has_events()
+                && plan.is_unnamed_loop_body_path(&row.path)
+                && model
+                    .step_intervals()
+                    .iter()
+                    .filter(|i| i.path == row.path)
+                    .count()
+                    + model.open_starts_at(&row.path).len()
+                    > 1;
             let first_pass = unnamed_loop_body
                 .then(|| unnamed_loop_first_pass_start(&row.path, model, run_start_ts))
                 .flatten();
@@ -386,8 +413,25 @@ pub fn build_time_rows(
                             // loop while it's still running -- shown
                             // as `?` until the last pass finishes,
                             // with the one in progress not counted
-                            // among `done`.
-                            total: (row.status.kind != StatusKind::Running).then_some(count as u64),
+                            // among `done`. Issue #654: decided from
+                            // whether the loop itself is still going
+                            // (a running-type status, or an event-
+                            // sourced pass still open), not from this
+                            // one row's own momentary status -- a
+                            // chain loop's shared body path can read
+                            // plain `Done` for a moment between two
+                            // passes, right after one ends and before
+                            // the next one's own `Start` event lands.
+                            total: {
+                                let loop_still_running =
+                                    matches!(
+                                        row.status.kind,
+                                        StatusKind::Running
+                                            | StatusKind::LikelyRunning
+                                            | StatusKind::RunningOrQueued
+                                    ) || !model.open_starts_at(&row.path).is_empty();
+                                (!loop_still_running).then_some(count as u64)
+                            },
                             eta_s: None,
                         }),
                     )
@@ -2636,6 +2680,52 @@ mod tests {
         assert_eq!(passes[1].label, "#2");
     }
 
+    /// Issue #654: between two chain passes, this path's own row can
+    /// read `Done` for a moment (the previous pass's own state,
+    /// right after it ends and before the next one's `Start` event
+    /// lands) -- an event-sourced open start the row's own momentary
+    /// status can't see yet still correctly keeps the total unknown.
+    #[test]
+    fn an_unnamed_loops_progress_stays_unknown_with_an_open_start_events_know_about() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        // The row's own status, read from state alone, momentarily
+        // says `Done` -- state hasn't caught up with the second
+        // pass's own start yet, even though events already have.
+        let mut done_row = tool_row("prime.u_nap");
+        done_row.status.kind = StatusKind::Done;
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let time_rows =
+            build_time_rows(&[done_row], &flat, &model, &plan, &header, &BTreeMap::new());
+        let progress = time_rows[0]
+            .loop_progress
+            .expect("an unnamed loop with logged passes has progress");
+        assert_eq!(progress.done, 1);
+        assert_eq!(
+            progress.total, None,
+            "an open start proves the loop is still going, whatever this row's own momentary status says"
+        );
+    }
+
     #[test]
     fn an_unnamed_loops_progress_shows_unknown_total_while_a_pass_runs() {
         let plan = unnamed_loop_plan();
@@ -2694,6 +2784,93 @@ mod tests {
             progress.total,
             Some(2),
             "once the loop ends, the total is the real count"
+        );
+    }
+
+    /// Issue #654: a single interval ever logged at an unnamed loop's
+    /// own body path is no pass count of its own -- the same path
+    /// taken once by something else entirely (`if: then: [loop: [a]]
+    /// else: [a]`, taking `else`) must not read `⟲ 1/1` on `a`.
+    #[test]
+    fn an_unnamed_loop_body_path_taken_only_once_shows_no_progress() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        let mut done_row = tool_row("prime.u_nap");
+        done_row.status.kind = StatusKind::Done;
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let time_rows =
+            build_time_rows(&[done_row], &flat, &model, &plan, &header, &BTreeMap::new());
+        assert_eq!(
+            time_rows[0].loop_progress, None,
+            "a single pass attempt is not a loop count of its own"
+        );
+    }
+
+    /// Issue #654: a named loop directly inside an unnamed loop's own
+    /// body shares that body's own path, but it is still a real
+    /// `RowKind::Loop` row with real progress of its own -- the
+    /// outer unnamed loop's own pass count must never replace it.
+    #[test]
+    fn a_named_loop_inside_an_unnamed_loops_body_keeps_its_own_progress() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        for (id, (start, end)) in [
+            (1, ("2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z")),
+            (2, ("2026-01-01T00:00:05Z", "2026-01-01T00:00:10Z")),
+        ] {
+            model.observe_event(&crate::observe::Event::Start {
+                ts: start.to_string(),
+                id: Some(id),
+                path: "prime.u_nap".to_string(),
+            });
+            model.observe_event(&crate::observe::Event::End {
+                ts: end.to_string(),
+                id: Some(id),
+                path: "prime.u_nap".to_string(),
+                ok: true,
+                ms: Some(5_000),
+                error: None,
+            });
+        }
+        let mut named_loop_row = tool_row("prime.u_nap");
+        named_loop_row.kind = RowKind::Loop;
+        named_loop_row.loop_progress = Some(LoopProgress {
+            done: 3,
+            total: Some(5),
+            eta_s: None,
+        });
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let time_rows = build_time_rows(
+            &[named_loop_row],
+            &flat,
+            &model,
+            &plan,
+            &header,
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            time_rows[0].loop_progress,
+            Some(LoopProgress {
+                done: 3,
+                total: Some(5),
+                eta_s: None
+            }),
+            "the named loop's own progress must survive, not the outer loop's pass count"
         );
     }
 
