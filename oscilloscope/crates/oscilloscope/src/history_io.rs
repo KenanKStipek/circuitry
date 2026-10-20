@@ -60,14 +60,20 @@ pub fn resolve_run_document_path(orchestration: &Path) -> String {
 /// `osi watch`'s own document key: an absolute `runtime.last_run.
 /// orchestration_path`, else `--plan`, else history is off for this
 /// watch (issue #649's own decision) -- `None` only while there is no
-/// state to decide from yet at all (too early to tell either way).
-/// The caller only warns once, the first time this actually settles
-/// on "off" rather than "not yet known".
+/// state to decide from yet at all (too early to tell either way, and
+/// too early to fall back to `--plan` either: deciding before the
+/// first live-state write exists at all would settle on `--plan` on
+/// the very first frame even when that write, once it arrives, would
+/// have given an absolute path of its own -- `document_settled`
+/// never asks again after this answers once). The caller only warns
+/// once, the first time this actually settles on "off" rather than
+/// "not yet known".
 fn resolve_watch_document_path(
     state: Option<&serde_json::Value>,
     plan_arg: Option<&Path>,
 ) -> Option<Option<String>> {
-    if let Some(path) = state.and_then(oscilloscope_core::model::orchestration_path) {
+    let state = state?;
+    if let Some(path) = oscilloscope_core::model::orchestration_path(state) {
         let path = Path::new(path);
         if path.is_absolute() {
             // Canonicalized the same way `resolve_run_document_path`
@@ -86,7 +92,7 @@ fn resolve_watch_document_path(
         let resolved = std::fs::canonicalize(plan_arg).unwrap_or_else(|_| plan_arg.to_path_buf());
         return Some(Some(resolved.to_string_lossy().into_owned()));
     }
-    state.map(|_| None)
+    Some(None)
 }
 
 /// Run history's own state for one `osi`/`osi watch` invocation
@@ -329,4 +335,43 @@ fn eta_ts_for(seconds: Option<f64>, now: &str) -> Option<String> {
             (now_dt + chrono::Duration::milliseconds((s * 1000.0).round() as i64)).to_rfc3339()
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_watch_document_path_waits_for_the_first_state_before_falling_back_to_plan() {
+        // No state yet at all: too early to tell, even with `--plan`
+        // in hand -- settling here would lock in `--plan` forever
+        // (`document_settled` never asks again), pre-empting an
+        // absolute `orchestration_path` the first real state write
+        // might still give.
+        assert_eq!(
+            resolve_watch_document_path(None, Some(Path::new("/plan.yml"))),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_watch_document_path_prefers_an_absolute_orchestration_path_over_plan() {
+        let state =
+            serde_json::json!({"runtime": {"last_run": {"orchestration_path": "/abs/doc.yml"}}});
+        let resolved = resolve_watch_document_path(Some(&state), Some(Path::new("/plan.yml")));
+        assert_eq!(resolved, Some(Some("/abs/doc.yml".to_string())));
+    }
+
+    #[test]
+    fn resolve_watch_document_path_falls_back_to_plan_when_the_path_is_relative() {
+        let state = serde_json::json!({"runtime": {"last_run": {"orchestration_path": "doc.yml"}}});
+        let resolved = resolve_watch_document_path(Some(&state), Some(Path::new("/plan.yml")));
+        assert_eq!(resolved, Some(Some("/plan.yml".to_string())));
+    }
+
+    #[test]
+    fn resolve_watch_document_path_settles_off_once_state_exists_with_neither() {
+        let state = serde_json::json!({"prime": {"value": null}});
+        assert_eq!(resolve_watch_document_path(Some(&state), None), Some(None));
+    }
 }

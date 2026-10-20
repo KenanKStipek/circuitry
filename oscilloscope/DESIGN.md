@@ -1313,10 +1313,23 @@ interval, and nothing here is built at all for a screen not shown.
   so the two can't disagree about what's running either).
 
 Issue #649: the time card's own `eta_ts` is the same whole-run ETA
-the header falls back to the innermost loop's own for when there
-isn't enough history yet; `vs usual` and the now pane's own p50/p90
-bar are the Time screen's own addition (issue #650), not this
-card's. Below
+history gives the header, in place of the header's own fallback to
+the innermost loop's ETA once there's enough history -- `eta_from_
+history` carries the same three-way choice (history / past usual /
+loop) the header line makes, so the two never disagree. Once it's
+from history, the card also shows `eta_remaining_s` (`(12m)`),
+`vs_usual_s` and `usual_total_s` (`vs usual +3m (p50 45m)`, the gap
+between this run's own elapsed time at its anchor step and the usual
+elapsed time to reach the same point) and the p10/p90 range as clock
+times (`usual 11:58–12:09`); below the run-count threshold it shows
+`history_count` instead (`history: 1 of 3 runs`). The now pane's own
+p50/p90 bar (a running step's elapsed busy time against
+`Header::history_step_usual`, pooled across every hash the same way
+per-step figures always are) is `FocusedStep::usual_busy_p50_s`/
+`usual_busy_p90_s`, filled in by `build_now_pane`'s own `NowFocus::
+Running` branch only -- a ghost-bar history of passes, which needs
+the bounded interval log below, is the Time screen's own addition
+(issue #650). Below
 [`tui::thresholds::TWO_COLUMN_MIN_WIDTH`]/`_MIN_HEIGHT` (80×20, the
 same line screen 2's own two-column layout collapses at) the overview
 restacks instead of just shrinking: the phase strip drops to one
@@ -1663,17 +1676,24 @@ written evicted first).
 nearest-rank percentiles over the newest 20 ok runs -- p50 needs 3,
 p10/p90 need 5. Whole-run figures (`DocumentStats::whole_run`) use
 only runs sharing the *current* `document_hash`; per-step figures
-(`DocumentStats::per_step`) pool every ok run of the document's own
-path, any hash, so an edit that changes the hash still has per-step
-history to show (just no whole-run one, until 3 runs of the new
-version exist). The ETA's own anchor is the most recently finished
-step with known statistics (`EtaInput::finished_steps`, built by
+shown generically for a step (`DocumentStats::per_step`) pool every ok
+run of the document's own path, any hash, so an edit that changes the
+hash still has per-step history to show (just no whole-run one, until
+3 runs of the new version exist). The ETA's own "what usually follows
+this step" is a *different* map, `DocumentStats::anchor_remaining_
+after_p50_s`, restricted to the same same-hash pool `whole_run` itself
+comes from -- pooling every hash here, the way `per_step` does for
+display, would let an edit that adds work after an anchor step make
+the ETA too early. The anchor is the most recently finished step with
+an entry in that map (`EtaInput::finished_steps`, built by
 `history::eta_input_from_state` from whichever state the caller
 already has) -- before any has finished, the run's own start plus the
 whole run's p50; a currently running step is a floor under that (its
 own usual time left, plus the p50 of what usually follows it), never
 earlier than now; past the usual (p90) end, `None`, read by the header
-as `ETA ?`.
+as `ETA ?`. `EtaOutput::vs_usual_s` is the gap, at the anchor, between
+this run's own elapsed time and the usual elapsed time to reach the
+same point -- `None` before any anchor exists.
 
 **When it's read and written:** `history_io::HistoryHandle` resolves
 the document lazily for `osi watch` (the first live-state write that
@@ -1682,18 +1702,34 @@ off for that watch, one stderr line) and eagerly for `osi <doc>` (the
 CLI argument itself, canonicalized); reads a document's own file at
 most once and recomputes statistics only when `document_hash`
 changes. `apply_history_eta` is the one place `Header::history_eta_ts`/
-`history_eta_past_usual` are ever set to anything but their own "no
-history" defaults -- directly on the `Header` `render::build`/`build_
-folded` already returned, right after every real call to either, in
-`run_tui`/`run_tui_watch`/`write_glance_line`. `HistoryHandle::write`
-is the one write path, called from all four endings
-(`finish_run`/`finish_watch`, and both `--glance` loops, which don't
-go through either finish function): a no-op unless `state` satisfies
-`model::run_ended` (so an abort with no final write, and `osi watch`
-detaching from a run still going, write nothing), and `build_record`
-itself returns `None` for a dry run, a validate-only run, or one with
-no `document_hash`. `osi watch --glance --once` never calls `write`
-at all -- it only reads.
+`history_eta_past_usual` (and the time card's own extra figures) are
+ever set to anything but their own "no history" defaults -- directly
+on the `Header` `render::build`/`build_folded` already returned,
+right after every real call to either, in `run_tui`/`run_tui_watch`/
+`write_glance_line`. Once the run has truly ended (`model::run_ended`),
+the ETA's own elapsed-time anchor freezes at `runtime.last_run.
+completed_at` rather than the live clock -- a run held open in the
+TUI after it finishes would otherwise watch its own ETA keep sliding
+forward, eventually past its own usual end.
+
+`HistoryHandle::write` is the one write path, called from all four
+endings (`finish_run`/`finish_watch`, and both `--glance` loops, which
+don't go through either finish function): a no-op unless `state`
+satisfies `model::run_ended` (so an abort with no final write, and
+`osi watch` detaching from a run still going, write nothing), and
+`build_record` itself returns `None` for a dry run, a validate-only
+run, or one with no `document_hash`. `append_record` itself skips the
+write, under the same lock the append takes, when the record's own
+`run_id` is already in the file -- not just folded away by
+`read_records`' own dedupe, which would otherwise let a repeatedly
+re-watched run directory grow the file forever. `osi watch --glance
+--once` never calls `write` at all -- it only reads. A notice `history_
+io::HistoryHandle::ensure_document` has (no absolute path and no
+`--plan`) is queued, not printed straight away: it can run on every
+redraw inside the TUI's own raw-mode, alternate-screen loop, where a
+bare `eprintln!` would land as a stray line over the drawn frame;
+`flush_history_notices` prints anything queued once that loop (or
+`--glance`'s own rewritten-in-place line) is done.
 
 ### 6.4 Tests
 
