@@ -120,6 +120,12 @@ pub fn osi_command(home: &TestHome) -> Command {
     ] {
         cmd.env_remove(key);
     }
+    // Issue #649: a bare `HOME` override isn't enough on its own --
+    // an inherited `XDG_STATE_HOME` or `OSI_HISTORY_DIR` would still
+    // point history at the real directory.
+    cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
+    cmd.env_remove("XDG_STATE_HOME");
+    cmd.env_remove("OSI_HISTORY");
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
