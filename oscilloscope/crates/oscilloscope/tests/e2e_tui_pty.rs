@@ -1902,27 +1902,125 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
     assert_no_leftover_process(work.path());
 }
 
-/// Every `HH:MM` substring found anywhere in `bytes` (raw pty output,
-/// escape codes and all) -- a cursor-positioning escape uses `;` to
-/// separate its own row/column, never `:`, so this never mistakes one
-/// for a clock-time tick label.
-fn clock_labels(bytes: &[u8]) -> std::collections::BTreeSet<String> {
-    let chars: Vec<char> = String::from_utf8_lossy(bytes).chars().collect();
-    let mut out = std::collections::BTreeSet::new();
-    let mut i = 0;
-    while i + 5 <= chars.len() {
-        let s = &chars[i..i + 5];
-        if s[0].is_ascii_digit()
-            && s[1].is_ascii_digit()
-            && s[2] == ':'
-            && s[3].is_ascii_digit()
-            && s[4].is_ascii_digit()
-        {
-            out.insert(s.iter().collect());
+/// The screen a terminal would show after `bytes`, replayed onto a
+/// `rows` x `cols` grid. osi's renderer writes absolute cursor moves
+/// (`ESC [ row ; col H`), colour codes, mode switches and text, and
+/// each frame redraws only the cells that changed, so reading labels
+/// straight off the stream sees fragments of them. Replaying it gives
+/// the real screen, whatever cells a frame happened to redraw.
+fn screen_grid(bytes: &[u8], rows: usize, cols: usize) -> Vec<Vec<char>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut r, mut c) = (0usize, 0usize);
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let mut fin = None;
+                    for p in chars.by_ref() {
+                        if p.is_ascii_alphabetic() || p == '@' || p == '~' {
+                            fin = Some(p);
+                            break;
+                        }
+                        params.push(p);
+                    }
+                    match fin {
+                        Some('H') | Some('f') => {
+                            let mut it = params
+                                .split(';')
+                                .map(|n| n.parse::<usize>().unwrap_or(1).max(1));
+                            r = it.next().unwrap_or(1) - 1;
+                            c = it.next().unwrap_or(1) - 1;
+                        }
+                        Some('J') if params == "2" => {
+                            for row in grid.iter_mut() {
+                                row.fill(' ');
+                            }
+                        }
+                        Some('K') if params.is_empty() || params == "0" => {
+                            if let Some(row) = grid.get_mut(r) {
+                                for cell in row.iter_mut().skip(c) {
+                                    *cell = ' ';
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(']') => {
+                    // An operating-system command runs to BEL or ESC \.
+                    while let Some(p) = chars.next() {
+                        if p == '\x07' {
+                            break;
+                        }
+                        if p == '\x1b' {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                Some('(') | Some(')') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+            continue;
         }
-        i += 1;
+        match ch {
+            '\r' => c = 0,
+            '\n' => r += 1,
+            _ if ch.is_control() => {}
+            _ => {
+                if r < rows && c < cols {
+                    grid[r][c] = ch;
+                }
+                c += 1;
+            }
+        }
     }
-    out
+    grid
+}
+
+/// The tick labels on the Time screen's clock axis: the row right
+/// under the timeline box's own top border, read off a replayed
+/// screen. The header and the start columns hold clock times too, so
+/// only that row is read.
+fn axis_tick_labels(bytes: &[u8]) -> Vec<String> {
+    let grid = screen_grid(bytes, 40, 120);
+    let Some(top) = grid
+        .iter()
+        .position(|row| row.iter().collect::<String>().contains("┌ timeline"))
+    else {
+        return Vec::new();
+    };
+    let Some(label_row) = grid.get(top + 1) else {
+        return Vec::new();
+    };
+    label_row
+        .iter()
+        .collect::<String>()
+        .split(|ch: char| !(ch.is_ascii_digit() || ch == ':' || ch == '-'))
+        .filter(|tok| tok.len() >= 5 && tok.contains(':'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Polls the replayed screen until `ok` holds for its axis labels,
+/// returning the last labels seen either way.
+fn wait_for_axis_labels(
+    captured: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ok: impl Fn(&[String]) -> bool,
+) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let labels = axis_tick_labels(&captured.lock().unwrap());
+        if ok(&labels) || std::time::Instant::now() > deadline {
+            return labels;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Issue #650's own `+`/`=` keys zoom the Time screen's own axis in
@@ -2001,31 +2099,25 @@ fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
     std::thread::sleep(Duration::from_millis(1500));
     send_bytes(&mut master, b"1");
     wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
-    std::thread::sleep(Duration::from_millis(300));
-    let labels_before = clock_labels(&captured_buf.lock().unwrap());
-
-    send_bytes(&mut master, b"+");
-    std::thread::sleep(Duration::from_millis(300));
-    let labels_after_plus = clock_labels(&captured_buf.lock().unwrap());
-    let new_since_plus: Vec<&String> = labels_after_plus.difference(&labels_before).collect();
+    let labels_before = wait_for_axis_labels(&captured_buf, |l| !l.is_empty());
     assert!(
-        !new_since_plus.is_empty(),
-        "+ must zoom in and show at least one tick label never shown before; \
-         before: {labels_before:?}, after: {labels_after_plus:?}"
+        !labels_before.is_empty(),
+        "the Time screen's axis shows no tick labels"
     );
 
-    let before_equals = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"+");
+    let labels_after_plus = wait_for_axis_labels(&captured_buf, |l| l != labels_before.as_slice());
+    assert_ne!(
+        labels_after_plus, labels_before,
+        "+ must zoom the axis in and change its tick labels"
+    );
+
     send_bytes(&mut master, b"=");
-    std::thread::sleep(Duration::from_millis(300));
-    let equals_delta = {
-        let buf = captured_buf.lock().unwrap();
-        buf[before_equals..].to_vec()
-    };
-    assert!(
-        !clock_labels(&equals_delta).is_empty(),
-        "= must redraw the timeline's own tick labels, fit back to the whole run; \
-         got:\n{:?}",
-        String::from_utf8_lossy(&equals_delta)
+    let labels_after_equals =
+        wait_for_axis_labels(&captured_buf, |l| l == labels_before.as_slice());
+    assert_eq!(
+        labels_after_equals, labels_before,
+        "= must fit the whole run again, back to the same tick labels as before +"
     );
 
     send_bytes(&mut master, b"q");
