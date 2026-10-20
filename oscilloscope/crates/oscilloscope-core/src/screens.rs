@@ -744,9 +744,17 @@ fn build_focused_step(
     let since_ts = node
         .and_then(|n| n.created_at.clone())
         .or_else(|| model.event_started_at(&row.path).map(str::to_string));
-    let elapsed_s = since_ts
-        .as_deref()
-        .and_then(|start| duration_seconds(start, now));
+    // A step that has already finished reads its own real duration
+    // (`completed_at` - `created_at`), never `now - created_at`: once
+    // the whole run has ended, `now` is wall-clock time at render,
+    // long past the run's own end, which would otherwise inflate a
+    // finished step's duration by however long it's been since.
+    let elapsed_s = since_ts.as_deref().and_then(|start| {
+        match node.and_then(|n| n.completed_at.as_deref()) {
+            Some(end) => duration_seconds(start, end),
+            None => duration_seconds(start, now),
+        }
+    });
     let details = details_for(&row.path, plan, model, state);
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
@@ -3201,6 +3209,53 @@ mod tests {
             .expect("row b is in the timeline");
         assert_eq!(running.start_s, Some(10.0));
         assert_eq!(running.status.kind, StatusKind::Running);
+    }
+
+    /// A finished step's zoom-pane duration is its own `completed_at`
+    /// minus `created_at`, never `now - created_at` -- `now` here is
+    /// long after the whole run ended, which a stale computation
+    /// would otherwise fold into the step's own duration.
+    #[test]
+    fn build_time_screen_a_finished_steps_duration_ignores_how_long_ago_now_is() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:20Z"
+            },
+            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"}},
+            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": "2026-01-01T00:00:20Z"}}
+        }});
+        let rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+            20.0,
+            "2026-01-01T00:00:20Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat_from(state.clone()),
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some("prime.a"),
+            &Default::default(),
+            "2026-02-15T12:00:00Z",
+        );
+        let selected = screen.selected.expect("prime.a is selected");
+        assert_eq!(
+            selected.elapsed_s,
+            Some(10.0),
+            "a finished step's own duration, not now - its start"
+        );
     }
 
     fn each_loop_plan() -> PlanTree {
