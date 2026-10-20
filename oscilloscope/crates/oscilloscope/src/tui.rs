@@ -3919,6 +3919,31 @@ mod time_bar_tests {
         assert_eq!(&chars[0..2], ['▓', '▓'], "{bar:?}");
     }
 
+    /// A leaf two loops deep maps to the outer loop's row, the only
+    /// one of the two the timeline draws, so follow still highlights
+    /// a row and scrolls to it.
+    #[test]
+    fn a_leaf_under_nested_loops_maps_to_the_outermost_loop_row() {
+        let mut outer = test_time_row(Some(0.0), None, StatusKind::Running);
+        outer.path = "prime.outer".to_string();
+        outer.kind = oscilloscope_core::render::RowKind::Loop;
+        let mut inner = test_time_row(Some(0.0), None, StatusKind::Running);
+        inner.path = "prime.outer.iter_1.inner".to_string();
+        inner.kind = oscilloscope_core::render::RowKind::Loop;
+        let mut by_path = std::collections::BTreeMap::new();
+        by_path.insert(outer.path.clone(), &outer);
+        by_path.insert(inner.path.clone(), &inner);
+        assert_eq!(
+            outermost_ancestor_loop_path(&by_path, "prime.outer.iter_1.inner.iter_2.x"),
+            Some("prime.outer")
+        );
+        assert_eq!(
+            outermost_ancestor_loop_path(&by_path, "prime.outer.iter_0.y"),
+            Some("prime.outer")
+        );
+        assert_eq!(outermost_ancestor_loop_path(&by_path, "prime.other"), None);
+    }
+
     fn test_time_row(
         start_s: Option<f64>,
         duration_s: Option<f64>,
@@ -4107,15 +4132,16 @@ fn time_row_groups(
     (by_path, passes)
 }
 
-/// The innermost loop row `path` sits under, if any (same walk
-/// [`time_zoom_ancestor_loop_label`] does for the zoom title) -- a
-/// leaf under a *collapsed* loop never gets a drawn row of its own
-/// at all (its path is always filtered out of the timeline's own
+/// The outermost loop row `path` sits under, if any -- a leaf under
+/// a *collapsed* loop never gets a drawn row of its own at all (its
+/// path is always filtered out of the timeline's own
 /// `visible`/`drawable` rows, expanded or not -- expanded shows
 /// separate pass rows instead), so follow selecting it must
-/// highlight and scroll to this loop row instead, the nearest one
-/// actually on screen.
-fn nearest_ancestor_loop_path<'a>(
+/// highlight and scroll to a loop row instead. Only the outermost
+/// one is drawn: a loop row under another loop is filtered out the
+/// same way its leaves are, so a leaf two loops deep maps to the
+/// outer loop's row, not the inner one's.
+fn outermost_ancestor_loop_path<'a>(
     by_path: &std::collections::BTreeMap<String, &'a oscilloscope_core::time::TimeRow>,
     path: &str,
 ) -> Option<&'a str> {
@@ -4125,7 +4151,7 @@ fn nearest_ancestor_loop_path<'a>(
             r.kind == oscilloscope_core::render::RowKind::Loop
                 && path.starts_with(&format!("{}.", r.path))
         })
-        .max_by_key(|r| r.path.len())
+        .min_by_key(|r| r.path.len())
         .map(|r| r.path.as_str())
 }
 
@@ -4195,7 +4221,7 @@ fn draw_time_timeline(
     // for scrolling it into view.
     let effective_selected_path: Option<&str> = app.selected_path.as_deref().map(|p| {
         if is_under_a_loop(p) {
-            nearest_ancestor_loop_path(&by_path, p).unwrap_or(p)
+            outermost_ancestor_loop_path(&by_path, p).unwrap_or(p)
         } else {
             p
         }
@@ -5129,7 +5155,7 @@ fn draw_time_plain_list(
         .collect();
     let effective_selected_path: Option<&str> = app.selected_path.as_deref().map(|p| {
         if is_under_a_loop(p) {
-            nearest_ancestor_loop_path(&by_path, p).unwrap_or(p)
+            outermost_ancestor_loop_path(&by_path, p).unwrap_or(p)
         } else {
             p
         }
