@@ -1466,7 +1466,12 @@ mod tests {
     }
 
     fn program_with_ifs() -> electricity_bytecode::Program {
-        let tmp = std::env::temp_dir().join(format!("osi-screens-test-{}", std::process::id()));
+        // A directory per call, not per process: tests run on parallel
+        // threads, and each call removes its own directory when it's done.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp =
+            std::env::temp_dir().join(format!("osi-screens-test-{}-{call}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("doc.yml");
         std::fs::write(
