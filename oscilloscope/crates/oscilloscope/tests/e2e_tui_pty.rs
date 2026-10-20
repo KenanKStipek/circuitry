@@ -680,6 +680,118 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #650: pressing `1` opens the Time screen during a live
+/// run, which shows a running row's own bar and the now line;
+/// `⏎` on a finished loop row expands it into one row per pass;
+/// `+` and `=` zoom the axis and fit it back without the screen
+/// breaking.
+#[test]
+fn pressing_1_during_a_live_run_opens_the_time_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    name: fan\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: tool\n        name: nap\n        provider: shell\n        params:\n          command: echo\n          args: [\"x\"]\n          allowed_commands: [\"echo\"]\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let before_1 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_1..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("timeline"),
+            "expected the timeline pane's own border title after pressing 1; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains('┃'),
+            "expected the now line on the running row's own bar; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("slow"),
+            "expected the running step's own row; got:\n{rendered:?}"
+        );
+    }
+
+    // Turns follow off, then jumps to the first row (`prime`) and
+    // down twice to land on `fan` deterministically (`items` is the
+    // one step before it) -- more robust than counting rows up from
+    // the running step, since whether `fan`'s own two passes fold
+    // into one "quick steps" summary or stay separate rows isn't
+    // this test's concern. Each key is its own write, with enough of
+    // a pause after for a redraw to land before the next.
+    for key in [&b"f"[..], b"g", b"j", b"j"] {
+        send_bytes(&mut master, key);
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    wait_for_pattern(&captured_buf, b"pass 1", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("pass 1") && rendered.contains("pass 2"),
+            "expected one row per pass after ⏎ on the loop row; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"+");
+    std::thread::sleep(Duration::from_millis(300));
+    send_bytes(&mut master, b"=");
+    std::thread::sleep(Duration::from_millis(300));
+    {
+        let snapshot = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&snapshot);
+        assert!(
+            rendered.contains("timeline"),
+            "the timeline pane must still be showing after + and =; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
 /// Issue #635: the Flow screen keeps rebuilding while it's on
 /// display, from the run's own state/event/log changes, not only
 /// from a key press -- `2` is pressed once, immediately, well before

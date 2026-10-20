@@ -340,11 +340,15 @@ pub struct LoopPassRow {
     pub duration_s: Option<f64>,
 }
 
-/// A named loop's own passes, one row per `iter_N` child, numeric
-/// order (DESIGN.md: "tree passes overlap, and that is shown" -- each
-/// pass's own span comes straight from its own `created_at`/
-/// `completed_at`, so two tree passes running at once simply overlap
-/// here exactly as they did in state).
+/// A named loop's own passes, one row per `iter_N` index found under
+/// `path`, numeric order (DESIGN.md: "tree passes overlap, and that
+/// is shown"). A pass's own span is the min `created_at`/max
+/// `completed_at` over every flat node in its own subtree, not read
+/// from `path.iter_N` itself -- a chain `each` loop's pass container
+/// carries no `{value, meta}` of its own at all in either engine's
+/// real state (only its children, e.g. `path.iter_0.nap`, do); a
+/// tree loop's own pass container does, but aggregating either way
+/// gives the same answer when it's the only node in its own subtree.
 fn expand_named_loop(
     path: &str,
     flat: &BTreeMap<String, NodeMeta>,
@@ -352,31 +356,56 @@ fn expand_named_loop(
     now: &str,
 ) -> Vec<LoopPassRow> {
     let prefix = format!("{path}.iter_");
-    let mut passes: Vec<(u32, &str, &NodeMeta)> = flat
-        .iter()
-        .filter_map(|(child_path, node)| {
-            let suffix = child_path.strip_prefix(&prefix)?;
-            let index: u32 = suffix.parse().ok()?;
-            Some((index, child_path.as_str(), node))
-        })
-        .collect();
-    passes.sort_by_key(|(index, ..)| *index);
-    passes
+    let mut indices: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for child_path in flat.keys() {
+        if let Some(suffix) = child_path.strip_prefix(&prefix) {
+            let digits: String = suffix.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() {
+                if let Ok(index) = digits.parse::<u32>() {
+                    indices.insert(index);
+                }
+            }
+        }
+    }
+    indices
         .into_iter()
-        .map(|(index, _, node)| {
-            let start_s = node
-                .created_at
-                .as_deref()
-                .and_then(|t| duration_seconds(run_start_ts, t));
-            let end_ts = node.completed_at.as_deref().unwrap_or(now);
-            let duration_s = node
-                .created_at
-                .as_deref()
-                .and_then(|t| duration_seconds(t, end_ts));
+        .map(|index| {
+            let pass_path = format!("{path}.iter_{index}");
+            let pass_prefix = format!("{pass_path}.");
+            let mut start_ts: Option<&str> = None;
+            let mut end_ts: Option<&str> = None;
+            let mut running = false;
+            let mut ok = true;
+            for (child_path, node) in flat {
+                if child_path != &pass_path && !child_path.starts_with(&pass_prefix) {
+                    continue;
+                }
+                if let Some(created_at) = node.created_at.as_deref() {
+                    if start_ts.is_none_or(|s| created_at < s) {
+                        start_ts = Some(created_at);
+                    }
+                }
+                match node.completed_at.as_deref() {
+                    Some(completed_at) => {
+                        if end_ts.is_none_or(|e| completed_at > e) {
+                            end_ts = Some(completed_at);
+                        }
+                        ok &= node.error.is_none();
+                    }
+                    None => running = true,
+                }
+            }
+            let start_s = start_ts.and_then(|t| duration_seconds(run_start_ts, t));
+            let end_s = if running {
+                duration_seconds(run_start_ts, now)
+            } else {
+                end_ts.and_then(|t| duration_seconds(run_start_ts, t))
+            };
+            let duration_s = start_s.zip(end_s).map(|(s, e)| e - s);
             let status = RowStatus {
-                kind: if node.is_running() {
+                kind: if running {
                     StatusKind::Running
-                } else if node.is_ok() {
+                } else if ok {
                     StatusKind::Done
                 } else {
                     StatusKind::Failed
@@ -1215,6 +1244,50 @@ mod tests {
         assert_eq!(passes[1].label, "pass 2");
         assert_eq!(passes[1].start_s, Some(10.0));
         assert_eq!(passes[1].duration_s, Some(15.0));
+    }
+
+    /// A chain `each` loop's own `iter_N` carries no `{value, meta}`
+    /// of its own in either engine's real state -- only its own
+    /// children (here, a single `nap` leaf) do. A pass's own span
+    /// still comes through, aggregated from that subtree.
+    #[test]
+    fn a_named_chain_loop_with_no_value_on_iter_n_itself_still_expands() {
+        use serde_json::json;
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "each_in_path": "prime.items.value", "progress": {"done": 2, "total": 2}},
+                "iter_0": {
+                    "nap": {"value": "x\n", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z", "provider": "shell"}}
+                },
+                "iter_1": {
+                    "nap": {"value": "x\n", "meta": {"created_at": "2026-01-01T00:00:01Z", "completed_at": "2026-01-01T00:00:02Z", "provider": "shell"}}
+                }
+            }
+        }});
+        let flat = crate::model::flatten_state(&state);
+        let model = RunModel::new();
+        let plan = PlanTree::empty();
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let rows = vec![loop_row("prime.fan")];
+        let time_rows = build_time_rows(&rows, &flat, &model, &plan, &header, &BTreeMap::new());
+        assert!(
+            time_rows[0].loop_expandable,
+            "a chain loop with no value on iter_n itself is still expandable"
+        );
+
+        let passes = expand_loop(
+            "prime.fan",
+            &flat,
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:02Z",
+        );
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0].label, "pass 1");
+        assert_eq!(passes[0].start_s, Some(0.0));
+        assert_eq!(passes[0].duration_s, Some(1.0));
+        assert_eq!(passes[1].label, "pass 2");
+        assert_eq!(passes[1].start_s, Some(1.0));
+        assert_eq!(passes[1].duration_s, Some(1.0));
     }
 
     #[test]
