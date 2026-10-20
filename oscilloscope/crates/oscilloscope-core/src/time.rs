@@ -672,8 +672,8 @@ fn next_round_local_time(
 /// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
 /// round clock times ... whichever keeps labels about 10 columns
 /// apart") -- one entry per tick: its own column, its run-relative
-/// offset, and its label, `HH:MM:SS` under a minute-long interval
-/// (so a run only tens of seconds old still gets labels at all) or
+/// offset, and its label, `HH:MM:SS` for a sub-minute tick interval
+/// (so a run only tens of seconds old still gets several labels) or
 /// `HH:MM` otherwise. Ticks fall on round clock times in `zone`,
 /// never on `axis_start_s` merely because that's where the axis
 /// happens to begin.
@@ -717,16 +717,8 @@ pub fn axis_tick_columns(
         out
     };
     let tick_s = crate::format::clock_tick_seconds(span, width, 10);
-    let ticks = ticks_at(tick_s, "%H:%M");
-    if !ticks.is_empty() {
-        return ticks;
-    }
-    // A span under a minute-or-coarser tick's own interval has no
-    // round minute of its own inside it at all (a run that hasn't
-    // crossed a minute boundary yet) -- fall back to a sub-minute
-    // tick instead of leaving the axis with no labels whatsoever.
-    let fine_tick_s = crate::format::clock_tick_seconds_under_a_minute(span, width, 10);
-    ticks_at(fine_tick_s, "%H:%M:%S")
+    let fmt = if tick_s < 60.0 { "%H:%M:%S" } else { "%H:%M" };
+    ticks_at(tick_s, fmt)
 }
 
 /// The decisions strip's own marks (DESIGN.md: "`◆` at the time each
@@ -1383,9 +1375,8 @@ mod tests {
         );
     }
 
-    /// Issue #650's probe: a run starting at a non-round time
-    /// (11:46:43) must still tick at round minutes, never at the
-    /// run's own start.
+    /// A run starting at a non-round time (11:46:43) must still tick
+    /// at round minutes, never at the run's own start.
     #[test]
     fn axis_tick_columns_ticks_at_round_minutes_not_the_runs_own_start() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
@@ -1407,8 +1398,8 @@ mod tests {
         }
     }
 
-    /// Issue #650's probe: a +05:30 zone still ticks on a local whole
-    /// hour, not a UTC one.
+    /// A +05:30 zone still ticks on a local whole hour, not a UTC
+    /// one.
     #[test]
     fn axis_tick_columns_ticks_on_local_whole_hours_in_a_half_hour_zone() {
         let ist = chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
@@ -1421,10 +1412,9 @@ mod tests {
         }
     }
 
-    /// Issue #650's probe: a short, 20s-old run that hasn't crossed a
-    /// minute boundary has no round minute of its own to tick on --
-    /// it still gets sub-minute labels (`HH:MM:SS`), not nothing at
-    /// all.
+    /// A short, 20s-old run that hasn't crossed a minute boundary has
+    /// no round minute of its own to tick on -- it still gets
+    /// sub-minute labels (`HH:MM:SS`), not nothing at all.
     #[test]
     fn axis_tick_columns_labels_sub_minute_intervals_with_seconds() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
@@ -1436,19 +1426,43 @@ mod tests {
         }
     }
 
-    /// Issue #650's probe: a short run that *does* cross a minute
-    /// boundary ticks on that round minute instead of falling back to
-    /// sub-minute ticks at all.
+    /// Spacing alone picks the tick interval -- a round minute inside
+    /// a short span doesn't win over a tighter sub-minute tick that
+    /// also keeps labels far enough apart.
     #[test]
-    fn axis_tick_columns_prefers_a_round_minute_over_sub_minute_ticks_when_one_exists() {
+    fn axis_tick_columns_picks_sub_minute_ticks_by_spacing_even_when_a_round_minute_exists() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
         let ticks = axis_tick_columns("2026-01-01T00:00:45Z", 0.0, 20.0, 96, &utc);
-        assert_eq!(ticks.len(), 1);
-        assert_eq!(ticks[0].2, "00:01");
+        assert!(
+            ticks.len() > 1,
+            "expected several sub-minute ticks, got {ticks:?}"
+        );
+        for (_, _, label) in &ticks {
+            assert_eq!(label.chars().count(), 8, "{label} should read HH:MM:SS");
+        }
     }
 
-    /// Issue #650's probe: a long, 6h span still only ticks on round
-    /// hours.
+    /// A finished 20s run that crosses a minute boundary ticks
+    /// several times, not once -- the same candidate list a longer
+    /// run uses, picked by spacing alone.
+    #[test]
+    fn axis_tick_columns_a_20s_span_crossing_a_minute_gets_several_labels() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T00:00:45Z", 0.0, 20.0, 70, &utc);
+        assert!(
+            ticks.len() > 1,
+            "expected several ticks across the minute boundary, got {ticks:?}"
+        );
+        for (_, _, label) in &ticks {
+            assert_eq!(label.chars().count(), 8, "{label} should read HH:MM:SS");
+        }
+        assert!(
+            ticks.iter().any(|(_, _, label)| label.starts_with("00:01")),
+            "expected at least one tick past the minute boundary, got {ticks:?}"
+        );
+    }
+
+    /// A long, 6h span still only ticks on round hours.
     #[test]
     fn axis_tick_columns_over_a_six_hour_span_ticks_on_round_hours() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();

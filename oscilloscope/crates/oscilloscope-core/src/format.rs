@@ -121,14 +121,18 @@ pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
     Some(zone.local(utc).format("%H:%M:%S").to_string())
 }
 
-/// The Time screen's own clock axis (issue #650): the round tick
-/// interval, in seconds, that keeps labels about `target_columns`
-/// columns apart over `span_s` spread across `width` columns -- one
-/// of 1, 2, 5, 10, 15 or 30 minutes, or 1 hour, whichever is the
-/// smallest that keeps ticks at least that far apart; beyond an
-/// hour, the smallest whole number of hours that still does.
+/// The Time screen's own clock axis: the round tick interval, in
+/// seconds, that keeps labels about `target_columns` columns apart
+/// over `span_s` spread across `width` columns -- the smallest of a
+/// single candidate list (5, 10, 15 or 30 seconds; 1, 2, 5, 10, 15 or
+/// 30 minutes; 1 hour) that keeps ticks at least that far apart;
+/// beyond an hour, the smallest whole number of hours that still
+/// does. Spacing alone picks the candidate -- a short span still
+/// chosen sub-minute even when a round minute also exists inside it.
 pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f64 {
-    const CANDIDATES_S: [f64; 7] = [60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0];
+    const CANDIDATES_S: [f64; 11] = [
+        5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0,
+    ];
     let width = width.max(1) as f64;
     let seconds_per_column = (span_s.max(0.0) / width).max(f64::MIN_POSITIVE);
     let target_columns = target_columns.max(1) as f64;
@@ -141,26 +145,6 @@ pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f
         .ceil()
         .max(1.0);
     hours * 3600.0
-}
-
-/// [`clock_tick_seconds`]'s own sub-minute fallback (issue #650): 5,
-/// 10, 15 or 30 seconds, the smallest that keeps labels about
-/// `target_columns` apart -- for a caller whose minute-or-coarser
-/// tick landed no tick inside a short axis at all (a run under a
-/// minute old that hasn't yet crossed a minute boundary has no round
-/// minute of its own to show), so the axis isn't left with no labels
-/// whatsoever.
-pub fn clock_tick_seconds_under_a_minute(span_s: f64, width: usize, target_columns: usize) -> f64 {
-    const CANDIDATES_S: [f64; 4] = [5.0, 10.0, 15.0, 30.0];
-    let width = width.max(1) as f64;
-    let seconds_per_column = (span_s.max(0.0) / width).max(f64::MIN_POSITIVE);
-    let target_columns = target_columns.max(1) as f64;
-    for candidate in CANDIDATES_S {
-        if candidate / seconds_per_column >= target_columns {
-            return candidate;
-        }
-    }
-    30.0
 }
 
 /// The midpoint between `start_ts` and `end_ts`, formatted the same
@@ -301,8 +285,8 @@ mod tests {
     #[test]
     fn clock_tick_picks_the_smallest_candidate_that_keeps_ticks_apart() {
         // 80 columns is this crate's own typical timeline width.
-        assert_eq!(clock_tick_seconds(30.0, 80, 10), 60.0);
-        assert_eq!(clock_tick_seconds(120.0, 80, 10), 60.0);
+        assert_eq!(clock_tick_seconds(30.0, 80, 10), 5.0);
+        assert_eq!(clock_tick_seconds(120.0, 80, 10), 15.0);
         assert_eq!(clock_tick_seconds(600.0, 80, 10), 120.0);
         assert_eq!(clock_tick_seconds(1_200.0, 80, 10), 300.0);
         assert_eq!(clock_tick_seconds(2_400.0, 80, 10), 300.0);

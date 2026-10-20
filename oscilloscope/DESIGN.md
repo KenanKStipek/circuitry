@@ -1751,20 +1751,18 @@ turns any of it into actual columns and styling.
 floored at 2s, so a run only seconds old doesn't have its own bars
 squeezed into a narrow strip on the left) while the run goes, or
 start to end once it has. `format::clock_tick_seconds` picks the
-round tick (1, 2, 5, 10, 15 or 30 minutes, or a whole number of
-hours) that keeps labels about 10 columns apart over the axis's own
-span and the pane's own width. Ticks fall on round clock times in
-the zone osi displays (`time::axis_tick_columns`), midnight-aligned
+round tick, by spacing alone, from one candidate list -- 5, 10, 15 or
+30 seconds; 1, 2, 5, 10, 15 or 30 minutes; 1 hour; then a whole
+number of hours -- taking the smallest that keeps labels about 10
+columns apart over the axis's own span and the pane's own width, with
+no preference for a round minute over a tighter sub-minute tick that
+also satisfies the spacing. Ticks fall on round clock times in the
+zone osi displays (`time::axis_tick_columns`), midnight-aligned
 rather than epoch-aligned, so an hour tick lands on a local whole
 hour even in a zone offset by a half hour from UTC -- never merely
 at the axis's own start, which is whatever odd second the run
-happened to begin at. When that minute-or-coarser tick lands no tick
-inside the axis at all (a run under a minute old that hasn't yet
-crossed a minute boundary has no round minute of its own to show),
-the axis falls back to a sub-minute one instead
-(`format::clock_tick_seconds_under_a_minute`: 5, 10, 15 or 30
-seconds), labelled `HH:MM:SS` rather than `HH:MM`, so a short run's
-axis still has labels. The now line (`┃`)
+happened to begin at. A sub-minute tick is labelled `HH:MM:SS` rather
+than `HH:MM`, so a short run's axis still has labels. The now line (`┃`)
 is drawn through every row and strip while the run is going, never
 once it has ended -- the strips share the timeline's own gutter
 exactly (one leading column for the timeline box's own left border,
