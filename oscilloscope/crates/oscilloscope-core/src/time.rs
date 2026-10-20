@@ -755,17 +755,40 @@ fn next_round_local_time(
 ) -> chrono::DateTime<chrono::Utc> {
     use chrono::TimeZone;
     let local = zone.local(from_utc);
-    let offset = *local.offset();
     let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let elapsed_s = (local.naive_local() - midnight).num_milliseconds() as f64 / 1000.0;
-    let next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
-    let next_local_naive =
-        midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
-    let next_local = offset
-        .from_local_datetime(&next_local_naive)
-        .single()
-        .unwrap_or_else(|| offset.from_utc_datetime(&next_local_naive));
-    next_local.with_timezone(&chrono::Utc)
+    let mut next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
+    // A candidate local naive time is tried against `from_utc`'s own
+    // offset first, then re-checked against whatever offset the zone
+    // actually reports for the resulting instant -- not the same
+    // offset whenever a daylight-saving change falls between the
+    // two. Neither agreeing means the naive time itself never
+    // existed at all (a "spring forward" gap skips straight over an
+    // hour of local clock time) -- advancing to the next candidate
+    // tick and trying again, rather than returning an instant whose
+    // own real local label would silently disagree with the one this
+    // was asked for.
+    loop {
+        let next_local_naive =
+            midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
+        let to_utc = |offset: chrono::FixedOffset| {
+            offset
+                .from_local_datetime(&next_local_naive)
+                .single()
+                .unwrap_or_else(|| offset.from_utc_datetime(&next_local_naive))
+                .with_timezone(&chrono::Utc)
+        };
+        let first_guess = to_utc(*local.offset());
+        let first_local = zone.local(first_guess);
+        if first_local.naive_local() == next_local_naive {
+            return first_guess;
+        }
+        let second_guess = to_utc(*first_local.offset());
+        if zone.local(second_guess).naive_local() == next_local_naive {
+            return second_guess;
+        }
+        next_elapsed_s += tick_s;
+    }
 }
 
 /// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
@@ -1683,6 +1706,96 @@ mod tests {
             at("03:00") - at("01:00"),
             3600.0,
             "only one real hour passes between them, not two: {ticks:?}"
+        );
+    }
+
+    /// 2-hour ticks cross the same spring-forward change as above --
+    /// re-resolving the offset at each candidate (not just the one
+    /// `from_utc` started at) is what keeps the cadence genuinely 2
+    /// real hours apart once it's past the gap, rather than drifting
+    /// onto an odd local hour that was never a real 2-hour mark at
+    /// all.
+    #[test]
+    fn axis_tick_columns_a_us_spring_forward_span_keeps_a_2_hour_cadence() {
+        let zone = SpringForwardZone;
+        // Wide enough (16 real hours over 80 columns) to pick a
+        // 2-hour tick interval instead of the 1-hour one above.
+        let ticks = axis_tick_columns("2026-03-08T05:00:00Z", 0.0, 16.0 * 3600.0, 80, &zone);
+        let offsets: Vec<f64> = ticks.iter().map(|(_, s, _)| *s).collect();
+        for pair in offsets.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "ticks must stay strictly increasing across the change: {ticks:?}"
+            );
+        }
+        let labels: Vec<&str> = ticks.iter().map(|(_, _, l)| l.as_str()).collect();
+        assert!(labels.contains(&"00:00"), "{labels:?}");
+        assert!(
+            !labels.contains(&"02:00"),
+            "02:00 never exists this day: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"03:00"),
+            "03:00 is not a round 2-hour mark, so it must never appear on its own: {labels:?}"
+        );
+        assert!(labels.contains(&"04:00"), "{labels:?}");
+        assert!(labels.contains(&"06:00"), "{labels:?}");
+        let at = |label: &str| ticks.iter().find(|(_, _, l)| l == label).unwrap().1;
+        assert_eq!(
+            at("04:00") - at("00:00"),
+            3.0 * 3600.0,
+            "only 3 real hours pass for 4 nominal ones, since one vanished: {ticks:?}"
+        );
+        assert_eq!(
+            at("06:00") - at("04:00"),
+            2.0 * 3600.0,
+            "back to a plain 2-hour cadence once past the change: {ticks:?}"
+        );
+    }
+
+    /// A `ClockZone` modelling the one hour US "fall back" change at
+    /// 2026-11-01 06:00 UTC (01:00 EDT repeats as 01:00 EST).
+    struct FallBackZone;
+
+    impl crate::format::ClockZone for FallBackZone {
+        fn local(
+            &self,
+            utc: chrono::DateTime<chrono::Utc>,
+        ) -> chrono::DateTime<chrono::FixedOffset> {
+            let transition = chrono::DateTime::parse_from_rfc3339("2026-11-01T06:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let offset = if utc < transition {
+                chrono::FixedOffset::west_opt(4 * 3600).unwrap()
+            } else {
+                chrono::FixedOffset::west_opt(5 * 3600).unwrap()
+            };
+            utc.with_timezone(&offset)
+        }
+    }
+
+    #[test]
+    fn axis_tick_columns_a_us_fall_back_span_repeats_the_doubled_hour() {
+        let zone = FallBackZone;
+        // Run starts at 2026-11-01T00:00 EDT (04:00 UTC) and spans 6
+        // real hours, to 2026-11-01T10:00 UTC (05:00 EST local, since
+        // 01:00-02:00 EDT runs twice this day).
+        let ticks = axis_tick_columns("2026-11-01T04:00:00Z", 0.0, 6.0 * 3600.0, 80, &zone);
+        let offsets: Vec<f64> = ticks.iter().map(|(_, s, _)| *s).collect();
+        for pair in offsets.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "ticks must stay strictly increasing across the change: {ticks:?}"
+            );
+        }
+        let labels: Vec<&str> = ticks.iter().map(|(_, _, l)| l.as_str()).collect();
+        assert!(labels.contains(&"00:00"), "{labels:?}");
+        assert!(labels.contains(&"04:00"), "{labels:?}");
+        let at = |label: &str| ticks.iter().find(|(_, _, l)| l == label).unwrap().1;
+        assert_eq!(
+            at("04:00") - at("00:00"),
+            5.0 * 3600.0,
+            "4 nominal local hours pass, plus the one repeated hour: {ticks:?}"
         );
     }
 
