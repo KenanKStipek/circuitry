@@ -597,3 +597,113 @@ def test_live_tracker_repair_phase_differs_from_transcript_label(tmp_path: Path)
     ]
     turn_lines = [line for line in lines if line["type"] == "turn"]
     assert [line["label"] for line in turn_lines] == ["turn", "repair turn"]
+
+
+def test_live_tracker_pi_takes_the_model_from_message_end_and_keeps_the_latest(
+    tmp_path: Path,
+) -> None:
+    """With no ``model`` param, pi's own ``message_end`` reports the model
+    it used, and a later turn reporting a different one updates it again
+    (#646). pi's own recorded fixture
+    (``tests/fixtures/agent_live/pi-stream.jsonl``) carries no ``model``
+    field on its ``message_end`` lines, so this test adds one itself."""
+    tracker = LiveTracker(
+        engine="pi", model="", attempt=1, transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        assert tracker._snapshot()["model"] is None
+        tracker.handle_line(json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant", "model": "anthropic/claude-sonnet",
+                "content": [{"type": "text", "text": "one"}], "stopReason": "stop",
+            },
+        }))
+        assert tracker._snapshot()["model"] == "anthropic/claude-sonnet"
+        tracker.handle_line(json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant", "model": "anthropic/claude-opus",
+                "content": [{"type": "text", "text": "two"}], "stopReason": "stop",
+            },
+        }))
+        assert tracker._snapshot()["model"] == "anthropic/claude-opus"
+        assert tracker.raw_extra()["model"] == "anthropic/claude-opus"
+    finally:
+        tracker.close()
+
+
+def test_live_tracker_pi_message_start_also_sets_the_model() -> None:
+    """pi's own ``message_start``, when it sends one, carries ``model`` the
+    same way ``message_end`` does (#646)."""
+    tracker = LiveTracker(
+        engine="pi", model="", attempt=1, transcript_path=Path("/dev/null"),
+        publish=lambda _snapshot: None,
+    )
+    try:
+        tracker.handle_line(json.dumps({
+            "type": "message_start",
+            "message": {"role": "assistant", "model": "anthropic/claude-sonnet"},
+        }))
+        assert tracker._snapshot()["model"] == "anthropic/claude-sonnet"
+    finally:
+        tracker.close()
+
+
+def test_live_tracker_claude_takes_the_model_from_system_init(tmp_path: Path) -> None:
+    """With no ``model`` param, Claude Code's own ``system``/``init`` line
+    reports the model it used (#646), matching the real recorded fixture
+    (``tests/fixtures/agent_live/claude-stream.jsonl``, whose own
+    ``system``/``init`` line already carries ``model``)."""
+    tracker = LiveTracker(
+        engine="claude_code", model="", attempt=1, transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        assert tracker._snapshot()["model"] is None
+        tracker.handle_line(json.dumps({
+            "type": "system", "subtype": "init", "session_id": "sess-1", "model": "claude-x",
+        }))
+        assert tracker._snapshot()["model"] == "claude-x"
+        assert tracker.raw_extra()["model"] == "claude-x"
+    finally:
+        tracker.close()
+
+
+@pytest.mark.parametrize(
+    ("engine", "line"),
+    [
+        (
+            "pi",
+            json.dumps({
+                "type": "message_end",
+                "message": {
+                    "role": "assistant", "model": "anthropic/claude-opus",
+                    "content": [{"type": "text", "text": "one"}], "stopReason": "stop",
+                },
+            }),
+        ),
+        (
+            "claude_code",
+            json.dumps({
+                "type": "system", "subtype": "init", "session_id": "sess-1", "model": "claude-x",
+            }),
+        ),
+    ],
+)
+def test_live_tracker_model_param_wins_over_whatever_the_stream_reports(
+    tmp_path: Path, engine: str, line: str
+) -> None:
+    """A ``model`` param fixes the tracker's model for the whole attempt
+    (#646): the CLI reporting a different one changes nothing."""
+    tracker = LiveTracker(
+        engine=engine, model="pinned/model", attempt=1, transcript_path=tmp_path / "t.log",
+        publish=lambda _snapshot: None,
+    )
+    try:
+        tracker.handle_line(line)
+        assert tracker._snapshot()["model"] == "pinned/model"
+        assert tracker.raw_extra()["model"] == "pinned/model"
+    finally:
+        tracker.close()

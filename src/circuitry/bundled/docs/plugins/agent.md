@@ -250,6 +250,7 @@ branch on.
 | Key | Meaning |
 |---|---|
 | `engine` | `pi` or `claude_code` |
+| `model` | `params['model']` when set; otherwise the model the CLI itself reports (Claude Code's `system`/`init` line, pi's own assistant message), kept up to date with the latest one the CLI reports; `null` until either names one |
 | `session_id` | The session's id — pass it to a later effect's `session` to continue it |
 | `turns` | Model turns, summed over the session and its repair turn |
 | `tool_calls` | Tool calls the agent made |
