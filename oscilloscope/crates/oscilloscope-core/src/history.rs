@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -59,7 +59,9 @@ const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 /// and per-step alike) is worked out from at most this many of a
 /// document's own most recent runs.
 const NEWEST_RUNS_FOR_STATS: usize = 20;
-const P50_MIN_RUNS: usize = 3;
+/// A whole-run ETA's own threshold — also the overview's own
+/// `history: N of 3 runs`.
+pub const P50_MIN_RUNS: usize = 3;
 const P10_P90_MIN_RUNS: usize = 5;
 
 // ---------------------------------------------------------------------
@@ -117,7 +119,7 @@ pub struct HistoryRecord {
 /// A concrete, `prime.`-prefixed path's own display key (issue #649:
 /// "keyed by its plan path with loop passes written `iter_*`") --
 /// `None` for `prime` itself, which is the whole run, never a step.
-fn display_key(path: &str, plan: &PlanTree) -> Option<String> {
+pub(crate) fn display_key(path: &str, plan: &PlanTree) -> Option<String> {
     let relative = path.strip_prefix("prime.")?;
     if !plan.has_plan() {
         // "`osi watch` with no `--plan` records top-level steps
@@ -217,28 +219,20 @@ fn build_steps(
                 .or_default()
                 .push(resolved);
         }
-        let overflowed = model.overflowed_passes(&interval.path);
-        if overflowed > 0 {
-            if let Some(key) = display_key(&interval.path, plan) {
-                // Counted once per concrete path already seen above,
-                // so this only double-adds the overflow tail, never
-                // the passes `step_intervals` itself still carries.
-                by_key.entry(key).or_default();
-            }
+    }
+
+    // One pass over the distinct overflowed paths, not one per
+    // logged interval: a path with several logged passes before it
+    // overflowed must have its own dropped tail counted once, not
+    // once per pass already logged.
+    let mut overflow_passes: BTreeMap<String, u64> = BTreeMap::new();
+    for (path, count) in model.overflowed_pass_counts() {
+        if let Some(key) = display_key(path, plan) {
+            *overflow_passes.entry(key).or_insert(0) += u64::from(*count);
         }
     }
 
     let mut steps: BTreeMap<String, StepRecord> = BTreeMap::new();
-    let mut overflow_passes: BTreeMap<String, u64> = BTreeMap::new();
-    for interval in model.step_intervals() {
-        let overflowed = model.overflowed_passes(&interval.path);
-        if overflowed > 0 {
-            if let Some(key) = display_key(&interval.path, plan) {
-                *overflow_passes.entry(key).or_insert(0) += u64::from(overflowed);
-            }
-        }
-    }
-
     for (key, intervals) in by_key {
         let ranges: Vec<(f64, f64)> = intervals.iter().map(|i| (i.start_s, i.end_s)).collect();
         let start_s = intervals
@@ -250,7 +244,7 @@ fn build_steps(
             .map(|i| i.end_s)
             .fold(f64::NEG_INFINITY, f64::max);
         let busy_s = merged_busy_s(ranges);
-        let passes = intervals.len() as u64 + overflow_passes.get(&key).copied().unwrap_or(0);
+        let passes = intervals.len() as u64 + overflow_passes.remove(&key).unwrap_or(0);
         let ok = intervals.iter().all(|i| i.ok);
         let tokens_sent = sum_optional(intervals.iter().map(|i| i.tokens_sent));
         let tokens_received = sum_optional(intervals.iter().map(|i| i.tokens_received));
@@ -266,6 +260,25 @@ fn build_steps(
                 tokens_received,
                 cost_usd,
                 ok,
+            },
+        );
+    }
+
+    // Every path whose passes all came after the cap has no logged
+    // interval at all, so it never went through the loop above --
+    // without this, its passes would simply vanish from the record.
+    for (key, passes) in overflow_passes {
+        steps.insert(
+            key,
+            StepRecord {
+                start_s: 0.0,
+                end_s: 0.0,
+                busy_s: 0.0,
+                passes,
+                tokens_sent: None,
+                tokens_received: None,
+                cost_usd: None,
+                ok: true,
             },
         );
     }
@@ -467,7 +480,12 @@ pub fn ensure_history_dir(dir: &Path) -> std::io::Result<()> {
     if dir.exists() {
         let mode = std::fs::metadata(dir)?.permissions().mode();
         if mode & 0o077 != 0 {
-            eprintln!(
+            // `let _ = writeln!(stderr())`, not `eprintln!`: a
+            // caller can reach this right after a lost terminal,
+            // where `eprintln!`'s own panic on a write failure would
+            // turn a plain warning into a crash.
+            let _ = writeln!(
+                std::io::stderr(),
                 "osi: history directory {} is group- or world-accessible (mode {:o}); \
                  it can hold document paths and step names",
                 dir.display(),
@@ -500,7 +518,11 @@ struct FileLock {
 impl FileLock {
     fn acquire(path: &Path) -> std::io::Result<Self> {
         use std::os::unix::io::AsRawFd;
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)?;
         let fd = file.as_raw_fd();
         // Blocking advisory lock (issue #649): several `osi` processes
         // can finish runs of the same document at once; the first to
@@ -511,6 +533,29 @@ impl FileLock {
             return Err(std::io::Error::last_os_error());
         }
         Ok(FileLock { file })
+    }
+
+    /// [`Self::acquire`], non-blocking -- `Ok(None)` exactly when
+    /// another process already holds it, used by [`evict_if_needed`]
+    /// so eviction never removes a file (or its lock) out from under
+    /// a writer that's mid-append or mid-compaction.
+    fn try_acquire(path: &Path) -> std::io::Result<Option<Self>> {
+        use std::os::unix::io::AsRawFd;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)?;
+        let fd = file.as_raw_fd();
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            return match err.raw_os_error() {
+                Some(code) if code == libc::EWOULDBLOCK => Ok(None),
+                _ => Err(err),
+            };
+        }
+        Ok(Some(FileLock { file }))
     }
 }
 
@@ -538,14 +583,26 @@ pub fn append_record(
     let lock_path = lock_path_for(&file_path);
     let _lock = FileLock::acquire(&lock_path)?;
 
-    let is_new = !file_path.exists();
+    if file_path.exists() && run_id_already_present(&file_path, &record.run_id)? {
+        // Issue #649: "a repeated `run_id` counts once, so `osi
+        // watch` on old run directories can fill in history safely"
+        // -- a second watch of an already-recorded run must add
+        // nothing at all, not a duplicate line left for a reader's
+        // own dedupe to paper over. Checked under the same lock the
+        // append itself takes, so two writers racing the same
+        // `run_id` still can't both get past this.
+        return Ok(());
+    }
+
+    // `mode(0o600)` only ever takes effect when this call is the one
+    // that creates the file -- never a chmod after the fact, so
+    // there's no window where a freshly created file is briefly
+    // readable at the umask's own mode.
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(&file_path)?;
-    if is_new {
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
     let mut line = serde_json::to_string(record).map_err(std::io::Error::other)?;
     line.push('\n');
     file.write_all(line.as_bytes())?;
@@ -556,6 +613,20 @@ pub fn append_record(
         compact(&file_path)?;
     }
     Ok(())
+}
+
+fn run_id_already_present(file_path: &Path, run_id: &str) -> std::io::Result<bool> {
+    for line in read_raw_lines(file_path)? {
+        if line.len() > MAX_LINE_BYTES {
+            continue;
+        }
+        if let Ok(existing) = serde_json::from_str::<HistoryRecord>(&line) {
+            if existing.v == FORMAT_VERSION && existing.run_id == run_id {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn lock_path_for(file_path: &Path) -> PathBuf {
@@ -670,10 +741,17 @@ pub fn evict_if_needed(history_dir: &Path) -> std::io::Result<()> {
     let mut idx = 0;
     while (count > MAX_DOCUMENTS || total > MAX_TOTAL_BYTES) && idx < files.len() {
         let (path, _, len) = &files[idx];
-        if std::fs::remove_file(path).is_ok() {
-            let _ = std::fs::remove_file(lock_path_for(path));
-            total = total.saturating_sub(*len);
-            count -= 1;
+        let lock_path = lock_path_for(path);
+        // Holds the file's own lock before removing it (or its lock
+        // file): skips a file another process is still mid-append or
+        // mid-compaction on, rather than deleting it out from under
+        // them, and leaves it for a later eviction pass instead.
+        if let Ok(Some(_lock)) = FileLock::try_acquire(&lock_path) {
+            if std::fs::remove_file(path).is_ok() {
+                total = total.saturating_sub(*len);
+                count -= 1;
+            }
+            let _ = std::fs::remove_file(&lock_path);
         }
         idx += 1;
     }
@@ -717,8 +795,10 @@ pub struct StepStats {
     pub busy_p50_s: Option<f64>,
     pub busy_p10_s: Option<f64>,
     pub busy_p90_s: Option<f64>,
-    /// p50 of `run.wall_s - step.end_s` over the same pool (the ETA's
-    /// own "what usually follows this step").
+    /// p50 of `run.wall_s - step.end_s`, pooled across every ok run
+    /// of this path, any hash -- shown generically for a step, but
+    /// never read by [`compute_eta`] itself; see
+    /// [`DocumentStats::anchor_remaining_after_p50_s`].
     pub remaining_after_p50_s: Option<f64>,
 }
 
@@ -733,6 +813,14 @@ pub struct DocumentStats {
     /// across *every* ok run of this document path, any hash
     /// (DESIGN.md's "earlier versions" pooling).
     pub per_step: BTreeMap<String, StepStats>,
+    /// p50 of `run.wall_s - step.end_s`, restricted to the exact same
+    /// pool [`Self::whole_run`] itself comes from (the current run's
+    /// own `document_hash`, newest 20, ok only) -- issue #649's ETA
+    /// rule, "the p50 of (the run's `wall_s` − S's `end_s`) over the
+    /// same runs": pooling every hash here, like [`Self::per_step`]
+    /// does for display, would let an edit that adds work after an
+    /// anchor step make the ETA too early.
+    pub anchor_remaining_after_p50_s: BTreeMap<String, f64>,
 }
 
 /// The newest `limit` of `records`, newest first -- ties (an absent
@@ -788,17 +876,21 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
         keys.extend(r.steps.keys().cloned());
     }
     let mut per_step = BTreeMap::new();
-    for key in keys {
+    for key in &keys {
         let busy: Vec<f64> = newest_ok
             .iter()
-            .filter_map(|r| r.steps.get(&key).map(|s| s.busy_s))
+            .filter_map(|r| r.steps.get(key).map(|s| s.busy_s))
             .collect();
+        // Pooled across every ok run of this path, any hash
+        // (DESIGN.md's "earlier versions" pooling) -- shown
+        // generically for a step, but never used by the ETA itself,
+        // which needs the same runs its own whole-run figures do.
         let remaining: Vec<f64> = newest_ok
             .iter()
-            .filter_map(|r| r.steps.get(&key).map(|s| r.wall_s - s.end_s))
+            .filter_map(|r| r.steps.get(key).map(|s| r.wall_s - s.end_s))
             .collect();
         per_step.insert(
-            key,
+            key.clone(),
             StepStats {
                 count: busy.len(),
                 busy_p50_s: percentile_with_threshold(&busy, 50.0, P50_MIN_RUNS),
@@ -809,9 +901,27 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
         );
     }
 
+    // The ETA's own "over the same runs" (issue #649): restricted to
+    // the same pool `whole_run` itself comes from, unlike `per_step`
+    // above -- pooling every hash here would let an edit that adds
+    // work after an anchor step make the ETA too early, since the
+    // anchor's "what usually follows" would include runs of a
+    // document that no longer matches what's actually running.
+    let mut anchor_remaining_after_p50_s = BTreeMap::new();
+    for key in &keys {
+        let remaining: Vec<f64> = same_hash
+            .iter()
+            .filter_map(|r| r.steps.get(key).map(|s| r.wall_s - s.end_s))
+            .collect();
+        if let Some(p50) = percentile_with_threshold(&remaining, 50.0, P50_MIN_RUNS) {
+            anchor_remaining_after_p50_s.insert(key.clone(), p50);
+        }
+    }
+
     DocumentStats {
         same_hash_ok_count,
         whole_run,
+        anchor_remaining_after_p50_s,
         per_step,
     }
 }
@@ -894,6 +1004,16 @@ pub struct EtaOutput {
     pub low_s: Option<f64>,
     pub high_s: Option<f64>,
     pub whole_run_count: usize,
+    /// The usual (p50) time the whole run takes, over the same pool
+    /// `remaining_s` itself comes from -- the overview's own "`(p50
+    /// 45m)`".
+    pub usual_total_s: Option<f64>,
+    /// How far ahead of (negative) or behind (positive) usual pace
+    /// the run is at its own anchor point -- actual elapsed time to
+    /// reach the anchor minus the usual elapsed time to reach the
+    /// same point. `None` before any recorded step has finished (no
+    /// anchor to compare against yet).
+    pub vs_usual_s: Option<f64>,
 }
 
 impl EtaOutput {
@@ -922,25 +1042,28 @@ pub fn compute_eta(stats: &DocumentStats, input: &EtaInput) -> EtaOutput {
     let anchor = input
         .finished_steps
         .iter()
-        .filter(|(key, _)| {
-            stats
-                .per_step
-                .get(key)
-                .is_some_and(|s| s.remaining_after_p50_s.is_some())
-        })
+        .filter(|(key, _)| stats.anchor_remaining_after_p50_s.contains_key(key))
         .max_by(|a, b| a.1.total_cmp(&b.1));
     let mut remaining_s = match anchor {
         Some((key, end_s)) => {
-            let after = stats.per_step[key].remaining_after_p50_s.unwrap_or(0.0);
+            let after = stats.anchor_remaining_after_p50_s[key];
             (end_s + after) - input.now_offset_s
         }
         None => whole_run.p50_s - input.now_offset_s,
     };
+    let vs_usual_s = anchor.map(|(key, end_s)| {
+        let after = stats.anchor_remaining_after_p50_s[key];
+        end_s - (whole_run.p50_s - after)
+    });
     if let Some((key, elapsed_busy)) = &input.running_step {
         if let Some(step_stats) = stats.per_step.get(key) {
             if let Some(busy_p50) = step_stats.busy_p50_s {
                 let left = (busy_p50 - elapsed_busy).max(0.0);
-                let after = step_stats.remaining_after_p50_s.unwrap_or(0.0);
+                let after = stats
+                    .anchor_remaining_after_p50_s
+                    .get(key)
+                    .copied()
+                    .unwrap_or(0.0);
                 remaining_s = remaining_s.max(left + after);
             }
         }
@@ -957,6 +1080,8 @@ pub fn compute_eta(stats: &DocumentStats, input: &EtaInput) -> EtaOutput {
             .p90_s
             .map(|p90| (p90 - input.now_offset_s).max(0.0)),
         whole_run_count: whole_run.count,
+        usual_total_s: Some(whole_run.p50_s),
+        vs_usual_s,
     }
 }
 

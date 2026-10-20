@@ -261,6 +261,33 @@ pub struct Header {
     /// history to know one — the header then reads `ETA ?` rather
     /// than falling back to the loop ETA.
     pub history_eta_past_usual: bool,
+    /// `history_eta_ts`'s own seconds-from-now, before it was turned
+    /// into a clock time — the overview's own `(12m)`. `None`
+    /// exactly when `history_eta_ts` is.
+    pub history_eta_remaining_s: Option<f64>,
+    /// The p10/p90 range behind `history_eta_ts`, as clock times —
+    /// the overview's own `usual 11:58–12:09`. Either may be `None`
+    /// below the p10/p90 run-count threshold even with
+    /// `history_eta_ts` set.
+    pub history_eta_low_ts: Option<String>,
+    pub history_eta_high_ts: Option<String>,
+    /// How far ahead of (negative) or behind (positive) usual pace
+    /// the run is at its own anchor step — the overview's own `vs
+    /// usual +3m`. `None` before any recorded step has finished.
+    pub history_vs_usual_s: Option<f64>,
+    /// The usual (p50) whole-run time behind `history_vs_usual_s` —
+    /// the overview's own `(p50 45m)`.
+    pub history_usual_total_s: Option<f64>,
+    /// How many ok runs of the current document hash history has,
+    /// whatever their count — the overview's own `history: N of 3
+    /// runs` while below the threshold a whole-run ETA itself needs.
+    pub history_same_hash_count: usize,
+    /// Per-step usual busy time from history (issue #649's now-pane
+    /// bar), keyed the same way [`crate::history::HistoryRecord::
+    /// steps`] is -- pooled across every ok run of this document
+    /// path, any hash ("earlier versions" pooling). Empty when
+    /// history is off or there's no document yet.
+    pub history_step_usual: std::collections::BTreeMap<String, crate::history::StepStats>,
     /// The latest report seen, once at least one has arrived (#610)
     /// -- a front end shows this in the header's own status-line
     /// slot, in place of `run_id`, for the rest of the run. `None`
@@ -1586,6 +1613,13 @@ fn build_header(
         // caller, directly on the `Header` this returns.
         history_eta_ts: None,
         history_eta_past_usual: false,
+        history_eta_remaining_s: None,
+        history_eta_low_ts: None,
+        history_eta_high_ts: None,
+        history_vs_usual_s: None,
+        history_usual_total_s: None,
+        history_same_hash_count: 0,
+        history_step_usual: Default::default(),
         latest_report,
         engine_alive,
     }

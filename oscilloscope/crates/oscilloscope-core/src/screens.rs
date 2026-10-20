@@ -523,6 +523,16 @@ pub struct FocusedStep {
     /// [`crate::flow::FlowRow::tokens`] uses.
     pub tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    /// A running step's own usual busy time from history (issue
+    /// #649's now-pane bar) -- `None` below the 3-run threshold, or
+    /// for a step that isn't actually running right now. Filled in
+    /// by [`build_now_pane`]'s own `NowFocus::Running` branch, never
+    /// by [`build_focused_step`] itself, which has no history of its
+    /// own to read.
+    pub usual_busy_p50_s: Option<f64>,
+    /// [`Self::usual_busy_p50_s`]'s own p90 -- `None` below the
+    /// 5-run threshold even with a p50 in hand.
+    pub usual_busy_p90_s: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -565,6 +575,25 @@ pub struct TimeCard {
     pub end_ts: Option<String>,
     pub elapsed_s: f64,
     pub eta_ts: Option<String>,
+    /// Set exactly when `eta_ts` came from history rather than the
+    /// loop ETA fallback — the only case the overview's own `(12m)`/
+    /// `usual …`/`vs usual …` figures apply to.
+    pub eta_from_history: bool,
+    /// `eta_ts`'s own seconds-from-now — the overview's own `(12m)`.
+    pub eta_remaining_s: Option<f64>,
+    /// Set once the run is past its own usual (p90) end — the
+    /// overview reads `ETA ?` rather than falling back to the loop
+    /// ETA, same three-way choice the header line makes.
+    pub eta_past_usual: bool,
+    pub usual_low_ts: Option<String>,
+    pub usual_high_ts: Option<String>,
+    pub vs_usual_s: Option<f64>,
+    pub usual_total_s: Option<f64>,
+    /// How many ok runs of the current document hash history has,
+    /// shown as `history: N of 3 runs` only while it's below the
+    /// threshold a whole-run ETA itself needs (`eta_from_history` is
+    /// false but history isn't simply off).
+    pub history_count: Option<usize>,
     pub bar: Vec<(String, f64)>,
     pub slowest_finished: Option<(String, f64)>,
 }
@@ -763,6 +792,8 @@ fn build_focused_step(
         received: details.received.clone(),
         tokens,
         cost_usd,
+        usual_busy_p50_s: None,
+        usual_busy_p90_s: None,
     }
 }
 
@@ -830,7 +861,13 @@ fn build_now_pane(
             .and_then(|p| running.iter().find(|r| r.path == p).copied())
             .or_else(|| running.iter().max_by_key(|r| r.depth).copied());
         if let Some(target) = target {
-            let step = build_focused_step(target, flat, plan, model, state, now);
+            let mut step = build_focused_step(target, flat, plan, model, state, now);
+            if let Some(usual) = crate::history::display_key(&target.path, plan)
+                .and_then(|key| header.history_step_usual.get(&key))
+            {
+                step.usual_busy_p50_s = usual.busy_p50_s;
+                step.usual_busy_p90_s = usual.busy_p90_s;
+            }
             NowFocus::Running(step, running.len() - 1)
         } else {
             let last_finished = rows
@@ -882,17 +919,51 @@ fn build_time_card(header: &crate::render::Header, phase_strip: &[PhaseStep]) ->
         .filter(|s| s.status.kind == StatusKind::Done)
         .filter_map(|s| s.duration_s.map(|d| (s.label.clone(), d)))
         .max_by(|a, b| a.1.total_cmp(&b.1));
+    // Issue #649: the same three-way choice the header line makes --
+    // `ETA ?` once past the usual end, else history's own `ETA ~`,
+    // else the loop ETA -- so the card and the header never disagree.
+    let (eta_ts, eta_from_history) = if header.history_eta_past_usual {
+        (None, true)
+    } else if header.history_eta_ts.is_some() {
+        (header.history_eta_ts.clone(), true)
+    } else {
+        (header.innermost_loop_eta_ts.clone(), false)
+    };
+    let history_count = (!eta_from_history && header.history_same_hash_count > 0)
+        .then_some(header.history_same_hash_count);
     TimeCard {
         start_ts: header.run_start_ts.clone(),
         end_ts: header.run_end_ts.clone(),
         elapsed_s: header.elapsed_s,
-        // Issue #649: the whole-run ETA from history, once there
-        // are enough runs, same fallback order as the header line's
-        // own `ETA ~`/`loop ETA ~`.
-        eta_ts: header
-            .history_eta_ts
-            .clone()
-            .or_else(|| header.innermost_loop_eta_ts.clone()),
+        eta_ts,
+        eta_from_history,
+        eta_remaining_s: if eta_from_history {
+            header.history_eta_remaining_s
+        } else {
+            None
+        },
+        eta_past_usual: header.history_eta_past_usual,
+        usual_low_ts: if eta_from_history {
+            header.history_eta_low_ts.clone()
+        } else {
+            None
+        },
+        usual_high_ts: if eta_from_history {
+            header.history_eta_high_ts.clone()
+        } else {
+            None
+        },
+        vs_usual_s: if eta_from_history {
+            header.history_vs_usual_s
+        } else {
+            None
+        },
+        usual_total_s: if eta_from_history {
+            header.history_usual_total_s
+        } else {
+            None
+        },
+        history_count,
         bar,
         slowest_finished,
     }
@@ -1336,6 +1407,13 @@ mod tests {
             innermost_loop_eta_ts: Some("2026-10-08T11:58:00Z".to_string()),
             history_eta_ts: None,
             history_eta_past_usual: false,
+            history_eta_remaining_s: None,
+            history_eta_low_ts: None,
+            history_eta_high_ts: None,
+            history_vs_usual_s: None,
+            history_usual_total_s: None,
+            history_same_hash_count: 0,
+            history_step_usual: Default::default(),
             latest_report: None,
             engine_alive: true,
         }

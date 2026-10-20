@@ -910,6 +910,23 @@ fn focus_step_lines(
             },
             FocusDetail::Plain => {}
         }
+        if more_running.is_some() {
+            if let (Some(p50), Some(elapsed)) = (step.usual_busy_p50_s, step.elapsed_s) {
+                let usual = p50.max(step.usual_busy_p90_s.unwrap_or(p50));
+                let bar = usual_progress_bar(elapsed, usual, 6);
+                let mut text = format!(
+                    "{bar} p50 {}",
+                    oscilloscope_core::format::format_duration(p50)
+                );
+                if let Some(p90) = step.usual_busy_p90_s {
+                    text.push_str(&format!(
+                        " · p90 {}",
+                        oscilloscope_core::format::format_duration(p90)
+                    ));
+                }
+                lines.push(Line::from(text));
+            }
+        }
         if let Some(more) = more_running {
             if more > 0 {
                 lines.push(Line::from(format!("+{more} more running")));
@@ -1051,12 +1068,55 @@ fn draw_time_card(
     lines.push(Line::from(oscilloscope_core::format::format_duration(
         card.elapsed_s,
     )));
-    if let Some(eta) = card
+    if card.eta_past_usual {
+        lines.push(Line::from("ETA ?"));
+    } else if let Some(eta) = card
         .eta_ts
         .as_deref()
         .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
     {
-        lines.push(Line::from(format!("ETA ~{}", &eta[..5.min(eta.len())])));
+        let label = if card.eta_from_history {
+            "ETA"
+        } else {
+            "loop ETA"
+        };
+        let remaining = card
+            .eta_remaining_s
+            .filter(|_| card.eta_from_history)
+            .map(|s| format!(" ({})", format_minutes(s)))
+            .unwrap_or_default();
+        lines.push(Line::from(format!(
+            "{label} ~{}{remaining}",
+            &eta[..5.min(eta.len())]
+        )));
+    }
+    if card.eta_from_history {
+        if let (Some(vs_usual), Some(usual_total)) = (card.vs_usual_s, card.usual_total_s) {
+            lines.push(Line::from(format!(
+                "vs usual {} (p50 {})",
+                format_minutes_signed(vs_usual),
+                format_minutes(usual_total)
+            )));
+        }
+        if let (Some(low), Some(high)) = (
+            card.usual_low_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+            card.usual_high_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+        ) {
+            lines.push(Line::from(format!(
+                "usual {}\u{2013}{}",
+                &low[..5.min(low.len())],
+                &high[..5.min(high.len())]
+            )));
+        }
+    } else if let Some(count) = card.history_count {
+        lines.push(Line::from(format!(
+            "history: {count} of {} runs",
+            oscilloscope_core::history::P50_MIN_RUNS
+        )));
     }
     if !card.bar.is_empty() {
         let max_ms = card
@@ -1574,6 +1634,47 @@ fn bar(value: u64, max: u64, width: usize) -> String {
     }
     let filled = ((value as f64 / max as f64) * width as f64).round() as usize;
     "█".repeat(filled.min(width))
+}
+
+/// `secs`, rounded to the nearest whole minute (issue #649's overview
+/// figures: `(12m)`, `(p50 45m)`) -- a coarser rounding than
+/// [`oscilloscope_core::format::format_duration`]'s own `6m12s`,
+/// deliberately: these are "about how long", not a clock.
+fn format_minutes(secs: f64) -> String {
+    let minutes = (secs / 60.0).round().max(0.0) as u64;
+    format!("{minutes}m")
+}
+
+/// [`format_minutes`], signed (issue #649's `vs usual +3m`/`-2m`).
+fn format_minutes_signed(secs: f64) -> String {
+    let minutes = (secs / 60.0).round() as i64;
+    if minutes < 0 {
+        format!("{minutes}m")
+    } else {
+        format!("+{minutes}m")
+    }
+}
+
+/// A running step's own elapsed busy time against its usual one
+/// (issue #649's now-pane bar): full blocks, one trailing half-block
+/// for a fractional unit, `░` filling the rest -- `value_s` past
+/// `usual_s` still fills the bar completely rather than overflowing
+/// it.
+fn usual_progress_bar(value_s: f64, usual_s: f64, width: usize) -> String {
+    if usual_s <= 0.0 || width == 0 {
+        return String::new();
+    }
+    let frac = (value_s / usual_s).clamp(0.0, 1.0);
+    let eighths = (frac * width as f64 * 2.0).round() as usize;
+    let full = (eighths / 2).min(width);
+    let half = eighths % 2 == 1 && full < width;
+    let empty = width - full - usize::from(half);
+    format!(
+        "{}{}{}",
+        "█".repeat(full),
+        if half { "▌" } else { "" },
+        "░".repeat(empty)
+    )
 }
 
 /// The Cost screen's own squarified-layout cache (issue #632,
@@ -7993,6 +8094,13 @@ mod highlight_tests {
                 innermost_loop_eta_ts: None,
                 history_eta_ts: None,
                 history_eta_past_usual: false,
+                history_eta_remaining_s: None,
+                history_eta_low_ts: None,
+                history_eta_high_ts: None,
+                history_vs_usual_s: None,
+                history_usual_total_s: None,
+                history_same_hash_count: 0,
+                history_step_usual: Default::default(),
                 latest_report: None,
                 engine_alive: true,
             },

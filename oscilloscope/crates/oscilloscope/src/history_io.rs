@@ -7,6 +7,7 @@
 //! decides *when* those functions run and with which paths.
 
 use std::cell::RefCell;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use oscilloscope_core::history::{self, DocumentStats, EtaOutput, HistoryRecord};
@@ -113,6 +114,14 @@ pub struct HistoryHandle {
     warned_no_document: std::cell::Cell<bool>,
     records: RefCell<Option<Vec<HistoryRecord>>>,
     stats: RefCell<Option<(Option<String>, DocumentStats)>>,
+    /// A notice [`Self::ensure_document`] has, but hasn't printed yet
+    /// -- `ensure_document` itself runs on every redraw inside the
+    /// TUI's own raw-mode, alternate-screen loop, where a bare
+    /// `eprintln!` would land as a stray line over the drawn frame.
+    /// The caller takes these with [`Self::take_notices`] once the
+    /// terminal is back to normal (or, for `--glance`, once its own
+    /// loop ends) and prints them there instead.
+    pending_notices: RefCell<Vec<String>>,
 }
 
 impl HistoryHandle {
@@ -127,6 +136,7 @@ impl HistoryHandle {
             warned_no_document: std::cell::Cell::new(false),
             records: RefCell::new(None),
             stats: RefCell::new(None),
+            pending_notices: RefCell::new(Vec::new()),
         }
     }
 
@@ -141,7 +151,15 @@ impl HistoryHandle {
             warned_no_document: std::cell::Cell::new(false),
             records: RefCell::new(None),
             stats: RefCell::new(None),
+            pending_notices: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Every notice queued so far, removing them -- the caller's own
+    /// job to print, once it's safe to (issue #649; see
+    /// [`Self::pending_notices`]'s own doc comment).
+    pub fn take_notices(&self) -> Vec<String> {
+        std::mem::take(&mut self.pending_notices.borrow_mut())
     }
 
     fn ensure_document(&self, state: Option<&serde_json::Value>) {
@@ -155,9 +173,10 @@ impl HistoryHandle {
                 *self.document.borrow_mut() = resolved;
                 if self.document.borrow().is_none() && !self.warned_no_document.get() {
                     self.warned_no_document.set(true);
-                    eprintln!(
+                    self.pending_notices.borrow_mut().push(
                         "osi: this watch has no absolute orchestration path and no --plan; \
                          history is off for it"
+                            .to_string(),
                     );
                 }
             }
@@ -183,29 +202,39 @@ impl HistoryHandle {
         self.stats.borrow().as_ref().map(|(_, stats)| stats.clone())
     }
 
-    /// The whole-run ETA for this frame (issue #649), or `None` when
-    /// history is off, the document isn't known yet (a watch with no
-    /// state), or there isn't enough history for one yet.
-    pub fn eta(
+    /// The whole-run ETA for this frame (issue #649), plus the
+    /// statistics it came from (the now pane's own per-step usual
+    /// time needs [`DocumentStats::per_step`] too) -- `None` under
+    /// the same conditions [`HistoryHandle::eta`] documents.
+    pub fn eta_with_stats(
         &self,
         state: Option<&serde_json::Value>,
         plan: &PlanTree,
         run_start_ts: Option<&str>,
-    ) -> Option<EtaOutput> {
+        now: &str,
+    ) -> Option<(EtaOutput, DocumentStats)> {
         self.ensure_document(state);
         let state = state?;
-        let run_start_ts = run_start_ts?;
+        // `last_run.started_at` when it's in hand, same anchor the
+        // recorded runs' own offsets come from (`build_record`) --
+        // `header.run_start_ts` can resolve earlier (cof sets it
+        // before preflight runs), which would otherwise offset this
+        // run's own figures from every recorded one by however long
+        // that takes.
+        let eta_start_ts = state
+            .pointer("/runtime/last_run/started_at")
+            .and_then(serde_json::Value::as_str)
+            .or(run_start_ts)?;
         let current_hash = state
             .pointer("/runtime/last_run/document_hash")
             .and_then(serde_json::Value::as_str);
         let stats = self.stats_for(current_hash)?;
-        let elapsed_s = oscilloscope_core::observe::duration_seconds(
-            run_start_ts,
-            &oscilloscope_core::observe::now_rfc3339(),
-        )
-        .unwrap_or(0.0);
-        let input = history::eta_input_from_state(state, plan, run_start_ts, elapsed_s);
-        Some(history::compute_eta(&stats, &input))
+        let anchor_now = eta_anchor_now(state, now);
+        let elapsed_s =
+            oscilloscope_core::observe::duration_seconds(eta_start_ts, anchor_now).unwrap_or(0.0);
+        let input = history::eta_input_from_state(state, plan, eta_start_ts, elapsed_s);
+        let eta = history::compute_eta(&stats, &input);
+        Some((eta, stats))
     }
 
     /// Writes one record for this run, once it has truly ended
@@ -234,7 +263,12 @@ impl HistoryHandle {
             return;
         };
         if let Err(err) = history::append_record(dir, &document, &record) {
-            eprintln!("osi: couldn't write run history: {err}");
+            // `let _ = writeln!(stderr())`, not `eprintln!`: this can
+            // run right after a lost terminal (`main.rs`'s own
+            // `lost_terminal`), where `eprintln!`'s own panic on a
+            // write failure would turn a history write failure into
+            // a crash.
+            let _ = writeln!(std::io::stderr(), "osi: couldn't write run history: {err}");
             return;
         }
         let _ = history::evict_if_needed(dir);
@@ -255,9 +289,44 @@ pub fn apply_history_eta(
     plan: &PlanTree,
     now: &str,
 ) {
-    let Some(eta) = history.eta(state, plan, header.run_start_ts.as_deref()) else {
+    let Some((eta, stats)) =
+        history.eta_with_stats(state, plan, header.run_start_ts.as_deref(), now)
+    else {
         return;
     };
     header.history_eta_past_usual = eta.past_usual;
-    header.history_eta_ts = eta.eta_ts(now);
+    let anchor_now = state.map(|s| eta_anchor_now(s, now)).unwrap_or(now);
+    header.history_eta_ts = eta.eta_ts(anchor_now);
+    header.history_eta_remaining_s = eta.remaining_s;
+    header.history_eta_low_ts = eta_ts_for(eta.low_s, anchor_now);
+    header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
+    header.history_vs_usual_s = eta.vs_usual_s;
+    header.history_usual_total_s = eta.usual_total_s;
+    header.history_same_hash_count = eta.whole_run_count;
+    header.history_step_usual = stats.per_step;
+}
+
+/// Once a run has truly ended (issue #649), the ETA freezes at its
+/// own end rather than the wall clock: the TUI can stay open on a
+/// finished run's state for as long as the user likes, and measuring
+/// elapsed time against a live `now` would show an ETA that kept
+/// sliding forward, eventually past its own usual end.
+fn eta_anchor_now<'a>(state: &'a serde_json::Value, now: &'a str) -> &'a str {
+    if oscilloscope_core::model::run_ended(state) {
+        if let Some(ts) = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(serde_json::Value::as_str)
+        {
+            return ts;
+        }
+    }
+    now
+}
+
+fn eta_ts_for(seconds: Option<f64>, now: &str) -> Option<String> {
+    seconds.and_then(|s| {
+        oscilloscope_core::diff::parse_instant(now).map(|now_dt| {
+            (now_dt + chrono::Duration::milliseconds((s * 1000.0).round() as i64)).to_rfc3339()
+        })
+    })
 }

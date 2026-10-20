@@ -647,21 +647,19 @@ pub struct RunModel {
     /// when `--events` carried one -- both engines always write it,
     /// but a stream from an older build might not.
     run_start_engine: Option<String>,
-    /// Set the first time any `--events` line arrives at all (issue
-    /// #649): while true, [`RunModel::step_intervals`] is fed only by
-    /// id-paired `start`/`end` events (`Event::Start`/`Event::End`),
-    /// not by state's own `created_at`/`completed_at` -- the two
-    /// sources would otherwise double-count the very same pass once
-    /// state eventually catches up with it.
-    has_events: bool,
     /// `Event::Start`'s own `ts`, by `id` -- `started_at` alone keeps
     /// only the latest start *per path*, which can't tell two
     /// concurrently open ids at the same (unnamed-loop) path apart.
     start_ts_by_id: BTreeMap<i64, String>,
     /// Every concrete path that has had at least one id-paired
-    /// `start`/`end` pair observed via events -- `observe`'s own
-    /// state-based interval capture (`push_state_interval`) skips
-    /// any path in this set, since events already cover it exactly.
+    /// `start` observed via events -- `observe`'s own state-based
+    /// interval capture (`push_state_interval`) skips any path in
+    /// this set, since its events-sourced `end` already covers it
+    /// exactly (or will once it arrives). Marked at `start`, not at
+    /// `end`, so a redraw that observes the node already finished in
+    /// state before the matching `end` line has been read still
+    /// skips it, rather than logging the same pass from both
+    /// sources.
     paths_with_id_events: BTreeSet<String>,
     /// One entry per effect instance that has run to completion,
     /// however it was observed (issue #649's history record: "a
@@ -741,7 +739,6 @@ impl RunModel {
             reports_by_path: BTreeMap::new(),
             report_event_paths: BTreeSet::new(),
             run_start_engine: None,
-            has_events: false,
             start_ts_by_id: BTreeMap::new(),
             paths_with_id_events: BTreeSet::new(),
             step_intervals: Vec::new(),
@@ -753,7 +750,6 @@ impl RunModel {
     /// Feeds one parsed `--events` line in (DESIGN.md §2.1's "With
     /// events (exact)" table, §3's ordering/abort rules).
     pub fn observe_event(&mut self, event: &Event) {
-        self.has_events = true;
         match event {
             Event::Dispatch {
                 path,
@@ -793,6 +789,7 @@ impl RunModel {
                     Some(id) => {
                         self.open_by_id.insert(*id, path.clone());
                         self.start_ts_by_id.insert(*id, ts.clone());
+                        self.paths_with_id_events.insert(path.clone());
                     }
                     None => {
                         *self.open_unid.entry(path.clone()).or_insert(0) += 1;
@@ -813,7 +810,6 @@ impl RunModel {
                     Some(id) => {
                         self.open_by_id.remove(id);
                         if let Some(start_ts) = self.start_ts_by_id.remove(id) {
-                            self.paths_with_id_events.insert(path.clone());
                             self.push_step_interval(StepInterval {
                                 path: path.clone(),
                                 start_ts,
@@ -1148,9 +1144,11 @@ impl RunModel {
     /// A path's own passes dropped past [`MAX_STEP_INTERVALS`] -- added
     /// to [`RunModel::step_intervals`]'s own count for that path when a
     /// caller builds a history record, since neither alone is the true
-    /// total.
-    pub fn overflowed_passes(&self, path: &str) -> u32 {
-        self.overflowed_pass_counts.get(path).copied().unwrap_or(0)
+    /// total. One entry per path that has had at least one pass
+    /// dropped, including a path with no logged interval at all
+    /// (every one of its passes came after the cap).
+    pub fn overflowed_pass_counts(&self) -> &BTreeMap<String, u32> {
+        &self.overflowed_pass_counts
     }
 
     /// `run_start`'s own `engine` field (issue #649), when `--events`

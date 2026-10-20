@@ -698,8 +698,21 @@ fn run_glance(
         None,
         history,
     );
+    flush_history_notices(history);
 
     ExitCode::from(exit_code(exit_status) as u8)
+}
+
+/// Every notice [`history_io::HistoryHandle`] has queued rather than
+/// printed right away (issue #649) -- called once a loop that reads
+/// history on every redraw is done, never from inside one: the TUI's
+/// own raw-mode, alternate-screen loop, and `--glance`'s own
+/// rewritten-in-place line, would both show a bare `eprintln!` as a
+/// stray line over whatever's actually drawn.
+fn flush_history_notices(history: &history_io::HistoryHandle) {
+    for notice in history.take_notices() {
+        let _ = writeln!(std::io::stderr(), "{notice}");
+    }
 }
 
 /// `osi watch`'s own document name (issue #626): the watched run's
@@ -787,6 +800,7 @@ fn watch_glance(
         // Issue #649: "`osi watch --glance --once` only reads" --
         // never a write, even when the one state it happened to read
         // already shows the run ended.
+        flush_history_notices(history);
         return ExitCode::from(0);
     }
 
@@ -901,6 +915,7 @@ fn watch_glance(
         engine_alive,
         history,
     );
+    flush_history_notices(history);
     // Signals and exit codes work exactly as `--log`'s own do
     // (DESIGN.md) -- the same rule `finish_watch` uses, not a second
     // copy of it.
@@ -2615,6 +2630,7 @@ fn run_tui(
         drop(terminal);
     }
     drop(_guard);
+    flush_history_notices(history);
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -3731,6 +3747,7 @@ fn run_tui_watch(
         drop(terminal);
     }
     drop(_guard);
+    flush_history_notices(history);
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
