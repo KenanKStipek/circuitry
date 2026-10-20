@@ -886,7 +886,13 @@ fn build_time_card(header: &crate::render::Header, phase_strip: &[PhaseStep]) ->
         start_ts: header.run_start_ts.clone(),
         end_ts: header.run_end_ts.clone(),
         elapsed_s: header.elapsed_s,
-        eta_ts: header.innermost_loop_eta_ts.clone(),
+        // Issue #649: the whole-run ETA from history, once there
+        // are enough runs, same fallback order as the header line's
+        // own `ETA ~`/`loop ETA ~`.
+        eta_ts: header
+            .history_eta_ts
+            .clone()
+            .or_else(|| header.innermost_loop_eta_ts.clone()),
         bar,
         slowest_finished,
     }

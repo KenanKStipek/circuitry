@@ -72,8 +72,9 @@ struct RunArgs {
     /// Which engine runs the orchestration.
     #[arg(long, value_enum, default_value = "cof")]
     engine: EngineChoice,
-    /// Keeps the run directory (state, events, stdout/stderr) here
-    /// instead of a temporary one that's removed once done.
+    /// Puts the run directory (state, events, stdout/stderr) here
+    /// instead of a temporary one -- which osi never removes either
+    /// way; it prints where that one ended up once the run ends.
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
     /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY.
@@ -4651,11 +4652,12 @@ mod tests {
         assert!(rendered.contains("The orchestration document to run"));
         assert!(rendered.contains("passed through to the engine unchanged"));
         assert!(rendered.contains("Which engine runs the orchestration"));
-        assert!(rendered.contains("Keeps the run directory"));
+        assert!(rendered.contains("Puts the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
         assert!(rendered.contains("Shows only the header line"));
         assert!(rendered.contains("Switches off the update highlights"));
         assert!(rendered.contains("The colour theme"));
+        assert!(rendered.contains("Turns run history off"));
         // Finding 10: `--theme`'s possible values (a derived
         // `ValueEnum`) are listed in `--help`, not just its own
         // description text.
@@ -4671,6 +4673,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("Shows only the header line"));
         assert!(rendered.contains("prints the current line once and exits 0"));
+        assert!(rendered.contains("Turns run history off"));
     }
 
     #[test]

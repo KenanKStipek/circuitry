@@ -91,6 +91,43 @@ osi watch ./run --plan do-thing.yml --config config.json -e key=value
   is `osi` itself being `SIGKILL`ed: nothing can run its own cleanup code
   after that, so the engine (in its own process group) keeps running.
 
+## Run history
+
+`osi` keeps a short record of each finished run, per document: how long
+each step took, its tokens and cost, and how the run ended. From these
+records it works out what is usual for each step (p50/p90) and, once
+there are enough runs of the same version of a document, an ETA for the
+whole run -- shown in the header, `--glance`, and the overview.
+
+- **Where:** `$XDG_STATE_HOME/circuitry/osi/history/` --
+  `~/.local/state/circuitry/osi/history/` by default, on macOS as well as
+  Linux. One JSONL file per document, named by the SHA-256 of its own
+  absolute path. `OSI_HISTORY_DIR=<dir>` puts it somewhere else.
+- **What's in a record:** the document's path and content hash, the
+  engine, when it started and ended, how it ended, its wall time, tokens
+  and cost, and the same figures per step, keyed by its own path (a
+  loop's passes written `iter_*`). A step a plan doesn't know by name (a
+  generated `dynamic` child, a `use: inline:` child's own made-up names)
+  is never recorded by name -- it's folded into one `(other)` entry.
+  **Never recorded:** values, prompts, rendered params or commands, tool
+  targets, error text, stdout/stderr, report messages or data, model
+  replies, transcript content, the environment, or the config.
+- **Limits:** at most 50 runs per document (the file is compacted once it
+  reaches 100 lines) and 500 steps per run; at most 500 documents and 64
+  MiB in total, oldest-written evicted first.
+- **Turning it off:** `--no-history` (on `osi <doc>` and `osi watch`) or
+  `OSI_HISTORY=off` turns history off completely -- nothing is read or
+  written, and no directory is created.
+- **Deleting it:** `rm -rf ~/.local/state/circuitry/osi/history` (or
+  wherever `OSI_HISTORY_DIR` points) removes every document's history.
+  There is no `osi history` command.
+- `osi watch` keys history by the watched run's own absolute
+  `runtime.last_run.orchestration_path`, else by `--plan`'s own document,
+  else history is off for that watch (one line on stderr says so). It
+  writes only once the watched run has really ended -- detaching (`q`,
+  Ctrl-C) from one still running writes nothing, and
+  `osi watch --glance --once` only ever reads.
+
 ## The terminal UI
 
 On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
