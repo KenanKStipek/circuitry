@@ -206,6 +206,13 @@ markers = [
 ]
 addopts = ["--strict-markers"]
 
+[tool.ruff]
+# `oscilloscope/tests/agent_live_fakes/` mirrors a reference fake CLI
+# kept byte-identical to its own copy elsewhere (osi's own transcript/
+# live-summary fixtures are recorded against it); it is not maintained
+# Circuitry source and is never imported by anything this lint protects.
+extend-exclude = ["oscilloscope/tests/agent_live_fakes/*.py"]
+
 [tool.ruff.lint]
 # Ruff's *default* rule set is not stable across releases: 0.16 promoted
 # several hundred rules into it and turned a green tree into 413 findings
