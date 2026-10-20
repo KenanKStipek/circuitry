@@ -1,0 +1,2 @@
+{"t": "2026-10-20T03:49:50.515903+00:00", "type": "turn", "label": "turn", "session_id": null}
+{"t": "2026-10-20T03:49:50.563845+00:00", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k MARKER_COMMAND"}

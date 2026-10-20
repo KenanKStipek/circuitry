@@ -638,6 +638,38 @@ effects:
             },
         },
     ),
+    # Issue #637's acceptance item 2: SIGINT lands mid tool call,
+    # during `fake_pi.py`'s own first (2.5s) sleep, the same shape
+    # `/tmp/orch-probes/agent-live/cancel_state.py` confirmed cof
+    # itself leaves `meta.live` in place for, no `completed_at` --
+    # the fixture a watcher reads an interrupted run's own agent from.
+    Case(
+        name="agent_live_pi_cancelled",
+        timeout_s=10.0,
+        doc="""\
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: pi
+      prompt: "Fix the bug."
+      tools: [read, bash, edit]
+      transcript: top_agent_transcript.jsonl
+""",
+        extra_runtime={"plugins": {"agent": {"pi": {"binary": FAKE_PI_BINARY}}}},
+        config_for_commit={
+            "default_adapter": "scripted",
+            "default_model": "scripted-model",
+            "runtime": {
+                "adapters": {"scripted": {}},
+                "plugins": {
+                    "agent": {"pi": {"binary": "oscilloscope/tests/agent_live_fakes/fake_pi.py"}}
+                },
+            },
+        },
+        signals=[SignalStep(after_s=1.0, sig=signal.SIGINT)],
+    ),
 ]
 
 

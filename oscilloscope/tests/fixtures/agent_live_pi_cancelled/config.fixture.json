@@ -1,0 +1,16 @@
+{
+  "default_adapter": "scripted",
+  "default_model": "scripted-model",
+  "runtime": {
+    "adapters": {
+      "scripted": {}
+    },
+    "plugins": {
+      "agent": {
+        "pi": {
+          "binary": "oscilloscope/tests/agent_live_fakes/fake_pi.py"
+        }
+      }
+    }
+  }
+}

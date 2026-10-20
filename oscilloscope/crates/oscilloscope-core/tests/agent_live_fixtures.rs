@@ -1,7 +1,8 @@
 //! Issue #637: recorded fixtures from a real `cof` run against the
 //! reference fake `pi`/`claude` CLIs (`scripts/record_fixtures.py`'s
-//! `AGENT_LIVE_CASES`, `tests/fixtures/agent_live_pi` and
-//! `tests/fixtures/agent_live_claude_code`), loaded from their own
+//! `AGENT_LIVE_CASES`, `tests/fixtures/agent_live_pi`,
+//! `tests/fixtures/agent_live_claude_code` and
+//! `tests/fixtures/agent_live_pi_cancelled`), loaded from their own
 //! `snapshots.jsonl`/transcript files -- never hand-copied JSON -- so
 //! `AgentLive`'s own parsing is checked against what the real agent
 //! tool actually writes, not a shape this crate invented on its own.
@@ -229,4 +230,40 @@ fn agent_live_claude_code_fixture_excludes_the_subagents_own_tokens() {
     // Claude Code never reports these two live (`docs/plugins/agent.md`).
     assert_eq!(live.tokens_received, None);
     assert_eq!(live.cost_usd, None);
+}
+
+/// Issue #637's acceptance item 2: `scripts/record_fixtures.py`'s
+/// `agent_live_pi_cancelled` case sends SIGINT mid the first tool
+/// call, the same shape `cancel_state.py` confirmed real `cof`
+/// leaves behind.
+#[test]
+fn agent_live_pi_cancelled_fixture_never_leaks_prompt_reply_or_tool_content_into_meta_or_events() {
+    assert_no_marker_in_meta("agent_live_pi_cancelled");
+}
+
+/// The cancelled run's own final state: `prime` itself has ended
+/// (SIGINT stops the whole run), but `top_agent`'s own `meta.live`
+/// is still there, with no `completed_at` of its own --
+/// `docs/plugins/agent.md`'s "a watcher shows it as stopped" case,
+/// the fixture a front end's own stopped-agent rendering reads.
+#[test]
+fn agent_live_pi_cancelled_fixtures_final_state_keeps_live_with_no_completed_at() {
+    let states = load_snapshots("agent_live_pi_cancelled");
+    let last = states.last().expect("at least one snapshot");
+    assert!(
+        last["prime"]["meta"]["completed_at"].is_string(),
+        "the run itself must have ended"
+    );
+    let meta = agent_meta(last, &["top_agent"]).expect("top_agent must exist in the final state");
+    assert!(
+        meta["completed_at"].is_null(),
+        "the agent's own attempt never completed"
+    );
+    let live = meta
+        .get("live")
+        .and_then(AgentLive::from_value)
+        .expect("meta.live must still be there");
+    assert_eq!(live.engine, Some("pi".to_string()));
+    assert_eq!(live.turns, Some(1));
+    assert_eq!(live.tokens_sent, Some(2100));
 }

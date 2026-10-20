@@ -1,0 +1,5 @@
+{"v":1,"seq":0,"ts":"2026-10-20T03:49:50.505Z","ev":"run_start","run_id":"06e17f00-647b-4380-b639-b7b97b02cb25","orchestration":"do.yml","engine":"cof 0.1.0","pid":14486}
+{"v":1,"seq":1,"ts":"2026-10-20T03:49:50.513Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-20T03:49:50.514Z","ev":"start","id":1,"path":"prime.top_agent"}
+{"v":1,"seq":3,"ts":"2026-10-20T03:49:51.177Z","ev":"end","id":0,"path":"prime","ok":false,"ms":663,"error":"Interrupted (Ctrl-C/SIGINT)"}
+{"v":1,"seq":4,"ts":"2026-10-20T03:49:51.179Z","ev":"run_end","ok":false,"error":"Interrupted (Ctrl-C/SIGINT)","signal":"SIGINT"}
