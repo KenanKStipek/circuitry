@@ -3786,10 +3786,9 @@ mod time_bar_tests {
     #[test]
     fn decisions_line_places_a_mark_by_its_own_fraction_of_the_window() {
         // A decision at 300s into a 0..600s/10-column window belongs
-        // at column 5 (300/600 of the way across) -- the old buggy
-        // formula (raw seconds divided by a column *count*, `d /
-        // width`) would have put it at column 30, clamped to the
-        // last one.
+        // at column 5 (300/600 of the way across) -- raw seconds
+        // divided by a column *count* (`d / width`) would instead put
+        // it at column 30, clamped to the last one.
         let line = decisions_line(&[300.0], 0.0, 600.0, 10);
         let col = line.chars().position(|c| c == '◆');
         assert_eq!(col, Some(5));
@@ -4411,13 +4410,11 @@ fn draw_time_strips(
     // left border (1), then its label padded to `label_width`, then
     // one space. This pane has no border of its own, so its gutter
     // needs that same two-space width between the label and the bar,
-    // not one, to actually land on the same column -- with only one,
-    // every live frame had the strips sitting one column to the left
-    // of the bars. Each label is also
-    // truncated to `label_width`, not just padded -- `{:<width$}`
-    // never cuts a longer string down, so a label that overflowed
-    // used to shift everything after it right by however much it
-    // overran.
+    // not one, to actually land on the same column as the bars
+    // themselves. Each label is also truncated to `label_width`, not
+    // just padded -- `{:<width$}` never cuts a longer string down, so
+    // a label that overflowed would shift everything after it right
+    // by however much it overran.
     let label_width = layout.label_width;
     let events_label = truncate_strip_label(events_label, label_width);
     let decisions_label = truncate_strip_label("decisions", label_width);
@@ -5116,8 +5113,7 @@ fn draw_time_screen(
     // Below three_pane's own threshold, neither the zoom nor the vs-
     // usual pane is drawn at all -- the timeline and its strips take
     // the whole body rather than reserving a golden-ratio minor
-    // section underneath that would otherwise stay blank (9 rows
-    // left empty at 80x24).
+    // section underneath that neither pane would then ever fill.
     let timeline_rows = if three_pane {
         oscilloscope_core::layout::golden_major_section(body.height)
     } else {
@@ -10741,8 +10737,8 @@ mod golden_tests {
     }
 
     /// A golden with the short `events/min` label (no `(state)`
-    /// suffix), confirming the strips' own alignment fix holds with
-    /// it too, not just the longer one.
+    /// suffix) -- the strips' own gutter must still line up with the
+    /// bars with it too, not just the longer one.
     #[test]
     fn time_strip_labels_at_100x30_with_the_short_events_label() {
         let plan = sample_plan();

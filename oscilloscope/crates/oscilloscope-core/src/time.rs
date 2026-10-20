@@ -158,14 +158,12 @@ pub fn axis_span(header: &Header, now: &str) -> AxisSpan {
     // The margin's own job is keeping the now line off the pane's
     // right edge at all -- when the ETA already reaches a decent way
     // past now on its own, topping up a margin on top of *that* on
-    // top of the usual proportional one double-counted the same gap,
-    // crowding a run with an active loop ETA back toward the left
-    // exactly the way a fixed, too-large margin once did for every
-    // run -- a chain loop a couple of seconds into its own first
-    // pass, little elapsed but already 3s from its own ETA, would
-    // otherwise still fail the same 60%-or-more check the plain
-    // margin fix was for. Only the shortfall below the usual margin
-    // is added.
+    // top of the usual proportional one would double-count the same
+    // gap, crowding a run with an active loop ETA back toward the
+    // left: a chain loop a couple of seconds into its own first pass,
+    // little elapsed but already 3s from its own ETA, would then read
+    // with now nowhere near a comfortable majority of the way across
+    // the pane. Only the shortfall below the usual margin is added.
     // `.max(1e-3)`, not `.max(0.0)`: the axis's own end must always
     // sit strictly past `later_ts`, even when the ETA already leaves
     // ample room on its own, since a margin of literally zero would

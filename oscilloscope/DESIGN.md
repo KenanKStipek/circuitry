@@ -1843,9 +1843,9 @@ intervals` as-is, and `tui.rs` buckets them (`time::bucket_weighted`/
 `time::in_flight_heights`) at whatever width and `+`/`-`/`=` visible
 window the bars themselves are drawn at right now, the same
 `TimeLayout` both the timeline and the strips share each frame.
-Bucketing once at a separate, fixed resolution instead (this
-screen's own first pass at it) couldn't keep up with the bars' own
-zoom, and let an in-flight strip run past the now line. The now line
+Bucketing once at a separate, fixed resolution instead couldn't keep
+up with the bars' own zoom, and would let an in-flight strip run past
+the now line. The now line
 is overlaid on every strip the same way it is on every bar row.
 - **events/min:** one point per logged start and end event, plus a
   currently running leaf's own start (`RunModel::step_intervals` has
