@@ -767,25 +767,33 @@ already shows, same as before; the scroll position follows whatever
 those leave visible.
 
 **The details pane** moves above the orchestration pane (issue #535).
-For any node whose `meta` has `prompt_sent` (a prompt), two blocks come
+For any node that is a prompt effect (`meta.prompt_chars` recorded --
+every `runtime.state.prompt_sent` mode keeps it, #587), two blocks come
 right after the `path`/`type` lines, before the rest of the meta list:
-`sent  ↑ N tokens` with a snippet of `meta.prompt_sent`, and `received
+`sent  ↑ N tokens` with a snippet of the sent text, and `received
  ↓ N tokens` with a snippet of the reply — `meta.answer` when present
 (the raw reply for `boolean`/`number` prompts), else the node's own
 value. Both token counts are `model::node_tokens` (the same `_total`-
 first rule the header/token bar/state pane/the Cost screen's treemap
 and table all use); a still-
 running prompt's `sent` shows the token bar's own in-flight estimate
-(`≈ceil(chars(prompt_sent)/4)`) and `received` reads "waiting for the
-reply", since neither engine reports output tokens before a prompt
-finishes. A prompt that failed before any reply shows its error as
-always, and no `received` block. Snippets collapse whitespace runs
-(including newlines) to one space and cut at 200 characters with `…`.
-`tokens_sent`/`tokens_received` drop out of the plain meta list for
-these nodes (the block headers already carry them), and the old
-`prompt_sent (v for full):`/`value (v for full):` blocks don't appear
-either — `v` still opens the full prompt or value. Every other node's
-details are unchanged.
+(`≈ceil(chars/4)` over `meta.prompt_chars`) and `received` reads
+"waiting for the reply", since neither engine reports output tokens
+before a prompt finishes. A prompt that failed before any reply shows
+its error as always, and no `received` block. Snippets collapse
+whitespace runs (including newlines) to one space and cut at 200
+characters with `…`. `tokens_sent`/`tokens_received` drop out of the
+plain meta list for these nodes (the block headers already carry
+them), and the old `prompt_sent (v for full):`/`value (v for full):`
+blocks don't appear either — `v` still opens the full prompt or value.
+Under `runtime.state.prompt_sent: full` or `head:<N>` the snippet is
+the recorded text (a `head:<N>` one as is, marker included); under
+`sha256`, where the text itself was never kept, it is a placeholder,
+`not recorded (N characters, sha256 <first 12 hex>)`, built from
+`meta.prompt_chars` and `meta.prompt_sent_sha256`
+(`model::prompt_sent_or_placeholder`) — `v` shows the same placeholder
+rather than falling through to the value. Every other node's details
+are unchanged.
 
 Measured on both engines with the scripted adapter: a model-mode `if`/
 `while` condition's own container node gets `meta.answer`, `adapter`,
@@ -904,9 +912,9 @@ own rules are unchanged:
     always equal to the header's own `↑`/`↓`, since both read the token
     rule below.
   - **What's in flight:** how many prompts are running, and an
-    estimated input for them, `≈ceil(chars(meta.prompt_sent) / 4)`. No
-    output estimate: neither engine reports a prompt's tokens before it
-    finishes.
+    estimated input for them, `≈ceil(chars / 4)` over `meta.
+    prompt_chars`. No output estimate: neither engine reports a
+    prompt's tokens before it finishes.
 
     The *count* comes from `render::Row`, not from the live state
     alone (issue #527's own PR): a tree-loop pass's prompt, and (on
@@ -926,18 +934,28 @@ own rules are unchanged:
     (§3), so such a row cannot be told apart from a running *tool* by
     path and events alone. A row that *does* have a state node applies
     `model::is_running_prompt`'s full criteria instead: `created_at`
-    and no `completed_at`, `meta.prompt_sent` actually written, and
-    `meta.waiting_for` empty — a prompt merely queued behind a
-    concurrency slot isn't processing yet (an event-only row can never
-    be merely queued in the first place: `on_effect_start` fires only
-    once a pass or branch actually begins).
+    and no `completed_at`, `meta.adapter`/`meta.model` set and `meta.
+    prompt_chars` recorded, and `meta.waiting_for` empty — a prompt
+    merely queued behind a concurrency slot isn't processing yet (an
+    event-only row can never be merely queued in the first place:
+    `on_effect_start` fires only once a pass or branch actually
+    begins). These fields all come from `runtime.state.prompt_sent`'s
+    own setting (#577), not `meta.prompt_sent` itself: `prompt_chars`
+    and the adapter/model pair are written together in every mode
+    (`full`, `head:<N>`, `sha256`), so a prompt running under `sha256`
+    -- where `meta.prompt_sent` stays `null` -- is counted exactly
+    like one running under `full` (#587). A model-mode `if`/loop
+    condition sets `adapter`/`model` too but never `prompt_chars`, so
+    it is never mistaken for a running prompt here.
 
-    The *estimate* only sums a running prompt's own `ceil(chars(meta.
-    prompt_sent) / 4)` when its `prompt_sent` is actually in state —
-    for one confirmed running by events alone, with no state node to
-    read at all, that can never be known, so the total is shown as a
-    lower bound (`≈52+`) rather than silently reading too low. When
-    *no* running prompt's `prompt_sent` is known at all, the estimate
+    The *estimate* sums each running prompt's own `ceil(chars / 4)`
+    from `meta.prompt_chars` when the run recorded it (every mode), or
+    else the length of whatever `meta.prompt_sent` text is actually
+    present (older state with no `prompt_chars` at all) -- for one
+    confirmed running by events alone, with no state node to read at
+    all, neither is available, so the total is shown as a lower bound
+    (`≈52+`) rather than silently reading too low. When *no* running
+    prompt's `prompt_chars`/`prompt_sent` is known at all, the estimate
     isn't merely low, it's entirely unknown — `≈0+` would read as a
     broken number (zero tokens, yet something's running?), and `now in
     ?` reads as if an estimate were coming once it wasn't going to;

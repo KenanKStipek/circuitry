@@ -4740,11 +4740,11 @@ mod tests {
     fn mark_details_highlights_ignores_a_bare_selection_change() {
         let plan = PlanTree::empty();
         let ask_running = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hello"}},
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hello", "prompt_chars": 5}},
             "other": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
         }});
         let ask_done = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hello"}},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hello", "prompt_chars": 5}},
             "other": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
         }});
         let mut highlights = highlight::Tracker::new();

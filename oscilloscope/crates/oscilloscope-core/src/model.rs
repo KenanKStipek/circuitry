@@ -399,28 +399,77 @@ pub fn subtree_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, u6
     })
 }
 
-/// The token bar's "what's in flight" line (DESIGN.md §6.3, issue
-/// #527): a prompt node counts as running only once its `prompt_sent`
-/// has actually been written and it isn't still queued behind a
-/// concurrency slot — a node that merely exists with `completed_at:
-/// null` can be a tool, or a prompt that hasn't reached the adapter
-/// call yet.
+/// The token bar's "what's in flight" line (DESIGN.md §6.3, issues
+/// #527 and #587): a prompt node counts as running from the fields
+/// every `runtime.state.prompt_sent` mode keeps, not from `meta.
+/// prompt_sent` itself, which is `null` under `sha256` — its own
+/// `created_at`/`completed_at`, `meta.adapter` and `meta.model` (set
+/// together, before the call), `meta.prompt_chars` (recorded in every
+/// mode, #577), and that it isn't still queued behind a concurrency
+/// slot. A node that merely exists with `completed_at: null` can be a
+/// tool, or a prompt that hasn't reached the adapter call yet; a
+/// model-mode `if`/loop condition sets `adapter`/`model` too but never
+/// `prompt_chars`, so it is never counted here.
 pub fn is_running_prompt(node: &NodeMeta) -> bool {
     node.created_at.is_some()
         && node.completed_at.is_none()
-        && node
-            .meta
-            .get("prompt_sent")
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty())
+        && node.meta.get("adapter").and_then(Value::as_str).is_some()
+        && node.meta.get("model").and_then(Value::as_str).is_some()
+        && node.meta.get("prompt_chars").is_some_and(|v| !v.is_null())
         && node.meta.get("waiting_for").is_none_or(|v| v.is_null())
 }
 
-/// The estimated input for one running prompt (DESIGN.md §6.3):
-/// `ceil(chars(meta.prompt_sent) / 4)`.
-pub fn estimated_prompt_tokens(prompt_sent: &str) -> u64 {
-    let chars = prompt_sent.chars().count() as u64;
+/// The estimated input for one running prompt (DESIGN.md §6.3, #587):
+/// `ceil(chars / 4)`, over `meta.prompt_chars` when the run recorded
+/// it (every mode), else over the text actually kept in `meta.
+/// prompt_sent` (older state with no `prompt_chars` at all).
+pub fn estimated_prompt_tokens(chars: u64) -> u64 {
     chars.div_ceil(4)
+}
+
+/// The character count to estimate a running prompt's input from
+/// (#587): `meta.prompt_chars` when present, else the length of
+/// whatever `meta.prompt_sent` text is actually recorded. `None` when
+/// neither is available (nothing to estimate from at all).
+pub fn prompt_chars_for_estimate(meta: &Value) -> Option<u64> {
+    meta.get("prompt_chars")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            meta.get("prompt_sent")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.chars().count() as u64)
+        })
+}
+
+/// The text to show for a prompt node's sent text, or a placeholder
+/// when the run's `runtime.state.prompt_sent` setting (#577) didn't
+/// keep it (#587): `not recorded (N characters, sha256 <first 12
+/// hex>)`. A `head:<N>` text is already recorded, marker included, so
+/// it is returned as is, same as `full`. `None` when this node is not
+/// a prompt effect at all (no `prompt_chars` recorded).
+pub fn prompt_sent_or_placeholder(meta: &Value) -> Option<String> {
+    if let Some(text) = meta.get("prompt_sent").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    let chars = meta.get("prompt_chars").and_then(Value::as_u64)?;
+    let sha256 = meta
+        .get("prompt_sent_sha256")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let sha256_prefix = &sha256[..sha256.len().min(12)];
+    Some(format!(
+        "not recorded ({chars} characters, sha256 {sha256_prefix})"
+    ))
+}
+
+/// Whether `meta` belongs to a prompt effect at all (#587),
+/// regardless of `runtime.state.prompt_sent`'s mode: `meta.
+/// prompt_chars` is recorded under every mode, and only ever by a
+/// prompt effect (a model-mode `if`/loop condition sets `adapter`/
+/// `model` but never this).
+pub fn is_prompt_node(meta: &Value) -> bool {
+    meta.get("prompt_chars").is_some_and(|v| !v.is_null())
 }
 
 /// Why a plan node was skipped (DESIGN.md §2.2). `Unknown` covers every
@@ -3014,5 +3063,83 @@ mod tests {
         // one bucket per minute, 3 events each (3 dropped passes).
         assert_eq!(minutes.get("2026-01-01T00:00"), Some(&3));
         assert_eq!(minutes.get("2026-01-01T00:01"), Some(&3));
+    }
+
+    /// Issue #587: `runtime.state.prompt_sent: sha256`/`head:<N>` and
+    /// `full` all keep `created_at`, `adapter` and `model` -- only
+    /// `meta.prompt_sent` itself differs -- so a running prompt is
+    /// counted the same way under every mode.
+    #[test]
+    fn is_running_prompt_holds_under_every_prompt_sent_mode() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "full": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": "hello", "prompt_chars": 5
+            }},
+            "sha256": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": null, "prompt_sent_sha256": "a".repeat(64), "prompt_chars": 5
+            }},
+            "head": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": "he\n[… 3 more characters not recorded]", "prompt_chars": 5
+            }}
+        }});
+        let flat = flatten_state(&state);
+        for path in ["prime.full", "prime.sha256", "prime.head"] {
+            assert!(
+                is_running_prompt(flat.get(path).unwrap()),
+                "{path} should count as a running prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn is_running_prompt_excludes_a_model_mode_condition() {
+        // Issue #587: a model-mode `if`/loop condition sets `adapter`/
+        // `model` too, but never `prompt_chars` -- it must not count.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "cond": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m"
+            }}
+        }});
+        let flat = flatten_state(&state);
+        assert!(!is_running_prompt(flat.get("prime.cond").unwrap()));
+    }
+
+    #[test]
+    fn prompt_sent_or_placeholder_reads_each_mode() {
+        let full = json!({"prompt_sent": "hello", "prompt_chars": 5});
+        assert_eq!(prompt_sent_or_placeholder(&full).as_deref(), Some("hello"));
+
+        let head =
+            json!({"prompt_sent": "he\n[… 3 more characters not recorded]", "prompt_chars": 5});
+        assert_eq!(
+            prompt_sent_or_placeholder(&head).as_deref(),
+            Some("he\n[… 3 more characters not recorded]")
+        );
+
+        let sha256 = json!({
+            "prompt_sent": null, "prompt_sent_sha256": "a".repeat(64), "prompt_chars": 5
+        });
+        assert_eq!(
+            prompt_sent_or_placeholder(&sha256).as_deref(),
+            Some("not recorded (5 characters, sha256 aaaaaaaaaaaa)")
+        );
+
+        let not_a_prompt = json!({"provider": "shell"});
+        assert_eq!(prompt_sent_or_placeholder(&not_a_prompt), None);
+    }
+
+    #[test]
+    fn prompt_chars_for_estimate_prefers_prompt_chars_over_text_length() {
+        let with_chars = json!({"prompt_sent": "hello", "prompt_chars": 999});
+        assert_eq!(prompt_chars_for_estimate(&with_chars), Some(999));
+
+        let without_chars = json!({"prompt_sent": "hello"});
+        assert_eq!(prompt_chars_for_estimate(&without_chars), Some(5));
+
+        let neither = json!({});
+        assert_eq!(prompt_chars_for_estimate(&neither), None);
     }
 }
