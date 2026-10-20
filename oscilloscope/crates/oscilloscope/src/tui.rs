@@ -3759,6 +3759,105 @@ fn multi_segment_bar(
     out.into_iter().collect()
 }
 
+#[cfg(test)]
+mod time_bar_tests {
+    use super::*;
+
+    #[test]
+    fn zoom_container_budget_reserves_a_row_for_plus_n_more_once_it_overflows() {
+        assert_eq!(
+            zoom_container_budget(3, 5),
+            5,
+            "everything fits, no +N more row needed"
+        );
+        assert_eq!(
+            zoom_container_budget(5, 3),
+            2,
+            "one row reserved for +N more"
+        );
+    }
+
+    #[test]
+    fn a_running_bars_own_head_is_drawn() {
+        // 0..5s over a 0..10s/10-column window: columns 0..4 fill,
+        // the head lands in column 5 (`bar_cells`' own `end_idx`).
+        let bar = time_bar_string(Some(0.0), Some(5.0), true, None, false, 0.0, 10.0, 10);
+        assert_eq!(bar.chars().nth(5), Some('▶'));
+    }
+
+    #[test]
+    fn a_failed_bars_own_end_is_drawn() {
+        let bar = time_bar_string(Some(0.0), Some(5.0), false, None, true, 0.0, 10.0, 10);
+        assert_eq!(bar.chars().nth(4), Some('✗'));
+    }
+
+    #[test]
+    fn a_ghost_bar_draws_without_a_real_start() {
+        let ghost = oscilloscope_core::time::GhostBar {
+            start_s: 5.0,
+            end_s: 8.0,
+        };
+        let bar = time_bar_string(None, None, false, Some(ghost), false, 0.0, 10.0, 10);
+        let chars: Vec<char> = bar.chars().collect();
+        assert_eq!(&chars[5..8], ['░', '░', '░']);
+    }
+
+    #[test]
+    fn overlay_now_line_puts_a_running_heads_own_bar_one_cell_before_the_now_line() {
+        let layout = TimeLayout {
+            label_width: 0,
+            show_columns: false,
+            bar_width: 10,
+            vis_start_s: 0.0,
+            vis_end_s: 10.0,
+        };
+        let mut bar = time_bar_string(Some(0.0), Some(5.0), true, None, false, 0.0, 10.0, 10);
+        assert_eq!(bar.chars().nth(5), Some('▶'), "the head before any overlay");
+        overlay_now_line(&mut bar, Some(5.0), &layout, true);
+        let chars: Vec<char> = bar.chars().collect();
+        assert_eq!(
+            chars[4], '▶',
+            "the head moved one cell left of the now line"
+        );
+        assert_eq!(chars[5], '┃', "the now line itself stays visible");
+    }
+
+    #[test]
+    fn overlay_now_line_on_a_finished_row_just_overlays_the_now_line() {
+        let layout = TimeLayout {
+            label_width: 0,
+            show_columns: false,
+            bar_width: 10,
+            vis_start_s: 0.0,
+            vis_end_s: 10.0,
+        };
+        let mut bar = time_bar_string(Some(0.0), Some(8.0), false, None, false, 0.0, 10.0, 10);
+        overlay_now_line(&mut bar, Some(4.0), &layout, false);
+        assert_eq!(bar.chars().nth(4), Some('┃'));
+    }
+
+    #[test]
+    fn multi_segment_bar_draws_more_than_one_segment_on_one_row() {
+        let segments = [(0.0, 2.0, false), (5.0, 8.0, true)];
+        let bar = multi_segment_bar(&segments, 0.0, 10.0, 10, '█');
+        let chars: Vec<char> = bar.chars().collect();
+        assert_eq!(&chars[0..2], ['█', '█']);
+        assert_eq!(chars[8], '▶', "the running segment's own head");
+    }
+}
+
+/// How many of a container's own children the zoom pane actually
+/// draws (DESIGN.md's "`+N more` when they don't fit") -- every one
+/// of them when they all fit in `viewport`, one row short of it
+/// otherwise, leaving room for the `+N more` line itself.
+fn zoom_container_budget(total: usize, viewport: usize) -> usize {
+    if total > viewport {
+        viewport.saturating_sub(1)
+    } else {
+        viewport
+    }
+}
+
 /// The visible window (issue #650's `+`/`-`/`=`): the whole axis by
 /// default, narrowed by `app.time_zoom` around now (while following)
 /// or around the selected row's own bar (otherwise), clamped back
@@ -4340,11 +4439,7 @@ fn draw_time_zoom_pane(
                     axis_end_s,
                 }) => {
                     let viewport = (area.height.saturating_sub(2) as usize).max(1);
-                    let budget = if children.len() > viewport {
-                        viewport.saturating_sub(1)
-                    } else {
-                        viewport
-                    };
+                    let budget = zoom_container_budget(children.len(), viewport);
                     for child in children.iter().take(budget) {
                         let glyph = status_glyph(child.status.kind);
                         let label =
@@ -10071,6 +10166,117 @@ mod golden_tests {
             .unwrap();
         let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
+    }
+
+    /// DESIGN.md's zoom pane: "With no transcript, the footer and a
+    /// `running: <tool>` line (from `current_tool`) are all it
+    /// shows" -- `time_snapshot_at` never attaches a transcript at
+    /// all, so the running agent's own zoom pane must fall back to
+    /// `meta.live.current_tool` instead of the brief-window note.
+    #[test]
+    fn time_agent_zoom_pane_with_no_transcript_falls_back_to_current_tool() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = agent_running_state();
+        let text = time_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("prime.fix"),
+            &Default::default(),
+            false,
+        );
+        assert!(
+            text.contains("running: bash"),
+            "no transcript at all falls back to current_tool:\n{text}"
+        );
+        assert!(!text.contains(oscilloscope_core::screens::AGENT_LIVE_DATA_NOTE));
+    }
+
+    /// DESIGN.md's zoom pane: "the bands start where the window
+    /// starts, after a dim `…`" -- shown only once
+    /// `TranscriptView::truncated` actually says the tail read
+    /// didn't reach the session's own start.
+    #[test]
+    fn time_agent_zoom_pane_marks_a_truncated_transcript_window() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = agent_running_state();
+        let now = "2026-01-01T11:52:55Z";
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            372.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some("prime.fix"),
+            &Default::default(),
+            now,
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.selected_path = Some("prime.fix".to_string());
+        let mut transcript = agent_running_transcript();
+        transcript.truncated = true;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    Some(&transcript),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains("│…"),
+            "a truncated window's own leading gap reads as cut off, not as thinking:\n{text}"
+        );
     }
 }
 
