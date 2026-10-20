@@ -94,7 +94,7 @@ fn python_repr_str(s: &str) -> String {
 /// in this workspace (`oscilloscope`, which links `electricity_
 /// compiler` directly) should call to compile a document with exactly
 /// the options a real `electricity` run would use for it, rather than
-/// reimplementing this merge itself (PR #441 review finding 14: this
+/// reimplementing this merge itself (PR #441: this
 /// function's own `config_runtime_block` and `run_orchestration`'s own
 /// step 1 now both go through `electricity_config::resolve_config`, so
 /// `--dump-ir`/osi's own plan can no longer drift from what a real run
@@ -208,7 +208,7 @@ fn extra_supported_providers() -> &'static [&'static str] {
 /// `json`, like every other provider this crate can build, now goes
 /// through [`electricity_vm::exec::tool::resolve_plugin`]'s own
 /// per-attempt [`electricity_tools::build_plugin`] fallback instead of
-/// a long-lived singleton here (review finding 6 on PR #454) -- a
+/// a long-lived singleton here (PR #454) -- a
 /// production run's own [`electricity_vm::RunContext::registry`] is
 /// left with nothing registered at all through M1-A; `test-tools`'
 /// `sleep`/`fail` still register as singletons (stateless, so there is
@@ -256,8 +256,8 @@ fn env_secret_in_use(document: &Value, runtime: Option<&Value>) -> Option<String
 
 /// Whether *runtime* (the already-merged, effective `runtime:` block)
 /// configures persistence -- `runtime.persistence.enabled` is Python-
-/// truthy (`electricity_config::persistence_enabled`, PR #441 review
-/// finding 2: `1`/`"yes"` turn persistence on just as `true` does, not
+/// truthy (`electricity_config::persistence_enabled`, PR #441:
+/// `1`/`"yes"` turn persistence on just as `true` does, not
 /// only a literal boolean). `electricity_config::validate_persistence`,
 /// called inside `pre_state_checks`, has already rejected anything
 /// malformed by the time a caller ever reaches this; this only asks
@@ -466,7 +466,7 @@ fn profile_provider_unbuildable(
 /// The preview-marker refusal for a document/config that configures
 /// persistence or runtime plugins (issue #431's "Out of scope"
 /// section: "refused with the preview marker, after the step-6/9
-/// validation" -- PR #441 review finding 4) -- *reason* names what was
+/// validation" -- PR #441) -- *reason* names what was
 /// configured ("runtime.persistence"/"runtime plugins (...)"). No
 /// `EffectPath` to report, unlike [`format_refusal`]'s own per-effect
 /// refusals: this is a run-level setting, not a node in the compiled
@@ -757,7 +757,7 @@ struct Observer<'a> {
     /// pairing seam -- the fallback id source when `--events` itself
     /// is off, so `effect_start` always has *some* value to hand back
     /// regardless. When `--events` is on, [`events::EventLog::on_start`]'s
-    /// own id is used instead (review finding 3 on PR #454: a *second*,
+    /// own id is used instead (PR #454: a *second*,
     /// independent counter here could never line up with `EventLog`'s
     /// own per-path stack, which is keyed by the ids `EventLog::on_start`
     /// itself hands out).
@@ -796,7 +796,7 @@ impl RunObserver for Observer<'_> {
     }
 
     fn write(&self) {
-        // Finding 7's own fix: never take a store snapshot from inside
+        // Never take a store snapshot from inside
         // this hook, which fires synchronously from inside whatever
         // just wrote to the store and may still hold a borrow a frame
         // or two up its own call stack -- only ever record that a
@@ -1106,7 +1106,7 @@ pub async fn run_orchestration_with_config(
     // Step 4: seed state (`input` namespace, from the CLI's own `-e`
     // entries) -- every failure from here on reports *some* state,
     // even if sparse, and carries the same `input` a `cof run` of the
-    // same `-e` values would (PR #441 review finding 3).
+    // same `-e` values would (PR #441).
     let store = Store::new();
     state::seed_state(&store, &req.inputs);
 
@@ -1128,7 +1128,7 @@ pub async fn run_orchestration_with_config(
     // KeyboardInterrupt)` never distinguishes where that boundary fell,
     // so a SIGINT arriving mid-check in cof reports `Interrupted
     // (Ctrl-C/SIGINT)`/exit 130 there too, not the check's own text
-    // (PR #441 review finding 8 -- this file's own earlier comment here
+    // (PR #441 -- this file's own earlier comment here
     // claimed the opposite, which was never actually true of cof).
     // electricity has no equivalent mid-check interrupt point of its
     // own (every check here runs to completion once started, unlike
@@ -1170,7 +1170,7 @@ pub async fn run_orchestration_with_config(
             Err(err) => fail!(err.to_string()),
         };
 
-    // PR #441 review finding 1c: re-seed `state["input"]` now that the
+    // PR #441: re-seed `state["input"]` now that the
     // real document is loaded, restoring a declared `type: string`
     // input's own raw `-e` text the same way `cli/app.py::
     // _restore_raw_text_for_string_inputs` does before `run()` is ever
@@ -1265,8 +1265,8 @@ pub async fn run_orchestration_with_config(
     // Step 6 (part 2)/7/9: complexity validation (before the limiter),
     // the concurrency-config-error check, persistence validation
     // (after the limiter) -- everything `build_input_namespace` (step
-    // 10) itself needs to *not* have run yet (PR #441 review finding
-    // 1b): a failure here means `check_interface_inputs` never got a
+    // 10) itself needs to *not* have run yet (PR #441): a failure here
+    // means `check_interface_inputs` never got a
     // chance to touch `state["input"]` at all, so it must stay exactly
     // what the step-5 reseed above just left it as -- never the
     // partial, best-effort coercion pass that's only ever correct for
@@ -1316,7 +1316,7 @@ pub async fn run_orchestration_with_config(
     // inside `pre_input_checks`) only ever rejects a malformed block,
     // never a well-formed one, since M0-H has no real backend/loader
     // of its own to refuse through *that* path (issue #431's "Out of
-    // scope" section; PR #441 review finding 4). No state at all is
+    // scope" section; PR #441). No state at all is
     // written for this refusal, same as [`first_unsupported`]'s own --
     // and, now that this runs *before* step 10, `build_input_namespace`
     // is never even called for a run this refuses.
@@ -1363,14 +1363,14 @@ pub async fn run_orchestration_with_config(
     }
 
     // Step 10: check_interface_inputs -- replaces `state["input"]`
-    // wholesale with the coerced/defaulted namespace (PR #441 review
-    // finding 1a: a key the final namespace doesn't carry forward,
+    // wholesale with the coerced/defaulted namespace (PR #441: a
+    // key the final namespace doesn't carry forward,
     // e.g. an optional input whose seed was `null`, must not survive
     // from the step-5 reseed above).
     match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
         Ok(namespace) => state::replace_input_namespace(&store, namespace),
         Err(err) => {
-            // PR #441 review finding 3: step 10 itself failed partway
+            // Step 10 itself failed partway
             // through -- mirror Python's own in-place mutation of
             // `state["input"]` as far as it got before the first
             // violation (`build_input_namespace_best_effort`'s own doc
@@ -1686,7 +1686,7 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // Review finding 1 on PR #526's own review: the same refusal as
+    // The same refusal as
     // just above, but for a *tool* plugin Circuitry knows
     // (`electricity_tools::plugin_names::PLUGIN_NAMES`) but this build
     // has no builder for -- read off the raw document, so a profile
@@ -1937,7 +1937,7 @@ pub async fn run_orchestration_with_config(
     // Step 17/18: execute the root, then the success or failure tail.
     // With `--live-state`, `tokio::select!`s this future against a
     // plain poll tick rather than just `.await`ing it directly, so its
-    // own pending-change flush (finding 7: see `live_state.rs`'s own
+    // own pending-change flush (see `live_state.rs`'s own
     // doc comment) gets a chance to run between `execute_root`'s own
     // polls -- never while it's still holding control, so never while
     // any node's own store borrow from that exact poll could still be
@@ -1945,8 +1945,8 @@ pub async fn run_orchestration_with_config(
     // (`flush_if_due` is the one place that actually enforces that
     // interval; this is only how often this loop gets to ask). Without
     // `--live-state` there is nothing for that tick to ever do, so this
-    // just `.await`s *exec_fut* directly instead (PR #441 review
-    // finding 10) -- `tokio::time::sleep` needs a timer driver
+    // just `.await`s *exec_fut* directly instead (PR #441) --
+    // `tokio::time::sleep` needs a timer driver
     // (`Builder::enable_time`/`enable_all`), which a caller embedding
     // this crate's own public `run_orchestration` on a runtime built
     // without one (this crate's own tests included, when they build a
@@ -1996,8 +1996,8 @@ pub async fn run_orchestration_with_config(
         }
         // Only `VmError::Cancelled` -- the VM's own cancellation signal,
         // not merely "the token happens to be set" -- ever becomes the
-        // interrupt text or a non-`None` `RunResult.signal` (PR #441
-        // review finding 13): that variant's own doc comment names
+        // interrupt text or a non-`None` `RunResult.signal` (PR #441):
+        // that variant's own doc comment names
         // this exact caller as the one place its token/signum gets
         // turned into `RunResult`'s own wording. Any other `VmError`
         // keeps its own real message, exit 1, even if a signal arrived
@@ -2347,7 +2347,7 @@ mod tests {
             options.inputs.get("name").map(String::as_str),
             Some("World")
         );
-        // PR #441 review finding 14: `config_runtime` is the fully
+        // PR #441: `config_runtime` is the fully
         // resolved runtime (`SANE_DEFAULTS` deep-merged with the file),
         // not just the file's own raw `runtime:` key -- `max_concurrency`
         // (this file's own) and `adapters` (only ever a `SANE_DEFAULTS`
