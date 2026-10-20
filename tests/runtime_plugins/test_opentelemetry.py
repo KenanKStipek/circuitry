@@ -156,7 +156,7 @@ def test_concurrent_branches_sharing_an_unnamed_loops_path_dont_collide(
     """An *unnamed* tree loop doesn't namespace its body's state path per
     pass (``loop.py``'s ``_execute_body`` only does that for a named loop),
     so two concurrent branches can report the exact same ``effect_path``
-    (#331 finding 7). Each branch's own start/complete still pairs up
+    (issue #331). Each branch's own start/complete still pairs up
     correctly — branch 2 doesn't end branch 1's span, and nothing is force-
     closed with a wrong "now" end time at ``_finalize``."""
     plugin, exporter = plugin_with_exporter
@@ -231,7 +231,7 @@ def test_concurrent_branches_sharing_an_unnamed_loops_path_dont_collide(
     # Each branch's own span keeps the attributes attached at *its own*
     # on_effect_start — not dropped by falling into on_effect_complete's
     # "no matching start" fallback because the other branch's concurrent
-    # start already overwrote a single shared dict entry (#331 finding 7).
+    # start already overwrote a single shared dict entry (issue #331).
     assert by_duration[1].attributes["circuitry.adapter"] == "adapter-1"
     assert by_duration[60].attributes["circuitry.adapter"] == "adapter-2"
     # Neither span leaked into the next run.
@@ -243,7 +243,7 @@ def test_provider_attribute_is_attached_from_meta(
     tmp_path: Path,
 ) -> None:
     """A tool effect's ``meta.provider`` (#271: "adapter, model and
-    provider") reaches the span as ``circuitry.provider`` (#331 finding 9)."""
+    provider") reaches the span as ``circuitry.provider`` (issue #331)."""
     plugin, exporter = plugin_with_exporter
     ctx = _make_context(tmp_path)
 

@@ -336,7 +336,7 @@ def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
 class _TotalsAccumulator:
     """Builds ``state.runtime.last_run.totals`` live, from the same
     ``effect_complete`` stream plugins and ``--live-state`` already observe
-    (#331 finding 4), instead of walking the finished state tree:
+    (issue #331), instead of walking the finished state tree:
 
     - A ``use`` child's effects reach this observer namespaced under the
       parent path (see ``use.py``'s ``_namespaced_effect_cb``) even in
@@ -1170,7 +1170,7 @@ def run(req: RunRequest) -> RunResult:
             # Written before on_run_failure runs (not after, as success's
             # on_run_success could previously assume) so a failure-hook
             # plugin sees the same totals a success-hook plugin would
-            # (#331 finding 11).
+            # (issue #331).
             last_run_node = state.setdefault("runtime", {}).setdefault("last_run", {})
             last_run_node["completed_at"] = _now_iso()
             last_run_node["totals"] = totals_accumulator.totals(
@@ -1387,7 +1387,7 @@ def validate(
     # `cof run`'s own resolution — `is_cache_path` still checks the shared
     # `default_cache_root()` regardless of which sources are configured, so
     # the fallback doesn't reopen the gate this override exists for.
-    # Built unconditionally now (#396 second-review finding 6) — confinement
+    # Built unconditionally now (issue #396's second review) — confinement
     # for a `{file: ...}` prompt source below needs `is_cache_path` whether
     # or not the caller passed `trust_document`, not just for the host-
     # settings override above. Still falls back to the curation-only
