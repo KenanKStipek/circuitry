@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 4020
 expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 6m12s · 11:52:55   0 overview  [2 flow]  3 cost                                       "
@@ -8,16 +7,16 @@ expression: text
 "│◐ prime   11:46:43  6m12s                                               ││fix                                         │"
 "│  ◐ fix   11:46:43  6m12s                                               ││agent · agent                               │"
 "│                                                                        ││asked:                                      │"
-"│                                                                        ││pi                                          │"
+"│                                                                        ││Fix the bug.                                │"
 "│                                                                        ││doing:                                      │"
 "│                                                                        ││since 11:46:43 · 6m12s                      │"
 "│                                                                        ││claude_code · sonnet · turn 14 · 31 tools   │"
 "│                                                                        ││↑2.1 Mt ↓— · $—                             │"
+"│                                                                        ││░█▒██                                       │"
+"│                                                                        ││11:51:15 › edit src/adapters/ollama.rs ✓ +12│"
+"│                                                                        ││11:51:40 › bash pytest -k timeout ✓         │"
+"│                                                                        ││11:52:30 › bash pytest -q tests/adapters run│"
 "│                                                                        ││context 142 kt / 200 kt                     │"
-"│                                                                        ││██████████████                              │"
-"│                                                                        ││files 3 · +12 −3 · tests …                  │"
-"│                                                                        ││doing:                                      │"
-"│                                                                        ││› edit src/adapters/ollama.rs ✓             │"
 "│                                                                        │└────────────────────────────────────────────┘"
 "│                                                                        │┌ story ─────────────────────────────────────┐"
 "│                                                                        ││                                            │"

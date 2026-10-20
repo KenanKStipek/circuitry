@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 4050
 expression: text
 ---
 "⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · aborted 6m12s · 11:52:55   0 overview  [2 flow]  3 cost "
@@ -8,14 +7,14 @@ expression: text
 "│✓ prime   6m12s                                ││fix                          │"
 "│  ✓ fix   6m12s                                ││agent · agent                │"
 "│                                               ││asked:                       │"
-"│                                               ││pi                           │"
+"│                                               ││Fix the bug.                 │"
 "│                                               ││produced:                    │"
 "│                                               ││Done. All tests pass.        │"
+"│                                               ││/tmp/fix-transcript.jsonl    │"
+"│                                               ││files 3                      │"
+"│                                               ││turns 14                     │"
 "│                                               ││tokens 2.1 Mt                │"
 "│                                               ││$1.10                        │"
-"│                                               ││                             │"
-"│                                               ││                             │"
-"│                                               ││                             │"
 "│                                               ││                             │"
 "│                                               ││                             │"
 "│                                               ││                             │"

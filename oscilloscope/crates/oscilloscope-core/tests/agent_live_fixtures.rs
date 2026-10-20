@@ -57,6 +57,8 @@ const FORBIDDEN_IN_META: &[&str] = &[
     "MARKER_TOOL_OUTPUT",
     "MARKER_FILE_CONTENT",
     "MARKER_REPLY",
+    "MARKER_COMMAND",
+    "MARKER_PATH",
 ];
 
 fn assert_no_marker_in_meta(name: &str) {

@@ -52,7 +52,27 @@ pub struct TreemapNode {
     /// [`layout_into`] ever consult this field.
     pub weight: u64,
     pub status: Option<StatusKind>,
+    /// A running leaf whose own [`Self::total`] came from `meta.live.
+    /// tokens_sent` (issue #637), not the bare running placeholder --
+    /// the one thing a front end's own tile label needs to know to
+    /// say `live` instead of just the number, since by the time it
+    /// draws, `total > 0` alone no longer tells a live-sized leaf
+    /// apart from a container that already has a real, finished
+    /// child. `false` for every other node, folded container included.
+    pub live: bool,
+    /// A running agent leaf's own `turn_tokens` (so far) and
+    /// `tokens_cached_in`, straight from `meta.live` (issue #637's
+    /// Cost section: "the per-turn strip" and "the cache bar") --
+    /// `None` for every node [`Self::live`] is `false` for too.
+    pub live_turns: Option<LiveTurnInfo>,
     pub children: Vec<TreemapNode>,
+}
+
+/// [`TreemapNode::live_turns`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LiveTurnInfo {
+    pub turn_tokens: Vec<u64>,
+    pub tokens_cached_in: Option<u64>,
 }
 
 impl TreemapNode {
@@ -64,6 +84,8 @@ impl TreemapNode {
             total,
             weight: total,
             status,
+            live: false,
+            live_turns: None,
             children: Vec::new(),
         }
     }
@@ -99,6 +121,10 @@ pub struct TreemapCell {
     pub has_children: bool,
     pub merged: bool,
     pub depth: u16,
+    /// [`TreemapNode::live`], carried through to the drawn cell.
+    pub live: bool,
+    /// [`TreemapNode::live_turns`], carried through to the drawn cell.
+    pub live_turns: Option<LiveTurnInfo>,
 }
 
 /// A rect too small to hold a border *and* at least one row/column of
@@ -246,6 +272,8 @@ fn layout_into(
                 has_children: false,
                 merged: true,
                 depth,
+                live: false,
+                live_turns: None,
             }),
         }
     }
@@ -270,6 +298,8 @@ fn emit_cell(node: &TreemapNode, rect: Rect, depth: u16, merged: bool, out: &mut
         has_children: can_recurse,
         merged,
         depth,
+        live: node.live,
+        live_turns: node.live_turns.clone(),
     });
     if can_recurse {
         layout_into(
@@ -613,6 +643,8 @@ fn build_node_for_measure(
         total,
         weight,
         status,
+        live: false,
+        live_turns: None,
         children,
     })
 }
@@ -647,23 +679,39 @@ fn leaf_node_for_measure(
         // has to subtract this floor back out again.
         let total = own_measure_value(node, measure);
         // Issue #637: a running agent's own live token count
-        // (`meta.live.tokens_sent`, the one figure the agent tool
-        // reports continuously) replaces the placeholder floor for
+        // (`meta.live.tokens_sent`, the one figure the issue's own
+        // Cost section names) replaces the placeholder floor for
         // `Measure::Total`/`Measure::In` -- `tokens_sent` is "input
         // tokens" either way, so it is the right figure under both.
-        // Other measures (`Out`/`Cost`) have no live equivalent
-        // (`docs/plugins/agent.md`) and keep the placeholder.
+        // `Out`/`Cost` keep the placeholder: pi does report `tokens_
+        // received`/`cost_usd` live too (`docs/plugins/agent.md`),
+        // but growing the tile from them is left for a later issue.
         let live_tokens = matches!(measure, Measure::Total | Measure::In)
             .then(|| node.live.as_ref().and_then(|live| live.tokens_sent))
             .flatten();
         let total = live_tokens.map_or(total, |live_tokens| total.max(live_tokens));
         let weight = total.max(RUNNING_PLACEHOLDER_WEIGHT);
+        // The per-turn strip and the cache bar (issue #637's Cost
+        // section) ride along with the same live tile, straight from
+        // `meta.live` -- `turn_tokens`/`tokens_cached_in` have no
+        // placeholder of their own to replace, so they're carried
+        // whenever the tile itself is live, not gated separately.
+        let live_turns = live_tokens
+            .is_some()
+            .then_some(node.live.as_ref())
+            .flatten()
+            .map(|live| LiveTurnInfo {
+                turn_tokens: live.turn_tokens.clone(),
+                tokens_cached_in: live.tokens_cached_in,
+            });
         return Some(TreemapNode {
             key,
             path: path.to_string(),
             total,
             weight,
             status,
+            live: live_tokens.is_some(),
+            live_turns,
             children: Vec::new(),
         });
     }
@@ -685,6 +733,8 @@ fn leaf_node_for_measure(
         total,
         weight: total,
         status,
+        live: false,
+        live_turns: None,
         children: Vec::new(),
     })
 }
@@ -723,6 +773,8 @@ fn container_own_value_node(
         total,
         weight: total,
         status,
+        live: false,
+        live_turns: None,
         children: Vec::new(),
     })
 }
@@ -811,6 +863,8 @@ fn fold_single_child(node: TreemapNode, kinds: &BTreeMap<String, RowKind>) -> Tr
             total: node.total,
             weight: node.weight,
             status: child.status,
+            live: child.live,
+            live_turns: child.live_turns.clone(),
             children: child.children,
         };
     }
@@ -1063,6 +1117,8 @@ mod tests {
             total: 150,
             weight: 150,
             status: Some(StatusKind::Running),
+            live: false,
+            live_turns: None,
             children: vec![child_a, child_b],
         };
         let cells = layout(&[container], 0, 0, 40, 20);

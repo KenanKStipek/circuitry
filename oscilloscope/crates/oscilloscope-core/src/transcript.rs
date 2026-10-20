@@ -24,11 +24,19 @@ pub struct ToolCall {
     pub ms: Option<u64>,
     pub lines_added: Option<u64>,
     pub lines_removed: Option<u64>,
+    /// Set once a later `tool_start`'s own `id` is not greater than
+    /// this call's (a retried attempt's own ids start over at 1, same
+    /// as the engine's `LiveTracker`) while this call was still
+    /// unmatched -- the attempt that started it was killed mid-call,
+    /// so no `tool_end` is ever coming for it. Distinct from
+    /// [`Self::is_running`]: a reader must never read a stopped call
+    /// as still running, nor let it decide `tests`' own outcome.
+    pub stopped: bool,
 }
 
 impl ToolCall {
     pub fn is_running(&self) -> bool {
-        self.ok.is_none()
+        self.ok.is_none() && !self.stopped
     }
 }
 
@@ -82,6 +90,7 @@ fn is_test_command(target: &str) -> bool {
 pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
     let mut calls: Vec<ToolCall> = Vec::new();
     let mut by_id: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut max_id: Option<u64> = None;
     let mut last_reply = None;
     for line in lines {
         let Some(ty) = line.get("type").and_then(Value::as_str) else {
@@ -93,6 +102,20 @@ pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
                 let Some(id) = line.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
+                // Issue #637 review: a retried attempt's own ids start
+                // over at 1, so an id no greater than the highest
+                // seen so far means the previous attempt is gone --
+                // whatever it left unmatched is never getting a
+                // `tool_end` and must stop reading as running.
+                if max_id.is_some_and(|max| id <= max) {
+                    for idx in by_id.values() {
+                        if calls[*idx].ok.is_none() {
+                            calls[*idx].stopped = true;
+                        }
+                    }
+                    by_id.clear();
+                }
+                max_id = Some(max_id.map_or(id, |max| max.max(id)));
                 let tool = line
                     .get("tool")
                     .and_then(Value::as_str)
@@ -111,6 +134,7 @@ pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
                     ms: None,
                     lines_added: None,
                     lines_removed: None,
+                    stopped: false,
                 });
                 by_id.insert(id, calls.len() - 1);
             }
@@ -137,7 +161,7 @@ pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
     let tests = calls
         .iter()
         .rev()
-        .find(|c| c.target.as_deref().is_some_and(is_test_command))
+        .find(|c| !c.stopped && c.target.as_deref().is_some_and(is_test_command))
         .map(|c| match c.ok {
             None => TestOutcome::Running,
             Some(true) => TestOutcome::Ok,
@@ -228,6 +252,25 @@ mod tests {
         ];
         let view = build_transcript_view(&lines);
         assert!(view.calls.is_empty());
+        assert_eq!(view.tests, None);
+    }
+
+    #[test]
+    fn a_retried_attempts_lower_id_closes_out_the_earlier_unmatched_call() {
+        let lines = vec![
+            json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}),
+            json!({"t": "t1", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
+            json!({"t": "t2", "type": "tool_end", "id": 1, "ok": true, "ms": 5}),
+        ];
+        let view = build_transcript_view(&lines);
+        assert_eq!(view.calls.len(), 2);
+        assert!(view.calls[0].stopped);
+        assert!(!view.calls[0].is_running());
+        assert!(!view.calls[1].stopped);
+        assert_eq!(view.calls[1].ok, Some(true));
+        // The stopped call was itself a test command, but it never
+        // got its own outcome -- it must not be read as "still
+        // running" forever, or as "failed", either.
         assert_eq!(view.tests, None);
     }
 

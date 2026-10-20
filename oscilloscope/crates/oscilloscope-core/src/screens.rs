@@ -410,18 +410,67 @@ pub enum FocusDetail {
     /// normally, at which point the generic [`FocusedStep::tokens`],
     /// [`FocusedStep::cost_usd`] and [`FocusedStep::value`] already
     /// carry its totals the same way any other tool step's do, and
-    /// `note` is the one thing left to say (only ever shown in the
-    /// brief window before the very first `meta.live` write).
+    /// `note` is the one thing left to say (only ever shown while the
+    /// step is still running, in the brief window before the very
+    /// first `meta.live` write).
     Agent {
-        /// The same `params_rendered.command` an ordinary tool step's
-        /// own [`FocusDetail::Tool::command`] reads -- an agent step
-        /// is still a `tool` leaf underneath, so its own invocation
-        /// is "asked" the same way.
-        command: Option<String>,
+        /// The first line of `params_rendered.prompt`, or the file's
+        /// own path for a prompt read from one (`docs/plugins/
+        /// agent.md`'s "A prompt from a file") -- never `params_
+        /// rendered.command`, which an agent effect's own params
+        /// never set at all.
+        asked: Option<String>,
         live: Option<Box<crate::model::AgentLive>>,
+        /// `live.is_some()` and its own `updated_at` is no longer
+        /// within 5 seconds of `now` (`AgentLive::is_recent`) -- an
+        /// interrupted run's own leftover `meta.live`, never removed
+        /// because nothing was left running to remove it
+        /// (`docs/plugins/agent.md`: "a watcher shows it as
+        /// stopped"). Computed once here, from the same `now` this
+        /// step was built with, so a front end never needs its own
+        /// wall clock to tell a stale summary from a live one.
+        stale: bool,
         note: &'static str,
+        /// `meta.raw.transcript`, set once the session has finished
+        /// (`meta.raw` only exists then) -- `None` while running, same
+        /// as [`Self::Agent::live`]'s own transcript path reads it
+        /// from `meta.live` instead for as long as that lasts.
+        raw_transcript: Option<String>,
+        /// `meta.raw.files_changed`.
+        raw_files_changed: Option<u64>,
+        /// `meta.raw.turns`.
+        raw_turns: Option<u64>,
     },
     Plain,
+}
+
+/// [`FocusDetail::Agent::asked`]: the first line of `params_rendered.
+/// prompt` (a plain string), or the file's own path when the prompt
+/// was read from one (the `{file, within}` form `docs/plugins/
+/// agent.md`'s "A prompt from a file" records, resolved paths
+/// included) -- `None` for neither shape, or no `prompt` at all.
+fn agent_asked_text(meta: &Value) -> Option<String> {
+    let prompt = meta.pointer("/params_rendered/prompt")?;
+    if let Some(text) = prompt.as_str() {
+        return Some(text.lines().next().unwrap_or(text).to_string());
+    }
+    prompt
+        .get("file")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// [`FocusDetail::Agent`]'s own `raw_transcript`/`raw_files_changed`/
+/// `raw_turns`, all read from `meta.raw` -- present only once the
+/// session has actually finished and reported one.
+fn agent_raw_summary(meta: &Value) -> (Option<String>, Option<u64>, Option<u64>) {
+    let transcript = meta
+        .pointer("/raw/transcript")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let files_changed = meta.pointer("/raw/files_changed").and_then(Value::as_u64);
+    let turns = meta.pointer("/raw/turns").and_then(Value::as_u64);
+    (transcript, files_changed, turns)
 }
 
 /// [`FocusDetail::Agent`]'s own fallback note: shown only when the
@@ -609,14 +658,18 @@ fn build_focused_step(
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
         let live = node.and_then(|n| n.live.clone()).map(Box::new);
+        let stale = live.as_deref().is_some_and(|l| !l.is_recent(now));
+        let (raw_transcript, raw_files_changed, raw_turns) = node
+            .map(|n| agent_raw_summary(&n.meta))
+            .unwrap_or((None, None, None));
         FocusDetail::Agent {
-            command: details
-                .meta_summary
-                .iter()
-                .find(|(k, _)| k == "command")
-                .map(|(_, v)| v.clone()),
+            asked: node.and_then(|n| agent_asked_text(&n.meta)),
             live,
+            stale,
             note: AGENT_LIVE_DATA_NOTE,
+            raw_transcript,
+            raw_files_changed,
+            raw_turns,
         }
     } else if row.kind == RowKind::Tool {
         FocusDetail::Tool {
@@ -2207,11 +2260,14 @@ mod tests {
         let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
         match step.detail {
             FocusDetail::Agent {
-                live: Some(live), ..
+                live: Some(live),
+                stale,
+                ..
             } => {
                 assert_eq!(live.engine, Some("pi".to_string()));
                 assert_eq!(live.turns, Some(14));
                 assert!(live.is_recent("2026-10-08T11:52:55Z"));
+                assert!(!stale);
             }
             other => panic!("expected a populated Agent detail, got {other:?}"),
         }
@@ -2239,9 +2295,12 @@ mod tests {
         let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
         match step.detail {
             FocusDetail::Agent {
-                live: Some(live), ..
+                live: Some(live),
+                stale,
+                ..
             } => {
                 assert!(!live.is_recent("2026-10-08T11:52:55Z"));
+                assert!(stale);
             }
             other => panic!("expected a populated Agent detail, got {other:?}"),
         }
@@ -2250,9 +2309,10 @@ mod tests {
     /// A finished agent step has no `meta.live` left at all (removed
     /// once the attempt ended) -- `live` is `None`, and the generic
     /// `tokens`/`cost_usd`/`value` fields (shared with every other
-    /// tool step) are what a front end reads instead.
+    /// tool step), plus `meta.raw`'s own transcript/files_changed/
+    /// turns, are what a front end reads instead.
     #[test]
-    fn a_finished_agent_step_has_no_live_field_and_falls_back_to_the_note() {
+    fn a_finished_agent_step_has_no_live_field_and_carries_raw_fields() {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let flat = flat_from(
@@ -2261,7 +2321,8 @@ mod tests {
                     "created_at": "2026-10-08T11:46:43Z",
                     "completed_at": "2026-10-08T11:52:55Z",
                     "provider": "agent",
-                    "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10
+                    "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
+                    "raw": {"transcript": "/tmp/t.jsonl", "files_changed": 3, "turns": 14}
                 }}
             }}),
         );
@@ -2274,12 +2335,36 @@ mod tests {
         let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:56Z");
         match step.detail {
             FocusDetail::Agent {
-                live: None, note, ..
-            } => assert_eq!(note, AGENT_LIVE_DATA_NOTE),
+                live: None,
+                note,
+                raw_transcript,
+                raw_files_changed,
+                raw_turns,
+                ..
+            } => {
+                assert_eq!(note, AGENT_LIVE_DATA_NOTE);
+                assert_eq!(raw_transcript, Some("/tmp/t.jsonl".to_string()));
+                assert_eq!(raw_files_changed, Some(3));
+                assert_eq!(raw_turns, Some(14));
+            }
             other => panic!("expected no live summary, got {other:?}"),
         }
         assert_eq!(step.tokens, Some(2_100_000 + 18_000));
         assert_eq!(step.cost_usd, Some(1.10));
+    }
+
+    #[test]
+    fn agent_asked_reads_the_first_line_of_a_plain_prompt() {
+        let meta =
+            json!({"params_rendered": {"prompt": "Fix the bug.\nSee the issue for details."}});
+        assert_eq!(agent_asked_text(&meta), Some("Fix the bug.".to_string()));
+    }
+
+    #[test]
+    fn agent_asked_reads_the_file_path_for_a_prompt_read_from_one() {
+        let meta =
+            json!({"params_rendered": {"prompt": {"file": "/repo/prompt.md", "within": "/repo"}}});
+        assert_eq!(agent_asked_text(&meta), Some("/repo/prompt.md".to_string()));
     }
 
     /// A retried attempt's own `meta.live.earlier_attempts` survives

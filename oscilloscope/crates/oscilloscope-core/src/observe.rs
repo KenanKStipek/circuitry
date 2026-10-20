@@ -208,7 +208,10 @@ pub fn tail_transcript_lines(path: &Path, max_bytes: u64) -> Vec<Value> {
         return Vec::new();
     }
     let mut bytes = Vec::new();
-    if file.read_to_end(&mut bytes).is_err() {
+    // A file appended between `metadata()` above and this read could
+    // otherwise hand back more than `max_bytes` -- `take` hard-caps
+    // what actually gets read, not merely where the seek started.
+    if (&mut file).take(max_bytes).read_to_end(&mut bytes).is_err() {
         return Vec::new();
     }
     let text = String::from_utf8_lossy(&bytes);

@@ -1738,20 +1738,45 @@ fn focused_agent_transcript_path(
     }
 }
 
+/// A tail's own result, kept across calls so two tail calls in the
+/// same tick (the key handler's own same-frame rebuild, immediately
+/// followed by the top-of-loop rebuild `needs_rebuild` triggers for
+/// it) read the file once, not twice, whenever nothing about it has
+/// actually changed between them -- `len` alone is enough to tell:
+/// growing is the only way a transcript changes while it's tailed,
+/// bar the one file-replaced-mid-run case DESIGN.md already asks
+/// osi to tolerate as stale for up to one more poll, same as any
+/// other observation here.
+#[derive(Default)]
+struct TranscriptTailCache {
+    path: Option<String>,
+    len: Option<u64>,
+    view: Option<oscilloscope_core::transcript::TranscriptView>,
+}
+
 /// Tails the one step's transcript this frame actually needs
 /// (`focused_agent_transcript_path`), bounded to the last 64 KiB
-/// (DESIGN.md, issue #637) -- stateless, so switching focus to a
-/// different step (or off a screen that shows one at all) costs
-/// nothing more than this call simply returning `None` next time; no
-/// file is ever opened for a step that isn't the one on screen.
+/// (DESIGN.md, issue #637) -- switching focus to a different step
+/// (or off a screen that shows one at all) costs nothing more than
+/// this call simply returning `None` next time; no file is ever
+/// opened for a step that isn't the one on screen.
 fn tail_focused_transcript(
     app: &App,
     overview: Option<&oscilloscope_core::screens::Overview>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+    cache: &mut TranscriptTailCache,
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
     let path = focused_agent_transcript_path(app, overview, flow_screen)?;
+    let len = std::fs::metadata(&path).ok().map(|m| m.len());
+    if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
+        return cache.view.clone();
+    }
     let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
-    Some(oscilloscope_core::transcript::build_transcript_view(&lines))
+    let view = oscilloscope_core::transcript::build_transcript_view(&lines);
+    cache.path = Some(path);
+    cache.len = len;
+    cache.view = Some(view.clone());
+    Some(view)
 }
 
 fn details_selection_path(app: &App) -> Option<String> {
@@ -1979,8 +2004,13 @@ fn run_tui(
         &story,
         &now_str,
     );
-    let mut transcript_view =
-        tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
+    let mut transcript_cache = TranscriptTailCache::default();
+    let mut transcript_view = tail_focused_transcript(
+        &app,
+        overview.as_ref(),
+        flow_screen.as_ref(),
+        &mut transcript_cache,
+    );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
     // `current_state: None`, before the loop has polled anything),
@@ -2174,8 +2204,12 @@ fn run_tui(
                 &story,
                 &now_str,
             );
-            transcript_view =
-                tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
+            transcript_view = tail_focused_transcript(
+                &app,
+                overview.as_ref(),
+                flow_screen.as_ref(),
+                &mut transcript_cache,
+            );
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
@@ -2343,8 +2377,12 @@ fn run_tui(
                             &story,
                             &now_str,
                         );
-                        transcript_view =
-                            tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
+                        transcript_view = tail_focused_transcript(
+                            &app,
+                            overview.as_ref(),
+                            flow_screen.as_ref(),
+                            &mut transcript_cache,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -3151,8 +3189,13 @@ fn run_tui_watch(
         &story,
         &now_str,
     );
-    let mut transcript_view =
-        tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
+    let mut transcript_cache = TranscriptTailCache::default();
+    let mut transcript_view = tail_focused_transcript(
+        &app,
+        overview.as_ref(),
+        flow_screen.as_ref(),
+        &mut transcript_cache,
+    );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
@@ -3376,8 +3419,12 @@ fn run_tui_watch(
                 &story,
                 &now_str,
             );
-            transcript_view =
-                tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
+            transcript_view = tail_focused_transcript(
+                &app,
+                overview.as_ref(),
+                flow_screen.as_ref(),
+                &mut transcript_cache,
+            );
         }
         // Issue #635: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
@@ -3504,8 +3551,12 @@ fn run_tui_watch(
                             &story,
                             &now_str,
                         );
-                        transcript_view =
-                            tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
+                        transcript_view = tail_focused_transcript(
+                            &app,
+                            overview.as_ref(),
+                            flow_screen.as_ref(),
+                            &mut transcript_cache,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;

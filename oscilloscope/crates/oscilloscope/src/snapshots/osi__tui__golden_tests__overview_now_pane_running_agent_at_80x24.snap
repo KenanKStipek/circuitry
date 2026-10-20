@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 3990
 expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 6m12s · 11:52:55   [0]  2  3                  "
@@ -10,14 +9,14 @@ expression: text
 "│                                               ││fix                          │"
 "│                                               ││agent · agent                │"
 "│                                               ││since 11:46:43 · 6m12s       │"
-"│                                               ││claude_code · sonnet · turn 1│"
+"│                                               ││claude_code · sonnet · turn …│"
 "│                                               ││↑2.1 Mt ↓— · $—              │"
-"│                                               ││context 142 kt / 200 kt      │"
-"│                                               ││██████████████               │"
-"│                                               ││files 3 · +12 −3 · tests …   │"
+"│                                               ││░█▒██                        │"
 "│                                               ││doing:                       │"
-"│                                               ││› edit src/adapters/ollama.rs│"
-"│                                               ││› bash pytest -k timeout ✓   │"
+"│                                               ││11:51:15 › edit src/adapters…│"
+"│                                               ││11:51:40 › bash pytest -k ti…│"
+"│                                               ││11:52:30 › bash pytest -q te…│"
+"│                                               ││context 142 kt / 200 kt      │"
 "└───────────────────────────────────────────────┘└─────────────────────────────┘"
 "┌ time ──────────────────┐┌ flow ──────────────────┐┌ cost ────────────────────┐"
 "│11:46:43 → now          ││0 effects · 0 failed    ││↑0 t ↓0 t                 │"
