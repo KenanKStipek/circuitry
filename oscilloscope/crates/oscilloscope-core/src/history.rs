@@ -500,10 +500,7 @@ struct FileLock {
 impl FileLock {
     fn acquire(path: &Path) -> std::io::Result<Self> {
         use std::os::unix::io::AsRawFd;
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
         let fd = file.as_raw_fd();
         // Blocking advisory lock (issue #649): several `osi` processes
         // can finish runs of the same document at once; the first to

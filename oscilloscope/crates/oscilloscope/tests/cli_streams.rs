@@ -8,9 +8,15 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// Issue #649: every spawn of `osi` here gets its own throwaway
+/// `HOME`, never the real one -- a history write under it, however
+/// unlikely for a bare `--help`/`--version`/usage-error check, would
+/// otherwise land in the real `~/.local/state/circuitry/osi/history`.
 fn run(args: &[&str]) -> std::process::Output {
+    let home = tempfile::tempdir().expect("temp home");
     Command::new(env!("CARGO_BIN_EXE_osi"))
         .args(args)
+        .env("HOME", home.path())
         .stdin(Stdio::null())
         .output()
         .expect("spawn osi")
@@ -186,9 +192,11 @@ fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
     // hasn't started writing yet, or never will) looks identical to a
     // silent hang without this.
     let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg("watch")
         .arg(dir.path())
+        .env("HOME", home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -258,9 +266,11 @@ fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     )
     .unwrap();
 
+    let home = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg("watch")
         .arg(dir.path())
+        .env("HOME", home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -315,6 +325,8 @@ fn osi_theme_is_read_and_the_old_osp_theme_is_ignored() {
     std::fs::write(&doc, "effects: []\n").expect("write doc");
     let empty_bin = dir.path().join("bin");
     std::fs::create_dir(&empty_bin).expect("bin dir");
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).expect("home dir");
     let run_with = |var: &str| {
         Command::new(env!("CARGO_BIN_EXE_osi"))
             .arg(&doc)
@@ -323,6 +335,7 @@ fn osi_theme_is_read_and_the_old_osp_theme_is_ignored() {
             .env_remove("OSP_THEME")
             .env(var, "bogus")
             .env("PATH", &empty_bin)
+            .env("HOME", &home)
             .stdin(Stdio::null())
             .output()
             .expect("spawn osi")

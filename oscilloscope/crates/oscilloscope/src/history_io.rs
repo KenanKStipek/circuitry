@@ -69,7 +69,16 @@ fn resolve_watch_document_path(
     if let Some(path) = state.and_then(oscilloscope_core::model::orchestration_path) {
         let path = Path::new(path);
         if path.is_absolute() {
-            return Some(Some(path.to_string_lossy().into_owned()));
+            // Canonicalized the same way `resolve_run_document_path`
+            // already is (issue #649): without this, the very same
+            // document could key to two different history files
+            // depending on whether it was reached through `osi <doc>`
+            // (which canonicalizes) or `osi watch`'s own state-read
+            // path (which otherwise wouldn't) -- symlinked temp
+            // directories (macOS's own `/tmp` included) make this a
+            // real, not just theoretical, mismatch.
+            let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            return Some(Some(resolved.to_string_lossy().into_owned()));
         }
     }
     if let Some(plan_arg) = plan_arg {
