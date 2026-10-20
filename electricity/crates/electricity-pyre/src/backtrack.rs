@@ -4,7 +4,7 @@
 //! Python-`re`-to-`fancy-regex` translation turns into a lookaround
 //! (non-MULTILINE `$`, `\b`/`\B`, any lookbehind) can exhaust the
 //! crate's own default on an ordinary multi-hundred-KB input even
-//! though the real per-character cost is tiny (PR #480 review R8:
+//! though the real per-character cost is tiny (PR #480:
 //! `\bzebra\b` findall with no match, 20,000 lines of `item N value
 //! M`, `\s+$` on 1.2 MB -- all fail against `fancy-regex`'s default
 //! even though `cof` succeeds instantly). Shared by
