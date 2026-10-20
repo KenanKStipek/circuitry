@@ -124,11 +124,14 @@ pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
 /// The Time screen's own clock axis (issue #650): the round tick
 /// interval, in seconds, that keeps labels about `target_columns`
 /// columns apart over `span_s` spread across `width` columns -- one
-/// of 1, 2, 5, 10, 15 or 30 minutes, or 1 hour, whichever is the
-/// smallest that keeps ticks at least that far apart; beyond an hour,
-/// the smallest whole number of hours that still does.
+/// of 5, 10, 15 or 30 seconds, 1, 2, 5, 10, 15 or 30 minutes, or 1
+/// hour, whichever is the smallest that keeps ticks at least that
+/// far apart; beyond an hour, the smallest whole number of hours that
+/// still does.
 pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f64 {
-    const CANDIDATES_S: [f64; 7] = [60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0];
+    const CANDIDATES_S: [f64; 11] = [
+        5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0,
+    ];
     let width = width.max(1) as f64;
     let seconds_per_column = (span_s.max(0.0) / width).max(f64::MIN_POSITIVE);
     let target_columns = target_columns.max(1) as f64;

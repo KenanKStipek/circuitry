@@ -114,9 +114,13 @@ pub struct AxisSpan {
 /// How far past `now` the axis's own end reaches while the run is
 /// still going, on top of the later of `now` and the ETA's own p90
 /// end (DESIGN.md: "plus a small margin") -- large enough that the
-/// now line never sits flush against the pane's own right edge.
+/// now line never sits flush against the pane's own right edge, but
+/// proportional to the span itself so a young run's bars aren't
+/// squeezed into a narrow strip on the left (issue #650's probes: a
+/// fixed 30s floor put a 10s-old run's now line a quarter of the way
+/// across the axis).
 fn axis_margin_s(elapsed_s: f64) -> f64 {
-    (elapsed_s * 0.05).max(30.0)
+    (elapsed_s * 0.1).max(2.0)
 }
 
 /// The timeline's own clock axis (DESIGN.md's "Clock axis"): start to
@@ -621,27 +625,80 @@ pub fn quiet_agent(running_leaf_kinds: &[RowKind], recent_rate: u64) -> bool {
     running_leaf_kinds == [RowKind::Prompt] && recent_rate == 0
 }
 
+/// The next round local clock time at or after `from_utc`, a whole
+/// multiple of `tick_s` seconds since local midnight in `zone` --
+/// every candidate [`crate::format::clock_tick_seconds`] returns
+/// divides a day evenly, so stepping forward by `tick_s` from one
+/// round time (done by this function's own caller, in absolute time)
+/// always lands on another, without recomputing from local midnight
+/// each time. Measuring from *local* midnight, not UTC's, is what
+/// puts an hour tick on a local whole hour even in a zone offset by
+/// a half hour from UTC.
+fn next_round_local_time(
+    from_utc: chrono::DateTime<chrono::Utc>,
+    tick_s: f64,
+    zone: &dyn crate::format::ClockZone,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    let local = zone.local(from_utc);
+    let offset = *local.offset();
+    let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let elapsed_s = (local.naive_local() - midnight).num_milliseconds() as f64 / 1000.0;
+    let next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
+    let next_local_naive =
+        midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
+    let next_local = offset
+        .from_local_datetime(&next_local_naive)
+        .single()
+        .unwrap_or_else(|| offset.from_utc_datetime(&next_local_naive));
+    next_local.with_timezone(&chrono::Utc)
+}
+
 /// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
 /// round clock times ... whichever keeps labels about 10 columns
-/// apart") -- one entry per tick, each paired with its own
-/// run-relative offset for a caller to format into an actual clock
-/// time and place on the same `width` columns the bars themselves
-/// use.
-pub fn axis_tick_columns(axis_start_s: f64, axis_end_s: f64, width: usize) -> Vec<(usize, f64)> {
+/// apart") -- one entry per tick: its own column, its run-relative
+/// offset, and its label, `HH:MM:SS` under a minute-long interval
+/// (so a run only tens of seconds old still gets labels at all) or
+/// `HH:MM` otherwise. Ticks fall on round clock times in `zone`,
+/// never on `axis_start_s` merely because that's where the axis
+/// happens to begin.
+pub fn axis_tick_columns(
+    run_start_ts: &str,
+    axis_start_s: f64,
+    axis_end_s: f64,
+    width: usize,
+    zone: &dyn crate::format::ClockZone,
+) -> Vec<(usize, f64, String)> {
     let width = width.max(1);
     let span = (axis_end_s - axis_start_s).max(0.0);
+    if span <= 0.0 {
+        return Vec::new();
+    }
     let tick_s = crate::format::clock_tick_seconds(span, width, 10);
     if tick_s <= 0.0 {
         return Vec::new();
     }
-    let first_tick = (axis_start_s / tick_s).ceil() * tick_s;
+    let Some(run_start) = crate::diff::parse_instant(run_start_ts) else {
+        return Vec::new();
+    };
+    let axis_start_utc =
+        (run_start + chrono::Duration::milliseconds((axis_start_s * 1000.0).round() as i64))
+            .with_timezone(&chrono::Utc);
+    let axis_end_utc =
+        (run_start + chrono::Duration::milliseconds((axis_end_s * 1000.0).round() as i64))
+            .with_timezone(&chrono::Utc);
+    let fmt = if tick_s < 60.0 { "%H:%M:%S" } else { "%H:%M" };
     let mut out = Vec::new();
-    let mut t = first_tick;
-    while t <= axis_end_s + 1e-9 {
-        if let Some(col) = now_column(axis_start_s, axis_end_s, width, t) {
-            out.push((col, t));
+    let mut tick = next_round_local_time(axis_start_utc, tick_s, zone);
+    let step = chrono::Duration::milliseconds((tick_s * 1000.0).round() as i64);
+    while tick <= axis_end_utc + chrono::Duration::milliseconds(1) {
+        let offset_s =
+            (tick - run_start.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+        if let Some(col) = now_column(axis_start_s, axis_end_s, width, offset_s) {
+            let label = zone.local(tick).format(fmt).to_string();
+            out.push((col, offset_s, label));
         }
-        t += tick_s;
+        tick += step;
     }
     out
 }
@@ -672,10 +729,19 @@ pub fn decision_points(story_lines: &[crate::diff::LogLine], run_start_ts: &str)
 }
 
 /// The in-flight strip's own heights (DESIGN.md: "how many steps are
-/// running at once") -- a sweep over every row's own `[start_s,
-/// end_s]` (running rows extended to `now_s`), counted per column the
-/// same way [`bucket_weighted`]'s callers are, but by overlap rather
-/// than by point.
+/// running at once") -- per column, the *most* intervals overlapping
+/// at any single instant within it, not how many merely touch it: a
+/// sweep over every interval's own start/end (ends processed before
+/// starts at an equal time, so a purely sequential run never double-
+/// counts the instant one step ends and the next begins), carrying
+/// each resulting overlap level into every column its own time range
+/// spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum InFlightEdge {
+    End,
+    Start,
+}
+
 pub fn in_flight_heights(
     axis_start_s: f64,
     axis_end_s: f64,
@@ -685,16 +751,55 @@ pub fn in_flight_heights(
     let width = width.max(1);
     let span = (axis_end_s - axis_start_s).max(f64::MIN_POSITIVE);
     let mut heights = vec![0u64; width];
+    let mut events: Vec<(f64, InFlightEdge)> = Vec::with_capacity(intervals.len() * 2);
     for &(start, end) in intervals {
-        let start_col = (((start.max(axis_start_s) - axis_start_s) / span) * width as f64)
-            .floor()
-            .max(0.0) as usize;
-        let end_col =
-            (((end.min(axis_end_s) - axis_start_s) / span) * width as f64).ceil() as usize;
-        let end_col = end_col.clamp(start_col + 1, width);
-        for height in &mut heights[start_col.min(width - 1)..end_col] {
-            *height += 1;
+        let start = start.clamp(axis_start_s, axis_end_s);
+        let end = end.clamp(axis_start_s, axis_end_s);
+        if end <= start {
+            continue;
         }
+        events.push((start, InFlightEdge::Start));
+        events.push((end, InFlightEdge::End));
+    }
+    if events.is_empty() {
+        return heights;
+    }
+    events.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    // The column an instant `t` opens (its own time falls at or after
+    // the column's own start).
+    let col_start_of = |t: f64| {
+        (((t - axis_start_s) / span) * width as f64)
+            .floor()
+            .clamp(0.0, (width - 1) as f64) as usize
+    };
+    // The last column a half-open span ending at `t` (exclusive)
+    // still reaches -- `ceil() - 1` rather than `floor()`, so a span
+    // ending exactly on a column boundary doesn't bleed one column
+    // too far into the next.
+    let col_end_of = |t: f64| {
+        ((((t - axis_start_s) / span) * width as f64).ceil() - 1.0)
+            .clamp(0.0, (width - 1) as f64) as usize
+    };
+    let mut current: i64 = 0;
+    let mut t = axis_start_s;
+    let mut idx = 0usize;
+    while idx < events.len() {
+        let next_t = events[idx].0;
+        if next_t > t && current > 0 {
+            let col_from = col_start_of(t);
+            let col_to = col_end_of(next_t).max(col_from);
+            for height in &mut heights[col_from..=col_to] {
+                *height = (*height).max(current as u64);
+            }
+        }
+        while idx < events.len() && events[idx].0 == next_t {
+            match events[idx].1 {
+                InFlightEdge::Start => current += 1,
+                InFlightEdge::End => current -= 1,
+            }
+            idx += 1;
+        }
+        t = next_t;
     }
     heights
 }
@@ -821,13 +926,23 @@ pub struct ZoomAgentFooter {
 /// finished (DESIGN.md: "from `meta.live`'s `turns`, `tool_calls` and
 /// `tools.<name>.ms` against the session's elapsed time, or
 /// `meta.raw`'s `turns`, `tool_calls` and `tool_counts` once it has
-/// finished").
+/// finished"). `running` is the call currently in progress, if any
+/// ([`running_tool_elapsed_ms`]) -- its own elapsed time is folded
+/// into that tool's total before picking the busiest one, since
+/// `tools.<name>.ms` only ever counts calls that have already
+/// finished, which left the footer reading a stale `0.0s` for
+/// seconds while the first call of a run was still going.
 pub fn zoom_agent_footer(
     turns: Option<u64>,
     tool_calls: Option<u64>,
     tools: &BTreeMap<String, crate::model::AgentLiveToolUsage>,
     elapsed_s: f64,
+    running: Option<(String, u64)>,
 ) -> ZoomAgentFooter {
+    let mut tools = tools.clone();
+    if let Some((name, ms)) = running {
+        tools.entry(name).or_default().ms += ms;
+    }
     let busiest_tool = tools
         .iter()
         .max_by_key(|(_, usage)| usage.ms)
@@ -844,6 +959,29 @@ pub fn zoom_agent_footer(
         tool_calls,
         busiest_tool,
     }
+}
+
+/// The tool call currently in progress, for [`zoom_agent_footer`]'s
+/// own running-elapsed fix: the transcript's own unmatched `tool_
+/// start` when there is one, else `current_tool` and its own `started
+/// _at` when there's no transcript at all. `None` while nothing is
+/// actually running, or when the running call's own start can't be
+/// placed on the run's clock.
+pub fn running_tool_elapsed_ms(
+    calls: &[ToolCall],
+    current_tool: Option<(&str, &str)>,
+    now_s: f64,
+    run_start_ts: &str,
+) -> Option<(String, u64)> {
+    if let Some(call) = calls.iter().rev().find(|c| c.is_running()) {
+        let start_s = duration_seconds(run_start_ts, call.start_t.as_deref()?)?;
+        let ms = ((now_s - start_s) * 1000.0).max(0.0) as u64;
+        return Some((call.tool.clone(), ms));
+    }
+    let (name, started_at) = current_tool?;
+    let start_s = duration_seconds(run_start_ts, started_at)?;
+    let ms = ((now_s - start_s) * 1000.0).max(0.0) as u64;
+    Some((name.to_string(), ms))
 }
 
 // ---------------------------------------------------------------------
@@ -864,6 +1002,16 @@ pub enum VsUsualMark {
 /// reads `≈` until it either finishes or passes the upper bound.
 pub fn vs_usual_mark(now_s: f64, stats: &StepStats, running: bool) -> Option<VsUsualMark> {
     let p50 = stats.busy_p50_s?;
+    if stats.count < 3 {
+        return None;
+    }
+    // A difference under a second is noise, not a real signal, no
+    // matter what the percentage rules below would say about it (a
+    // step taking a few milliseconds reads `0.0s` either way, so the
+    // 20%/p10-p90 rules see nothing but rounding).
+    if (now_s - p50).abs() < 1.0 {
+        return Some(VsUsualMark::Usual);
+    }
     if stats.count >= 5 {
         let p10 = stats.busy_p10_s?;
         let p90 = stats.busy_p90_s?;
@@ -875,17 +1023,14 @@ pub fn vs_usual_mark(now_s: f64, stats: &StepStats, running: bool) -> Option<VsU
             VsUsualMark::Usual
         });
     }
-    if stats.count >= 3 {
-        let delta = (now_s - p50) / p50.max(f64::MIN_POSITIVE);
-        return Some(if delta > 0.2 {
-            VsUsualMark::Slower
-        } else if !running && delta < -0.2 {
-            VsUsualMark::Faster
-        } else {
-            VsUsualMark::Usual
-        });
-    }
-    None
+    let delta = (now_s - p50) / p50.max(f64::MIN_POSITIVE);
+    Some(if delta > 0.2 {
+        VsUsualMark::Slower
+    } else if !running && delta < -0.2 {
+        VsUsualMark::Faster
+    } else {
+        VsUsualMark::Usual
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1142,7 +1287,8 @@ mod tests {
 
     #[test]
     fn axis_tick_columns_keeps_ticks_about_10_columns_apart() {
-        let ticks = axis_tick_columns(0.0, 600.0, 60);
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T00:00:00Z", 0.0, 600.0, 60, &utc);
         assert!(ticks.len() >= 2);
         for window in ticks.windows(2) {
             assert!(window[1].0 - window[0].0 >= 9);
@@ -1152,7 +1298,70 @@ mod tests {
 
     #[test]
     fn axis_tick_columns_is_empty_for_a_zero_span() {
-        assert_eq!(axis_tick_columns(10.0, 10.0, 40), Vec::new());
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        assert_eq!(
+            axis_tick_columns("2026-01-01T00:00:10Z", 10.0, 10.0, 40, &utc),
+            Vec::new()
+        );
+    }
+
+    /// Issue #650's probe: a run starting at a non-round time
+    /// (11:46:43) must still tick at round minutes, never at the
+    /// run's own start.
+    #[test]
+    fn axis_tick_columns_ticks_at_round_minutes_not_the_runs_own_start() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T11:46:43Z", 0.0, 300.0, 60, &utc);
+        assert!(!ticks.is_empty());
+        assert_ne!(
+            ticks[0].1, 0.0,
+            "the first tick must not sit at the run's own start"
+        );
+        // The run starts at :43 seconds past its own minute -- a
+        // round-minute tick's own absolute second-of-minute is 0.
+        for (_, offset_s, label) in &ticks {
+            assert_eq!(label.chars().count(), 5, "{label} should read HH:MM");
+            assert_eq!((43.0 + offset_s) % 60.0, 0.0, "{label} is not a round minute");
+        }
+    }
+
+    /// Issue #650's probe: a +05:30 zone still ticks on a local whole
+    /// hour, not a UTC one.
+    #[test]
+    fn axis_tick_columns_ticks_on_local_whole_hours_in_a_half_hour_zone() {
+        let ist = chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
+        // 00:00:00Z is 05:30:00 IST -- the run spans several hours,
+        // so the tick interval lands on whole IST hours.
+        let ticks = axis_tick_columns("2026-01-01T00:00:00Z", 0.0, 6.0 * 3600.0, 80, &ist);
+        assert!(!ticks.is_empty());
+        for (_, _, label) in &ticks {
+            assert!(label.ends_with(":00"), "{label} is not a round IST hour");
+        }
+    }
+
+    /// Issue #650's probe: a short, 20s-old run still gets sub-minute
+    /// labels (`HH:MM:SS`), not nothing at all.
+    #[test]
+    fn axis_tick_columns_labels_sub_minute_intervals_with_seconds() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T00:00:00Z", 0.0, 20.0, 40, &utc);
+        assert!(!ticks.is_empty());
+        for (_, offset_s, label) in &ticks {
+            assert_eq!(label.chars().count(), 8, "{label} should read HH:MM:SS");
+            assert_eq!(offset_s % 5.0, 0.0);
+        }
+    }
+
+    /// Issue #650's probe: a long, 6h span still only ticks on round
+    /// hours.
+    #[test]
+    fn axis_tick_columns_over_a_six_hour_span_ticks_on_round_hours() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T00:00:00Z", 0.0, 6.0 * 3600.0, 80, &utc);
+        assert!(!ticks.is_empty());
+        for (_, offset_s, _) in &ticks {
+            assert_eq!(offset_s % 3600.0, 0.0);
+        }
     }
 
     #[test]
@@ -1223,6 +1432,26 @@ mod tests {
         assert_eq!(heights[5], 1);
     }
 
+    /// Issue #650's probe: a purely sequential run (no step overlaps
+    /// another) must read 1 everywhere it runs at all, never 2 at the
+    /// instant one step ends and the next begins.
+    #[test]
+    fn in_flight_heights_back_to_back_intervals_never_double_count() {
+        let intervals = vec![(0.0, 20.0), (20.0, 40.0), (40.0, 60.0)];
+        let heights = in_flight_heights(0.0, 60.0, 6, &intervals);
+        assert_eq!(heights, vec![1, 1, 1, 1, 1, 1]);
+    }
+
+    /// Issue #650's probe: three intervals overlap at once, and a
+    /// fourth starts exactly where they end -- the true max is 3, not
+    /// 4 (the old touch-counting rule's answer).
+    #[test]
+    fn in_flight_heights_true_max_overlap_is_3_not_4() {
+        let intervals = vec![(0.0, 30.0), (0.0, 30.0), (0.0, 30.0), (30.0, 60.0)];
+        let heights = in_flight_heights(0.0, 60.0, 6, &intervals);
+        assert_eq!(heights.iter().copied().max(), Some(3));
+    }
+
     #[test]
     fn queued_now_counts_only_running_nodes_waiting_for_a_slot() {
         use serde_json::json;
@@ -1277,6 +1506,22 @@ mod tests {
             vs_usual_mark(110.0, &stats, false),
             Some(VsUsualMark::Usual)
         );
+    }
+
+    /// Issue #650's probe: a quick step's own noise (a few
+    /// milliseconds either way) must never read `\u25b2`/`\u25bc` --
+    /// a difference under a second is always `\u2248`.
+    #[test]
+    fn vs_usual_mark_under_a_second_of_difference_is_always_usual() {
+        let stats = StepStats {
+            count: 5,
+            busy_p50_s: Some(0.01),
+            busy_p10_s: Some(0.005),
+            busy_p90_s: Some(0.02),
+            ..Default::default()
+        };
+        assert_eq!(vs_usual_mark(0.03, &stats, false), Some(VsUsualMark::Usual));
+        assert_eq!(vs_usual_mark(0.0, &stats, false), Some(VsUsualMark::Usual));
     }
 
     #[test]
@@ -1396,13 +1641,63 @@ mod tests {
                 ms: 10_000,
             },
         );
-        let footer = zoom_agent_footer(Some(14), Some(31), &tools, 375.0);
+        let footer = zoom_agent_footer(Some(14), Some(31), &tools, 375.0, None);
         assert_eq!(footer.turns, Some(14));
         assert_eq!(footer.tool_calls, Some(31));
         let (name, ms, pct) = footer.busiest_tool.unwrap();
         assert_eq!(name, "bash");
         assert_eq!(ms, 250_000);
         assert!((pct - 66.67).abs() < 0.1);
+    }
+
+    /// Issue #650's probe: the footer must count the call in
+    /// progress's own elapsed time, not just already-finished calls
+    /// -- otherwise it reads `bash 0.0s` for seconds while the very
+    /// first call of a run is still going.
+    #[test]
+    fn zoom_agent_footer_folds_the_running_calls_own_elapsed_time_in() {
+        let tools = BTreeMap::new();
+        let footer =
+            zoom_agent_footer(Some(1), Some(1), &tools, 5.0, Some(("bash".to_string(), 3_000)));
+        let (name, ms, _) = footer.busiest_tool.unwrap();
+        assert_eq!(name, "bash");
+        assert_eq!(ms, 3_000);
+    }
+
+    #[test]
+    fn running_tool_elapsed_ms_reads_from_an_unmatched_transcript_call() {
+        let calls = vec![ToolCall {
+            start_t: Some("2026-01-01T00:00:10Z".to_string()),
+            end_t: None,
+            tool: "bash".to_string(),
+            target: None,
+            ok: None,
+            ms: None,
+            lines_added: None,
+            lines_removed: None,
+            stopped: false,
+        }];
+        let result = running_tool_elapsed_ms(&calls, None, 15.0, "2026-01-01T00:00:00Z");
+        assert_eq!(result, Some(("bash".to_string(), 5_000)));
+    }
+
+    #[test]
+    fn running_tool_elapsed_ms_falls_back_to_current_tool_with_no_transcript() {
+        let result = running_tool_elapsed_ms(
+            &[],
+            Some(("read", "2026-01-01T00:00:10Z")),
+            15.0,
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(result, Some(("read".to_string(), 5_000)));
+    }
+
+    #[test]
+    fn running_tool_elapsed_ms_is_none_with_nothing_running() {
+        assert_eq!(
+            running_tool_elapsed_ms(&[], None, 15.0, "2026-01-01T00:00:00Z"),
+            None
+        );
     }
 
     #[test]
