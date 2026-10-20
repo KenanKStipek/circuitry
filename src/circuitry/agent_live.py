@@ -314,6 +314,10 @@ class LiveTracker:
     ) -> None:
         self._engine = engine
         self._model = model or None
+        # A model param fixes `_model` for the whole attempt (#646): once
+        # set here, no later `_note_model` call from the stream may
+        # overwrite it.
+        self._model_locked = bool(self._model)
         self._attempt = attempt
         self._transcript_path = transcript_path
         self._earlier_attempts = earlier_attempts
@@ -460,13 +464,32 @@ class LiveTracker:
             self._cost_usd = cost_usd
         self._publish_now()
 
+    # ---- the model, when params set none (#646) ----
+
+    def _note_model(self, value: Any) -> bool:
+        """Takes *value* as the model the CLI itself just reported --
+        ``meta.live.model``/``meta.raw.model`` keep the latest one seen this
+        way, unless a ``model`` param already fixed it (#646). Returns
+        whether this changed anything worth a publish. Never called while
+        ``self._lock`` is already held -- it isn't reentrant.
+        """
+        if not isinstance(value, str) or not value or self._model_locked:
+            return False
+        with self._lock:
+            if self._model == value:
+                return False
+            self._model = value
+            return True
+
     # ---- raw, once the attempt ends ----
 
     def raw_extra(self) -> dict[str, Any]:
-        """The new ``meta.raw`` keys (#636): the final state of everything
-        this tracker accumulated over every turn of this attempt."""
+        """The new ``meta.raw`` keys (#636, plus ``model`` for #646): the
+        final state of everything this tracker accumulated over every turn
+        of this attempt."""
         with self._lock:
             return {
+                "model": self._model,
                 "context_tokens": self._context_tokens,
                 "context_window": self._context_window,
                 "tool_counts": {
@@ -647,12 +670,22 @@ class LiveTracker:
                 call_id=call_id if isinstance(call_id, str) else None,
             )
             return
+        if kind == "message_start":
+            # pi's own ``message_start``, when it sends one, carries the
+            # assistant message's ``model`` the same way ``message_end``
+            # does (#646) -- nothing else here is read from it.
+            message = event.get("message")
+            model = message.get("model") if isinstance(message, dict) else None
+            if self._note_model(model):
+                self._publish_now()
+            return
         if kind == "message_end":
             message = event.get("message")
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 return
             with self._lock:
                 self._turns += 1
+            self._note_model(message.get("model"))
             usage = message.get("usage")
             if isinstance(usage, dict):
                 cost = usage.get("cost")
@@ -678,10 +711,16 @@ class LiveTracker:
             return
         kind = event.get("type")
         if kind == "system":
+            # Claude Code's own ``system/init`` line carries the model it
+            # used (#646), alongside the session id this already read.
             session_id = event.get("session_id")
+            model_changed = self._note_model(event.get("model"))
+            session_changed = False
             if isinstance(session_id, str):
                 with self._lock:
                     self._session_id = session_id
+                session_changed = True
+            if model_changed or session_changed:
                 self._publish_now()
             return
         if kind == "assistant":

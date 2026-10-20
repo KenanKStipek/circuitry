@@ -13,7 +13,10 @@ this module adds the session's contract on top:
   Claude Code ``--resume``) quoting the errors; still invalid after that,
   the effect fails with them. ``value`` is the parsed JSON. Without
   ``result_file``, ``value`` is the final assistant text.
-* ``raw``: ``engine``, ``session_id``, ``turns``, ``tool_calls``,
+* ``raw``: ``engine``, ``model`` (``params['model']`` when set, else the
+  model the CLI itself reports — Claude Code's ``system/init`` line, pi's
+  own assistant message — kept up to date with the latest the CLI reports,
+  #646), ``session_id``, ``turns``, ``tool_calls``,
   ``tokens`` (``sent``/``received``), ``cost`` when the CLI reports one,
   ``repair_turn``, ``context_tokens``, ``context_window``, ``tool_counts``,
   ``turn_tokens``, ``files_changed``, ``lines_added``, ``lines_removed``,
