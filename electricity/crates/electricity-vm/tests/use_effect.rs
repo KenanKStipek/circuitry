@@ -224,7 +224,7 @@ async fn a_cycle_between_two_path_children_is_detected_with_the_exact_arrow_text
     let VmError::Raised { message, .. } = err else {
         panic!("expected a VmError::Raised, got {err:?}");
     };
-    // Review finding 6 on PR #472: this used to only check `contains("
+    // PR #472's review: this used to only check `contains("
     // → ")`, but the PR body calls this "exact arrow text" -- so check
     // the full, real message, both resolved identities included.
     let identity_a = std::fs::canonicalize("tests/fixtures/use/cycle_a.yml")
