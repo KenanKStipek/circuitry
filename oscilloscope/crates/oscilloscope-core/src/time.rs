@@ -681,12 +681,12 @@ pub fn axis_tick_columns(
     let Some(run_start) = crate::diff::parse_instant(run_start_ts) else {
         return Vec::new();
     };
-    let axis_start_utc =
-        (run_start + chrono::Duration::milliseconds((axis_start_s * 1000.0).round() as i64))
-            .with_timezone(&chrono::Utc);
-    let axis_end_utc =
-        (run_start + chrono::Duration::milliseconds((axis_end_s * 1000.0).round() as i64))
-            .with_timezone(&chrono::Utc);
+    let axis_start_utc = (run_start
+        + chrono::Duration::milliseconds((axis_start_s * 1000.0).round() as i64))
+    .with_timezone(&chrono::Utc);
+    let axis_end_utc = (run_start
+        + chrono::Duration::milliseconds((axis_end_s * 1000.0).round() as i64))
+    .with_timezone(&chrono::Utc);
     let fmt = if tick_s < 60.0 { "%H:%M:%S" } else { "%H:%M" };
     let mut out = Vec::new();
     let mut tick = next_round_local_time(axis_start_utc, tick_s, zone);
@@ -749,8 +749,11 @@ pub fn in_flight_heights(
     intervals: &[(f64, f64)],
 ) -> Vec<u64> {
     let width = width.max(1);
-    let span = (axis_end_s - axis_start_s).max(f64::MIN_POSITIVE);
     let mut heights = vec![0u64; width];
+    if axis_end_s <= axis_start_s {
+        return heights;
+    }
+    let span = axis_end_s - axis_start_s;
     let mut events: Vec<(f64, InFlightEdge)> = Vec::with_capacity(intervals.len() * 2);
     for &(start, end) in intervals {
         let start = start.clamp(axis_start_s, axis_end_s);
@@ -777,8 +780,8 @@ pub fn in_flight_heights(
     // ending exactly on a column boundary doesn't bleed one column
     // too far into the next.
     let col_end_of = |t: f64| {
-        ((((t - axis_start_s) / span) * width as f64).ceil() - 1.0)
-            .clamp(0.0, (width - 1) as f64) as usize
+        ((((t - axis_start_s) / span) * width as f64).ceil() - 1.0).clamp(0.0, (width - 1) as f64)
+            as usize
     };
     let mut current: i64 = 0;
     let mut t = axis_start_s;
@@ -1321,7 +1324,11 @@ mod tests {
         // round-minute tick's own absolute second-of-minute is 0.
         for (_, offset_s, label) in &ticks {
             assert_eq!(label.chars().count(), 5, "{label} should read HH:MM");
-            assert_eq!((43.0 + offset_s) % 60.0, 0.0, "{label} is not a round minute");
+            assert_eq!(
+                (43.0 + offset_s) % 60.0,
+                0.0,
+                "{label} is not a round minute"
+            );
         }
     }
 
@@ -1657,8 +1664,13 @@ mod tests {
     #[test]
     fn zoom_agent_footer_folds_the_running_calls_own_elapsed_time_in() {
         let tools = BTreeMap::new();
-        let footer =
-            zoom_agent_footer(Some(1), Some(1), &tools, 5.0, Some(("bash".to_string(), 3_000)));
+        let footer = zoom_agent_footer(
+            Some(1),
+            Some(1),
+            &tools,
+            5.0,
+            Some(("bash".to_string(), 3_000)),
+        );
         let (name, ms, _) = footer.busiest_tool.unwrap();
         assert_eq!(name, "bash");
         assert_eq!(ms, 3_000);

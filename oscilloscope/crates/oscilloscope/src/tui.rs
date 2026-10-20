@@ -4013,21 +4013,21 @@ fn draw_time_timeline(
     let gutter = " ".repeat(layout.label_width + 1);
     let mut tick_label_row = vec![' '; layout.bar_width];
     let mut tick_rule_row = vec!['─'; layout.bar_width];
-    for (col, offset_s) in oscilloscope_core::time::axis_tick_columns(
-        layout.vis_start_s,
-        layout.vis_end_s,
-        layout.bar_width,
-    ) {
-        tick_rule_row[col] = if col == 0 {
-            '├'
-        } else if col == layout.bar_width.saturating_sub(1) {
-            '┤'
-        } else {
-            '┼'
-        };
-        if let Some(label) =
-            run_start_ts.and_then(|rs| offset_clock_label(rs, offset_s, ctx.zone, "%H:%M"))
-        {
+    if let Some(rs) = run_start_ts {
+        for (col, _offset_s, label) in oscilloscope_core::time::axis_tick_columns(
+            rs,
+            layout.vis_start_s,
+            layout.vis_end_s,
+            layout.bar_width,
+            ctx.zone,
+        ) {
+            tick_rule_row[col] = if col == 0 {
+                '├'
+            } else if col == layout.bar_width.saturating_sub(1) {
+                '┤'
+            } else {
+                '┼'
+            };
             // Skip a label that would be cut off rather than write
             // a stray, unreadable fragment of it -- the rule row's
             // own tick mark still lands on `col` either way.
@@ -4149,7 +4149,7 @@ fn draw_time_timeline(
                     layout,
                     pass.status.kind == StatusKind::Running,
                 );
-                lines.push(Line::from(vec![
+                let mut pass_spans = vec![
                     Span::styled(
                         format!("{pass_label:<label_width$} "),
                         status_style(pass.status.kind, ctx.theme),
@@ -4158,7 +4158,25 @@ fn draw_time_timeline(
                         pass_bar,
                         Style::default().fg(status_color(pass.status.kind, ctx.theme)),
                     ),
-                ]));
+                ];
+                if layout.show_columns {
+                    let start_text = pass
+                        .start_s
+                        .zip(run_start_ts)
+                        .and_then(|(s, start_ts)| {
+                            offset_clock_label(start_ts, s, ctx.zone, "%H:%M:%S")
+                        })
+                        .unwrap_or_default();
+                    let duration_text = pass
+                        .duration_s
+                        .map(oscilloscope_core::format::format_duration)
+                        .unwrap_or_default();
+                    pass_spans.push(Span::styled(
+                        format!("  {start_text:<9}{duration_text:>7}"),
+                        Style::default().fg(ctx.theme.dim),
+                    ));
+                }
+                lines.push(Line::from(pass_spans));
             }
             TimeDrawRow::Planned(ghost) => {
                 let label_width = layout.label_width;
@@ -4275,7 +4293,19 @@ fn draw_time_strips(
         }
     }
 
+    // The timeline box is drawn inside a bordered block, so its own
+    // content starts one column past `area.x` (the left border); this
+    // pane has no border of its own, so a leading space here is what
+    // actually lines its gutter up with the bars (issue #650's
+    // probes: every live frame had the strips sitting one column to
+    // the left of the bars without it). Each label is also truncated
+    // to `label_width`, not just padded -- `{:<width$}` never cuts a
+    // longer string down, so a label that overflowed used to shift
+    // everything after it right by however much it overran.
     let label_width = layout.label_width;
+    let events_label = truncate_label(events_label, label_width);
+    let decisions_label = truncate_label("decisions", label_width);
+    let in_flight_label = truncate_label("in flight", label_width);
     let lines = if layout.show_columns {
         let in_flight_suffix = if screen.strips.queued > 0 {
             format!("max {in_flight_max} · {} queued", screen.strips.queued)
@@ -4289,22 +4319,104 @@ fn draw_time_strips(
         };
         vec![
             Line::from(format!(
-                "{events_label:<label_width$} {events_line}  {events_suffix}"
+                " {events_label:<label_width$} {events_line}  {events_suffix}"
             )),
-            Line::from(format!("{:<label_width$} {decisions_line}", "decisions")),
+            Line::from(format!(" {decisions_label:<label_width$} {decisions_line}")),
             Line::from(format!(
-                "{:<label_width$} {in_flight_line}  {in_flight_suffix}",
-                "in flight"
+                " {in_flight_label:<label_width$} {in_flight_line}  {in_flight_suffix}"
             )),
         ]
     } else {
         vec![
-            Line::from(format!("{events_label:<label_width$} {events_line}")),
-            Line::from(format!("{:<label_width$} {decisions_line}", "decisions")),
-            Line::from(format!("{:<label_width$} {in_flight_line}", "in flight")),
+            Line::from(format!(" {events_label:<label_width$} {events_line}")),
+            Line::from(format!(" {decisions_label:<label_width$} {decisions_line}")),
+            Line::from(format!(" {in_flight_label:<label_width$} {in_flight_line}")),
         ]
     };
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+const TIME_ZOOM_AGENT_BAND_LABELS: [&str; 5] = ["think", "read", "edit", "bash", "other"];
+
+/// The zoom pane's own label column width: sized to the longest
+/// label it will actually draw (the agent's own band names, or a
+/// container's children, whichever this selection calls for), up to
+/// a third of the pane's own width -- a fixed 8 columns used to
+/// leave every pass of a loop reading a truncated `✓ pass…` (issue
+/// #650's probes). `0` for a selection with no padded label column
+/// at all (a step's own bar, or nothing selected).
+fn time_zoom_label_width(
+    screen: &oscilloscope_core::screens::TimeScreen,
+    pane_width: u16,
+) -> usize {
+    let max_label_len = match (&screen.selected, &screen.zoom_extra) {
+        (Some(step), _)
+            if matches!(
+                step.detail,
+                oscilloscope_core::screens::FocusDetail::Agent { .. }
+            ) =>
+        {
+            TIME_ZOOM_AGENT_BAND_LABELS
+                .iter()
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap_or(0)
+        }
+        (Some(_), Some(oscilloscope_core::screens::TimeZoomExtra::Container { children, .. })) => {
+            children
+                .iter()
+                .map(|c| {
+                    format!("{} {}", status_glyph(c.status.kind), c.label)
+                        .chars()
+                        .count()
+                })
+                .max()
+                .unwrap_or(0)
+        }
+        _ => 0,
+    };
+    if max_label_len == 0 {
+        return 0;
+    }
+    let cap = ((pane_width as usize) / 3).max(2);
+    (max_label_len + 1).min(cap)
+}
+
+/// The zoom pane's own axis line (DESIGN.md's zoom pane: start and
+/// end as clock times, plus the duration), for every kind -- a
+/// container, a prompt, a tool or an agent alike. `None` only
+/// without a `since_ts` at all (a step that has never actually
+/// started).
+fn zoom_axis_line(
+    step: &oscilloscope_core::screens::FocusedStep,
+    now: &str,
+    ctx: &DrawCtx,
+) -> Option<String> {
+    let since_ts = step.since_ts.as_deref()?;
+    let since_dt = oscilloscope_core::diff::parse_instant(since_ts)?;
+    let start_text = ctx
+        .zone
+        .local(since_dt.with_timezone(&chrono::Utc))
+        .format("%H:%M:%S")
+        .to_string();
+    let (end_text, duration_s) = if step.status.kind == StatusKind::Running {
+        let now_dt = oscilloscope_core::diff::parse_instant(now)?;
+        let duration_s = (now_dt - since_dt).num_milliseconds() as f64 / 1000.0;
+        ("now".to_string(), duration_s)
+    } else {
+        let duration_s = step.elapsed_s?;
+        let end_dt = since_dt + chrono::Duration::milliseconds((duration_s * 1000.0) as i64);
+        let end_text = ctx
+            .zone
+            .local(end_dt.with_timezone(&chrono::Utc))
+            .format("%H:%M:%S")
+            .to_string();
+        (end_text, duration_s)
+    };
+    Some(format!(
+        "{start_text} → {end_text} · {}",
+        oscilloscope_core::format::format_duration(duration_s)
+    ))
 }
 
 fn draw_time_zoom_pane(
@@ -4316,7 +4428,7 @@ fn draw_time_zoom_pane(
     ctx: &DrawCtx,
     now: &str,
 ) {
-    let label_width = 8usize;
+    let label_width = time_zoom_label_width(screen, area.width);
     let bar_width = (area.width as usize).saturating_sub(2 + label_width).max(4);
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &screen.selected {
@@ -4324,248 +4436,270 @@ fn draw_time_zoom_pane(
             "nothing selected",
             Style::default().fg(ctx.theme.dim),
         )),
-        Some(step) => match &step.detail {
-            oscilloscope_core::screens::FocusDetail::Agent {
-                live,
-                raw_turns,
-                raw_tool_calls,
-                raw_tool_counts,
-                ..
-            } => {
-                let run_start_ts = screen.axis.start_ts.clone();
-                let session_start_s = step
-                    .since_ts
-                    .as_deref()
-                    .zip(run_start_ts.as_deref())
-                    .and_then(|(s, rs)| oscilloscope_core::observe::duration_seconds(rs, s))
-                    .unwrap_or(0.0);
-                let now_s = run_start_ts
-                    .as_deref()
-                    .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now))
-                    .unwrap_or(session_start_s);
-                // The session's own end: its real elapsed time once
-                // known, `now` while it's still running.
-                let axis_end_s = step
-                    .elapsed_s
-                    .map_or(now_s, |elapsed| session_start_s + elapsed);
-                let running = live.is_some();
-                if let (Some(view), Some(run_start_ts)) = (transcript_view, run_start_ts.as_deref())
-                {
-                    let bands = oscilloscope_core::time::agent_zoom_bands(
-                        &view.calls,
-                        session_start_s,
-                        now_s,
-                        run_start_ts,
-                        running,
-                    );
-                    // DESIGN.md: "the bands start where the window
-                    // starts, after a dim `…`" -- shown only when the
-                    // window itself is actually cut off and the
-                    // earliest band really does start right at it (a
-                    // band starting later than the session's own
-                    // start is ordinary thinking time, not a gap the
-                    // window missed).
-                    if view.truncated
-                        && bands
-                            .first()
-                            .is_some_and(|b| (b.start_s - session_start_s).abs() < 1e-6)
-                    {
-                        lines.push(Line::styled("…", Style::default().fg(ctx.theme.dim)));
-                    }
-                    const ORDER: [oscilloscope_core::time::ZoomBandKind; 5] = [
-                        oscilloscope_core::time::ZoomBandKind::Think,
-                        oscilloscope_core::time::ZoomBandKind::Read,
-                        oscilloscope_core::time::ZoomBandKind::Edit,
-                        oscilloscope_core::time::ZoomBandKind::Bash,
-                        oscilloscope_core::time::ZoomBandKind::Other,
-                    ];
-                    for kind in ORDER {
-                        let segments: Vec<(f64, f64, bool)> = bands
-                            .iter()
-                            .filter(|b| b.kind == kind)
-                            .map(|b| (b.start_s, b.end_s, b.running))
-                            .collect();
-                        if segments.is_empty() {
-                            continue;
-                        }
-                        let (label, fill) = match kind {
-                            oscilloscope_core::time::ZoomBandKind::Think => ("think", '▓'),
-                            oscilloscope_core::time::ZoomBandKind::Read => ("read", '░'),
-                            oscilloscope_core::time::ZoomBandKind::Edit => ("edit", '▒'),
-                            oscilloscope_core::time::ZoomBandKind::Bash => ("bash", '█'),
-                            oscilloscope_core::time::ZoomBandKind::Other => ("other", '·'),
-                        };
-                        let bar = multi_segment_bar(
-                            &segments,
-                            session_start_s,
-                            axis_end_s,
-                            bar_width,
-                            fill,
-                        );
-                        lines.push(Line::from(format!("{label:<label_width$}{bar}")));
-                    }
-                } else if let Some(current) = live.as_deref().and_then(|l| l.current_tool.as_ref())
-                {
-                    // DESIGN.md: "With no transcript, the footer and
-                    // a `running: <tool>` line (from `current_tool`)
-                    // are all it shows."
-                    lines.push(Line::styled(
-                        format!("running: {}", current.name),
-                        Style::default().fg(ctx.theme.dim),
-                    ));
-                } else {
-                    lines.push(Line::styled(
-                        oscilloscope_core::screens::AGENT_LIVE_DATA_NOTE,
-                        Style::default().fg(ctx.theme.dim),
-                    ));
-                }
-                // `meta.live`'s own tools/turns/tool_calls while
-                // running, `meta.raw`'s once finished (DESIGN.md).
-                let tools = live
-                    .as_deref()
-                    .map(|l| l.tools.clone())
-                    .unwrap_or_else(|| raw_tool_counts.clone());
-                let turns = live.as_deref().and_then(|l| l.turns).or(*raw_turns);
-                let tool_calls = live
-                    .as_deref()
-                    .and_then(|l| l.tool_calls)
-                    .or(*raw_tool_calls);
-                let elapsed = (axis_end_s - session_start_s).max(0.0);
-                let footer =
-                    oscilloscope_core::time::zoom_agent_footer(turns, tool_calls, &tools, elapsed);
-                let mut footer_parts = Vec::new();
-                if let Some(turns) = footer.turns {
-                    footer_parts.push(format!("turn {turns}"));
-                }
-                if let Some(calls) = footer.tool_calls {
-                    footer_parts.push(format!("{calls} tools"));
-                }
-                if let Some((name, ms, pct)) = footer.busiest_tool {
-                    footer_parts.push(format!(
-                        "{name} {} ({pct:.0}%)",
-                        oscilloscope_core::format::format_duration(ms as f64 / 1000.0)
-                    ));
-                }
-                if !footer_parts.is_empty() {
-                    lines.push(Line::styled(
-                        footer_parts.join(" · "),
-                        Style::default().fg(ctx.theme.dim),
-                    ));
-                }
+        Some(step) => {
+            if let Some(axis_line) = zoom_axis_line(step, now, ctx) {
+                lines.push(Line::styled(axis_line, Style::default().fg(ctx.theme.dim)));
             }
-            _ => match &screen.zoom_extra {
-                Some(oscilloscope_core::screens::TimeZoomExtra::Container {
-                    children,
-                    start_s,
-                    axis_end_s,
-                }) => {
-                    let viewport = (area.height.saturating_sub(2) as usize).max(1);
-                    let budget = zoom_container_budget(children.len(), viewport);
-                    for child in children.iter().take(budget) {
-                        let glyph = status_glyph(child.status.kind);
-                        let label =
-                            truncate_label(&format!("{glyph} {}", child.label), label_width - 1);
-                        let bar = time_bar_string(
-                            child.start_s,
-                            child.duration_s,
-                            child.status.kind == StatusKind::Running,
-                            child.ghost,
-                            child.status.kind == StatusKind::Failed,
-                            *start_s,
-                            *axis_end_s,
-                            bar_width,
+            match &step.detail {
+                oscilloscope_core::screens::FocusDetail::Agent {
+                    live,
+                    raw_turns,
+                    raw_tool_calls,
+                    raw_tool_counts,
+                    ..
+                } => {
+                    let run_start_ts = screen.axis.start_ts.clone();
+                    let session_start_s = step
+                        .since_ts
+                        .as_deref()
+                        .zip(run_start_ts.as_deref())
+                        .and_then(|(s, rs)| oscilloscope_core::observe::duration_seconds(rs, s))
+                        .unwrap_or(0.0);
+                    let now_s = run_start_ts
+                        .as_deref()
+                        .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now))
+                        .unwrap_or(session_start_s);
+                    // The session's own end: its real elapsed time once
+                    // known, `now` while it's still running.
+                    let axis_end_s = step
+                        .elapsed_s
+                        .map_or(now_s, |elapsed| session_start_s + elapsed);
+                    let running = live.is_some();
+                    if let (Some(view), Some(run_start_ts)) =
+                        (transcript_view, run_start_ts.as_deref())
+                    {
+                        let bands = oscilloscope_core::time::agent_zoom_bands(
+                            &view.calls,
+                            session_start_s,
+                            now_s,
+                            run_start_ts,
+                            running,
                         );
+                        // DESIGN.md: "the bands start where the window
+                        // starts, after a dim `…`" -- shown only when the
+                        // window itself is actually cut off and the
+                        // earliest band really does start right at it (a
+                        // band starting later than the session's own
+                        // start is ordinary thinking time, not a gap the
+                        // window missed).
+                        if view.truncated
+                            && bands
+                                .first()
+                                .is_some_and(|b| (b.start_s - session_start_s).abs() < 1e-6)
+                        {
+                            lines.push(Line::styled("…", Style::default().fg(ctx.theme.dim)));
+                        }
+                        const ORDER: [oscilloscope_core::time::ZoomBandKind; 5] = [
+                            oscilloscope_core::time::ZoomBandKind::Think,
+                            oscilloscope_core::time::ZoomBandKind::Read,
+                            oscilloscope_core::time::ZoomBandKind::Edit,
+                            oscilloscope_core::time::ZoomBandKind::Bash,
+                            oscilloscope_core::time::ZoomBandKind::Other,
+                        ];
+                        for kind in ORDER {
+                            let segments: Vec<(f64, f64, bool)> = bands
+                                .iter()
+                                .filter(|b| b.kind == kind)
+                                .map(|b| (b.start_s, b.end_s, b.running))
+                                .collect();
+                            if segments.is_empty() {
+                                continue;
+                            }
+                            let (label, fill) = match kind {
+                                oscilloscope_core::time::ZoomBandKind::Think => ("think", '▓'),
+                                oscilloscope_core::time::ZoomBandKind::Read => ("read", '░'),
+                                oscilloscope_core::time::ZoomBandKind::Edit => ("edit", '▒'),
+                                oscilloscope_core::time::ZoomBandKind::Bash => ("bash", '█'),
+                                oscilloscope_core::time::ZoomBandKind::Other => ("other", '·'),
+                            };
+                            let bar = multi_segment_bar(
+                                &segments,
+                                session_start_s,
+                                axis_end_s,
+                                bar_width,
+                                fill,
+                            );
+                            lines.push(Line::from(format!("{label:<label_width$}{bar}")));
+                        }
+                    } else if let Some(current) =
+                        live.as_deref().and_then(|l| l.current_tool.as_ref())
+                    {
+                        // DESIGN.md: "With no transcript, the footer and
+                        // a `running: <tool>` line (from `current_tool`)
+                        // are all it shows."
                         lines.push(Line::styled(
-                            format!("{label:<label_width$}{bar}"),
-                            status_style(child.status.kind, ctx.theme),
+                            format!("running: {}", current.name),
+                            Style::default().fg(ctx.theme.dim),
+                        ));
+                    } else {
+                        lines.push(Line::styled(
+                            oscilloscope_core::screens::AGENT_LIVE_DATA_NOTE,
+                            Style::default().fg(ctx.theme.dim),
                         ));
                     }
-                    let more = children.len().saturating_sub(budget);
-                    if more > 0 {
+                    // `meta.live`'s own tools/turns/tool_calls while
+                    // running, `meta.raw`'s once finished (DESIGN.md).
+                    let tools = live
+                        .as_deref()
+                        .map(|l| l.tools.clone())
+                        .unwrap_or_else(|| raw_tool_counts.clone());
+                    let turns = live.as_deref().and_then(|l| l.turns).or(*raw_turns);
+                    let tool_calls = live
+                        .as_deref()
+                        .and_then(|l| l.tool_calls)
+                        .or(*raw_tool_calls);
+                    let elapsed = (axis_end_s - session_start_s).max(0.0);
+                    let running_tool = run_start_ts.as_deref().and_then(|rs| {
+                        let calls = transcript_view.map(|v| v.calls.as_slice()).unwrap_or(&[]);
+                        let current = live
+                            .as_deref()
+                            .and_then(|l| l.current_tool.as_ref())
+                            .map(|c| (c.name.as_str(), c.started_at.as_str()));
+                        oscilloscope_core::time::running_tool_elapsed_ms(calls, current, now_s, rs)
+                    });
+                    let footer = oscilloscope_core::time::zoom_agent_footer(
+                        turns,
+                        tool_calls,
+                        &tools,
+                        elapsed,
+                        running_tool,
+                    );
+                    let mut footer_parts = Vec::new();
+                    if let Some(turns) = footer.turns {
+                        footer_parts.push(format!("turn {turns}"));
+                    }
+                    if let Some(calls) = footer.tool_calls {
+                        footer_parts.push(format!("{calls} tools"));
+                    }
+                    if let Some((name, ms, pct)) = footer.busiest_tool {
+                        footer_parts.push(format!(
+                            "{name} {} ({pct:.0}%)",
+                            oscilloscope_core::format::format_duration(ms as f64 / 1000.0)
+                        ));
+                    }
+                    if !footer_parts.is_empty() {
                         lines.push(Line::styled(
-                            format!("+{more} more"),
+                            footer_parts.join(" · "),
                             Style::default().fg(ctx.theme.dim),
                         ));
                     }
                 }
-                Some(oscilloscope_core::screens::TimeZoomExtra::StepBar {
-                    start_s,
-                    p50_s,
-                    p90_s,
-                    axis_end_s,
-                    waiting_label,
-                }) => {
-                    // Wide enough to also show p50/p90 when either
-                    // falls past the step's own real end (DESIGN.md:
-                    // "with its p50 and p90 marked on the axis").
-                    let window_end_s = axis_end_s
-                        .max(start_s + p50_s.unwrap_or(0.0))
-                        .max(start_s + p90_s.unwrap_or(0.0));
-                    let mut bar: Vec<char> = time_bar_string(
-                        Some(*start_s),
-                        Some(axis_end_s - start_s),
-                        waiting_label.is_some(),
-                        None,
-                        step.error.is_some(),
-                        *start_s,
-                        window_end_s,
-                        bar_width,
-                    )
-                    .chars()
-                    .collect();
-                    for (offset, mark) in [(*p50_s, '┆'), (*p90_s, '┄')] {
-                        if let Some(offset) = offset {
-                            if let Some(col) = oscilloscope_core::time::now_column(
+                _ => match &screen.zoom_extra {
+                    Some(oscilloscope_core::screens::TimeZoomExtra::Container {
+                        children,
+                        start_s,
+                        axis_end_s,
+                    }) => {
+                        let viewport = (area.height.saturating_sub(2) as usize).max(1);
+                        let budget = zoom_container_budget(children.len(), viewport);
+                        for child in children.iter().take(budget) {
+                            let glyph = status_glyph(child.status.kind);
+                            let label = truncate_label(
+                                &format!("{glyph} {}", child.label),
+                                label_width - 1,
+                            );
+                            let bar = time_bar_string(
+                                child.start_s,
+                                child.duration_s,
+                                child.status.kind == StatusKind::Running,
+                                child.ghost,
+                                child.status.kind == StatusKind::Failed,
                                 *start_s,
-                                window_end_s,
+                                *axis_end_s,
                                 bar_width,
-                                start_s + offset,
-                            ) {
-                                if col < bar.len() {
-                                    bar[col] = mark;
+                            );
+                            lines.push(Line::styled(
+                                format!("{label:<label_width$}{bar}"),
+                                status_style(child.status.kind, ctx.theme),
+                            ));
+                        }
+                        let more = children.len().saturating_sub(budget);
+                        if more > 0 {
+                            lines.push(Line::styled(
+                                format!("+{more} more"),
+                                Style::default().fg(ctx.theme.dim),
+                            ));
+                        }
+                    }
+                    Some(oscilloscope_core::screens::TimeZoomExtra::StepBar {
+                        start_s,
+                        p50_s,
+                        p90_s,
+                        axis_end_s,
+                        waiting_label,
+                    }) => {
+                        // Wide enough to also show p50/p90 when either
+                        // falls past the step's own real end (DESIGN.md:
+                        // "with its p50 and p90 marked on the axis").
+                        let window_end_s = axis_end_s
+                            .max(start_s + p50_s.unwrap_or(0.0))
+                            .max(start_s + p90_s.unwrap_or(0.0));
+                        let mut bar: Vec<char> = time_bar_string(
+                            Some(*start_s),
+                            Some(axis_end_s - start_s),
+                            waiting_label.is_some(),
+                            None,
+                            step.error.is_some(),
+                            *start_s,
+                            window_end_s,
+                            bar_width,
+                        )
+                        .chars()
+                        .collect();
+                        for (offset, mark) in [(*p50_s, '┆'), (*p90_s, '┄')] {
+                            if let Some(offset) = offset {
+                                if let Some(col) = oscilloscope_core::time::now_column(
+                                    *start_s,
+                                    window_end_s,
+                                    bar_width,
+                                    start_s + offset,
+                                ) {
+                                    if col < bar.len() {
+                                        bar[col] = mark;
+                                    }
                                 }
                             }
                         }
+                        lines.push(Line::from(bar.into_iter().collect::<String>()));
+                        let mut marks = Vec::new();
+                        if let Some(p50) = p50_s {
+                            marks.push(format!(
+                                "p50 {}",
+                                oscilloscope_core::format::format_duration(*p50)
+                            ));
+                        }
+                        if let Some(p90) = p90_s {
+                            marks.push(format!(
+                                "p90 {}",
+                                oscilloscope_core::format::format_duration(*p90)
+                            ));
+                        }
+                        if !marks.is_empty() {
+                            lines.push(Line::styled(
+                                marks.join(" · "),
+                                Style::default().fg(ctx.theme.dim),
+                            ));
+                        }
+                        if let Some(label) = waiting_label {
+                            lines.push(Line::styled(*label, Style::default().fg(ctx.theme.dim)));
+                        }
                     }
-                    lines.push(Line::from(bar.into_iter().collect::<String>()));
-                    let mut marks = Vec::new();
-                    if let Some(p50) = p50_s {
-                        marks.push(format!(
-                            "p50 {}",
-                            oscilloscope_core::format::format_duration(*p50)
-                        ));
+                    None => {
+                        lines.push(Line::from(step.breadcrumb.clone()));
+                        if let Some(since) = step
+                            .since_ts
+                            .as_deref()
+                            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                        {
+                            lines.push(Line::styled(
+                                format!("since {since}"),
+                                Style::default().fg(ctx.theme.dim),
+                            ));
+                        }
                     }
-                    if let Some(p90) = p90_s {
-                        marks.push(format!(
-                            "p90 {}",
-                            oscilloscope_core::format::format_duration(*p90)
-                        ));
-                    }
-                    if !marks.is_empty() {
-                        lines.push(Line::styled(
-                            marks.join(" · "),
-                            Style::default().fg(ctx.theme.dim),
-                        ));
-                    }
-                    if let Some(label) = waiting_label {
-                        lines.push(Line::styled(*label, Style::default().fg(ctx.theme.dim)));
-                    }
-                }
-                None => {
-                    lines.push(Line::from(step.breadcrumb.clone()));
-                    if let Some(since) = step
-                        .since_ts
-                        .as_deref()
-                        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                    {
-                        lines.push(Line::styled(
-                            format!("since {since}"),
-                            Style::default().fg(ctx.theme.dim),
-                        ));
-                    }
-                }
-            },
-        },
+                },
+            }
+        }
     }
     let max_scroll = lines
         .len()
@@ -4686,7 +4820,16 @@ fn draw_time_plain_list(
         let Some(time_row) = by_path.get(row.path.as_str()) else {
             continue;
         };
+        let indent = "  ".repeat(time_row.depth);
         let glyph = status_glyph(time_row.status.kind);
+        let mut label = format!("{indent}{glyph} {}", time_row.label);
+        if let Some(progress) = &time_row.loop_progress {
+            let total = progress
+                .total
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            label.push_str(&format!(" ⟲ {}/{total}", progress.done));
+        }
         let start_text = time_row
             .start_s
             .zip(run_start_ts)
@@ -4713,8 +4856,8 @@ fn draw_time_plain_list(
         };
         lines.push(Line::styled(
             format!(
-                "{glyph} {:<30}{start_text:<9}{duration_text:>7}",
-                truncate_label(&time_row.label, 30)
+                "{:<30}{start_text:<9}{duration_text:>7}",
+                truncate_label(&label, 30)
             ),
             style,
         ));
@@ -4746,7 +4889,16 @@ fn draw_time_screen(
         return;
     }
 
-    let timeline_rows = oscilloscope_core::layout::golden_major_section(body.height);
+    // Below three_pane's own threshold, neither the zoom nor the vs-
+    // usual pane is drawn at all -- the timeline and its strips take
+    // the whole body rather than reserving a golden-ratio minor
+    // section underneath that stays blank (issue #650's probes: 9
+    // rows left empty at 80x24).
+    let timeline_rows = if three_pane {
+        oscilloscope_core::layout::golden_major_section(body.height)
+    } else {
+        body.height
+    };
     let top_bottom = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -9945,6 +10097,76 @@ mod golden_tests {
         let text = time_snapshot_at(
             80,
             24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("prime.b"),
+            &Default::default(),
+            false,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #650's probe: the now line must sit at the exact same
+    /// column in every timeline row and every strip, with and
+    /// without `--events` (the strips' own gutter used to leave out
+    /// the timeline box's left border, landing one column short).
+    #[test]
+    fn time_strip_and_row_now_columns_always_match() {
+        for use_events in [false, true] {
+            let plan = sample_plan();
+            let mut model = RunModel::new();
+            if use_events {
+                model.observe_event(&oscilloscope_core::observe::Event::Start {
+                    ts: "2026-01-01T00:00:00Z".to_string(),
+                    id: Some(1),
+                    path: "prime.a".to_string(),
+                });
+            }
+            let state = overview_running_state();
+            let text = time_snapshot_at(
+                100,
+                30,
+                &plan,
+                &mut model,
+                Some(&state),
+                ProcessState::Running,
+                Some("prime.b"),
+                &Default::default(),
+                false,
+            );
+            let now_cols: Vec<usize> = text
+                .lines()
+                .filter_map(|l| l.chars().position(|c| c == '┃'))
+                .collect();
+            assert!(
+                now_cols.len() >= 2,
+                "expected both bar rows and strips to show a now line (events={use_events})"
+            );
+            assert!(
+                now_cols.windows(2).all(|w| w[0] == w[1]),
+                "now column must line up everywhere (events={use_events}): {now_cols:?}"
+            );
+        }
+    }
+
+    /// A golden with the short `events/min` label (no `(from state)`
+    /// suffix), confirming the strips' own alignment fix holds with
+    /// it too, not just the longer one.
+    #[test]
+    fn time_strip_labels_at_100x30_with_the_short_events_label() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.a".to_string(),
+        });
+        let state = overview_running_state();
+        let text = time_snapshot_at(
+            100,
+            30,
             &plan,
             &mut model,
             Some(&state),

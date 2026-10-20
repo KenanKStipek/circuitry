@@ -284,8 +284,8 @@ mod tests {
     #[test]
     fn clock_tick_picks_the_smallest_candidate_that_keeps_ticks_apart() {
         // 80 columns is this crate's own typical timeline width.
-        assert_eq!(clock_tick_seconds(30.0, 80, 10), 60.0);
-        assert_eq!(clock_tick_seconds(120.0, 80, 10), 60.0);
+        assert_eq!(clock_tick_seconds(30.0, 80, 10), 5.0);
+        assert_eq!(clock_tick_seconds(120.0, 80, 10), 15.0);
         assert_eq!(clock_tick_seconds(600.0, 80, 10), 120.0);
         assert_eq!(clock_tick_seconds(1_200.0, 80, 10), 300.0);
         assert_eq!(clock_tick_seconds(2_400.0, 80, 10), 300.0);
