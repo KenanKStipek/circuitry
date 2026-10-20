@@ -1655,44 +1655,51 @@ pub fn build_time_screen(
             let leaf_intervals: Vec<(f64, f64, bool, StatusKind)> = rows
                 .iter()
                 .filter(|r| r.kind.is_leaf() && !r.has_children)
-                .filter_map(|r| {
-                    // An unnamed loop's body leaf: in flight across
-                    // its own whole span, one interval for the whole
-                    // loop, not one per pass -- its own passes run
-                    // one at a time, so this alone is what keeps a
-                    // sequential loop's own max at 1. The end comes
-                    // from state, exactly like every other row below
-                    // (never an event-sourced one of its own, which a
-                    // step right after it could, by a little clock
-                    // skew between the two logs, start before).
+                .flat_map(|r| {
+                    // An unnamed loop's body leaf: named and unnamed
+                    // loops run their passes the same way in `chain`
+                    // and `tree` flow, so a `flow: tree` unnamed loop
+                    // can have several passes in flight at once --
+                    // one interval per logged (finished) pass at this
+                    // path, plus one per pass still open right now,
+                    // rather than a single interval for the whole
+                    // loop (which undercounts a tree loop's own max
+                    // at 1).
                     if model.has_events() && plan.is_unnamed_loop_body_path(&r.path) {
-                        if let Some((first_s, _)) =
-                            crate::time::unnamed_loop_first_pass_start(&r.path, model, run_start_ts)
-                        {
-                            if let Some(state_start) =
-                                row_run_relative_start(r, flat, model, run_start_ts)
-                            {
-                                let end = if r.status.kind == StatusKind::Running {
-                                    duration_seconds(run_start_ts, now).unwrap_or(state_start)
-                                } else {
-                                    state_start + r.duration_s.unwrap_or(0.0)
-                                };
-                                return Some((
-                                    first_s.min(state_start),
-                                    end,
-                                    is_agent_row(r, flat, plan),
-                                    r.status.kind,
-                                ));
+                        let is_agent = is_agent_row(r, flat, plan);
+                        let offsets = model.step_interval_offsets(run_start_ts);
+                        let mut out: Vec<(f64, f64, bool, StatusKind)> = model
+                            .step_intervals()
+                            .iter()
+                            .zip(offsets.iter())
+                            .filter(|&(i, &(s, e))| i.path == r.path && !s.is_nan() && !e.is_nan())
+                            .map(|(i, &(s, e))| {
+                                (
+                                    s,
+                                    e,
+                                    is_agent,
+                                    if i.ok { StatusKind::Done } else { StatusKind::Failed },
+                                )
+                            })
+                            .collect();
+                        drop(offsets);
+                        let end_now = duration_seconds(run_start_ts, now);
+                        for start_ts in model.open_starts_at(&r.path) {
+                            if let Some(s) = duration_seconds(run_start_ts, start_ts) {
+                                out.push((s, end_now.unwrap_or(s), is_agent, StatusKind::Running));
                             }
                         }
+                        return out;
                     }
-                    let start = row_run_relative_start(r, flat, model, run_start_ts)?;
+                    let Some(start) = row_run_relative_start(r, flat, model, run_start_ts) else {
+                        return Vec::new();
+                    };
                     let end = if r.status.kind == StatusKind::Running {
                         duration_seconds(run_start_ts, now).unwrap_or(start)
                     } else {
                         start + r.duration_s.unwrap_or(0.0)
                     };
-                    Some((start, end, is_agent_row(r, flat, plan), r.status.kind))
+                    vec![(start, end, is_agent_row(r, flat, plan), r.status.kind)]
                 })
                 .collect();
             let in_flight_intervals: Vec<(f64, f64)> =
@@ -3701,7 +3708,399 @@ mod tests {
         );
     }
 
-    /// A `use` step with running children counts as a leaf
+    fn unnamed_loop_plan_under_tree_parallel() -> PlanTree {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopFlow, LoopSpec, NodeKind, OnError, Op, ParamNode, Program,
+            Region, ToolOp,
+        };
+        fn tool(path: EffectPath, name: &str) -> Op {
+            Op {
+                path,
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                    provider: "shell".to_string(),
+                    params: ParamNode::Literal(electricity_value::Value::None),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: Default::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }
+        }
+        let root_path = EffectPath::root();
+        let fan_path = root_path.clone().push_name("fan");
+        let a_path = fan_path.clone().push_name("a");
+        let u_nap_path = fan_path.clone().push_name("u_nap");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: fan_path.clone(),
+                    name: Some("fan".to_string()),
+                    kind: NodeKind::Control(Region::Parallel {
+                        branches: vec![
+                            tool(a_path, "a"),
+                            Op {
+                                path: fan_path.clone(),
+                                name: None,
+                                kind: NodeKind::Control(Region::Loop {
+                                    name: None,
+                                    spec: LoopSpec::Each {
+                                        in_path: "prime.items".to_string(),
+                                        as_name: "item".to_string(),
+                                        truncate: false,
+                                    },
+                                    body: Box::new(Region::Block {
+                                        ops: vec![tool(u_nap_path, "u_nap")],
+                                        overlay: true,
+                                    }),
+                                    flow: LoopFlow::Chain,
+                                    max_concurrency: None,
+                                    max_iterations: None,
+                                    min_iterations: 0,
+                                    collect: None,
+                                }),
+                                on_error: OnError::Fail,
+                                labels: None,
+                                enabled: true,
+                            },
+                        ],
+                        max_concurrency: None,
+                        stop_on_error: false,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    /// An unnamed loop reached directly as a tree `dynamic`'s own
+    /// `Parallel` branch, never through `walk_block`'s transparent-op
+    /// handling, must still be recognised as a loop body -- `record_
+    /// op_entry` is the one place both contexts funnel their loop
+    /// `PlanEntryKind` through.
+    #[test]
+    fn build_time_screen_expands_an_unnamed_loop_directly_under_a_tree_parallel() {
+        let plan = unnamed_loop_plan_under_tree_parallel();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.fan.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.fan.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.fan.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:12Z".to_string(),
+            id: Some(2),
+            path: "prime.fan.u_nap".to_string(),
+            ok: true,
+            ms: Some(7_000),
+            error: None,
+        });
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "fan": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": null, "flow": "tree"
+                },
+                "a": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z"
+                }},
+                "u_nap": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z"
+                }}
+            }
+        }});
+        let rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            13.0,
+            "2026-01-01T00:00:13Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = flat_from(state.clone());
+        let mut expanded = std::collections::BTreeSet::new();
+        expanded.insert("prime.fan.u_nap".to_string());
+        expanded.insert("prime.fan.a".to_string());
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &expanded,
+            "2026-01-01T00:00:13Z",
+        );
+        let pass_labels_after = |path: &str, rows: &[TimeDisplayRow]| -> Vec<String> {
+            let mut out = Vec::new();
+            let mut seen_row = false;
+            for row in rows {
+                match row {
+                    TimeDisplayRow::Row(r) if r.path == path => seen_row = true,
+                    TimeDisplayRow::Row(_) => seen_row = false,
+                    TimeDisplayRow::Pass(p) if seen_row => out.push(p.label.clone()),
+                    TimeDisplayRow::Pass(_) => {}
+                }
+            }
+            out
+        };
+        assert_eq!(
+            pass_labels_after("prime.fan.u_nap", &screen.rows),
+            vec!["#1".to_string(), "#2".to_string()],
+            "the loop's own body leaf must expand into its own pass rows: {:?}",
+            screen.rows
+        );
+        assert!(
+            pass_labels_after("prime.fan.a", &screen.rows).is_empty(),
+            "a sibling outside the loop's body must never expand, even if asked to: {:?}",
+            screen.rows
+        );
+    }
+
+    fn unnamed_loop_inside_named_loops_pass_plan() -> PlanTree {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
+            Program, Region, ToolOp,
+        };
+        fn tool(path: EffectPath, name: &str) -> Op {
+            Op {
+                path,
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                    provider: "shell".to_string(),
+                    params: ParamNode::Literal(electricity_value::Value::None),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: Default::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }
+        }
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("items");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let u_nap_path = pass_path.clone().push_name("u_nap");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path.clone(),
+                    name: Some("items".to_string()),
+                    kind: NodeKind::Control(Region::Loop {
+                        name: Some("items".to_string()),
+                        spec: LoopSpec::Each {
+                            in_path: "prime.list".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![Op {
+                                path: pass_path.clone(),
+                                name: None,
+                                kind: NodeKind::Control(Region::Loop {
+                                    name: None,
+                                    spec: LoopSpec::Each {
+                                        in_path: "prime.sub".to_string(),
+                                        as_name: "s".to_string(),
+                                        truncate: false,
+                                    },
+                                    body: Box::new(Region::Block {
+                                        ops: vec![tool(u_nap_path.clone(), "u_nap")],
+                                        overlay: true,
+                                    }),
+                                    flow: LoopFlow::Chain,
+                                    max_concurrency: None,
+                                    max_iterations: None,
+                                    min_iterations: 0,
+                                    collect: None,
+                                }),
+                                on_error: OnError::Fail,
+                                labels: None,
+                                enabled: true,
+                            }],
+                            overlay: true,
+                        }),
+                        flow: LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    /// An unnamed loop inside a *named* loop's own pass carries the
+    /// real pass's concrete `iter_N` in its row path, never the
+    /// `iter_*` placeholder `PlanTree::is_unnamed_loop_body_path`'s
+    /// own set is keyed by -- the lookup must normalise first.
+    #[test]
+    fn build_time_screen_expands_an_unnamed_loop_inside_a_named_loops_pass() {
+        let plan = unnamed_loop_inside_named_loops_pass_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.items.iter_0.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.items.iter_0.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.items.iter_0.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:12Z".to_string(),
+            id: Some(2),
+            path: "prime.items.iter_0.u_nap".to_string(),
+            ok: true,
+            ms: Some(7_000),
+            error: None,
+        });
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "items": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": null, "mode": "each"
+                },
+                "iter_0": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+                    },
+                    "u_nap": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z"
+                    }}
+                }
+            }
+        }});
+        let rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            13.0,
+            "2026-01-01T00:00:13Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = flat_from(state.clone());
+        let mut expanded = std::collections::BTreeSet::new();
+        expanded.insert("prime.items.iter_0.u_nap".to_string());
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &expanded,
+            "2026-01-01T00:00:13Z",
+        );
+        let pass_labels_after = |path: &str, rows: &[TimeDisplayRow]| -> Vec<String> {
+            let mut out = Vec::new();
+            let mut seen_row = false;
+            for row in rows {
+                match row {
+                    TimeDisplayRow::Row(r) if r.path == path => seen_row = true,
+                    TimeDisplayRow::Row(_) => seen_row = false,
+                    TimeDisplayRow::Pass(p) if seen_row => out.push(p.label.clone()),
+                    TimeDisplayRow::Pass(_) => {}
+                }
+            }
+            out
+        };
+        assert_eq!(
+            pass_labels_after("prime.items.iter_0.u_nap", &screen.rows),
+            vec!["#1".to_string(), "#2".to_string()],
+            "the inner unnamed loop's own body leaf must expand into its own pass rows: {:?}",
+            screen.rows
+        );
+    }
+
     /// (`RowKind::is_leaf`), but it can have child rows of its own --
     /// without excluding those, "in flight" would count the `use`
     /// alongside the one child actually running inside it.
@@ -3790,6 +4189,88 @@ mod tests {
             "only the running child counts, not the use step around it: {:?}",
             screen.strips.in_flight_intervals
         );
+    }
+
+    /// An unnamed loop runs its passes the same way whether it's
+    /// named or not (`flow: tree` passes can run concurrently) -- a
+    /// single merged interval for the whole loop undercounted "in
+    /// flight" at 1 for three passes genuinely running at once.
+    #[test]
+    fn build_time_screen_in_flight_counts_an_unnamed_tree_loops_concurrent_passes() {
+        let plan = unnamed_loop_plan_with_sibling();
+        let mut model = RunModel::new();
+        for id in 1..=3 {
+            model.observe_event(&crate::observe::Event::Start {
+                ts: "2026-01-01T00:00:00Z".to_string(),
+                id: Some(id),
+                path: "prime.u_nap".to_string(),
+            });
+        }
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "u_nap": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let rows = vec![
+            Row {
+                path: "prime".to_string(),
+                depth: 0,
+                label: "prime".to_string(),
+                kind: RowKind::Root,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.u_nap".to_string(),
+                depth: 1,
+                label: "u_nap".to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let header = crate::render::Header {
+            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
+            ..base_header()
+        };
+        let screen = build_time_screen(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:05Z",
+        );
+        assert_eq!(
+            screen.strips.in_flight_intervals.len(),
+            3,
+            "every concurrently open pass must count: {:?}",
+            screen.strips.in_flight_intervals
+        );
+        let heights =
+            crate::time::in_flight_heights(0.0, 5.0, 1, &screen.strips.in_flight_intervals);
+        assert_eq!(heights, vec![3], "max overlap must read 3, not 1");
     }
 
     /// An agent is a `RowKind::Tool` with provider `agent`, never a

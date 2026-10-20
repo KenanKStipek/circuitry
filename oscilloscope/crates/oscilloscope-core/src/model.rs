@@ -1117,6 +1117,21 @@ impl RunModel {
         self.started_at.get(path).map(String::as_str)
     }
 
+    /// Every currently open (not yet ended) id'd `start` at `path` --
+    /// an unnamed loop's own passes each get an id of their own
+    /// (DESIGN.md: "Without `--events` they can't be told apart"),
+    /// so this is every pass still running right now, its own start
+    /// timestamp. A `use`/tree-loop child reached only through events
+    /// never shows up in `flat` while it runs at all (DESIGN.md §1.4),
+    /// which is exactly when this is needed.
+    pub fn open_starts_at(&self, path: &str) -> Vec<&str> {
+        self.open_by_id
+            .iter()
+            .filter(|(_, p)| p.as_str() == path)
+            .filter_map(|(id, _)| self.start_ts_by_id.get(id).map(String::as_str))
+            .collect()
+    }
+
     /// `path`'s own latest `end` event duration, in seconds: `None`
     /// either with no matching `end` event yet, or with one that
     /// carried no `ms` of its own. A renderer's own fallback for a

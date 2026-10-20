@@ -382,7 +382,13 @@ pub fn build_time_rows(
                         end_s.zip(start_s).map(|(e, s)| e - s),
                         Some(LoopProgress {
                             done: count as u64,
-                            total: Some(count as u64),
+                            // The total is never known for an unnamed
+                            // loop while it's still running -- shown
+                            // as `?` until the last pass finishes,
+                            // with the one in progress not counted
+                            // among `done`.
+                            total: (row.status.kind != StatusKind::Running)
+                                .then_some(count as u64),
                             eta_s: None,
                         }),
                     )
@@ -426,9 +432,13 @@ pub(crate) fn unnamed_loop_first_pass_start(
 ) -> Option<(f64, usize)> {
     let mut start_s: Option<f64> = None;
     let mut count = 0usize;
-    for interval in model.step_intervals().iter().filter(|i| i.path == path) {
+    let offsets = model.step_interval_offsets(run_start_ts);
+    for (interval, &(s, _)) in model.step_intervals().iter().zip(offsets.iter()) {
+        if interval.path != path {
+            continue;
+        }
         count += 1;
-        if let Some(s) = duration_seconds(run_start_ts, &interval.start_ts) {
+        if !s.is_nan() {
             start_s = Some(start_s.map_or(s, |cur: f64| cur.min(s)));
         }
     }
@@ -551,7 +561,7 @@ fn expand_unnamed_loop(
     run_start_ts: &str,
     now: &str,
 ) -> Vec<LoopPassRow> {
-    model
+    let mut rows: Vec<LoopPassRow> = model
         .step_intervals()
         .iter()
         .filter(|i| i.path == path)
@@ -559,7 +569,6 @@ fn expand_unnamed_loop(
         .map(|(n, interval)| {
             let start_s = duration_seconds(run_start_ts, &interval.start_ts);
             let duration_s = duration_seconds(&interval.start_ts, &interval.end_ts);
-            let _ = now;
             LoopPassRow {
                 label: format!("#{}", n + 1),
                 status: RowStatus {
@@ -575,7 +584,26 @@ fn expand_unnamed_loop(
                 duration_s,
             }
         })
-        .collect()
+        .collect();
+    // A pass still running when expanded lists as its own row too
+    // (DESIGN.md), numbered right after every finished pass -- it has
+    // no `end` event yet, so it never reaches the loop above.
+    let finished = rows.len();
+    for (n, start_ts) in model.open_starts_at(path).into_iter().enumerate() {
+        let start_s = duration_seconds(run_start_ts, start_ts);
+        let duration_s = start_s.and_then(|s| duration_seconds(run_start_ts, now).map(|e| e - s));
+        rows.push(LoopPassRow {
+            label: format!("#{}", finished + n + 1),
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_s,
+            duration_s,
+        });
+    }
+    rows
 }
 
 /// Expands `path`'s own loop row into one row per pass (DESIGN.md:
@@ -2423,6 +2451,104 @@ mod tests {
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[0].label, "#1");
         assert_eq!(passes[1].label, "#2");
+    }
+
+    #[test]
+    fn an_unnamed_loops_progress_shows_unknown_total_while_a_pass_runs() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let rows = vec![tool_row("prime.u_nap")];
+        let time_rows = build_time_rows(&rows, &flat, &model, &plan, &header, &BTreeMap::new());
+        let progress = time_rows[0]
+            .loop_progress
+            .expect("an unnamed loop with logged passes has progress");
+        assert_eq!(
+            progress.done, 1,
+            "the pass in progress must not count as done"
+        );
+        assert_eq!(
+            progress.total, None,
+            "the total is unknown while the loop is still running"
+        );
+
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:12Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(7_000),
+            error: None,
+        });
+        let mut done_row = tool_row("prime.u_nap");
+        done_row.status.kind = StatusKind::Done;
+        let time_rows =
+            build_time_rows(&[done_row], &flat, &model, &plan, &header, &BTreeMap::new());
+        let progress = time_rows[0]
+            .loop_progress
+            .expect("an unnamed loop with logged passes has progress");
+        assert_eq!(progress.done, 2);
+        assert_eq!(
+            progress.total,
+            Some(2),
+            "once the loop ends, the total is the real count"
+        );
+    }
+
+    #[test]
+    fn expand_unnamed_loop_lists_the_pass_in_progress_as_a_running_row() {
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        let passes = expand_loop(
+            "prime.u_nap",
+            &BTreeMap::new(),
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:08Z",
+        );
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0].label, "#1");
+        assert_eq!(passes[0].status.kind, StatusKind::Done);
+        assert_eq!(passes[1].label, "#2");
+        assert_eq!(passes[1].status.kind, StatusKind::Running);
+        assert_eq!(passes[1].start_s, Some(5.0));
+        assert_eq!(passes[1].duration_s, Some(3.0));
     }
 
     #[test]
