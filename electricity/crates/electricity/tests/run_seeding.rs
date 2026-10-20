@@ -1,9 +1,9 @@
 //! Exercises the golden corpus `electricity/scripts/generate_vm_run_
 //! seeding.py` writes (PR #441): `-e` seeding's
 //! own success-path corner cases -- an optional, `null`-valued input
-//! dropped on success (1a), and a root-level `-e` key that is never
+//! dropped on success, and a root-level `-e` key that is never
 //! lifted under `input` at all (a namespace name, an `_`-prefixed key,
-//! or a sibling of an `-e input=...` that already wins outright -- 1d)
+//! or a sibling of an `-e input=...` that already wins outright)
 //! -- each compared against a real `cof run`'s own normalized `--out`
 //! state. Every case's own document and `-e` inputs live in the golden
 //! file itself (`CorpusCase::orchestration`/`inputs`).

@@ -1586,9 +1586,9 @@ pub async fn run_orchestration_with_config(
         }
     }
 
-    // Resolved before the refusal walker below needs it (review P2-10
-    // on PR #454's second review: whether this run's own effective
-    // config enables complexity decomposition isn't a property of
+    // Resolved before the refusal walker below needs it (whether
+    // this run's own effective config enables complexity decomposition
+    // isn't a property of
     // *program* itself, so the walker takes it as an argument rather
     // than re-deriving it -- narrowed to decomposition alone by issue
     // #516 §4(b), once K2 wired scoring/routing into `prompt`) -- the
@@ -1658,8 +1658,8 @@ pub async fn run_orchestration_with_config(
         "_noop".to_string()
     };
 
-    // Review P2-3 on PR #454's second review: `electricity_adapters::
-    // build_registry()` replaces a direct `AdapterRegistry::new()`
+    // `electricity_adapters::build_registry()` replaces a direct
+    // `AdapterRegistry::new()`
     // call -- lane F1/F2's own PR only ever adds a builder line
     // inside `build_registry()`'s own crate, never touches this file.
     // Lane F1 (issue #478) has registered `scripted` and `host_claude`

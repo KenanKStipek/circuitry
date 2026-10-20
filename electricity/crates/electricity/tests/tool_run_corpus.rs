@@ -2,8 +2,7 @@
 //! run_corpus.py` writes (issue #431's Test strategy section, lane C's
 //! own tool-runtime-focused documents -- `success_chain`, a propagating
 //! tool error, `on_error: skip`, retries exhausted against a CEL
-//! `expect:`, a passing `expect:`, a raising `expect:` (the regression
-//! case for a raising `expect:` regression), an `enabled_tools` allowlist
+//! `expect:`, a passing `expect:`, a raising `expect:`, an `enabled_tools` allowlist
 //! refusal, a `params_json` merge, non-string param keys end to end,
 //! and redaction surfacing in `meta.params_rendered`).
 //!
