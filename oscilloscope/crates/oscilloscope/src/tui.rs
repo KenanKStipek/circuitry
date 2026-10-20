@@ -4293,15 +4293,17 @@ fn draw_time_strips(
         }
     }
 
-    // The timeline box is drawn inside a bordered block, so its own
-    // content starts one column past `area.x` (the left border); this
-    // pane has no border of its own, so a leading space here is what
-    // actually lines its gutter up with the bars (issue #650's
+    // A row's own bar starts at `label_width + 2`: the timeline box's
+    // left border (1), then its label padded to `label_width`, then
+    // one space. This pane has no border of its own, so its gutter
+    // needs that same two-space width between the label and the bar,
+    // not one, to actually land on the same column (issue #650's
     // probes: every live frame had the strips sitting one column to
-    // the left of the bars without it). Each label is also truncated
-    // to `label_width`, not just padded -- `{:<width$}` never cuts a
-    // longer string down, so a label that overflowed used to shift
-    // everything after it right by however much it overran.
+    // the left of the bars with only one). Each label is also
+    // truncated to `label_width`, not just padded -- `{:<width$}`
+    // never cuts a longer string down, so a label that overflowed
+    // used to shift everything after it right by however much it
+    // overran.
     let label_width = layout.label_width;
     let events_label = truncate_label(events_label, label_width);
     let decisions_label = truncate_label("decisions", label_width);
@@ -4319,18 +4321,18 @@ fn draw_time_strips(
         };
         vec![
             Line::from(format!(
-                " {events_label:<label_width$} {events_line}  {events_suffix}"
+                "{events_label:<label_width$}  {events_line}  {events_suffix}"
             )),
-            Line::from(format!(" {decisions_label:<label_width$} {decisions_line}")),
+            Line::from(format!("{decisions_label:<label_width$}  {decisions_line}")),
             Line::from(format!(
-                " {in_flight_label:<label_width$} {in_flight_line}  {in_flight_suffix}"
+                "{in_flight_label:<label_width$}  {in_flight_line}  {in_flight_suffix}"
             )),
         ]
     } else {
         vec![
-            Line::from(format!(" {events_label:<label_width$} {events_line}")),
-            Line::from(format!(" {decisions_label:<label_width$} {decisions_line}")),
-            Line::from(format!(" {in_flight_label:<label_width$} {in_flight_line}")),
+            Line::from(format!("{events_label:<label_width$}  {events_line}")),
+            Line::from(format!("{decisions_label:<label_width$}  {decisions_line}")),
+            Line::from(format!("{in_flight_label:<label_width$}  {in_flight_line}")),
         ]
     };
     frame.render_widget(Paragraph::new(lines), area);
