@@ -842,7 +842,7 @@ def build_corpus() -> list[dict]:
         condition("97 in state.b", {"b": b"abc"}),
     ]
 
-    # --- fourth review of #379, findings 2 and 3: `has(X)` is "X
+    # --- fourth review of #379: `has(X)` is "X
     # evaluated without error", for *any* `X` -- an argument that was
     # never a field selection (`cel`'s own `has()` macro fails to even
     # parse this), and a root that is itself a macro/function-call result

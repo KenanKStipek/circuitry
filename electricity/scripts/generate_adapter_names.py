@@ -4,7 +4,7 @@
 ``adapters/factory.py::build_adapter``'s own "Unknown adapter: ... Supported
 adapters: ..." text lists Python's *full* registry (every provider name in
 ``ADAPTER_REGISTRY``, sorted), not just the handful electricity itself can
-build (review finding 4 on PR #454 -- `AdapterRegistry::supported_names`
+build (PR #454 -- `AdapterRegistry::supported_names`
 only ever lists the registry's own registered builders, empty for M1-A).
 electricity-vm's own builder (``adapter.rs::AdapterRegistry::build``) needs
 that exact list to word its own unknown-adapter message the same way, even

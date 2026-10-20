@@ -318,7 +318,7 @@ def build_compose_cases() -> list[dict]:
     # A hidden key (the first effect reference mints `__circuitry_
     # partial_0__`) shadowing a *real*, pre-existing top-level key of
     # that exact name -- the shallow `{**ctx, **extra}` merge must have
-    # the hidden binding win outright (issue #492 review finding 4).
+    # the hidden binding win outright (issue #492's review).
     cases.append(
         compose_case(
             "{{> reply}}:{{__circuitry_partial_0__}}",
@@ -331,7 +331,7 @@ def build_compose_cases() -> list[dict]:
     # `{{.}}` at the root, with a hidden binding present -- the only
     # case that actually exercises the hidden overlay's own `whole()`
     # (a section over `.` pushes it as the new nearest scope) rather
-    # than just `lookup` (issue #492 review finding 4).
+    # than just `lookup` (issue #492's review).
     cases.append(
         compose_case(
             "{{> reply}}{{#.}}[{{__circuitry_partial_0__}}]{{/.}}",

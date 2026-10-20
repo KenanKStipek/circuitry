@@ -8,7 +8,7 @@ order cases alone (`key_order_cases`, below) are each recorded *twice* --
 once `sort_keys=True`, once `sort_keys=False` -- since that is the one knob
 ordering can actually depend on, so the one corpus serves M1-L2's
 `safe_dump(sort_keys=False)` too without doubling every other case for a
-knob that can't change their output (review finding 7 on PR #510's first
+knob that can't change their output (PR #510's first
 review: an earlier draft of this docstring overstated this).
 
 Must be run with Python 3.11 and the pinned `PyYAML==6.0.3`

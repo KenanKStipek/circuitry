@@ -760,8 +760,8 @@ mod tests {
     /// way to install [`PlaceholderAdapter`], and nothing in a `use`
     /// child can call [`Adapter::generate`] in this milestone either)
     /// -- exercised directly so its message text stays pinned to
-    /// `format_config_refusal`'s own phrasing (PR #497 review finding
-    /// 5), `{VERSION}` included, not a hand-written duplicate of it.
+    /// `format_config_refusal`'s own phrasing (PR #497's review),
+    /// `{VERSION}` included, not a hand-written duplicate of it.
     #[tokio::test]
     async fn placeholder_adapter_generate_uses_format_config_refusals_own_phrasing() {
         let path = electricity_bytecode::EffectPath::root().push_name("p");

@@ -243,7 +243,7 @@ def build_cases() -> list[dict]:
         )
     )
     cases.append(
-        # Finding 1's own probe: `_render_params`'s own "did not
+        # `_render_params`'s own "did not
         # resolve" message names the *effect* (`self.defn.name`), never
         # the provider -- this case's own name is deliberately not
         # `json` (the provider every case here uses), so a regression
@@ -267,7 +267,7 @@ def build_cases() -> list[dict]:
         )
     )
     cases.append(
-        # Finding 2's own probe: a CEL `expect:` that *raises*
+        # A CEL `expect:` that *raises*
         # (`value.missing` on an empty dict, an unresolved path) is
         # caught inside `evaluate_expect` itself -- `tool.py` never sees
         # an exception here, so the failure text is the same `expect

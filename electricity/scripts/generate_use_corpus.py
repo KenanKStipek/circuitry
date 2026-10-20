@@ -465,7 +465,7 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
             ctx={"input": {"v": "Y"}},
         )
     )
-    # Review finding 1 on PR #472: `meta.expect` must be written on a
+    # PR #472's review: `meta.expect` must be written on a
     # *passing* attempt too, not only a failing one -- the corpus
     # already had `retried_failing_expect_then_fails` for the failure
     # half; this is the missing pass half, over the same child.
@@ -480,7 +480,7 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
             },
         )
     )
-    # Review finding 2: the inline validation-failure text end to end --
+    # The inline validation-failure text end to end --
     # `validate: true` wraps in "Inline orchestration validation
     # failed:\n  - ..." (and sets `meta.validation_errors`); `validate:
     # false` gives the bare message, no wrapper, no `validation_errors`.

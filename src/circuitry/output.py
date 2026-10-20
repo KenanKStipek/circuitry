@@ -37,8 +37,8 @@ class ResilientConsole(Console):
     Overriding ``_check_buffer`` (rather than ``print``) is what actually
     covers this: it is the one place Rich funnels *every* write through --
     ``print``, ``line``, ``control``, ``print_json``, and, critically, a
-    ``Live``/``Status`` region's own flush on ``__exit__`` (#357 review
-    finding 1) -- while Rich's own ``_check_buffer`` only ever catches
+    ``Live``/``Status`` region's own flush on ``__exit__`` (issue #357)
+    -- while Rich's own ``_check_buffer`` only ever catches
     ``BrokenPipeError``, leaving a plain ``OSError`` (EIO) from a hung-up
     tty to escape uncaught from inside a spinner's ``with`` block, before
     `cli.app` ever reaches its own ``--out``/``--last`` writes.
@@ -49,7 +49,7 @@ class ResilientConsole(Console):
     ``ENOSPC``/``EDQUOT`` (disk full) or a transient ``EAGAIN`` is a real
     failure a caller like ``cof run --json > out.json`` needs to see, not
     one this best-effort fallback should turn into a silent, exit-0 loss of
-    output (#357 review finding 4).
+    output (issue #357).
     """
 
     def _check_buffer(self) -> None:

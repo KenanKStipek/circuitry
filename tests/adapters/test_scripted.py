@@ -527,7 +527,7 @@ def test_leftover_export_writes_nothing_when_env_var_unset(
 def test_leftover_export_merges_every_registered_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PR #455 review finding 1: a fallback chain (or more than one
+    """PR #455's review: a fallback chain (or more than one
     ``provider: scripted`` prompt) builds a fresh instance per attempt, each
     loading its own, independent copy of the queue -- so the export must
     merge by the lowest remaining count *per path*, never by summing every
