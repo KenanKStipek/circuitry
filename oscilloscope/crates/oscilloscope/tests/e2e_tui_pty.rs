@@ -161,6 +161,33 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
     }
 }
 
+/// [`wait_for_pattern`], but only looking at bytes written at or
+/// after `since_len` -- some labels this screen draws (a tree loop's
+/// own breadcrumbed pass containers, "pass 1 of 2") can share a
+/// substring with what a *different* action is meant to produce (the
+/// Time screen's own `⏎`-expanded pass rows, "pass 1"), already
+/// on screen from selecting the row at all, well before the action
+/// under test ever runs -- scanning the whole buffer would let that
+/// stale match satisfy this wait immediately, before the real thing
+/// has happened at all.
+fn wait_for_pattern_since(
+    buf: &Arc<Mutex<Vec<u8>>>,
+    since_len: usize,
+    pattern: &[u8],
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if buf.lock().unwrap()[since_len..]
+            .windows(pattern.len())
+            .any(|w| w == pattern)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// [`wait_for_pattern`], read straight off `master` itself rather
 /// than a [`drain_continuously`] buffer -- the one test below that
 /// needs to close `master` itself afterward can't hand it to
@@ -756,7 +783,12 @@ fn pressing_1_during_a_live_run_opens_the_time_screen() {
 
     let before_enter = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\r");
-    wait_for_pattern(&captured_buf, b"pass 1", Duration::from_secs(10));
+    wait_for_pattern_since(
+        &captured_buf,
+        before_enter,
+        b"pass 1",
+        Duration::from_secs(10),
+    );
     {
         let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
         let rendered = String::from_utf8_lossy(&after);
