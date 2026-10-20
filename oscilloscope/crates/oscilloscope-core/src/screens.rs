@@ -3797,6 +3797,122 @@ mod tests {
         );
     }
 
+    /// Collapsed, an unnamed loop's own row spans its first pass's
+    /// own start through its last pass's own (state-sourced) end,
+    /// carries the real finished `⟲ 2/2` once the loop itself has
+    /// ended, and the whole span counts once in `in flight`.
+    #[test]
+    fn build_time_screen_collapsed_unnamed_loop_row_spans_first_pass_to_last() {
+        let plan = unnamed_loop_plan_with_sibling();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:12Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(7_000),
+            error: None,
+        });
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:13Z"
+            },
+            "u_nap": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z",
+                "provider": "shell"
+            }},
+            "a": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:12Z", "completed_at": "2026-01-01T00:00:13Z"
+            }}
+        }});
+        let rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+            13.0,
+            "2026-01-01T00:00:13Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = flat_from(state.clone());
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:13Z",
+        );
+        let row = screen
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                TimeDisplayRow::Row(tr) if tr.path == "prime.u_nap" => Some(tr),
+                _ => None,
+            })
+            .expect("the collapsed row must still be there");
+        assert_eq!(
+            row.start_s,
+            Some(0.0),
+            "the row starts at the first pass's own start, not the last pass's: {row:?}"
+        );
+        assert_eq!(
+            row.duration_s,
+            Some(12.0),
+            "the row's own span runs through the last pass's own (state-sourced) end: {row:?}"
+        );
+        let progress = row
+            .loop_progress
+            .expect("an unnamed loop with logged passes has progress");
+        assert_eq!(progress.done, 2);
+        assert_eq!(
+            progress.total,
+            Some(2),
+            "the loop itself has finished, so the real total is known"
+        );
+        // One interval per logged pass (two, for u_nap), plus one
+        // for the unrelated sibling `a` -- sequential, so none
+        // overlap, and the true max stays 1.
+        assert_eq!(
+            screen.strips.in_flight_intervals.len(),
+            3,
+            "{:?}",
+            screen.strips.in_flight_intervals
+        );
+        let heights =
+            crate::time::in_flight_heights(0.0, 13.0, 13, &screen.strips.in_flight_intervals);
+        assert_eq!(
+            heights.iter().copied().max(),
+            Some(1),
+            "sequential passes never overlap: {heights:?}"
+        );
+    }
+
     fn unnamed_loop_plan_under_tree_parallel() -> PlanTree {
         use electricity_bytecode::{
             EffectPath, LeafKind, LoopFlow, LoopSpec, NodeKind, OnError, Op, ParamNode, Program,

@@ -3784,6 +3784,37 @@ fn multi_segment_bar(
 mod time_bar_tests {
     use super::*;
 
+    /// A tick label too close to the bar's own right edge to fit in
+    /// full is left out entirely -- never cut to a stray, unreadable
+    /// fragment -- while every other tick still shows in full and
+    /// the rule row's own tick marks land on every column regardless.
+    #[test]
+    fn tick_axis_rows_never_cuts_a_label_that_would_overflow() {
+        let ticks = vec![
+            (0usize, 0.0, "00:00".to_string()),
+            (10usize, 600.0, "00:10".to_string()),
+            (18usize, 1080.0, "00:18".to_string()),
+        ];
+        let (labels, rule) = tick_axis_rows(20, &ticks);
+        let text: String = labels.iter().collect();
+        assert!(text.starts_with("00:00"), "{text:?}");
+        assert!(text.contains("00:10"), "{text:?}");
+        assert!(
+            !text.contains("00:18"),
+            "the last tick's label runs past column 20 and must not appear at all, cut or not: {text:?}"
+        );
+        assert_eq!(
+            &labels[18..20],
+            [' ', ' '],
+            "left blank rather than cut: {labels:?}"
+        );
+        assert_eq!(rule[0], '├', "{rule:?}");
+        assert_eq!(
+            rule[18], '┼',
+            "a tick mark lands on its column even with no label: {rule:?}"
+        );
+    }
+
     #[test]
     fn decisions_line_places_a_mark_by_its_own_fraction_of_the_window() {
         // A decision at 300s into a 0..600s/10-column window belongs
@@ -4098,6 +4129,33 @@ fn nearest_ancestor_loop_path<'a>(
         .map(|r| r.path.as_str())
 }
 
+/// The clock axis's own tick-label and rule rows (DESIGN.md: a
+/// labelled tick row plus a `├─┤` rule), built from
+/// [`oscilloscope_core::time::axis_tick_columns`]'s own output -- a
+/// label that would run past `bar_width` is left out entirely rather
+/// than cut to a stray, unreadable fragment; the rule row's own tick
+/// mark still lands on its column either way.
+fn tick_axis_rows(bar_width: usize, ticks: &[(usize, f64, String)]) -> (Vec<char>, Vec<char>) {
+    let mut tick_label_row = vec![' '; bar_width];
+    let mut tick_rule_row = vec!['─'; bar_width];
+    for (col, _offset_s, label) in ticks {
+        let col = *col;
+        tick_rule_row[col] = if col == 0 {
+            '├'
+        } else if col == bar_width.saturating_sub(1) {
+            '┤'
+        } else {
+            '┼'
+        };
+        if col + label.chars().count() <= tick_label_row.len() {
+            for (i, ch) in label.chars().enumerate() {
+                tick_label_row[col + i] = ch;
+            }
+        }
+    }
+    (tick_label_row, tick_rule_row)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_time_timeline(
     frame: &mut Frame,
@@ -4158,33 +4216,19 @@ fn draw_time_timeline(
     app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
 
     let gutter = " ".repeat(layout.label_width + 1);
-    let mut tick_label_row = vec![' '; layout.bar_width];
-    let mut tick_rule_row = vec!['─'; layout.bar_width];
-    if let Some(rs) = run_start_ts {
-        for (col, _offset_s, label) in oscilloscope_core::time::axis_tick_columns(
-            rs,
-            layout.vis_start_s,
-            layout.vis_end_s,
-            layout.bar_width,
-            ctx.zone,
-        ) {
-            tick_rule_row[col] = if col == 0 {
-                '├'
-            } else if col == layout.bar_width.saturating_sub(1) {
-                '┤'
-            } else {
-                '┼'
-            };
-            // Skip a label that would be cut off rather than write
-            // a stray, unreadable fragment of it -- the rule row's
-            // own tick mark still lands on `col` either way.
-            if col + label.chars().count() <= tick_label_row.len() {
-                for (i, ch) in label.chars().enumerate() {
-                    tick_label_row[col + i] = ch;
-                }
-            }
-        }
-    }
+    let (tick_label_row, mut tick_rule_row) = run_start_ts.map_or_else(
+        || (vec![' '; layout.bar_width], vec!['─'; layout.bar_width]),
+        |rs| {
+            let ticks = oscilloscope_core::time::axis_tick_columns(
+                rs,
+                layout.vis_start_s,
+                layout.vis_end_s,
+                layout.bar_width,
+                ctx.zone,
+            );
+            tick_axis_rows(layout.bar_width, &ticks)
+        },
+    );
     if let Some(now_s) = screen.now_s {
         if let Some(col) = oscilloscope_core::time::now_column(
             layout.vis_start_s,
@@ -10793,6 +10837,49 @@ mod golden_tests {
             assert!(
                 now_cols.windows(2).all(|w| w[0] == w[1]),
                 "now column must line up everywhere (events={use_events}): {now_cols:?}"
+            );
+        }
+    }
+
+    /// The same now-column alignment, at the two smaller widths the
+    /// start/duration columns are first shown or first dropped at
+    /// (`thresholds::TIME_START_DURATION_COLUMN_MIN_WIDTH`) -- a
+    /// layout miscalculation at either boundary would show up as a
+    /// now line that lines up at 100 columns but not at one just
+    /// above or below the threshold.
+    #[test]
+    fn time_strip_and_row_now_columns_always_match_at_80x24_and_85x24() {
+        for (width, height) in [(80u16, 24u16), (85u16, 24u16)] {
+            let plan = sample_plan();
+            let mut model = RunModel::new();
+            model.observe_event(&oscilloscope_core::observe::Event::Start {
+                ts: "2026-01-01T00:00:00Z".to_string(),
+                id: Some(1),
+                path: "prime.a".to_string(),
+            });
+            let state = overview_running_state();
+            let text = time_snapshot_at(
+                width,
+                height,
+                &plan,
+                &mut model,
+                Some(&state),
+                ProcessState::Running,
+                Some("prime.b"),
+                &Default::default(),
+                false,
+            );
+            let now_cols: Vec<usize> = text
+                .lines()
+                .filter_map(|l| l.chars().position(|c| c == '┃'))
+                .collect();
+            assert!(
+                now_cols.len() >= 2,
+                "expected both bar rows and strips to show a now line at {width}x{height}"
+            );
+            assert!(
+                now_cols.windows(2).all(|w| w[0] == w[1]),
+                "now column must line up everywhere at {width}x{height}: {now_cols:?}"
             );
         }
     }
