@@ -4075,6 +4075,28 @@ fn time_row_groups(
     (by_path, passes)
 }
 
+/// The innermost loop row `path` sits under, if any (same walk
+/// [`time_zoom_ancestor_loop_label`] does for the zoom title) -- a
+/// leaf under a *collapsed* loop never gets a drawn row of its own
+/// at all (its path is always filtered out of the timeline's own
+/// `visible`/`drawable` rows, expanded or not -- expanded shows
+/// separate pass rows instead), so follow selecting it must
+/// highlight and scroll to this loop row instead, the nearest one
+/// actually on screen.
+fn nearest_ancestor_loop_path<'a>(
+    by_path: &std::collections::BTreeMap<String, &'a oscilloscope_core::time::TimeRow>,
+    path: &str,
+) -> Option<&'a str> {
+    by_path
+        .values()
+        .filter(|r| {
+            r.kind == oscilloscope_core::render::RowKind::Loop
+                && path.starts_with(&format!("{}.", r.path))
+        })
+        .max_by_key(|r| r.path.len())
+        .map(|r| r.path.as_str())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_time_timeline(
     frame: &mut Frame,
@@ -4108,7 +4130,18 @@ fn draw_time_timeline(
     let drawable = time_drawable_rows(&visible, &by_path, &passes, screen.planned, app);
     let run_start_ts = screen.axis.start_ts.as_deref();
 
-    let selected_idx = app.selected_path.as_deref().and_then(|p| {
+    // Follow can select a leaf hidden under a collapsed loop (its
+    // own row never drawn at all) -- the nearest ancestor row that
+    // *is* drawn stands in for it, both for the highlight below and
+    // for scrolling it into view.
+    let effective_selected_path: Option<&str> = app.selected_path.as_deref().map(|p| {
+        if is_under_a_loop(p) {
+            nearest_ancestor_loop_path(&by_path, p).unwrap_or(p)
+        } else {
+            p
+        }
+    });
+    let selected_idx = effective_selected_path.and_then(|p| {
         drawable
             .iter()
             .position(|r| matches!(r, TimeDrawRow::Row(tr) if tr.path == p))
@@ -4175,7 +4208,7 @@ fn draw_time_timeline(
     for item in drawable.iter().skip(app.tree_scroll).take(viewport) {
         match item {
             TimeDrawRow::Row(time_row) => {
-                let selected = app.selected_path.as_deref() == Some(time_row.path.as_str());
+                let selected = effective_selected_path == Some(time_row.path.as_str());
                 let indent = "  ".repeat(time_row.depth);
                 let glyph = status_glyph(time_row.status.kind);
                 let mut label = format!("{indent}{glyph} {}", time_row.label);
@@ -5046,10 +5079,14 @@ fn draw_time_plain_list(
         .into_iter()
         .filter(|r| !is_under_a_loop(&r.path))
         .collect();
-    let selected_idx = app
-        .selected_path
-        .as_deref()
-        .and_then(|p| visible.iter().position(|r| r.path == p));
+    let effective_selected_path: Option<&str> = app.selected_path.as_deref().map(|p| {
+        if is_under_a_loop(p) {
+            nearest_ancestor_loop_path(&by_path, p).unwrap_or(p)
+        } else {
+            p
+        }
+    });
+    let selected_idx = effective_selected_path.and_then(|p| visible.iter().position(|r| r.path == p));
     let viewport = (area.height as usize).max(1);
     app.tree_viewport = viewport;
     let line_counts = vec![1usize; visible.len()];
@@ -5088,7 +5125,7 @@ fn draw_time_plain_list(
             .duration_s
             .map(oscilloscope_core::format::format_duration)
             .unwrap_or_default();
-        let selected = app.selected_path.as_deref() == Some(row.path.as_str());
+        let selected = effective_selected_path == Some(row.path.as_str());
         let style = if selected {
             Style::default().add_modifier(Modifier::REVERSED)
         } else {
@@ -10972,6 +11009,185 @@ mod golden_tests {
             "the zoom title must name the selected leaf and its loop:\n{text}"
         );
         insta::assert_snapshot!(text);
+    }
+
+    fn many_steps_then_a_named_loop_plan(n: usize) -> PlanTree {
+        let root_path = EffectPath::root();
+        let mut ops: Vec<Op> = (0..n)
+            .map(|i| {
+                tool(
+                    root_path.clone().push_name(format!("s{i}")),
+                    &format!("s{i}"),
+                    OnError::Fail,
+                )
+            })
+            .collect();
+        let loop_path = root_path.clone().push_name("items");
+        let pass0 = loop_path.clone().push_pass(LoopId(0));
+        let nap = tool(pass0.push_name("nap"), "nap", OnError::Fail);
+        ops.push(Op {
+            path: loop_path.clone(),
+            name: Some("items".to_string()),
+            kind: NodeKind::Control(Region::Loop {
+                name: Some("items".to_string()),
+                spec: LoopSpec::Each {
+                    in_path: "prime.xs".to_string(),
+                    as_name: "x".to_string(),
+                    truncate: false,
+                },
+                body: Box::new(Region::Block {
+                    ops: vec![nap],
+                    overlay: true,
+                }),
+                flow: LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        });
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    /// A leaf hidden under a collapsed loop (DESIGN.md: "Loops are
+    /// collapsed by default") has no row of its own in the timeline
+    /// at all -- follow selecting it must highlight and scroll to its
+    /// loop row, the nearest one actually drawn, not give up and
+    /// leave the viewport wherever it was.
+    #[test]
+    fn time_timeline_scrolls_to_a_collapsed_loops_row_for_a_hidden_leafs_selection() {
+        let n = 30;
+        let plan = many_steps_then_a_named_loop_plan(n);
+        let mut model = RunModel::new();
+        let mut state = serde_json::Map::new();
+        for i in 0..n {
+            state.insert(
+                format!("s{i}"),
+                json!({"value": "ok", "meta": {
+                    "created_at": format!("2026-01-01T00:{:02}:00Z", i),
+                    "completed_at": format!("2026-01-01T00:{:02}:01Z", i)
+                }}),
+            );
+        }
+        state.insert(
+            "items".to_string(),
+            json!({"value": null, "meta": {
+                    "created_at": "2026-01-01T00:30:00Z", "completed_at": null
+                },
+                "iter_0": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:30:00Z", "completed_at": "2026-01-01T00:30:10Z"
+                    },
+                    "nap": {"value": "n0", "meta": {
+                        "created_at": "2026-01-01T00:30:00Z", "completed_at": "2026-01-01T00:30:10Z", "provider": "shell"
+                    }}
+                },
+                "iter_1": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:30:10Z", "completed_at": null
+                    },
+                    "nap": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:30:10Z", "completed_at": null, "provider": "shell"
+                    }}
+                }
+            }),
+        );
+        let state = json!({"prime": Value::Object(state)});
+        let now = "2026-01-01T00:30:15Z";
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            900.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some("prime.items.iter_1.nap"),
+            &Default::default(),
+            now,
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.selected_path = Some("prime.items.iter_1.nap".to_string());
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(100, 22);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains("items"),
+            "the selected leaf's own loop row must be scrolled into view: {text}"
+        );
+        assert!(
+            !text.contains("s0 "),
+            "scrolled past the first row, which must no longer show: {text}"
+        );
     }
 
     /// DESIGN.md's own performance rule: "A 400-pass loop collapsed
