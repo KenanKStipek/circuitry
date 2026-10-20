@@ -2347,15 +2347,14 @@ fn draw_overlay(
 // screen's own height, which used to cut "press any key to close"
 // off the bottom there).
 const HELP_TEXT: &[&str] = &[
-    "0            overview",
-    "2            flow: control flow, selected step, story",
-    "3            cost",
+    "0 1 2 3      overview · time · flow · cost",
     "↑↓ / j k     move (the focused pane, or cost: select a store)",
     "PgUp PgDn    move a page",
     "Home End     jump to the first / last row",
     "g G          same as Home / End",
     "← →          collapse / expand (orchestration or state)",
-    "⏎            overview: open flow; flow: expand; cost: zoom in",
+    "⏎            overview: open flow; flow/time: expand; cost: zoom in",
+    "+ - =        time: zoom in / out / fit",
     "esc i o $    cost: zoom out · switch measure (same key: total)",
     "z            fold on/off (breadcrumbs, quick steps)",
     "tab          flow → selected → story → flow (else: tree → details)",
@@ -2372,8 +2371,9 @@ const HELP_TEXT: &[&str] = &[
 ];
 
 /// Wide enough for every [`HELP_TEXT`] line with none of them
-/// wrapping -- the longest (the ↑↓ line) is 61 columns; 4 columns of
-/// margin plus the 2-column border leaves room to spare.
+/// wrapping -- the longest (the ⏎ and `tab` lines) is 66 columns; the
+/// 2-column border leaves no margin to spare, so a new line must
+/// stay at or under that same length.
 const HELP_OVERLAY_WIDTH: u16 = 68;
 
 /// One redraw's whole layout (issue #626): a one-line header, shared
