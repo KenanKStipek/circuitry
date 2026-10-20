@@ -1,0 +1,8 @@
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: claude_code
+      prompt: "Fix the bug."
+      transcript: top_agent_transcript.jsonl

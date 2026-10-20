@@ -1,0 +1,27 @@
+interface:
+  inputs:
+    items: {type: array, default: ["only"]}
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: pi
+      prompt: "Fix the bug."
+      tools: [read, bash, edit]
+      transcript: top_agent_transcript.jsonl
+  - type: loop
+    name: fan
+    flow: tree
+    each:
+      in: input.items
+      as: item
+    body:
+      - name: tree_agent
+        type: tool
+        provider: agent
+        params:
+          engine: pi
+          prompt: "Pass {{item}}."
+          tools: [read, bash, edit]
+          transcript: tree_agent_transcript.jsonl
