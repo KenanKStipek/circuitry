@@ -139,16 +139,31 @@ pub fn axis_span(header: &Header, now: &str) -> AxisSpan {
         .history_eta_high_ts
         .clone()
         .or_else(|| header.innermost_loop_eta_ts.clone());
-    let later_ts = match (
-        p90_candidate
-            .as_deref()
-            .and_then(crate::diff::parse_instant),
-        now_dt,
-    ) {
-        (Some(p90), Some(now_parsed)) if p90 > now_parsed => p90_candidate.unwrap(),
-        _ => now.to_string(),
+    let later_parsed = p90_candidate
+        .as_deref()
+        .and_then(crate::diff::parse_instant);
+    let (later_ts, gap_past_now_s) = match (later_parsed, now_dt) {
+        (Some(p90), Some(now_parsed)) if p90 > now_parsed => (
+            p90_candidate.unwrap(),
+            (p90 - now_parsed).num_milliseconds() as f64 / 1000.0,
+        ),
+        _ => (now.to_string(), 0.0),
     };
-    let margin_s = axis_margin_s(header.elapsed_s);
+    // The margin's own job is keeping the now line off the pane's
+    // right edge at all -- when the ETA already reaches a decent way
+    // past now on its own, topping up a margin on top of *that* on
+    // top of the usual proportional one double-counted the same gap,
+    // crowding a run with an active loop ETA back toward the left
+    // exactly the way a fixed, too-large margin once did for every
+    // run (#650's probes: a chain loop a couple of seconds into its
+    // own first pass, little elapsed but already 3s from its own
+    // ETA, failed the same 60%-or-more check the plain margin fix
+    // was for). Only the shortfall below the usual margin is added.
+    // `.max(1e-3)`, not `.max(0.0)`: the axis's own end must always
+    // sit strictly past `later_ts`, even when the ETA already leaves
+    // ample room on its own, since a margin of literally zero would
+    // draw the ETA's own marker flush against the pane's right edge.
+    let margin_s = (axis_margin_s(header.elapsed_s) - gap_past_now_s).max(1e-3);
     let end_ts = match crate::diff::parse_instant(&later_ts) {
         Some(parsed) => {
             (parsed + chrono::Duration::milliseconds((margin_s * 1000.0) as i64)).to_rfc3339()
@@ -1177,6 +1192,28 @@ mod tests {
         assert!(!span.show_now);
     }
 
+    /// Issue #650's probe: 10s into a run with no history or loop
+    /// ETA at all, `now` must sit well past the axis's own midpoint
+    /// -- the old fixed 30s floor (`max(5% of elapsed, 30s)`) put it
+    /// at a quarter of the way across instead.
+    #[test]
+    fn axis_margin_is_proportional_not_a_fixed_30s_floor() {
+        let mut header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        header.elapsed_s = 10.0;
+        let now = "2026-01-01T00:00:10Z";
+        let span = axis_span(&header, now);
+        let start_dt = crate::diff::parse_instant(span.start_ts.as_deref().unwrap()).unwrap();
+        let end_dt = crate::diff::parse_instant(&span.end_ts).unwrap();
+        let now_dt = crate::diff::parse_instant(now).unwrap();
+        let total_s = (end_dt - start_dt).num_milliseconds() as f64 / 1000.0;
+        let now_s = (now_dt - start_dt).num_milliseconds() as f64 / 1000.0;
+        assert!(
+            now_s / total_s >= 0.6,
+            "now sits at {:.0}% of the axis",
+            now_s / total_s * 100.0
+        );
+    }
+
     #[test]
     fn axis_span_reaches_past_now_while_running_with_no_eta() {
         let header = header_with(Some("2026-01-01T00:00:00Z"), None);
@@ -1196,6 +1233,33 @@ mod tests {
         let p90_dt = crate::diff::parse_instant("2026-01-01T00:30:00Z").unwrap();
         let end_dt = crate::diff::parse_instant(&span.end_ts).unwrap();
         assert!(end_dt > p90_dt);
+    }
+
+    /// Issue #650's probe: an active loop ETA already a few seconds
+    /// ahead of now must not get an *additional* full margin stacked
+    /// on top of it -- only enough to cover any shortfall below the
+    /// usual one, so a run barely any older than its own innermost
+    /// loop's ETA still reads with `now` comfortably past the
+    /// midpoint, not squeezed left the same way a too-wide margin
+    /// once squeezed every run.
+    #[test]
+    fn axis_span_margin_tops_up_rather_than_stacks_onto_an_already_wide_eta_gap() {
+        let mut header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        header.elapsed_s = 6.5;
+        header.innermost_loop_eta_ts = Some("2026-01-01T00:00:09.5Z".to_string());
+        let now = "2026-01-01T00:00:06.5Z";
+        let span = axis_span(&header, now);
+        let start_dt = crate::diff::parse_instant(span.start_ts.as_deref().unwrap()).unwrap();
+        let end_dt = crate::diff::parse_instant(&span.end_ts).unwrap();
+        let now_dt = crate::diff::parse_instant(now).unwrap();
+        let total_s = (end_dt - start_dt).num_milliseconds() as f64 / 1000.0;
+        let now_s = (now_dt - start_dt).num_milliseconds() as f64 / 1000.0;
+        assert!(end_dt > crate::diff::parse_instant("2026-01-01T00:00:09.5Z").unwrap());
+        assert!(
+            now_s / total_s >= 0.6,
+            "now sits at {:.0}% of the axis, squeezed left",
+            now_s / total_s * 100.0
+        );
     }
 
     fn stats_with(count: usize, p50: f64, start_p50: f64, end_p50: f64) -> StepStats {
