@@ -182,8 +182,8 @@ pub(crate) fn execute_dynamic<'a>(
         // `token.is_set()` polling has no equivalent mid-effect
         // interruption, so the closest approximation is: if *token*
         // wasn't set before `finally:` started but is set once it ends,
-        // treat that as if `finally:` itself were cancelled (issue #431
-        // review finding on PR #440).
+        // treat that as if `finally:` itself were cancelled (PR #440's
+        // review of issue #431).
         let was_set_before_finally = token.is_set();
         let finally_result = match finally {
             Some(Region::Block { ops, .. }) => {
@@ -514,7 +514,7 @@ fn execute_tree<'a>(
                 }
             }
 
-            // Finding O1 on PR #462: a `VmError::Refused`
+            // PR #462: a `VmError::Refused`
             // branch (lane I's own mid-run child refusal, M1 lane I
             // prerequisites, issue #448, item U3) used to fall into the
             // generic `Err(e)` arm below like any ordinary failure --
@@ -579,7 +579,7 @@ fn execute_tree<'a>(
         };
 
         if interrupted {
-            // PR #549's review, finding 3: a cancelled tree never
+            // PR #549's review: a cancelled tree never
             // merges (cof's own no-state-write cancellation contract,
             // the comment on `tree_errors`/`refused` above), but the
             // overlay this call registered must still come down here --

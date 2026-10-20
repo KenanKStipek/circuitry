@@ -411,7 +411,7 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
     /// (no store access at all), so only the fall-through branch (the
     /// first segment isn't a hidden key) needs to reach *inner* at all,
     /// and it does so through *inner*'s own `contains`, never `lookup`
-    /// (review finding 1 on issue #492's PR: the inherited default would
+    /// (issue #492's review: the inherited default would
     /// otherwise call `self.lookup`, which falls through to `inner.
     /// lookup`, which -- for a store-backed `inner` whose path resolves
     /// onto a `Slot::Node` with no segments left -- materializes that
@@ -920,8 +920,8 @@ mod tests {
             .unwrap();
         // A named-loop-shaped node: large enough that a full
         // `Store::snapshot` of it would be a real cost, not just
-        // incidentally harmless -- the same shape review finding 1 on
-        // issue #492's PR names ("a `prime.<head>` node can be a loop
+        // incidentally harmless -- the same shape issue #492's
+        // review names ("a `prime.<head>` node can be a loop
         // with thousands of passes").
         let named_loop = store
             .ensure_dict(&prime, Value::from("named_loop"))
@@ -1249,7 +1249,7 @@ mod golden_corpus_live_root {
     /// through [`electricity_template::step`] from the very first
     /// segment on, the same as the eager, plain-`Value`-rooted path,
     /// never actually exercising [`LiveRoot`]'s own node-walking branches
-    /// at all (issue #492 review finding 7).
+    /// at all (issue #492's review).
     fn seed_store_from_ctx(store: &Store, parent: &NodeRef, value: &Value) {
         let Value::Dict(dict) = value else {
             return;

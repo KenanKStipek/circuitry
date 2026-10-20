@@ -463,8 +463,8 @@ async fn generate_with_fallbacks(
         // `run_tracked`'s own `RunCancelledBySignal` (a `BaseException`)
         // fires at once and is never recorded as an attempt nor
         // absorbed by `on_error` -- the same contract `exec/tool.rs`'s
-        // own cancellation check already has (follow-up,
-        // finding N12). Checked before *every* fallback attempt, not
+        // own cancellation check already has (follow-up).
+        // Checked before *every* fallback attempt, not
         // just the first, so a token cancelled between two attempts
         // (e.g. while an earlier one was still building/dispatching)
         // stops the chain before the next one ever dispatches.
@@ -540,7 +540,7 @@ async fn generate_with_fallbacks(
         // dispatch itself didn't -- a real HTTP adapter would
         // otherwise wait out Ctrl-C/SIGTERM for the whole call, up to
         // its own timeout, and then record it as a failed attempt
-        // (follow-up, finding N12). Dropping the
+        // (follow-up). Dropping the
         // `generate` future (what `select!` does to the losing branch)
         // is what actually aborts an in-flight HTTP connection.
         let generate_outcome = tokio::select! {
@@ -908,7 +908,7 @@ pub(crate) async fn execute_prompt(
     // scores the effect when scoring is on, and may replace
     // `resolved_model`/`model_reason` with the router's (or a pin's)
     // choice. The `?` here only ever carries the unknown-pinned-band
-    // `ValueError` (§3 finding 7) -- raised before `effect_start`, so
+    // `ValueError` (issue #516 §3) -- raised before `effect_start`, so
     // no start/complete pair fires and `on_error` never sees it.
     let (complexity_meta, routed_model) = crate::complexity::score_and_route(
         op,
