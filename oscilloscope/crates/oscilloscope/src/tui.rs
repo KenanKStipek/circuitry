@@ -4596,7 +4596,8 @@ fn draw_time_zoom_pane(
             Style::default().fg(ctx.theme.dim),
         )),
         Some(step) => {
-            if let Some(row) = app.selected_path.as_deref().and_then(|p| by_path.get(p)) {
+            let selected_row = app.selected_path.as_deref().and_then(|p| by_path.get(p));
+            if let Some(row) = selected_row {
                 if let (Some(run_start_ts), Some(now_s)) = (
                     screen.axis.start_ts.as_deref(),
                     screen
@@ -4629,12 +4630,23 @@ fn draw_time_zoom_pane(
                         .as_deref()
                         .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now))
                         .unwrap_or(session_start_s);
-                    // The session's own end: its real elapsed time once
-                    // known, `now` while it's still running.
-                    let axis_end_s = step
-                        .elapsed_s
-                        .map_or(now_s, |elapsed| session_start_s + elapsed);
-                    let running = live.is_some();
+                    // Only while the agent is actually running: an
+                    // interrupted run's own leftover `meta.live` (issue
+                    // #637) must not keep the think band, the footer's
+                    // running-tool time or this axis growing forever --
+                    // `step.elapsed_s` alone would, since a cancelled
+                    // step with no `completed_at` reads `now - created_
+                    // at` the same as a running one does.
+                    let running = step.status.kind == StatusKind::Running && live.is_some();
+                    // The session's own end: `now` while it's still
+                    // running, else the row's own real (frozen) span.
+                    let axis_end_s = if running {
+                        now_s
+                    } else {
+                        selected_row
+                            .and_then(|row| row.start_s.zip(row.duration_s))
+                            .map_or(now_s, |(s, d)| s + d)
+                    };
                     if let (Some(view), Some(run_start_ts)) =
                         (transcript_view, run_start_ts.as_deref())
                     {
@@ -4726,15 +4738,22 @@ fn draw_time_zoom_pane(
                     // otherwise add wall-clock time to a call that
                     // isn't running any more, growing for as long as
                     // the TUI stays open.
-                    let running_tool = live.as_deref().and_then(|l| {
-                        let rs = run_start_ts.as_deref()?;
-                        let calls = transcript_view.map(|v| v.calls.as_slice()).unwrap_or(&[]);
-                        let current = l
-                            .current_tool
-                            .as_ref()
-                            .map(|c| (c.name.as_str(), c.started_at.as_str()));
-                        oscilloscope_core::time::running_tool_elapsed_ms(calls, current, now_s, rs)
-                    });
+                    let running_tool = running
+                        .then(|| {
+                            live.as_deref().and_then(|l| {
+                                let rs = run_start_ts.as_deref()?;
+                                let calls =
+                                    transcript_view.map(|v| v.calls.as_slice()).unwrap_or(&[]);
+                                let current = l
+                                    .current_tool
+                                    .as_ref()
+                                    .map(|c| (c.name.as_str(), c.started_at.as_str()));
+                                oscilloscope_core::time::running_tool_elapsed_ms(
+                                    calls, current, now_s, rs,
+                                )
+                            })
+                        })
+                        .flatten();
                     let footer = oscilloscope_core::time::zoom_agent_footer(
                         turns,
                         tool_calls,
@@ -11256,6 +11275,106 @@ mod golden_tests {
         assert!(
             right_after.contains("bash 2.5s"),
             "the busiest tool must come from meta.raw alone: {right_after:?}"
+        );
+    }
+
+    /// Issue #637: an interrupted agent's own `meta.live` is left
+    /// behind with no `completed_at` of its own, and its transcript
+    /// can end in an unmatched `tool_start` (the call that was running
+    /// when the run was cancelled). The think band's own end, the
+    /// footer's running-tool time and the zoom axis must all come
+    /// from the row's own (frozen) status, never keep extending to
+    /// `now`.
+    #[test]
+    fn time_agent_zoom_pane_does_not_grow_for_a_cancelled_agent_with_leftover_live() {
+        let plan = sample_plan();
+        let state = agent_cancelled_state();
+        let transcript = oscilloscope_core::transcript::build_transcript_view(
+            &[json!({
+                "t": "2026-01-01T11:46:50Z", "type": "tool_start", "id": 1,
+                "tool": "bash", "target": "pytest -q"
+            })],
+            false,
+        );
+        let snapshot_at = |now: &str| -> String {
+            let mut model = RunModel::new();
+            let rendered = render::build_folded(
+                "do-thing.yml",
+                "cof",
+                &plan,
+                &mut model,
+                Some(&state),
+                ProcessState::exited(true),
+                11.0,
+                now,
+                &[],
+                true,
+                &Default::default(),
+            );
+            let flat = oscilloscope_core::model::flatten_state(&state);
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                Some("prime.fix"),
+                &Default::default(),
+                now,
+            );
+            let mut app = App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Time;
+            app.selected_path = Some("prime.fix".to_string());
+            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+            let test_tracker = crate::highlight::Tracker::new();
+            let test_ctx = DrawCtx {
+                theme: &test_theme,
+                highlights: &test_tracker,
+                now: Instant::now(),
+                color_mode: ColorMode::TrueColor,
+                theme_banner: None,
+                zone: &test_zone(),
+                no_animation: false,
+            };
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        0,
+                        &mut app,
+                        Some(&state),
+                        &test_ctx,
+                        0,
+                        now,
+                        None,
+                        None,
+                        None,
+                        Some(&time_screen),
+                        Some(&transcript),
+                        &mut CostLayoutCache::default(),
+                    )
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .to_string()
+                .lines()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let right_after = snapshot_at("2026-01-01T11:46:55Z");
+        let hours_later = snapshot_at("2026-01-01T13:00:00Z");
+        assert_eq!(
+            right_after, hours_later,
+            "the zoom pane must not keep growing once the run has ended, even with meta.live left over"
         );
     }
 
