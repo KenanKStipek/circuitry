@@ -188,6 +188,20 @@ pub fn step_ghost_bar(
     })
 }
 
+/// Ghost bars' own shift (DESIGN.md: "shifted by how far ahead or
+/// behind the run is") -- gated on at least
+/// [`crate::history::P50_MIN_RUNS`] ok runs of the *current* document
+/// hash ([`Header::history_same_hash_count`]), not directly on
+/// [`Header::history_vs_usual_s`]: that field stays `None` until some
+/// step has actually finished ([`crate::history::compute_eta`]'s own
+/// anchor), even with plenty of same-hash runs in hand -- before any
+/// step finishes, the anchor is the run's own start, so the shift at
+/// that point really is zero.
+pub fn vs_usual_shift_s(header: &Header) -> Option<f64> {
+    let count = header.history_same_hash_count?;
+    (count >= crate::history::P50_MIN_RUNS).then(|| header.history_vs_usual_s.unwrap_or(0.0))
+}
+
 /// The timeline's own `planned` row (DESIGN.md: "runs from now to the
 /// ETA") -- `None` under the same conditions [`step_ghost_bar`] has
 /// none, since both read the same whole-run ETA.
@@ -253,34 +267,45 @@ fn has_named_loop_passes(path: &str, flat: &BTreeMap<String, NodeMeta>) -> bool 
     flat.keys().any(|k| k.starts_with(&prefix))
 }
 
-fn loop_entry<'a>(path: &str, plan: &'a PlanTree) -> Option<&'a PlanEntryKind> {
-    plan.match_path(path)
-        .and_then(|m| m.entries.first())
-        .map(|e| &e.kind)
-}
-
 /// Whether `path`'s own loop row can be expanded into one row per
-/// pass (DESIGN.md's loop collapse/expand rule).
+/// pass (DESIGN.md's loop collapse/expand rule) -- `row_kind` is the
+/// row's own [`RowKind`], since a named loop's own container row
+/// (`RowKind::Loop`) and an unnamed loop's own body leaf (which
+/// shares its row with the leaf underneath it, DESIGN.md §1.3: "its
+/// own effective_path is exactly its enclosing scope's") need two
+/// different answers.
 fn loop_is_expandable(
     path: &str,
     flat: &BTreeMap<String, NodeMeta>,
     model: &RunModel,
     plan: &PlanTree,
+    row_kind: RowKind,
 ) -> bool {
-    if has_named_loop_passes(path, flat) {
-        return true;
-    }
-    let named = matches!(
-        loop_entry(path, plan),
-        Some(PlanEntryKind::Loop { named: true, .. })
-    );
-    if named {
+    if row_kind == RowKind::Loop {
         // A named loop with no `iter_*` child yet (no pass has
-        // started) has nothing to expand into yet, but isn't an
-        // "unnamed, no ids" row either -- still reads as expandable
-        // once it has at least one pass.
+        // started) has nothing to expand into yet -- still reads as
+        // expandable once it has at least one pass.
+        return has_named_loop_passes(path, flat);
+    }
+    // Not a `RowKind::Loop` row at all -- it might still *be* an
+    // unnamed loop's own body: that loop writes no path segment of
+    // its own, so its own `PlanEntryKind::Loop` sits at this leaf's
+    // own *parent* path (the control node's own effective path,
+    // identical to its enclosing scope's), not at the leaf's.
+    let Some((parent, _)) = path.rsplit_once('.') else {
+        return false;
+    };
+    let is_unnamed_loop_body = plan.match_path(parent).is_some_and(|m| {
+        m.entries
+            .iter()
+            .any(|e| matches!(e.kind, PlanEntryKind::Loop { named: false, .. }))
+    });
+    if !is_unnamed_loop_body {
         return false;
     }
+    // Without `--events`, successive passes reuse the same path with
+    // no id to tell them apart (DESIGN.md: "they can't be told
+    // apart, and the loop stays one row").
     model.has_events() && model.step_intervals().iter().any(|i| i.path == path)
 }
 
@@ -302,12 +327,11 @@ pub fn build_time_rows(
     rows.iter()
         .map(|row| {
             let start_s = row_start_s(&row.path, flat, model, run_start_ts);
-            let loop_expandable =
-                row.kind == RowKind::Loop && loop_is_expandable(&row.path, flat, model, plan);
+            let loop_expandable = loop_is_expandable(&row.path, flat, model, plan, row.kind);
             let ghost = if row.status.kind == StatusKind::Pending {
                 let key = crate::history::display_key(&row.path, plan);
                 let stats = key.as_deref().and_then(|k| step_usual.get(k));
-                step_ghost_bar(stats, header.history_vs_usual_s)
+                step_ghost_bar(stats, vs_usual_shift_s(header))
             } else {
                 None
             };
@@ -764,15 +788,18 @@ pub enum VsUsualMark {
 }
 
 /// DESIGN.md's own marks rule: outside p10/p90 with 5 or more runs,
-/// else more than 20% from p50 with 3 or 4.
-pub fn vs_usual_mark(now_s: f64, stats: &StepStats) -> Option<VsUsualMark> {
+/// else more than 20% from p50 with 3 or 4 -- `running` keeps a step
+/// still in progress from ever reading `▼` (faster), since its own
+/// `now_s` is only how far it has *gotten*, not how long it took: it
+/// reads `≈` until it either finishes or passes the upper bound.
+pub fn vs_usual_mark(now_s: f64, stats: &StepStats, running: bool) -> Option<VsUsualMark> {
     let p50 = stats.busy_p50_s?;
     if stats.count >= 5 {
         let p10 = stats.busy_p10_s?;
         let p90 = stats.busy_p90_s?;
         return Some(if now_s > p90 {
             VsUsualMark::Slower
-        } else if now_s < p10 {
+        } else if !running && now_s < p10 {
             VsUsualMark::Faster
         } else {
             VsUsualMark::Usual
@@ -782,7 +809,7 @@ pub fn vs_usual_mark(now_s: f64, stats: &StepStats) -> Option<VsUsualMark> {
         let delta = (now_s - p50) / p50.max(f64::MIN_POSITIVE);
         return Some(if delta > 0.2 {
             VsUsualMark::Slower
-        } else if delta < -0.2 {
+        } else if !running && delta < -0.2 {
             VsUsualMark::Faster
         } else {
             VsUsualMark::Usual
@@ -801,18 +828,34 @@ pub struct VsUsualRow {
 }
 
 /// "earlier versions" (DESIGN.md: "After an edit, the title reads
-/// `vs usual · earlier versions`") -- `true` exactly when there isn't
-/// enough same-hash history for a whole-run ETA, the one condition
-/// [`crate::render::Header::history_vs_usual_s`] is `None` under.
+/// `vs usual · earlier versions`") -- below
+/// [`crate::history::P50_MIN_RUNS`] ok runs of the *current* document
+/// hash, but with pooled step history from other hashes to show
+/// instead (`Header::history_step_usual`'s own "earlier versions"
+/// pooling, issue #649). Not keyed on
+/// [`crate::render::Header::history_vs_usual_s`]: that field is also
+/// `None` before any step has finished even with plenty of same-hash
+/// runs ([`vs_usual_shift_s`]'s own doc comment), and it is `None`
+/// with history off entirely, which must show no title suffix at all
+/// -- both read `false` here instead.
 pub fn vs_usual_is_earlier_versions(header: &Header) -> bool {
-    header.history_vs_usual_s.is_none()
+    header
+        .history_same_hash_count
+        .is_some_and(|count| count < crate::history::P50_MIN_RUNS)
+        && !header.history_step_usual.is_empty()
 }
 
 /// Issue #650's own "too few runs" case (DESIGN.md: "`history: 1 of 3
 /// runs of this version`") -- `Some((count, threshold))` below
-/// [`crate::history::P50_MIN_RUNS`] same-hash ok runs, read straight
-/// from [`Header::history_same_hash_count`].
+/// [`crate::history::P50_MIN_RUNS`] same-hash ok runs, but only when
+/// there is no pooled step history to fall back on at all
+/// (`Header::history_step_usual`'s empty): with some, the "earlier
+/// versions" rows show instead, even for a same-hash count of zero
+/// right after an edit.
 pub fn vs_usual_too_few_runs(header: &Header) -> Option<(usize, usize)> {
+    if !header.history_step_usual.is_empty() {
+        return None;
+    }
     let count = header.history_same_hash_count?;
     (count < crate::history::P50_MIN_RUNS).then_some((count, crate::history::P50_MIN_RUNS))
 }
@@ -1079,9 +1122,9 @@ mod tests {
             busy_p90_s: Some(140.0),
             ..Default::default()
         };
-        assert_eq!(vs_usual_mark(150.0, &stats), Some(VsUsualMark::Slower));
-        assert_eq!(vs_usual_mark(70.0, &stats), Some(VsUsualMark::Faster));
-        assert_eq!(vs_usual_mark(100.0, &stats), Some(VsUsualMark::Usual));
+        assert_eq!(vs_usual_mark(150.0, &stats, false), Some(VsUsualMark::Slower));
+        assert_eq!(vs_usual_mark(70.0, &stats, false), Some(VsUsualMark::Faster));
+        assert_eq!(vs_usual_mark(100.0, &stats, false), Some(VsUsualMark::Usual));
     }
 
     #[test]
@@ -1091,9 +1134,9 @@ mod tests {
             busy_p50_s: Some(100.0),
             ..Default::default()
         };
-        assert_eq!(vs_usual_mark(130.0, &stats), Some(VsUsualMark::Slower));
-        assert_eq!(vs_usual_mark(70.0, &stats), Some(VsUsualMark::Faster));
-        assert_eq!(vs_usual_mark(110.0, &stats), Some(VsUsualMark::Usual));
+        assert_eq!(vs_usual_mark(130.0, &stats, false), Some(VsUsualMark::Slower));
+        assert_eq!(vs_usual_mark(70.0, &stats, false), Some(VsUsualMark::Faster));
+        assert_eq!(vs_usual_mark(110.0, &stats, false), Some(VsUsualMark::Usual));
     }
 
     #[test]
@@ -1103,24 +1146,94 @@ mod tests {
             busy_p50_s: Some(100.0),
             ..Default::default()
         };
-        assert_eq!(vs_usual_mark(130.0, &stats), None);
+        assert_eq!(vs_usual_mark(130.0, &stats, false), None);
     }
 
     #[test]
-    fn vs_usual_is_earlier_versions_exactly_when_no_whole_run_shift_exists() {
+    fn vs_usual_mark_keeps_a_running_step_from_reading_faster_too_soon() {
+        let stats = StepStats {
+            count: 5,
+            busy_p50_s: Some(100.0),
+            busy_p10_s: Some(80.0),
+            busy_p90_s: Some(140.0),
+            ..Default::default()
+        };
+        // Below p10 but still running: `≈`, not `▼` -- it hasn't
+        // actually finished faster than usual, it just hasn't gotten
+        // there yet.
+        assert_eq!(vs_usual_mark(70.0, &stats, true), Some(VsUsualMark::Usual));
+        // Past p90 while still running is genuinely slower already.
+        assert_eq!(vs_usual_mark(150.0, &stats, true), Some(VsUsualMark::Slower));
+    }
+
+    fn stats_usual(busy_p50: f64) -> StepStats {
+        StepStats {
+            count: 5,
+            busy_p50_s: Some(busy_p50),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn vs_usual_is_earlier_versions_below_the_threshold_with_pooled_history() {
         let mut header = header_with(Some("t0"), None);
+        header.history_same_hash_count = Some(1);
+        header
+            .history_step_usual
+            .insert("plan".to_string(), stats_usual(10.0));
         assert!(vs_usual_is_earlier_versions(&header));
-        header.history_vs_usual_s = Some(5.0);
+    }
+
+    #[test]
+    fn vs_usual_is_earlier_versions_is_false_with_enough_same_hash_runs() {
+        let mut header = header_with(Some("t0"), None);
+        header.history_same_hash_count = Some(3);
+        header
+            .history_step_usual
+            .insert("plan".to_string(), stats_usual(10.0));
         assert!(!vs_usual_is_earlier_versions(&header));
     }
 
     #[test]
-    fn vs_usual_too_few_runs_reads_below_the_threshold() {
+    fn vs_usual_is_earlier_versions_is_false_with_history_off() {
+        let header = header_with(Some("t0"), None);
+        assert_eq!(header.history_same_hash_count, None);
+        assert!(!vs_usual_is_earlier_versions(&header));
+    }
+
+    #[test]
+    fn vs_usual_too_few_runs_reads_below_the_threshold_with_no_pooled_history() {
         let mut header = header_with(Some("t0"), None);
         header.history_same_hash_count = Some(1);
         assert_eq!(vs_usual_too_few_runs(&header), Some((1, 3)));
         header.history_same_hash_count = Some(3);
         assert_eq!(vs_usual_too_few_runs(&header), None);
+    }
+
+    #[test]
+    fn vs_usual_too_few_runs_is_none_right_after_an_edit_with_pooled_history() {
+        let mut header = header_with(Some("t0"), None);
+        header.history_same_hash_count = Some(0);
+        header
+            .history_step_usual
+            .insert("plan".to_string(), stats_usual(10.0));
+        assert_eq!(vs_usual_too_few_runs(&header), None);
+    }
+
+    #[test]
+    fn vs_usual_shift_s_is_zero_before_any_step_has_finished() {
+        let mut header = header_with(Some("t0"), None);
+        header.history_same_hash_count = Some(5);
+        assert_eq!(header.history_vs_usual_s, None);
+        assert_eq!(vs_usual_shift_s(&header), Some(0.0));
+    }
+
+    #[test]
+    fn vs_usual_shift_s_is_none_below_the_same_hash_threshold() {
+        let mut header = header_with(Some("t0"), None);
+        header.history_same_hash_count = Some(1);
+        header.history_vs_usual_s = Some(20.0);
+        assert_eq!(vs_usual_shift_s(&header), None);
     }
 
     #[test]
@@ -1318,8 +1431,105 @@ mod tests {
         assert_eq!((p1_start, p1_start + p1_dur), (10.0, 30.0));
     }
 
+    /// An unnamed loop's own body never gets a `RowKind::Loop` row
+    /// of its own (DESIGN.md §1.3) -- it shares its leaf's row and
+    /// path, so a real compiled plan's `PlanEntryKind::Loop` for it
+    /// sits at the leaf's own *parent* path, not the leaf's.
+    fn unnamed_loop_plan() -> PlanTree {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopFlow, LoopSpec, NodeKind, OnError, Op, ParamNode, Program,
+            Region, ToolOp,
+        };
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone();
+        let body_path = loop_path.clone().push_name("u_nap");
+        let tool = Op {
+            path: body_path,
+            name: Some("u_nap".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+                prompt_file: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::Loop {
+                        name: None,
+                        spec: LoopSpec::Each {
+                            in_path: "prime.items".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool],
+                            overlay: true,
+                        }),
+                        flow: LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    fn tool_row(path: &str) -> Row {
+        Row {
+            path: path.to_string(),
+            depth: 1,
+            label: "u_nap".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
     #[test]
-    fn an_unnamed_loops_passes_expand_by_event_id_when_events_are_flowing() {
+    fn an_unnamed_loops_body_leaf_expands_by_event_id_when_events_are_flowing() {
+        let plan = unnamed_loop_plan();
         let flat = BTreeMap::new();
         let mut model = RunModel::new();
         model.observe_event(&crate::observe::Event::Start {
@@ -1348,10 +1558,14 @@ mod tests {
             ms: Some(7_000),
             error: None,
         });
-        let plan = PlanTree::empty();
         let header = header_with(Some("2026-01-01T00:00:00Z"), None);
-        let rows = vec![loop_row("prime.u_nap")];
+        let rows = vec![tool_row("prime.u_nap")];
         let time_rows = build_time_rows(&rows, &flat, &model, &plan, &header, &BTreeMap::new());
+        assert_eq!(
+            time_rows[0].kind,
+            RowKind::Tool,
+            "an unnamed loop's body never gets its own RowKind::Loop row"
+        );
         assert!(time_rows[0].loop_expandable);
 
         let passes = expand_loop(
@@ -1367,12 +1581,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unnamed_loop_with_no_events_stays_one_row() {
+    fn an_unnamed_loops_body_leaf_with_no_events_stays_one_row() {
+        let plan = unnamed_loop_plan();
         let flat = BTreeMap::new();
         let model = RunModel::new();
-        let plan = PlanTree::empty();
         let header = header_with(Some("2026-01-01T00:00:00Z"), None);
-        let rows = vec![loop_row("prime.u_nap")];
+        let rows = vec![tool_row("prime.u_nap")];
         let time_rows = build_time_rows(&rows, &flat, &model, &plan, &header, &BTreeMap::new());
         assert!(!time_rows[0].loop_expandable);
     }

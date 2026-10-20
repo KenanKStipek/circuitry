@@ -1164,9 +1164,9 @@ impl RunModel {
     }
 
     /// Every interval logged so far (issue #649's history record) --
-    /// at most [`MAX_STEP_INTERVALS`]; [`RunModel::overflowed_pass_counts`]
-    /// (private, folded into the record by the caller) covers the rest,
-    /// by path, with no timing.
+    /// at most [`MAX_STEP_INTERVALS`]; [`RunModel::overflowed_minute_counts`]
+    /// and [`RunModel::overflowed_total_passes`] cover the rest, by
+    /// clock minute and in total, with no per-path timing.
     pub fn step_intervals(&self) -> &[StepInterval] {
         &self.step_intervals
     }

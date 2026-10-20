@@ -129,7 +129,7 @@ impl RowKind {
         }
     }
 
-    fn is_leaf(self) -> bool {
+    pub(crate) fn is_leaf(self) -> bool {
         matches!(
             self,
             RowKind::Tool | RowKind::Prompt | RowKind::Use | RowKind::Yield | RowKind::Reflector

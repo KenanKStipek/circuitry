@@ -1639,7 +1639,7 @@ fn build_vs_usual_pane(
                 None => continue,
             }
         };
-        let Some(mark) = crate::time::vs_usual_mark(now_s, stats) else {
+        let Some(mark) = crate::time::vs_usual_mark(now_s, stats, running) else {
             continue;
         };
         vs_rows.push(TimeVsUsualRow {
