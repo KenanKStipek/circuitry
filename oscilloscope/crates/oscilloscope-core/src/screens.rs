@@ -1477,6 +1477,13 @@ pub struct TimeVsUsualPane {
     pub finish_ts: Option<String>,
     pub usual_low_ts: Option<String>,
     pub usual_high_ts: Option<String>,
+    /// The current hash's own ok-run count normally; under "earlier
+    /// versions" (`earlier_versions`), the largest pooled count among
+    /// the rows actually shown instead -- never the current hash's
+    /// count there, which is always below the threshold by
+    /// definition and would read `from 0 runs` for figures pooled
+    /// from other versions entirely. `None` when there is nothing
+    /// meaningful to show.
     pub from_runs: Option<usize>,
 }
 
@@ -1678,7 +1685,11 @@ pub fn build_time_screen(
                                     s,
                                     e,
                                     is_agent,
-                                    if i.ok { StatusKind::Done } else { StatusKind::Failed },
+                                    if i.ok {
+                                        StatusKind::Done
+                                    } else {
+                                        StatusKind::Failed
+                                    },
                                 )
                             })
                             .collect();
@@ -1811,6 +1822,14 @@ fn build_vs_usual_pane(
         .map(|r| format!("{}.", r.path))
         .collect();
     let mut vs_rows = Vec::new();
+    // "earlier versions" pools a different count per step (issue
+    // #650) -- the largest pooled count among the rows actually shown
+    // stands in for the footer's own `from N runs`, since `header.
+    // history_same_hash_count` is the *current* hash's own count,
+    // always below the threshold whenever `earlier_versions` is true
+    // by definition, and would otherwise read "from 0 runs" for
+    // figures that are not from 0 runs at all.
+    let mut pooled_run_count: Option<usize> = None;
     for row in rows {
         if loop_prefixes
             .iter()
@@ -1846,6 +1865,7 @@ fn build_vs_usual_pane(
         let Some(mark) = crate::time::vs_usual_mark(now_s, stats, running) else {
             continue;
         };
+        pooled_run_count = Some(pooled_run_count.unwrap_or(0).max(stats.count));
         vs_rows.push(TimeVsUsualRow {
             path: row.path.clone(),
             label: row.label.clone(),
@@ -1867,7 +1887,11 @@ fn build_vs_usual_pane(
         finish_ts,
         usual_low_ts: header.history_eta_low_ts.clone(),
         usual_high_ts: header.history_eta_high_ts.clone(),
-        from_runs: header.history_same_hash_count,
+        from_runs: if earlier_versions {
+            pooled_run_count
+        } else {
+            header.history_same_hash_count
+        },
     }
 }
 
@@ -3477,6 +3501,71 @@ mod tests {
             busy_p50_s: Some(busy_p50),
             ..Default::default()
         }
+    }
+
+    /// "earlier versions" means below the current hash's own
+    /// run-count threshold, so `header.history_same_hash_count`
+    /// alone would always read `from 0 runs` here -- the footer must
+    /// instead read however many runs the pooled figures it is
+    /// actually showing came from.
+    #[test]
+    fn build_vs_usual_pane_reads_the_pooled_count_under_earlier_versions_not_zero() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"
+            },
+            "nap": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z",
+                "provider": "shell"
+            }}
+        }});
+        let mut rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+            10.0,
+            "2026-01-01T00:00:10Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        rendered.header.history_same_hash_count = Some(0);
+        rendered.header.history_step_usual.insert(
+            "nap".to_string(),
+            crate::history::StepStats {
+                count: 7,
+                busy_p50_s: Some(10.0),
+                ..Default::default()
+            },
+        );
+        let flat = flat_from(state.clone());
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:10Z",
+        );
+        assert!(screen.vs_usual.earlier_versions);
+        assert!(
+            !screen.vs_usual.rows.is_empty(),
+            "the pooled row must show: {:?}",
+            screen.vs_usual.rows
+        );
+        assert_eq!(
+            screen.vs_usual.from_runs,
+            Some(7),
+            "must read the pooled count the figures actually came from, never the current hash's 0 runs"
+        );
     }
 
     #[test]

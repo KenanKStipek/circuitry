@@ -3544,10 +3544,11 @@ fn time_layout(
     let show_columns = frame_width >= thresholds::TIME_START_DURATION_COLUMN_MIN_WIDTH;
     let label_width = 22usize.min((area_width as usize).saturating_sub(10));
     // A row reads `label_width` + 1 (the gutter space) + the bar,
-    // plus 18 more (`"  " + 9 + 7`) when the start/duration columns
-    // are shown -- all inside the box's own inner width, 2 columns
-    // narrower than `area_width` for its left/right border.
-    let column_width = if show_columns { 18 } else { 0 };
+    // plus 19 more (`"  " + 9 + 7` + a trailing space before the
+    // border) when the start/duration columns are shown -- all
+    // inside the box's own inner width, 2 columns narrower than
+    // `area_width` for its left/right border.
+    let column_width = if show_columns { 19 } else { 0 };
     let bar_width = (area_width as usize)
         .saturating_sub(label_width + 1 + column_width + 2)
         .max(4);
@@ -4260,7 +4261,7 @@ fn draw_time_timeline(
                         .map(oscilloscope_core::format::format_duration)
                         .unwrap_or_default();
                     spans.push(Span::styled(
-                        format!("  {start_text:<9}{duration_text:>7}"),
+                        format!("  {start_text:<9}{duration_text:>7} "),
                         Style::default().fg(ctx.theme.dim),
                     ));
                 }
@@ -4318,7 +4319,7 @@ fn draw_time_timeline(
                         .map(oscilloscope_core::format::format_duration)
                         .unwrap_or_default();
                     pass_spans.push(Span::styled(
-                        format!("  {start_text:<9}{duration_text:>7}"),
+                        format!("  {start_text:<9}{duration_text:>7} "),
                         Style::default().fg(ctx.theme.dim),
                     ));
                 }
@@ -4361,7 +4362,7 @@ fn draw_time_timeline(
                         oscilloscope_core::format::format_duration(ghost.end_s - ghost.start_s)
                     );
                     spans.push(Span::styled(
-                        format!("  {eta_text:<9}{dur_text:>7}"),
+                        format!("  {eta_text:<9}{dur_text:>7} "),
                         Style::default().fg(ctx.theme.dim),
                     ));
                 }
@@ -4968,7 +4969,10 @@ fn draw_time_vs_usual_pane(
     // with the usual truncation rather than pushing the fixed columns
     // past it.
     let inner_width = (area.width as usize).saturating_sub(2);
-    let label_width = inner_width.saturating_sub(21);
+    // `now`/`p50`/the mark take 10 + 10 + 1 columns; the extra 1
+    // reserves a gutter space so a full-width label never runs
+    // straight into the `now` column with nothing between them.
+    let label_width = inner_width.saturating_sub(22);
     // `build_vs_usual_pane` has no view of the user's own collapse or
     // filter state -- it must list exactly the timeline's own visible
     // rows (DESIGN.md), so a row collapsed with `←`, or hidden by `/`
@@ -5005,7 +5009,7 @@ fn draw_time_vs_usual_pane(
             let p50_text = oscilloscope_core::format::format_duration(row.p50_s);
             let label = truncate_label(&row.label, label_width);
             lines.push(Line::from(format!(
-                "{label:<label_width$}{now_text:<10}{p50_text:<10}{mark}"
+                "{label:<label_width$} {now_text:<10}{p50_text:<10}{mark}"
             )));
         }
         let hhmm = |ts: &str| {
@@ -5086,7 +5090,8 @@ fn draw_time_plain_list(
             p
         }
     });
-    let selected_idx = effective_selected_path.and_then(|p| visible.iter().position(|r| r.path == p));
+    let selected_idx =
+        effective_selected_path.and_then(|p| visible.iter().position(|r| r.path == p));
     let viewport = (area.height as usize).max(1);
     app.tree_viewport = viewport;
     let line_counts = vec![1usize; visible.len()];

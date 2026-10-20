@@ -387,8 +387,7 @@ pub fn build_time_rows(
                             // as `?` until the last pass finishes,
                             // with the one in progress not counted
                             // among `done`.
-                            total: (row.status.kind != StatusKind::Running)
-                                .then_some(count as u64),
+                            total: (row.status.kind != StatusKind::Running).then_some(count as u64),
                             eta_s: None,
                         }),
                     )
@@ -899,6 +898,14 @@ pub fn in_flight_heights(
     let round_ms = |t: f64| (t * 1000.0).round() / 1000.0;
     let mut events: Vec<(f64, InFlightEdge)> = Vec::with_capacity(intervals.len() * 2);
     for &(start, end) in intervals {
+        // A non-finite edge (never produced by a real input) sorts
+        // next to itself under `total_cmp` but compares false to
+        // every other value under `==`, which would stall the sweep
+        // below forever looking for a match that's already past --
+        // skipped here instead of ever reaching it.
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
         let start = round_ms(start.clamp(axis_start_s, axis_end_s));
         let end = round_ms(end.clamp(axis_start_s, axis_end_s));
         if end <= start {
@@ -1795,6 +1802,19 @@ mod tests {
         let intervals = vec![(0.0, 3.589970), (3.590000, 10.0)];
         let heights = in_flight_heights(0.0, 10.0, 10, &intervals);
         assert_eq!(heights.iter().copied().max(), Some(1), "{heights:?}");
+    }
+
+    /// A non-finite edge (never produced by a real input) must be
+    /// skipped, not left to stall the sweep: it sorts into the event
+    /// list under `total_cmp` but never compares equal to anything
+    /// under `==`, so the loop that walks events sharing one instant
+    /// would spin forever looking for a match if this weren't
+    /// filtered out first.
+    #[test]
+    fn in_flight_heights_skips_a_non_finite_edge_without_hanging() {
+        let intervals = vec![(0.0, 10.0), (f64::NAN, 5.0), (3.0, f64::NAN), (2.0, 8.0)];
+        let heights = in_flight_heights(0.0, 10.0, 10, &intervals);
+        assert_eq!(heights.iter().copied().max(), Some(2), "{heights:?}");
     }
 
     /// Three intervals overlap at once, and a fourth starts exactly
