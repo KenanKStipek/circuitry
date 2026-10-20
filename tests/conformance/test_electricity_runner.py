@@ -370,7 +370,7 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
 def test_a_date_as_a_dict_key_exits_nonzero_on_both_engines_with_no_out(
     tmp_path: Path, electricity_binary: Path | None
 ) -> None:
-    """Issue #512 review finding 3: `default=`/`dumps_default_str` is never
+    """Issue #512's review: `default=`/`dumps_default_str` is never
     consulted for a dict *key* (`json.dumps` doesn't either), so an
     unquoted YAML 1.1 date used as one still fails state serialization --
     with no `--out` to redirect to, `cof run --json` crashes uncaught

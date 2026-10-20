@@ -235,7 +235,7 @@ class TestCancellation:
 
 class TestSignalResetSkipsAlreadyIgnored:
     def test_forked_child_leaves_an_inherited_sig_ign_ignored(self, monkeypatch):
-        """#357 review finding 2: under `nohup`, `cof`'s own SIGHUP is
+        """Issue #357: under `nohup`, `cof`'s own SIGHUP is
         `SIG_IGN` on entry, and the sandboxed child shares its process
         group, so a hangup reaches the child too -- the child must leave
         an already-ignored signal ignored rather than resetting it to

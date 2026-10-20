@@ -84,7 +84,7 @@ def test_redact_host_url_leaves_a_plain_url_untouched() -> None:
 
 
 def test_redact_host_url_coerces_a_non_string_value_with_str() -> None:
-    """Review finding F8 (issue #515): a misconfigured non-string
+    """Issue #515: a misconfigured non-string
     `base_url`/`expo_url` (`runtime.adapters.ollama.base_url: 5`) must
     still produce a `host:` requirement, not crash the `check()` that is
     already reporting a problem -- `urlsplit` requires a string or bytes

@@ -567,7 +567,7 @@ def _interrupted_dynamic_orchestration(tmp_path: Path) -> tuple[Path, Path]:
     step does. Returns (orch_path, started_marker) for the slow step.
 
     Chain flow (not tree) on purpose: this reproduces a
-    follow-up finding on #356, not the parallel-stopping bug above —
+    follow-up case from issue #356, not the parallel-stopping bug above —
     an interrupted *named dynamic*'s own ``meta.error`` must never be
     empty, regardless of its ``flow``, or `cof run --resume` reads it as
     finished and skips every child inside it, including the ones that

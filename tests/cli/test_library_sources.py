@@ -521,7 +521,7 @@ def test_is_cache_path_false_when_no_sources_configured() -> None:
 def test_is_cache_path_true_for_a_case_altered_spelling_of_the_same_cache_dir(
     tmp_path: Path,
 ) -> None:
-    """Review finding (#337): the check must compare directory *identity*,
+    """Issue #337: the check must compare directory *identity*,
     not path strings — `Path.resolve()` follows symlinks but does not fix
     letter case, so on a case-insensitive filesystem (macOS's default) a
     caller must not be able to skip the gate by spelling the same cache

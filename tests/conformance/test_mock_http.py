@@ -108,7 +108,7 @@ def test_a_request_that_does_not_match_the_next_matcher_gets_a_diagnostic_respon
 
 
 def test_a_stalled_connection_does_not_block_a_second_connection(tmp_path: Path) -> None:
-    """PR #455 review finding P2-6: a single-threaded server handles one
+    """PR #455's review: a single-threaded server handles one
     connection fully before noticing a second one -- a pooled client that
     keeps one connection open (an incomplete request, here) would hang a
     second, independent connection until the first finishes or times out.

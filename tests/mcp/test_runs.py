@@ -961,7 +961,7 @@ def test_two_unnamed_tree_loops_in_a_row_complete_through_run_manager(
     that reaches `Store.fire_branch_settled` with a `None` name for real.
     Before the `own_path` fallback, `effect_path(None)` raised inside the
     loop's own `finally`, which cancelled the remaining passes and failed
-    the whole run (#475 review finding 1). Two such loops back to back
+    the whole run (issue #475). Two such loops back to back
     must not confuse `RunManager`'s settle-point accounting either."""
     p = _write_yml(tmp_path, "two_unnamed_trees.yml", """
         model: claude-sonnet-4

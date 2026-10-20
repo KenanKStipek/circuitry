@@ -111,7 +111,7 @@ def test_totals_count_a_use_childs_effects_even_in_declared_outputs_mode(
     """A ``use`` child with declared ``outputs:`` (no ``record_children``)
     never leaves its own effects in the final state — only the mapped
     output value does — but every one of its effects still ran and still
-    fired ``effect_complete`` namespaced under the parent (#331 finding 4).
+    fired ``effect_complete`` namespaced under the parent (issue #331).
     Totals accumulated from that stream see them; a post-hoc walk of the
     finished state tree cannot.
     """
@@ -201,7 +201,7 @@ def test_totals_are_already_written_when_on_run_failure_plugins_see_the_state(
 ) -> None:
     """``on_run_success`` plugins could already read ``last_run.totals``;
     an ``on_run_failure`` plugin could not, because totals used to be
-    written only *after* that hook ran (#331 finding 11).
+    written only *after* that hook ran (issue #331).
     """
     import circuitry.cli.runtime_shim as runtime_shim
 

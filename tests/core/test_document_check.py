@@ -112,8 +112,8 @@ def test_unknown_keys_in_nested_effects_are_found() -> None:
 
 def test_near_miss_key_inside_a_dynamics_finally_is_an_error() -> None:
     """A typo on the exact key `finally:` exists for (`on_eror` instead of
-    `on_error`) is caught the same way one in `effects` is (#272 review,
-    finding 5) — the near-miss walk used to never enter `finally:` at all."""
+    `on_error`) is caught the same way one in `effects` is (issue #272)
+    — the near-miss walk used to never enter `finally:` at all."""
     orch = {
         "effects": [
             {
