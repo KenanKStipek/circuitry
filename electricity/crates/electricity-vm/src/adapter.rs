@@ -128,7 +128,7 @@ pub struct AdapterError {
 /// module used to keep its own 5-variant copy, justified by a
 /// dependency-direction rule that doesn't actually hold here: this
 /// crate (`electricity-vm`) already depends on `electricity-tools`
-/// (review finding 1 on PR #454).
+/// (PR #454).
 pub use electricity_tools::PyExc;
 
 impl fmt::Display for AdapterError {

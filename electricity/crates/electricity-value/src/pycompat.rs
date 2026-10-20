@@ -17,7 +17,7 @@ use std::fmt;
 
 /// A Python exception class name -- the one canonical copy every
 /// crate that needs to report one builds on (issue #449's gate lane;
-/// review finding 1 on PR #454 named `electricity-tools::PyExc` and
+/// PR #454 named `electricity-tools::PyExc` and
 /// `electricity-vm::adapter::PyExc` as two copies of the same thing,
 /// kept apart by a dependency-direction rule that doesn't actually
 /// hold -- `electricity-vm` already depends on `electricity-tools`).
@@ -215,7 +215,7 @@ impl fmt::Display for PyExc {
 }
 
 /// A failed [`py_int`] coercion -- the Python exception class it would
-/// have raised (review finding 5 on PR #454: a caller that only kept
+/// have raised (PR #454: a caller that only kept
 /// the message text couldn't tell a `ValueError` from the
 /// `OverflowError` a non-finite float raises) plus CPython's own
 /// message text.
