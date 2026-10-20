@@ -703,7 +703,23 @@ pub struct RunModel {
     /// count into `(other)` rather than attributing it to any one
     /// step.
     overflowed_total_passes: u64,
+    /// [`RunModel::step_interval_offsets`]'s own cache: the run start
+    /// it was computed against, and one `(start_s, end_s)` pair per
+    /// `step_intervals` entry parsed so far, in the same order --
+    /// `step_intervals` only ever grows, so a later call need only
+    /// parse the tail that's new since the last one, not run-relative
+    /// seconds from four re-parsed RFC 3339 timestamps per interval
+    /// on every redraw. A `RefCell`, not a `&mut self` method, since
+    /// every caller already holds `&RunModel` alone -- interior to
+    /// this cache alone, no observable state of the model itself ever
+    /// changes because of it.
+    interval_offset_cache: std::cell::RefCell<IntervalOffsetCache>,
 }
+
+/// [`RunModel`]'s own `interval_offset_cache` field: the run start
+/// it was last computed against, and one `(start_s, end_s)` pair per
+/// [`RunModel::step_intervals`] entry parsed so far.
+type IntervalOffsetCache = (Option<String>, Vec<(f64, f64)>);
 
 /// One effect instance's own start/end, as observed either from
 /// events (exact) or from state's own `created_at`/`completed_at`
@@ -767,6 +783,7 @@ impl RunModel {
             recorded_state_intervals: BTreeSet::new(),
             overflowed_minute_counts: BTreeMap::new(),
             overflowed_total_passes: 0,
+            interval_offset_cache: std::cell::RefCell::new((None, Vec::new())),
         }
     }
 
@@ -1169,6 +1186,49 @@ impl RunModel {
     /// clock minute and in total, with no per-path timing.
     pub fn step_intervals(&self) -> &[StepInterval] {
         &self.step_intervals
+    }
+
+    /// `step_intervals()[i]`'s own `(start_s, end_s)`, run-relative to
+    /// `run_start_ts`, for every `i` -- parsed once per interval and
+    /// cached rather than four RFC 3339 timestamps re-parsed (`run_
+    /// start_ts` itself included, twice over) on every call, which a
+    /// per-frame redraw otherwise did for the whole log each time
+    /// (issue #650's events/min strip). A `NaN` entry marks an
+    /// interval whose own timestamp fails to parse, which never
+    /// happens for a real log -- a caller skips it the same way it
+    /// already skips a `duration_seconds` that returned `None`.
+    /// Invalidated whole whenever `run_start_ts` itself changes
+    /// (never, in practice, once a run has one); otherwise only the
+    /// tail past what was already cached is parsed, since `step_
+    /// intervals` only ever grows -- returned as a borrow, not a
+    /// clone, so a caller iterating the whole log costs nothing
+    /// beyond that parse, every frame after the first.
+    pub fn step_interval_offsets(&self, run_start_ts: &str) -> std::cell::Ref<'_, [(f64, f64)]> {
+        {
+            let mut cache = self.interval_offset_cache.borrow_mut();
+            if cache.0.as_deref() != Some(run_start_ts) {
+                cache.0 = Some(run_start_ts.to_string());
+                cache.1.clear();
+            }
+            if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(run_start_ts) {
+                for interval in &self.step_intervals[cache.1.len()..] {
+                    let offsets = (|| {
+                        let s = chrono::DateTime::parse_from_rfc3339(&interval.start_ts).ok()?;
+                        let e = chrono::DateTime::parse_from_rfc3339(&interval.end_ts).ok()?;
+                        Some((
+                            (s - start_dt).num_microseconds()? as f64 / 1_000_000.0,
+                            (e - start_dt).num_microseconds()? as f64 / 1_000_000.0,
+                        ))
+                    })();
+                    cache.1.push(offsets.unwrap_or((f64::NAN, f64::NAN)));
+                }
+            } else {
+                cache
+                    .1
+                    .resize(self.step_intervals.len(), (f64::NAN, f64::NAN));
+            }
+        }
+        std::cell::Ref::map(self.interval_offset_cache.borrow(), |c| c.1.as_slice())
     }
 
     /// How many passes [`RunModel::step_intervals`] has dropped past

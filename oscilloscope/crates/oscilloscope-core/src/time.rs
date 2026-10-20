@@ -616,11 +616,14 @@ pub fn event_points(
     running_starts: &[f64],
 ) -> Vec<(f64, u64)> {
     let mut points: Vec<(f64, u64)> = Vec::new();
-    for interval in model.step_intervals() {
-        if let Some(s) = duration_seconds(run_start_ts, &interval.start_ts) {
+    // `step_interval_offsets` parses each interval's own timestamps
+    // once and caches the result -- the log only grows, so a later
+    // frame parses just its own new tail, not the whole thing again.
+    for &(s, e) in model.step_interval_offsets(run_start_ts).iter() {
+        if !s.is_nan() {
             points.push((s, 1));
         }
-        if let Some(e) = duration_seconds(run_start_ts, &interval.end_ts) {
+        if !e.is_nan() {
             points.push((e, 1));
         }
     }

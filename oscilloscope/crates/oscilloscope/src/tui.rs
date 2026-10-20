@@ -4093,16 +4093,15 @@ fn draw_time_timeline(
     // here (breadcrumbed or not), only as this screen's own
     // `expand_loop` rows, spliced in below exactly when the loop
     // itself is in `app.time_expanded_loops`.
-    let loop_prefixes: Vec<&str> = by_path
+    // The trailing `.` is appended once per loop row here, not once
+    // per (row × loop row) pair inside the filter below -- a `format!`
+    // there cost `O(rows × loop rows)` allocations on every redraw.
+    let loop_prefixes: Vec<String> = by_path
         .values()
         .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-        .map(|r| r.path.as_str())
+        .map(|r| format!("{}.", r.path))
         .collect();
-    let is_under_a_loop = |path: &str| {
-        loop_prefixes
-            .iter()
-            .any(|p| path.starts_with(&format!("{p}.")))
-    };
+    let is_under_a_loop = |path: &str| loop_prefixes.iter().any(|p| path.starts_with(p.as_str()));
     let visible: Vec<&Row> = all_visible
         .into_iter()
         .filter(|r| !is_under_a_loop(&r.path))
@@ -5021,16 +5020,12 @@ fn draw_time_plain_list(
 ) {
     let all_visible = visible_rows(&state.rows, app);
     let (by_path, _) = time_row_groups(&screen.rows);
-    let loop_prefixes: Vec<&str> = by_path
+    let loop_prefixes: Vec<String> = by_path
         .values()
         .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-        .map(|r| r.path.as_str())
+        .map(|r| format!("{}.", r.path))
         .collect();
-    let is_under_a_loop = |path: &str| {
-        loop_prefixes
-            .iter()
-            .any(|p| path.starts_with(&format!("{p}.")))
-    };
+    let is_under_a_loop = |path: &str| loop_prefixes.iter().any(|p| path.starts_with(p.as_str()));
     let visible: Vec<&Row> = all_visible
         .into_iter()
         .filter(|r| !is_under_a_loop(&r.path))
@@ -9265,6 +9260,117 @@ mod golden_tests {
         assert!(
             elapsed < std::time::Duration::from_millis(500),
             "building and drawing the Time screen for a 2000-node real-clock state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
+    }
+
+    /// Issue #650's events/min strip used to re-parse four RFC 3339
+    /// timestamps per logged interval (`run_start_ts` included,
+    /// twice over) on every redraw -- `RunModel::step_interval_
+    /// offsets`'s own cache is what this guards, at the interval
+    /// log's own 50,000-entry cap.
+    #[test]
+    fn time_screen_performance_with_50_000_logged_intervals() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap();
+        for i in 0..50_000i64 {
+            let start = (base + chrono::Duration::milliseconds(10 * i))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let end = (base + chrono::Duration::milliseconds(10 * i + 5))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            model.observe_event(&Event::Start {
+                ts: start,
+                id: Some(i),
+                path: "prime.nap".to_string(),
+            });
+            model.observe_event(&Event::End {
+                ts: end,
+                id: Some(i),
+                path: "prime.nap".to_string(),
+                ok: true,
+                ms: Some(5),
+                error: None,
+            });
+        }
+        assert_eq!(model.step_intervals().len(), 50_000);
+        let state = json!({"prime": {"value": null, "meta": {
+            "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+        }}});
+        let now = (base + chrono::Duration::milliseconds(10 * 50_000))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            500.0,
+            &now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Three redraws, the same way a real TUI session's own poll
+        // loop would call `build_time_screen` again on every tick --
+        // the cache only pays off from the second one on.
+        let start_time = std::time::Instant::now();
+        for _ in 0..3 {
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                None,
+                &Default::default(),
+                &now,
+            );
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        0,
+                        &mut app,
+                        Some(&state),
+                        &test_ctx,
+                        0,
+                        &now,
+                        None,
+                        None,
+                        None,
+                        Some(&time_screen),
+                        None,
+                        &mut CostLayoutCache::default(),
+                    )
+                })
+                .unwrap();
+        }
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "building the strips and drawing three times over a 50,000-interval log took {elapsed:?}, a generous bound even for a debug build"
         );
     }
 
