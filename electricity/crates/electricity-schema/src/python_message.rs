@@ -286,7 +286,7 @@ pub(crate) fn json_to_value(value: &JsonValue) -> Value {
                 Value::from(i)
             } else if n.is_u64() || n.is_i64() {
                 // A `u64` (or arbitrary-precision integer) past
-                // `i64::MAX` -- `u as i64` wraps around silently
+                // `i64::MAX` -- `u as i64` wraps around silently;
                 // parse the exact decimal text instead,
                 // the same big-int fast path `electricity_value::
                 // IntValue::parse_decimal` already gives every other

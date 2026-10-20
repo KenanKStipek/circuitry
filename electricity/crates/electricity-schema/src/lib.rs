@@ -1789,7 +1789,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn an_unrecognized_schema_uri_defaults_to_the_latest_draft() {
-        // Python's
+        // Issue #498's own follow-up: Python's
         // own `validator_for` falls back to the latest draft for *any*
         // `$schema` it doesn't recognize verbatim (an unversioned/old
         // URI included), with a warning, never an error -- not a
@@ -1802,7 +1802,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn an_unknown_keyword_is_an_annotation_never_a_reason_to_fall_back() {
-        // Python's
+        // Issue #498's own follow-up: Python's
         // own `Draft202012Validator.VALIDATORS` dict has no `dependencies`
         // entry at all (a legacy Draft ≤7 keyword) and obviously no
         // `descripton` (a typo) -- both are silently ignored, never
@@ -1815,7 +1815,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn a_nested_id_changing_the_ref_base_routes_to_crate_authority() {
-        // This
+        // Issue #498's own follow-up: this
         // engine's own `resolve_ref` only ever resolves a `"#/..."`
         // pointer against the *document* root, never a nested `$id`
         // subtree's own base -- routed to the crate (which does resolve
@@ -1837,7 +1837,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn multiple_of_a_float_divisor_against_nan_is_a_generic_failure() {
-        // Python's
+        // Issue #498's own follow-up: Python's
         // own `_keywords.multipleOf` calls `int(instance / dB)` for a
         // `float` divisor -- `int(nan)` is an uncaught `ValueError`, not
         // an ordinary `ValidationError`, so `core/prompt.py` never adds
