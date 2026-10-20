@@ -212,8 +212,7 @@ def test_finally_runs_when_a_use_child_document_finishes(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cancellation (#272 review, finding 1) and a finally failure's own on_error
-# (finding 2).
+# Cancellation (issue #272) and a finally failure's own on_error.
 # ---------------------------------------------------------------------------
 
 

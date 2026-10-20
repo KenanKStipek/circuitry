@@ -41,8 +41,8 @@ ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 #: review: letting every failure case through unconditionally would mask
 #: a regression that brings a refusal back for content this build is
 #: actually supposed to run and fail on its own terms). Any other case
-#: that hits this marker fails loudly, never skips (PR #441 review
-#: finding 6: a case electricity wrongly refuses this way is a real
+#: that hits this marker fails loudly, never skips (PR #441: a
+#: case electricity wrongly refuses this way is a real
 #: regression).
 PREVIEW_MESSAGE_MARKER = "is a preview and can't run this orchestration"
 

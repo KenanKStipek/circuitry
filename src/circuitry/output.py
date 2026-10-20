@@ -106,7 +106,7 @@ T = TypeVar("T")
 #: time. Ownership is decided and released while holding the lock, but the
 #: live region itself is entered and exited *outside* the lock — holding a
 #: non-reentrant lock across a caller's ``with`` body would deadlock the
-#: next live region requested on the same thread (#271/#331 finding 1).
+#: next live region requested on the same thread (#271/#331).
 #: Whichever region claims the console first wins; everything that would
 #: nest under it is silently skipped (``None``, no crash, no garbled
 #: output) rather than queued or raised.

@@ -35,7 +35,7 @@ ORCHESTRATION = (
 )
 
 #: An `env_vars get` of a name only the `.env` file ever defines --
-#: the visible, running-document effect #471 review finding 5 named
+#: the visible, running-document effect issue #471 named
 #: (`env_vars` is implemented on both engines at HEAD, not the stub the
 #: PR body once described), proving the variable reaches a tool call,
 #: not just config resolution.
