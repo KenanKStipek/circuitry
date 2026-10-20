@@ -673,14 +673,21 @@ pub struct RunModel {
     /// `step_intervals` entry by `observe`'s own state-based capture
     /// -- the dedup key for that half of the log.
     recorded_state_intervals: BTreeSet<(String, String)>,
-    /// Once [`MAX_STEP_INTERVALS`] entries have been logged, further
-    /// passes are only counted here, by path -- their own timing is
-    /// lost, so they contribute to a step's `passes` count but not to
-    /// its `busy_s` (DESIGN.md's bound is meant for a run with far
-    /// more passes than any real document's history needs; the Time
-    /// screen, issue #650, is the first thing expected to approach
-    /// it).
-    overflowed_pass_counts: BTreeMap<String, u32>,
+    /// Once [`MAX_STEP_INTERVALS`] entries have been logged, a
+    /// dropped pass's own path is no longer kept (issue #649: "then
+    /// keeps only counts per minute") -- just how many of its own
+    /// start/end events fell in each clock minute, keyed by the
+    /// first 16 characters of the timestamp (`"2026-10-08T11:52"`,
+    /// true of both an RFC-3339 event timestamp and state's own
+    /// microsecond-plus-offset one), for the Time screen's events/
+    /// min strip to keep covering a run this large.
+    overflowed_minute_counts: BTreeMap<String, u32>,
+    /// How many passes [`RunModel::step_intervals`] has dropped in
+    /// total past the cap -- since their own paths are no longer
+    /// kept, a caller building a history record folds this whole
+    /// count into `(other)` rather than attributing it to any one
+    /// step.
+    overflowed_total_passes: u64,
 }
 
 /// One effect instance's own start/end, as observed either from
@@ -743,7 +750,8 @@ impl RunModel {
             paths_with_id_events: BTreeSet::new(),
             step_intervals: Vec::new(),
             recorded_state_intervals: BTreeSet::new(),
-            overflowed_pass_counts: BTreeMap::new(),
+            overflowed_minute_counts: BTreeMap::new(),
+            overflowed_total_passes: 0,
         }
     }
 
@@ -1093,13 +1101,20 @@ impl RunModel {
     /// Pushes an events-sourced interval (an id-paired `start`/`end`).
     fn push_step_interval(&mut self, interval: StepInterval) {
         if self.step_intervals.len() >= MAX_STEP_INTERVALS {
-            *self
-                .overflowed_pass_counts
-                .entry(interval.path.clone())
-                .or_insert(0) += 1;
+            self.overflowed_total_passes += 1;
+            self.bump_overflowed_minute(&interval.start_ts);
+            self.bump_overflowed_minute(&interval.end_ts);
             return;
         }
         self.step_intervals.push(interval);
+    }
+
+    /// Counts one dropped interval's own start or end event into its
+    /// clock minute (`overflowed_minute_counts`'s own key, the first
+    /// 16 characters of `ts`).
+    fn bump_overflowed_minute(&mut self, ts: &str) {
+        let minute = ts.get(..16).unwrap_or(ts).to_string();
+        *self.overflowed_minute_counts.entry(minute).or_insert(0) += 1;
     }
 
     /// Pushes a state-sourced interval (`observe`'s own "just finished"
@@ -1141,14 +1156,21 @@ impl RunModel {
         &self.step_intervals
     }
 
-    /// A path's own passes dropped past [`MAX_STEP_INTERVALS`] -- added
-    /// to [`RunModel::step_intervals`]'s own count for that path when a
-    /// caller builds a history record, since neither alone is the true
-    /// total. One entry per path that has had at least one pass
-    /// dropped, including a path with no logged interval at all
-    /// (every one of its passes came after the cap).
-    pub fn overflowed_pass_counts(&self) -> &BTreeMap<String, u32> {
-        &self.overflowed_pass_counts
+    /// How many passes [`RunModel::step_intervals`] has dropped past
+    /// its own cap, in total -- a caller building a history record
+    /// folds this whole count into `(other)`, since no per-path
+    /// breakdown survives the cap any more.
+    pub fn overflowed_total_passes(&self) -> u64 {
+        self.overflowed_total_passes
+    }
+
+    /// Counts of dropped start/end events per clock minute, past
+    /// [`RunModel::step_intervals`]'s own cap -- the Time screen's
+    /// events/min strip's own tail for a run large enough to reach
+    /// it. Keyed by the first 16 characters of the timestamp
+    /// (`"2026-10-08T11:52"`).
+    pub fn overflowed_minute_counts(&self) -> &BTreeMap<String, u32> {
+        &self.overflowed_minute_counts
     }
 
     /// `run_start`'s own `engine` field (issue #649), when `--events`
@@ -2790,5 +2812,107 @@ mod tests {
         // otherwise this test could not actually tell the two rules
         // apart (finding F4).
         assert_ne!((sent, received), (11, 22));
+    }
+
+    /// Issue #650's own seam: an unnamed loop's passes reuse the same
+    /// path, but `--events` still gives each pass its own id, so
+    /// `step_intervals` logs both passes as separate intervals rather
+    /// than overwriting one with the other.
+    #[test]
+    fn step_intervals_pairs_an_unnamed_loops_passes_by_event_id() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5000),
+            error: None,
+        });
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&Event::End {
+            ts: "2026-01-01T00:00:12Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(7000),
+            error: None,
+        });
+        let intervals = model.step_intervals();
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(intervals[0].start_ts, "2026-01-01T00:00:00Z");
+        assert_eq!(intervals[0].end_ts, "2026-01-01T00:00:05Z");
+        assert_eq!(intervals[1].start_ts, "2026-01-01T00:00:05Z");
+        assert_eq!(intervals[1].end_ts, "2026-01-01T00:00:12Z");
+        assert!(intervals.iter().all(|i| i.path == "prime.u_nap"));
+    }
+
+    /// Without `--events`, an unnamed loop's finished pass is only
+    /// ever visible through state's own `created_at`/`completed_at`,
+    /// captured by `observe`'s own "just finished" hook
+    /// (`push_state_interval`) exactly once per `created_at`, even
+    /// though the loop reuses the same path on every pass.
+    #[test]
+    fn step_intervals_from_state_alone_captures_each_passes_own_created_at() {
+        let mut model = RunModel::new();
+        let first = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "u_nap": {"value": "n0", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z", "error": null}}
+        }});
+        model.observe(&first, &PlanTree::empty(), ProcessState::Running);
+        let second = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "u_nap": {"value": "n1", "meta": {"created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z", "error": null}}
+        }});
+        model.observe(&second, &PlanTree::empty(), ProcessState::Running);
+        // Re-observing the same second snapshot again (the TUI's own
+        // redraw tick) must not log the same pass twice.
+        model.observe(&second, &PlanTree::empty(), ProcessState::Running);
+
+        let intervals = model.step_intervals();
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(intervals[0].start_ts, "2026-01-01T00:00:00Z");
+        assert_eq!(intervals[0].end_ts, "2026-01-01T00:00:05Z");
+        assert_eq!(intervals[1].start_ts, "2026-01-01T00:00:05Z");
+        assert_eq!(intervals[1].end_ts, "2026-01-01T00:00:12Z");
+    }
+
+    /// Past [`MAX_STEP_INTERVALS`], a dropped pass no longer keeps
+    /// its own path, only a count per clock minute of its start and
+    /// end events (issue #649: "then keeps only counts per minute") --
+    /// the Time screen's events/min strip's own tail at this scale.
+    #[test]
+    fn step_intervals_past_the_cap_count_by_minute_not_by_path() {
+        let mut model = RunModel::new();
+        for i in 0..(MAX_STEP_INTERVALS + 3) {
+            let id = i as i64 + 1;
+            model.observe_event(&Event::Start {
+                ts: "2026-01-01T00:00:00Z".to_string(),
+                id: Some(id),
+                path: "prime.loop.nap".to_string(),
+            });
+            model.observe_event(&Event::End {
+                ts: "2026-01-01T00:01:00Z".to_string(),
+                id: Some(id),
+                path: "prime.loop.nap".to_string(),
+                ok: true,
+                ms: Some(60_000),
+                error: None,
+            });
+        }
+        assert_eq!(model.step_intervals().len(), MAX_STEP_INTERVALS);
+        assert_eq!(model.overflowed_total_passes(), 3);
+        let minutes = model.overflowed_minute_counts();
+        // Every dropped pass starts at :00:00 and ends at :01:00 --
+        // one bucket per minute, 3 events each (3 dropped passes).
+        assert_eq!(minutes.get("2026-01-01T00:00"), Some(&3));
+        assert_eq!(minutes.get("2026-01-01T00:01"), Some(&3));
     }
 }
