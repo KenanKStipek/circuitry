@@ -125,7 +125,12 @@ fn axis_margin_s(elapsed_s: f64) -> f64 {
 
 /// The timeline's own clock axis (DESIGN.md's "Clock axis"): start to
 /// the later of `now` and the ETA's p90 end (plus a margin) while the
-/// run goes, or start to end once it has one.
+/// run goes, or start to end once it has one. Below the p10/p90 run
+/// threshold, the ETA itself (`history_eta_ts`, gated at a lower run
+/// count) stands in for its own missing p90 -- every pending step
+/// with history still gets a ghost bar from the run's first frame,
+/// rather than only the next one, whose own axis the running row's
+/// bar alone already reached.
 pub fn axis_span(header: &Header, now: &str) -> AxisSpan {
     if let Some(end_ts) = header.run_end_ts.clone() {
         return AxisSpan {
@@ -138,6 +143,7 @@ pub fn axis_span(header: &Header, now: &str) -> AxisSpan {
     let p90_candidate = header
         .history_eta_high_ts
         .clone()
+        .or_else(|| header.history_eta_ts.clone())
         .or_else(|| header.innermost_loop_eta_ts.clone());
     let later_parsed = p90_candidate
         .as_deref()
@@ -1227,7 +1233,22 @@ mod tests {
         assert!(end_dt > p90_dt);
     }
 
-    /// Issue #650's probe: an active loop ETA already a few seconds
+    /// Below the p10/p90 run threshold (3 or 4 ok runs), there's no
+    /// `history_eta_high_ts` at all -- the axis still reaches the
+    /// plain ETA (`history_eta_ts`), not just past `now`, so every
+    /// pending step with history gets a ghost bar from the first
+    /// frame.
+    #[test]
+    fn axis_span_reaches_the_plain_eta_when_there_is_no_p90() {
+        let mut header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        header.history_eta_ts = Some("2026-01-01T00:30:00Z".to_string());
+        let span = axis_span(&header, "2026-01-01T00:05:00Z");
+        let eta_dt = crate::diff::parse_instant("2026-01-01T00:30:00Z").unwrap();
+        let end_dt = crate::diff::parse_instant(&span.end_ts).unwrap();
+        assert!(end_dt > eta_dt);
+    }
+
+    /// An active loop ETA already a few seconds
     /// ahead of now must not get an *additional* full margin stacked
     /// on top of it -- only enough to cover any shortfall below the
     /// usual one, so a run barely any older than its own innermost

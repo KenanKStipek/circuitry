@@ -1746,11 +1746,12 @@ on display, the same rule `build_cost_screen`/`build_flow_screen`
 already follow. `oscilloscope`'s `tui.rs` is the only thing that
 turns any of it into actual columns and styling.
 
-**The clock axis:** start to the later of now and the ETA's p90 end
-(plus a margin proportional to the elapsed span -- about 10% of it,
-floored at 2s, so a run only seconds old doesn't have its own bars
-squeezed into a narrow strip on the left) while the run goes, or
-start to end once it has. `format::clock_tick_seconds` picks the
+**The clock axis:** start to the later of now and the ETA's p90 end,
+or the plain ETA itself below the p10/p90 run threshold where there
+is no p90 yet (plus a margin proportional to the elapsed span --
+about 10% of it, floored at 2s, so a run only seconds old doesn't
+have its own bars squeezed into a narrow strip on the left) while
+the run goes, or start to end once it has. `format::clock_tick_seconds` picks the
 round tick, by spacing alone, from one candidate list -- 5, 10, 15 or
 30 seconds; 1, 2, 5, 10, 15 or 30 minutes; 1 hour; then a whole
 number of hours -- taking the smallest that keeps labels about 10
