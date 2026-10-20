@@ -148,8 +148,8 @@ async fn a_request_is_sent_with_no_default_headers_added() {
         .skip(1)
         .take_while(|line| !line.is_empty())
         .collect();
-    // Title-cased on the wire, urllib's own convention (issue #485
-    // probe finding O5), not the header name's own casing as handed
+    // Title-cased on the wire, urllib's own convention (issue #485),
+    // not the header name's own casing as handed
     // to this function (already title-cased by the caller in
     // practice, but `hyper`'s own `title_case_headers(true)` is what
     // actually enforces it here).
@@ -204,7 +204,7 @@ async fn a_short_body_against_content_length_is_incomplete_read() {
         TimeoutModel::PerOperation(Duration::from_secs(5)),
     )
     .await
-    .expect("a body-phase failure is reported via body_error, not Err -- issue #485 finding 8");
+    .expect("a body-phase failure is reported via body_error, not Err -- issue #485");
     assert!(response.body.is_empty());
     match response.body_error {
         Some(SendError::IncompleteRead { read, expected }) => {
@@ -266,7 +266,7 @@ async fn a_slow_body_past_the_deadline_times_out() {
         TimeoutModel::PerOperation(Duration::from_millis(200)),
     )
     .await
-    .expect("a body-phase failure is reported via body_error, not Err -- issue #485 finding 8");
+    .expect("a body-phase failure is reported via body_error, not Err -- issue #485");
     assert!(response.body.is_empty());
     assert!(matches!(response.body_error, Some(SendError::Timeout)));
 }
@@ -275,7 +275,7 @@ async fn a_slow_body_past_the_deadline_times_out() {
 async fn request_header_names_are_title_cased_on_the_wire() {
     // urllib title-cases every header name it sends
     // (`http.client.HTTPConnection.putheader`); `hyper`'s own default
-    // is lower-case (issue #485 probe finding O5) -- header *order*
+    // is lower-case (issue #485) -- header *order*
     // is not required to match.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -347,7 +347,7 @@ async fn a_proxied_https_request_sends_proxy_authorization_on_the_connect_line_o
     .await
     .unwrap_err();
     // A failed tunnel is a retryable, wrapped `Connect` shape, not
-    // `Other` (issue #485 review finding 7).
+    // `Other` (issue #485).
     assert!(matches!(err, SendError::Connect { .. }));
     let tunnel_request = tunnel_rx.recv().unwrap();
     assert!(tunnel_request.starts_with("CONNECT origin.example:443 HTTP/1.1"));
@@ -357,7 +357,7 @@ async fn a_proxied_https_request_sends_proxy_authorization_on_the_connect_line_o
 #[tokio::test]
 async fn a_total_timeout_catches_several_under_budget_phases_summing_past_it() {
     // `TimeoutModel::Total` is one deadline for the *whole* call
-    // (issue #485 review finding 13), not the same duration reapplied
+    // (issue #485), not the same duration reapplied
     // to every phase: a header wait and a body wait each individually
     // under the total still have to sum under it too. A server that
     // delays once before the headers and once more before the body,
@@ -416,7 +416,7 @@ async fn a_tls_handshake_that_never_responds_is_a_connect_timeout() {
     // urllib's own connect-phase timeout (TCP connect, TLS handshake,
     // the proxy CONNECT tunnel) is the wrapped `SendError::Connect`
     // shape, never the unwrapped `SendError::Timeout` a status-line/
-    // body-read timeout raises (issue #485 review finding 2) -- a
+    // body-read timeout raises (issue #485) -- a
     // server that accepts the TCP connection but never speaks TLS
     // back reproduces the TLS-handshake half of that on loopback.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
