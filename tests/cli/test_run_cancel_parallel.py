@@ -406,7 +406,7 @@ effects:
     assert elapsed < _STOP_BOUND_SECONDS
     assert "Traceback" not in stderr, stderr
     # Isolates this test from the first signal's own (uninterrupted)
-    # cleanup path (#356 review F6): `os._exit` skips writing `--out`
+    # cleanup path (#356): `os._exit` skips writing `--out`
     # entirely, so its presence would mean this test actually exercised a
     # plain re-raised KeyboardInterrupt from inside cleanup rather than
     # the second-signal path it's named for.
@@ -418,7 +418,7 @@ def test_cancel_loop_body_on_error_continue_does_not_start_next_effect(
     tmp_path: Path,
 ) -> None:
     """A branch-level `on_error: continue` must not let a cancelled run's
-    worker start the body's next effect (#356 review F3): `a`'s killed
+    worker start the body's next effect (#356): `a`'s killed
     subprocess is a nonzero exit that `on_error: continue` swallows
     (ToolRuntime.execute returns normally instead of raising), so only an
     explicit cancellation check before `b` — not `a`'s own exception path
@@ -496,7 +496,7 @@ effects:
 @requires_bash
 def test_cancel_finally_with_nested_container_still_runs(tmp_path: Path) -> None:
     """A `finally:` containing its own container (dynamic/loop/use/
-    conditional) must still run in full after a signal (#356 review F1) —
+    conditional) must still run in full after a signal (#356) —
     not abort the moment that nested container's own cancellation check
     sees the already-cancelled token and raises past the rest of the
     `finally:` list.

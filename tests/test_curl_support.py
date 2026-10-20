@@ -560,7 +560,7 @@ def test_curl_supports_retry_after_header_false_when_probe_times_out(
 ) -> None:
     """A hung `curl --version` (SubprocessError, e.g. TimeoutExpired) must
     not escape the probe and break `run_curl` for every caller — and must
-    not block forever either (#357 review N3): a bare `TimeoutExpired`
+    not block forever either (#357): a bare `TimeoutExpired`
     propagating out of `communicate()` through `with proc:` would hit
     `Popen.__exit__`'s own unbounded `self.wait()`, since `__exit__` only
     special-cases `KeyboardInterrupt`, not `TimeoutExpired`. The fix kills

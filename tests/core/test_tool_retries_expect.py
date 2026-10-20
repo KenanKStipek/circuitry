@@ -453,7 +453,7 @@ def test_tool_exhausting_retries_still_records_created_at_and_retries_used(
 def test_effect_complete_observer_sees_retries_used_on_exhausted_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#421 P2-6: retries_used is already on the node by the time
+    """#421: retries_used is already on the node by the time
     effect_complete fires, even on the exhausted-retries failure path —
     pins the ordering `fire_effect_complete` relies on."""
     plugin = MagicMock()

@@ -188,7 +188,7 @@ def test_exhausting_retries_still_records_retries_used() -> None:
 
 
 def test_effect_complete_observer_sees_retries_used_on_exhausted_retry() -> None:
-    """#421 P2-6: retries_used is already on the node by the time
+    """#421: retries_used is already on the node by the time
     effect_complete fires, even on the exhausted-retries failure path —
     pins the ordering `fire_effect_complete` relies on."""
     root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")

@@ -70,7 +70,7 @@ def test_group_on_use_or_reflector_is_also_a_structural_error(
 ) -> None:
     """`use` and `reflector` are containers too — neither dispatches itself,
     so `group:` is just as much an error on them as on loop/dynamic/if
-    (#274 review P2: only loop/dynamic/if were covered before)."""
+    (#274: only loop/dynamic/if were covered before)."""
     orch = {
         "effects": [
             {"type": container_type, "name": "c", "group": "gpu", **extra},
@@ -338,7 +338,7 @@ def test_run_executes_a_grouped_tool_with_a_configured_group(tmp_path: Path) -> 
 def test_run_max_concurrency_actually_limits_leaves_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`run()`-level proof, not just "doesn't crash" (#274 review P2): a
+    """`run()`-level proof, not just "doesn't crash" (#274): a
     `runtime.max_concurrency: 1` config caps a tree loop's own
     `max_concurrency: 3` dispatches to 1 at a time, the whole way through
     `cli.runtime_shim.run`."""

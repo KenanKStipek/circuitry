@@ -265,7 +265,7 @@ def test_use_a_single_failed_attempt_leaves_retries_used_absent(
 def test_effect_complete_observer_sees_retries_used_on_exhausted_retry(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#421 P2-6: retries_used is already on the node by the time
+    """#421: retries_used is already on the node by the time
     effect_complete fires, even on the exhausted-retries failure path --
     pins the ordering `fire_effect_complete` relies on."""
     child_path = _write_orch(
