@@ -57,6 +57,12 @@ pub struct TranscriptView {
     pub calls: Vec<ToolCall>,
     pub tests: Option<TestOutcome>,
     pub last_reply: Option<String>,
+    /// `observe::transcript_tail_truncated`'s own answer for this
+    /// read -- the Time screen's zoom pane (issue #650) dims a
+    /// leading `…` ahead of the earliest band when this is set,
+    /// since the window it tailed doesn't reach back to the
+    /// session's own start.
+    pub truncated: bool,
 }
 
 /// The exact test-runner commands issue #637 names: a `tool_start`
@@ -141,7 +147,7 @@ impl ToolKind {
 /// 64 KiB), and a `tool_start` with no `id` at all, are all skipped
 /// rather than treated as an error -- the same tolerance the tailer
 /// itself has for a cut-off last line or a replaced file.
-pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
+pub fn build_transcript_view(lines: &[Value], truncated: bool) -> TranscriptView {
     let mut calls: Vec<ToolCall> = Vec::new();
     let mut by_id: BTreeMap<u64, usize> = BTreeMap::new();
     let mut max_id: Option<u64> = None;
@@ -225,6 +231,7 @@ pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
         calls,
         tests,
         last_reply,
+        truncated,
     }
 }
 
@@ -242,7 +249,7 @@ mod tests {
         let lines = vec![line(
             json!({"t": "2024-01-01T00:00:00Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}),
         )];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.calls.len(), 1);
         assert!(view.calls[0].is_running());
         assert_eq!(view.tests, Some(TestOutcome::Running));
@@ -254,7 +261,7 @@ mod tests {
             json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}),
             json!({"t": "t1", "type": "tool_end", "id": 1, "ok": true, "ms": 41000}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert!(!view.calls[0].is_running());
         assert_eq!(view.tests, Some(TestOutcome::Ok));
     }
@@ -265,7 +272,7 @@ mod tests {
             json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k timeout"}),
             json!({"t": "t1", "type": "tool_end", "id": 1, "ok": false, "ms": 500}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.tests, Some(TestOutcome::Failed));
     }
 
@@ -277,7 +284,7 @@ mod tests {
             json!({"t": "t2", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k timeout"}),
             json!({"t": "t3", "type": "tool_end", "id": 2, "ok": true, "ms": 500}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.tests, Some(TestOutcome::Ok));
     }
 
@@ -287,14 +294,14 @@ mod tests {
             json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
             json!({"t": "t1", "type": "tool_end", "id": 1, "ok": true, "ms": 5}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.tests, None);
     }
 
     #[test]
     fn a_tool_end_with_no_matching_start_in_this_window_is_skipped() {
         let lines = vec![json!({"t": "t1", "type": "tool_end", "id": 99, "ok": true, "ms": 5})];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert!(view.calls.is_empty());
     }
 
@@ -304,7 +311,7 @@ mod tests {
             json!({"type": "something_else"}),
             json!({"no_type_field": true}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert!(view.calls.is_empty());
         assert_eq!(view.tests, None);
     }
@@ -316,7 +323,7 @@ mod tests {
             json!({"t": "t1", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
             json!({"t": "t2", "type": "tool_end", "id": 1, "ok": true, "ms": 5}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.calls.len(), 2);
         assert!(view.calls[0].stopped);
         assert!(!view.calls[0].is_running());
@@ -334,7 +341,7 @@ mod tests {
             json!({"t": "t0", "type": "reply", "text": "first"}),
             json!({"t": "t1", "type": "reply", "text": "second"}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.last_reply, Some("second".to_string()));
     }
 

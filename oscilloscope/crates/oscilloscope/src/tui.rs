@@ -5204,7 +5204,7 @@ mod golden_tests {
             json!({"t": "2026-01-01T11:52:21Z", "type": "tool_end", "id": 4, "ok": true, "ms": 41000}),
             json!({"t": "2026-01-01T11:52:30Z", "type": "tool_start", "id": 5, "tool": "bash", "target": "pytest -q tests/adapters"}),
         ];
-        oscilloscope_core::transcript::build_transcript_view(&lines)
+        oscilloscope_core::transcript::build_transcript_view(&lines, false)
     }
 
     /// [`overview_snapshot_at`], with a specific transcript view

@@ -199,7 +199,7 @@ fn agent_live_pi_fixtures_transcript_resolves_tests_ok_and_both_tool_calls() {
         !lines.is_empty(),
         "the recorded transcript must not be empty"
     );
-    let view = build_transcript_view(&lines);
+    let view = build_transcript_view(&lines, false);
     assert_eq!(view.tests, Some(TestOutcome::Ok));
     assert_eq!(view.calls.len(), 2);
     assert_eq!(view.calls[0].tool, "bash");

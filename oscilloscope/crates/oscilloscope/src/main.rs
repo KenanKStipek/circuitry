@@ -1883,7 +1883,11 @@ fn tail_focused_transcript(
         return cache.view.clone();
     }
     let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
-    let view = oscilloscope_core::transcript::build_transcript_view(&lines);
+    let truncated = oscilloscope_core::observe::transcript_tail_truncated(
+        Path::new(&path),
+        TRANSCRIPT_TAIL_BYTES,
+    );
+    let view = oscilloscope_core::transcript::build_transcript_view(&lines, truncated);
     cache.path = Some(path);
     cache.len = len;
     cache.view = Some(view.clone());

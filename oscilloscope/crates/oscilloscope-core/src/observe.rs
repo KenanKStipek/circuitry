@@ -237,6 +237,16 @@ pub fn tail_transcript_lines(path: &Path, max_bytes: u64) -> Vec<Value> {
         .collect()
 }
 
+/// Whether [`tail_transcript_lines`]'s own window, read with the same
+/// `max_bytes`, actually reaches back to the file's real start --
+/// the Time screen's zoom pane (issue #650) dims a leading `…` when
+/// it doesn't, so a reader never mistakes the window's own edge for
+/// the session's own start. A missing or unreadable file reads as
+/// not truncated (nothing to mark as cut off either way).
+pub fn transcript_tail_truncated(path: &Path, max_bytes: u64) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() > max_bytes)
+}
+
 /// One parsed `--events` line (DESIGN.md §3). `v`/`seq` aren't carried
 /// through: osi only orders by `ts`, same as a state diff, and the
 /// tailer already delivers lines in file order.
@@ -731,6 +741,31 @@ mod tests {
     fn duration_seconds_parses_rfc3339_timestamps() {
         let d = duration_seconds("2026-10-08T19:56:22.000Z", "2026-10-08T19:56:24.500Z").unwrap();
         assert!((d - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transcript_tail_truncated_is_false_when_the_file_fits_in_one_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(&path, "{\"t\":\"a\",\"type\":\"turn\"}\n").unwrap();
+        assert!(!transcript_tail_truncated(&path, TRANSCRIPT_TAIL_BYTES));
+    }
+
+    #[test]
+    fn transcript_tail_truncated_is_true_past_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(&path, "x".repeat(300)).unwrap();
+        assert!(transcript_tail_truncated(&path, 200));
+        assert!(!transcript_tail_truncated(&path, 300));
+    }
+
+    #[test]
+    fn transcript_tail_truncated_is_false_for_a_missing_file() {
+        assert!(!transcript_tail_truncated(
+            std::path::Path::new("/does/not/exist.jsonl"),
+            100
+        ));
     }
 
     #[test]
