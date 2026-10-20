@@ -1747,12 +1747,29 @@ already follow. `oscilloscope`'s `tui.rs` is the only thing that
 turns any of it into actual columns and styling.
 
 **The clock axis:** start to the later of now and the ETA's p90 end
-(plus a small margin) while the run goes, or start to end once it
-has. `format::clock_tick_seconds` picks the round tick (1, 2, 5, 10,
-15 or 30 minutes, or a whole number of hours) that keeps labels
-about 10 columns apart over the axis's own span and the pane's own
-width. The now line (`┃`) is drawn through every row and strip while
-the run is going, never once it has ended.
+(plus a margin proportional to the elapsed span -- about 10% of it,
+floored at 2s, so a run only seconds old doesn't have its own bars
+squeezed into a narrow strip on the left) while the run goes, or
+start to end once it has. `format::clock_tick_seconds` picks the
+round tick (1, 2, 5, 10, 15 or 30 minutes, or a whole number of
+hours) that keeps labels about 10 columns apart over the axis's own
+span and the pane's own width. Ticks fall on round clock times in
+the zone osi displays (`time::axis_tick_columns`), midnight-aligned
+rather than epoch-aligned, so an hour tick lands on a local whole
+hour even in a zone offset by a half hour from UTC -- never merely
+at the axis's own start, which is whatever odd second the run
+happened to begin at. When that minute-or-coarser tick lands no tick
+inside the axis at all (a run under a minute old that hasn't yet
+crossed a minute boundary has no round minute of its own to show),
+the axis falls back to a sub-minute one instead
+(`format::clock_tick_seconds_under_a_minute`: 5, 10, 15 or 30
+seconds), labelled `HH:MM:SS` rather than `HH:MM`, so a short run's
+axis still has labels. The now line (`┃`)
+is drawn through every row and strip while the run is going, never
+once it has ended -- the strips share the timeline's own gutter
+exactly (one leading column for the timeline box's own left border,
+since the strips have no border of their own), so the now column and
+every tick line up between the bars and the strips in every frame.
 
 **A row's own bar:** `time::bar_cells` places `[start_s, end_s]`
 (run-relative seconds, the same offset `history::StepRecord::start_s`
@@ -1840,11 +1857,15 @@ is overlaid on every strip the same way it is on every bar row.
   `if`'s own inferred decision isn't marked, for now.
 - **in flight:** a sweep over every *leaf* row's own `[start_s,
   end_s]` (`time::in_flight_heights`; a container never counts
-  alongside the one leaf actually running inside it), counted by
-  overlap rather than by point, ending in the run's own peak
-  concurrency and, when any running node currently carries `meta.
-  waiting_for` (`time::queued_now`), how many are queued behind a
-  slot right now. Both the suffix figures and the start/duration
+  alongside the one leaf actually running inside it), ending in the
+  run's own peak concurrency and, when any running node currently
+  carries `meta.waiting_for` (`time::queued_now`), how many are
+  queued behind a slot right now. The height in each column is the
+  *most* intervals that actually overlap at a single instant inside
+  it, not how many merely touch it -- a sweep over every interval's
+  own start and end, ends processed before starts at an equal time,
+  so a purely sequential run reads 1 throughout rather than 2 at
+  every step boundary. Both the suffix figures and the start/duration
   columns drop below 90 columns, the same width the timeline's own
   columns do.
 
@@ -1856,6 +1877,14 @@ this one pane): a container's direct children, or a prompt/tool's
 own p50/p90 marks -- both built only for the selected row, since
 neither has anywhere else to be read from.
 
+- Every kind's own pane leads with one axis line -- start and end
+  (or `now` while still running) as clock times, plus the duration,
+  e.g. `03:23:52 → 03:23:57 · 5.0s`. The label column to the left of
+  every bar or band is sized to the longest label the pane will
+  actually draw (a container's children, or the agent's own band
+  names), up to a third of the pane's own width, rather than a fixed
+  width that left a loop's own passes all reading a truncated `✓
+  pass…`.
 - **A container** (`TimeZoomExtra::Container`): its direct children
   (one level of depth down, never recursed into) as rows with bars
   on the container's own axis -- its own start to its own end (or
@@ -1886,16 +1915,27 @@ neither has anywhere else to be read from.
   (`screens::AGENT_LIVE_DATA_NOTE`) with neither. The footer's own
   turns/tool-calls/busiest-tool figures (`time::zoom_agent_footer`)
   read `meta.live`'s own `tools.<name>.ms` while running, or `meta.
-  raw`'s `tool_counts` once finished -- transcript tailing now also
-  covers screen `1`, and a finished agent's own `meta.raw.transcript`
-  (not just a running one's `meta.live.transcript`), since this is
-  the first screen that ever shows a finished agent's own bands.
+  raw`'s `tool_counts` once finished, plus the call currently in
+  progress's own elapsed time (`time::running_tool_elapsed_ms`, from
+  the transcript's own unmatched `tool_start` or else `current_tool`
+  and its own `started_at`) folded into that tool's own total --
+  `tools.<name>.ms` alone only ever counts calls that have already
+  finished, which otherwise left the footer reading a stale `bash
+  0.0s` for as long as the first call of a run was still going.
+  Transcript tailing now also covers screen `1`, and a finished
+  agent's own `meta.raw.transcript` (not just a running one's `meta.
+  live.transcript`), since this is the first screen that ever shows a
+  finished agent's own bands.
 
 **"vs usual"** (`time::vs_usual_mark`): a step with 5 or more runs of
 history is marked `▲`/`▼` outside its own p10/p90, else `≈`; with 3 or
 4, more than 20% from p50 either way -- a still-*running* step never
 reads `▼` purely for not having gotten as far as p10/20%-under yet,
 only `≈` until it either finishes or actually passes the upper bound.
+A difference under a second is always `≈`, on top of either rule --
+without it, a step taking a few milliseconds reads `▲`/`▼` at random
+from one run to the next, both the 20% and p10/p90 rules having
+nothing but rounding noise to go on at that scale.
 Below 3 ok runs of the current document hash, with no pooled step
 history from earlier versions either, the pane reads `history: N of 3
 runs of this version` instead of any rows (`time::vs_usual_too_few_
@@ -1916,9 +1956,13 @@ means the whole run, with no panning in this screen at all.
 (62% of the height, `layout::golden_major_section`) above the zoom
 pane and the vs usual pane side by side (62/38,
 `layout::left_column_width`). 80×20 up to 100×30, the timeline and
-strips alone, with the start/duration columns additionally dropped
-below 90 columns. Below 80×20, a plain list (status, step, start,
-duration), no axis at all.
+strips alone take the *whole* body height (neither the zoom nor the
+vs usual pane draws there at all, so reserving a golden-ratio minor
+section underneath them would only leave it blank), with the
+start/duration columns additionally dropped below 90 columns. Below
+80×20, a plain list (status, step, start, duration), indented by
+depth the same way the overview's and Flow's own small-terminal
+lists are, no axis at all.
 
 ### 6.4 Tests
 

@@ -674,33 +674,44 @@ pub fn axis_tick_columns(
     if span <= 0.0 {
         return Vec::new();
     }
-    let tick_s = crate::format::clock_tick_seconds(span, width, 10);
-    if tick_s <= 0.0 {
-        return Vec::new();
-    }
     let Some(run_start) = crate::diff::parse_instant(run_start_ts) else {
         return Vec::new();
     };
-    let axis_start_utc = (run_start
-        + chrono::Duration::milliseconds((axis_start_s * 1000.0).round() as i64))
-    .with_timezone(&chrono::Utc);
-    let axis_end_utc = (run_start
-        + chrono::Duration::milliseconds((axis_end_s * 1000.0).round() as i64))
-    .with_timezone(&chrono::Utc);
-    let fmt = if tick_s < 60.0 { "%H:%M:%S" } else { "%H:%M" };
-    let mut out = Vec::new();
-    let mut tick = next_round_local_time(axis_start_utc, tick_s, zone);
-    let step = chrono::Duration::milliseconds((tick_s * 1000.0).round() as i64);
-    while tick <= axis_end_utc + chrono::Duration::milliseconds(1) {
-        let offset_s =
-            (tick - run_start.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
-        if let Some(col) = now_column(axis_start_s, axis_end_s, width, offset_s) {
-            let label = zone.local(tick).format(fmt).to_string();
-            out.push((col, offset_s, label));
+    let ticks_at = |tick_s: f64, fmt: &str| -> Vec<(usize, f64, String)> {
+        if tick_s <= 0.0 {
+            return Vec::new();
         }
-        tick += step;
+        let axis_start_utc = (run_start
+            + chrono::Duration::milliseconds((axis_start_s * 1000.0).round() as i64))
+        .with_timezone(&chrono::Utc);
+        let axis_end_utc = (run_start
+            + chrono::Duration::milliseconds((axis_end_s * 1000.0).round() as i64))
+        .with_timezone(&chrono::Utc);
+        let mut out = Vec::new();
+        let mut tick = next_round_local_time(axis_start_utc, tick_s, zone);
+        let step = chrono::Duration::milliseconds((tick_s * 1000.0).round() as i64);
+        while tick <= axis_end_utc + chrono::Duration::milliseconds(1) {
+            let offset_s =
+                (tick - run_start.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+            if let Some(col) = now_column(axis_start_s, axis_end_s, width, offset_s) {
+                let label = zone.local(tick).format(fmt).to_string();
+                out.push((col, offset_s, label));
+            }
+            tick += step;
+        }
+        out
+    };
+    let tick_s = crate::format::clock_tick_seconds(span, width, 10);
+    let ticks = ticks_at(tick_s, "%H:%M");
+    if !ticks.is_empty() {
+        return ticks;
     }
-    out
+    // A span under a minute-or-coarser tick's own interval has no
+    // round minute of its own inside it at all (a run that hasn't
+    // crossed a minute boundary yet) -- fall back to a sub-minute
+    // tick instead of leaving the axis with no labels whatsoever.
+    let fine_tick_s = crate::format::clock_tick_seconds_under_a_minute(span, width, 10);
+    ticks_at(fine_tick_s, "%H:%M:%S")
 }
 
 /// The decisions strip's own marks (DESIGN.md: "`◆` at the time each
@@ -1346,17 +1357,30 @@ mod tests {
         }
     }
 
-    /// Issue #650's probe: a short, 20s-old run still gets sub-minute
-    /// labels (`HH:MM:SS`), not nothing at all.
+    /// Issue #650's probe: a short, 20s-old run that hasn't crossed a
+    /// minute boundary has no round minute of its own to tick on --
+    /// it still gets sub-minute labels (`HH:MM:SS`), not nothing at
+    /// all.
     #[test]
     fn axis_tick_columns_labels_sub_minute_intervals_with_seconds() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
-        let ticks = axis_tick_columns("2026-01-01T00:00:00Z", 0.0, 20.0, 40, &utc);
+        let ticks = axis_tick_columns("2026-01-01T00:00:10Z", 0.0, 20.0, 40, &utc);
         assert!(!ticks.is_empty());
         for (_, offset_s, label) in &ticks {
             assert_eq!(label.chars().count(), 8, "{label} should read HH:MM:SS");
-            assert_eq!(offset_s % 5.0, 0.0);
+            assert_eq!((10.0 + offset_s) % 5.0, 0.0);
         }
+    }
+
+    /// Issue #650's probe: a short run that *does* cross a minute
+    /// boundary ticks on that round minute instead of falling back to
+    /// sub-minute ticks at all.
+    #[test]
+    fn axis_tick_columns_prefers_a_round_minute_over_sub_minute_ticks_when_one_exists() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T00:00:45Z", 0.0, 20.0, 96, &utc);
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[0].2, "00:01");
     }
 
     /// Issue #650's probe: a long, 6h span still only ticks on round
