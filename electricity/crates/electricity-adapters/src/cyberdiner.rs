@@ -418,7 +418,8 @@ fn non_json_error(url: &str, text: &str) -> AdapterError {
 /// failure here has no `except HTTPError` handler of its own to
 /// swallow it into (unlike a 4xx/5xx), so it propagates the same
 /// unwrapped shape [`send_error`] gives a hard [`http_client::send`]
-/// failure (the same body-error-ordering as the other call sites above).
+/// failure -- the body error is checked before the body is parsed,
+/// the same order every other call site here uses.
 fn interpret_success(url: &str, response: RawResponse) -> Result<Dict, AdapterError> {
     if let Some(body_error) = response.body_error {
         return Err(send_error(url, body_error));
@@ -460,8 +461,7 @@ fn interpret_error(url: &str, response: RawResponse) -> AdapterError {
 /// status pair is followed at all, and an unfollowed 3xx (no
 /// `Location`, a disallowed method/status, or the redirect cap below)
 /// falls straight into the ordinary non-2xx error path -- urllib
-/// treats *any* non-2xx as an `HTTPError`, never only `>= 400`
-/// (`HTTPError` is raised for any non-2xx status, not just >= 400).
+/// treats *any* non-2xx as an `HTTPError`, never only `>= 400`.
 async fn request_json(
     method: &str,
     url: &str,
@@ -931,7 +931,7 @@ fn new_semaphore(max_in_flight: i64) -> Option<tokio::sync::Semaphore> {
 pub fn build_cyberdiner(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     // `raw_valid_tiers = cfg.get("valid_tiers") or ()`; `if
     // isinstance(raw_valid_tiers, str): raw_valid_tiers = (raw_valid_tiers,)`
-    // a configured string wraps as a single
+    // -- a configured string wraps as a single
     // tier, rather than being dropped as a non-list.
     let valid_tiers: Vec<String> = match crate::config::cfg_get(cfg, "valid_tiers") {
         Some(Value::Str(s)) if !s.is_empty() => {
