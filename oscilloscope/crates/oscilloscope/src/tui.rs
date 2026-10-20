@@ -3764,6 +3764,18 @@ mod time_bar_tests {
     use super::*;
 
     #[test]
+    fn decisions_line_places_a_mark_by_its_own_fraction_of_the_window() {
+        // A decision at 300s into a 0..600s/10-column window belongs
+        // at column 5 (300/600 of the way across) -- the old buggy
+        // formula (raw seconds divided by a column *count*, `d /
+        // width`) would have put it at column 30, clamped to the
+        // last one.
+        let line = decisions_line(&[300.0], 0.0, 600.0, 10);
+        let col = line.chars().position(|c| c == '◆');
+        assert_eq!(col, Some(5));
+    }
+
+    #[test]
     fn zoom_container_budget_reserves_a_row_for_plus_n_more_once_it_overflows() {
         assert_eq!(
             zoom_container_budget(3, 5),
@@ -3844,6 +3856,21 @@ mod time_bar_tests {
         assert_eq!(&chars[0..2], ['█', '█']);
         assert_eq!(chars[8], '▶', "the running segment's own head");
     }
+}
+
+/// The decisions strip's own line (DESIGN.md: "a `◆` at the time each
+/// named `if` decided") -- each of `decisions` (run-relative
+/// seconds) bucketed by [`oscilloscope_core::time::bucket_weighted`],
+/// the same window and width every other strip and the bars
+/// themselves use, so a mark lands under its own real time rather
+/// than at whatever column its own raw seconds happen to divide into.
+fn decisions_line(decisions: &[f64], vis_start_s: f64, vis_end_s: f64, width: usize) -> String {
+    let points: Vec<(f64, u64)> = decisions.iter().map(|&d| (d, 1)).collect();
+    let heights = oscilloscope_core::time::bucket_weighted(vis_start_s, vis_end_s, width, &points);
+    heights
+        .iter()
+        .map(|h| if *h > 0 { '◆' } else { ' ' })
+        .collect()
 }
 
 /// How many of a container's own children the zoom pane actually
@@ -4223,18 +4250,12 @@ fn draw_time_strips(
         .map(|h| time_height_glyph(*h, in_flight_max))
         .collect();
 
-    let decision_points: Vec<(f64, u64)> =
-        screen.strips.decisions.iter().map(|&d| (d, 1)).collect();
-    let decision_heights = oscilloscope_core::time::bucket_weighted(
+    let mut decisions_line = decisions_line(
+        &screen.strips.decisions,
         layout.vis_start_s,
         layout.vis_end_s,
         width,
-        &decision_points,
     );
-    let mut decisions_line: String = decision_heights
-        .iter()
-        .map(|h| if *h > 0 { '◆' } else { ' ' })
-        .collect();
 
     // DESIGN.md: the now line runs "through every row and strip".
     for line in [&mut events_line, &mut decisions_line, &mut in_flight_line] {
