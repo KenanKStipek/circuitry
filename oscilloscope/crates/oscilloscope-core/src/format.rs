@@ -137,7 +137,9 @@ pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f
             return candidate;
         }
     }
-    let hours = (target_columns * seconds_per_column / 3600.0).ceil().max(1.0);
+    let hours = (target_columns * seconds_per_column / 3600.0)
+        .ceil()
+        .max(1.0);
     hours * 3600.0
 }
 
