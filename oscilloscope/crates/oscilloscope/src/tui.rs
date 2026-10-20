@@ -1375,6 +1375,16 @@ fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], log_total: u64,
     frame.render_widget(paragraph, area);
 }
 
+/// A strip label too long for `max`, cut from the right with no
+/// ellipsis -- unlike [`truncate_label`], a strip's own label set is
+/// small and fixed (`events/min (state)`, `decisions`, `in flight`),
+/// so cutting it ever actually losing a character would read as a
+/// bug rather than an unavoidable abbreviation; this exists only so
+/// a pathologically narrow pane doesn't panic slicing past the end.
+fn truncate_strip_label(label: &str, max: usize) -> String {
+    label.chars().take(max).collect()
+}
+
 /// A label too long for `max`, truncated from the *right*, trailing
 /// `…` (treemap cell labels, pane border titles): the start of the
 /// text is usually the more identifying part there.
@@ -4251,7 +4261,7 @@ fn draw_time_strips(
         .map(|h| time_height_glyph(*h, events_max))
         .collect();
     let events_label = if screen.strips.events_from_state {
-        "events/min (from state)"
+        "events/min (state)"
     } else {
         "events/min"
     };
@@ -4305,9 +4315,9 @@ fn draw_time_strips(
     // used to shift everything after it right by however much it
     // overran.
     let label_width = layout.label_width;
-    let events_label = truncate_label(events_label, label_width);
-    let decisions_label = truncate_label("decisions", label_width);
-    let in_flight_label = truncate_label("in flight", label_width);
+    let events_label = truncate_strip_label(events_label, label_width);
+    let decisions_label = truncate_strip_label("decisions", label_width);
+    let in_flight_label = truncate_strip_label("in flight", label_width);
     let lines = if layout.show_columns {
         let in_flight_suffix = if screen.strips.queued > 0 {
             format!("max {in_flight_max} · {} queued", screen.strips.queued)
@@ -10153,7 +10163,7 @@ mod golden_tests {
         }
     }
 
-    /// A golden with the short `events/min` label (no `(from state)`
+    /// A golden with the short `events/min` label (no `(state)`
     /// suffix), confirming the strips' own alignment fix holds with
     /// it too, not just the longer one.
     #[test]

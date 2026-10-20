@@ -1199,7 +1199,7 @@ impl RunModel {
     /// strip reads this to decide between counting logged intervals
     /// and falling back to state's own `created_at`/`completed_at`
     /// (DESIGN.md: "without `--events`, osi counts state's ...
-    /// instead and labels the strip `(from state)`").
+    /// instead and labels the strip `(state)`").
     pub fn has_events(&self) -> bool {
         self.latest_event_ts.is_some()
     }

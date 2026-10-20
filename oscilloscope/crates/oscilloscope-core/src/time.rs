@@ -572,7 +572,7 @@ pub struct EventsPerMinuteStrip {
     pub heights: Vec<u64>,
     /// Set without `--events` (DESIGN.md: "osi counts state's
     /// `created_at`/`completed_at` instead and labels the strip
-    /// `(from state)`").
+    /// `(state)`").
     pub from_state: bool,
 }
 

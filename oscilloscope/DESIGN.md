@@ -1846,7 +1846,7 @@ is overlaid on every strip the same way it is on every bar row.
   log's own 50,000-entry cap -- the per-minute counts it keeps
   instead (`RunModel::overflowed_minute_counts`), folded in at each
   minute's own midpoint. Without `--events` at all
-  (`RunModel::has_events`), the strip reads `(from state)` and the
+  (`RunModel::has_events`), the strip reads `(state)` and the
   same `created_at`/`completed_at` transitions `observe` already
   tracks stand in for events. While the only running step is an
   agent and the strip's own rate over the last minute has actually
