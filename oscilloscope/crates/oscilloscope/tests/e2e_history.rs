@@ -1,7 +1,9 @@
 //! End-to-end tests for run history (issue #649) against a real
-//! `cof`: enabled only with `OSI_E2E_COF=1` and `cof` on `PATH`, same
-//! as `e2e_cof.rs`. Every spawn below points `OSI_HISTORY_DIR` at
-//! this test's own temp directory, on top of the usual isolated
+//! `cof` (enabled only with `OSI_E2E_COF=1` and `cof` on `PATH`, same
+//! as `e2e_cof.rs`) and, for issue #650's own gap, a real
+//! `electricity` too (`OSI_E2E_ELECTRICITY=1`, same as
+//! `e2e_electricity.rs`). Every spawn below points `OSI_HISTORY_DIR`
+//! at this test's own temp directory, on top of the usual isolated
 //! `HOME` (`support::TestHome`) -- belt and suspenders against ever
 //! touching the real `~/.local/state/circuitry/osi/history`.
 
@@ -11,7 +13,8 @@ use std::time::Duration;
 
 use oscilloscope_core::history;
 use support::{
-    SCRIPTED_CONFIG, TestHome, e2e_enabled, osi_command, wait_with_timeout_capturing_stdout,
+    ELECTRICITY_CONFIG, SCRIPTED_CONFIG, TestHome, e2e_electricity_enabled, e2e_enabled,
+    osi_command, osi_electricity_command, wait_with_timeout_capturing_stdout,
     wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
@@ -303,4 +306,130 @@ fn watch_on_a_finished_run_directory_adds_one_record_and_a_second_watch_adds_non
         records_after_first_watch[0].run_id,
         records_after_second_watch[0].run_id
     );
+}
+
+/// Issue #650: run history on a real `electricity`, not just `cof`
+/// -- the record's own `engine` field names it correctly.
+#[test]
+fn an_electricity_run_is_recorded_with_its_own_engine_name() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let history_dir = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"hi\\\"\"}\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osi_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .env("OSI_HISTORY_DIR", history_dir.path())
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi --engine electricity");
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    assert!(status.success(), "stdout:\n{stdout}");
+
+    let document = std::fs::canonicalize(&doc)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let records = history::read_records(history_dir.path(), &document);
+    assert_eq!(records.len(), 1, "expected one record, got {records:?}");
+    assert_eq!(records[0].outcome, history::Outcome::Ok);
+    assert_eq!(records[0].engine.as_deref(), Some("electricity"));
+}
+
+/// Issue #650: a document's own history pools runs from both
+/// engines under the same `document_hash` -- the whole-run and
+/// per-step statistics (`history::compute_stats`) never cared which
+/// engine a run used, only the hash, and this is the one place that
+/// actually runs the identical document on both to prove it.
+#[test]
+fn history_pools_a_cof_run_and_an_electricity_run_of_the_same_document() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let cof_home = TestHome::new();
+    let electricity_home = TestHome::new();
+    let history_dir = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"hi\\\"\"}\n",
+    );
+    let cof_config = write_doc(work.path(), "cof_config.json", SCRIPTED_CONFIG);
+    let electricity_config = write_doc(work.path(), "electricity_config.json", ELECTRICITY_CONFIG);
+
+    let cof_run_dir = work.path().join("cof_run");
+    let cof_child = osi_command(&cof_home)
+        .arg(&doc)
+        .arg(&cof_config)
+        .arg("--out-dir")
+        .arg(&cof_run_dir)
+        .arg("--log")
+        .env("OSI_HISTORY_DIR", history_dir.path())
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi (cof)");
+    let (cof_status, cof_stdout) =
+        wait_with_timeout_capturing_stdout(cof_child, Duration::from_secs(30));
+    assert!(cof_status.success(), "cof stdout:\n{cof_stdout}");
+
+    let electricity_run_dir = work.path().join("electricity_run");
+    let electricity_child = osi_electricity_command(&electricity_home)
+        .arg(&doc)
+        .arg(&electricity_config)
+        .arg("--out-dir")
+        .arg(&electricity_run_dir)
+        .arg("--log")
+        .env("OSI_HISTORY_DIR", history_dir.path())
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osi --engine electricity");
+    let (electricity_status, electricity_stdout) =
+        wait_with_timeout_capturing_stdout(electricity_child, Duration::from_secs(30));
+    assert!(
+        electricity_status.success(),
+        "electricity stdout:\n{electricity_stdout}"
+    );
+
+    let document = std::fs::canonicalize(&doc)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let records = history::read_records(history_dir.path(), &document);
+    assert_eq!(records.len(), 2, "expected two records, got {records:?}");
+    assert!(records.iter().all(|r| r.outcome == history::Outcome::Ok));
+    assert_eq!(records[0].document_hash, records[1].document_hash);
+    let engines: std::collections::BTreeSet<Option<&str>> =
+        records.iter().map(|r| r.engine.as_deref()).collect();
+    assert_eq!(
+        engines,
+        std::collections::BTreeSet::from([Some("cof"), Some("electricity")])
+    );
+
+    let stats = history::compute_stats(&records, records[0].document_hash.as_deref());
+    let whole_run = stats.whole_run;
+    assert!(
+        whole_run.is_none(),
+        "2 runs is still below the 3-run threshold -- both engines' runs still count toward it: {whole_run:?}"
+    );
+    assert_eq!(stats.same_hash_ok_count, 2);
 }
