@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 4589
 expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 6m12s · 11:52:55   [0 overview]  1 time  2 flow  3 cost                               "
@@ -33,7 +32,7 @@ expression: text
 "│11:46:43 → now                        ││1 effects · 0 failed                  ││↑2.1 Mt ↓18.0 kt                      │"
 "│6m12s                                 ││                                      ││$1.10                                 │"
 "│fix ██████                            ││                                      ││▁▁▁▁▁▁▁▁▁▁▁█                          │"
-"│slowest fix 6m12s                     ││                                      ││top prime.fix 2.1 Mt                  │"
+"│slowest fix 6m12s                     ││                                      ││top fix 2.1 Mt                        │"
 "│                                      ││                                      ││nothing in flight                     │"
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"

@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 4614
 expression: text
 ---
 "⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · cancelled 11.0s · 11:52:55   [0 overview]  1 time  2 flow  3 cost                               "
@@ -13,13 +12,13 @@ expression: text
 "│                                                                        ││                                            │"
 "│                                                                        ││fix                                         │"
 "│                                                                        ││agent · agent                               │"
-"│                                                                        ││since 11:46:43 · 6m12s                      │"
+"│                                                                        ││since 11:46:43 · 11.0s                      │"
 "│                                                                        ││stopped                                     │"
 "│                                                                        ││pi · turn 1 · 1 tools                       │"
 "│                                                                        ││↑2.1 kt ↓40 t · $0.01                       │"
 "│                                                                        ││doing:                                      │"
 "│                                                                        ││bash ×1                                     │"
-"│                                                                        ││running: bash                               │"
+"│                                                                        ││last: bash                                  │"
 "│                                                                        ││context 2.1 kt                              │"
 "│                                                                        ││                                            │"
 "│                                                                        ││                                            │"
@@ -31,9 +30,9 @@ expression: text
 "└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘"
 "┌ time ────────────────────────────────┐┌ flow ────────────────────────────────┐┌ cost ────────────────────────────────┐"
 "│11:46:43–11:46:54                     ││1/1 effects · 0 failed                ││↑0 t ↓0 t                             │"
-"│11.0s                                 ││                                      ││stopped fix ↑2.1 kt ↓40 t             │"
-"│fix ██████                            ││                                      ││nothing in flight                     │"
-"│                                      ││                                      ││                                      │"
+"│11.0s                                 ││                                      ││top fix 2.1 kt                        │"
+"│fix ██████                            ││                                      ││stopped fix ↑2.1 kt ↓40 t             │"
+"│                                      ││                                      ││nothing in flight                     │"
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"

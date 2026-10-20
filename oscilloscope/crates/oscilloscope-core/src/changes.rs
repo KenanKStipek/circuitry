@@ -373,7 +373,7 @@ mod tests {
     fn a_token_bar_change_is_reported() {
         let idle = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
         let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hello there"}}
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m", "prompt_sent": "hello there", "prompt_chars": 11}}
         }});
         let old = render(&idle, "t0", 0.0);
         let new = render(&running, "t0", 0.0);

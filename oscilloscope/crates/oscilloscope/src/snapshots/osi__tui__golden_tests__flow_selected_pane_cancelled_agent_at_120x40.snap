@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 4679
 expression: text
 ---
 "⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · cancelled 11.0s · 11:52:55   0 overview  1 time  [2 flow]  3 cost                               "
@@ -15,7 +14,7 @@ expression: text
 "│                                                                        ││pi · turn 1 · 1 tools                       │"
 "│                                                                        ││↑2.1 kt ↓40 t · $0.01                       │"
 "│                                                                        ││bash ×1                                     │"
-"│                                                                        ││running: bash                               │"
+"│                                                                        ││last: bash                                  │"
 "│                                                                        ││context 2.1 kt                              │"
 "│                                                                        ││                                            │"
 "│                                                                        │└────────────────────────────────────────────┘"

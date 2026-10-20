@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 7895
 expression: text
 ---
 "⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0 overview  1 time  [2 flow]  3 cost                                       "
@@ -15,7 +14,7 @@ expression: text
 "│    y > 1                                                               ││                                            │"
 "│    · else: u_else                                                      ││                                            │"
 "│  ✓ u_then   00:00:00  0.2s                                             ││                                            │"
-"│  ⟲ fan  pass 1 of 1   00:00:01  0.4s                                   ││                                            │"
+"│  ✓ ⟲ fan  pass 1 of 1   00:00:01  0.4s                                 ││                                            │"
 "│                                                                        ││                                            │"
 "│                                                                        ││                                            │"
 "│                                                                        │└────────────────────────────────────────────┘"

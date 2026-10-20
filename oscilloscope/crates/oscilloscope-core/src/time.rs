@@ -367,7 +367,34 @@ pub fn build_time_rows(
             // event-sourced end of its own, which a `use` step right
             // after it could, by a few milliseconds of clock skew
             // between the two logs, start running before.
-            let unnamed_loop_body = model.has_events() && plan.is_unnamed_loop_body_path(&row.path);
+            // Issue #654: a single pass attempt at this path (one
+            // finished interval, nothing else open) is no pass count
+            // of its own, just the one time this path happened to
+            // run so far (`if: then: [loop: [a]] else: [a]` taking
+            // `else` must not read `a` as `⟲ 1/1`) -- the same
+            // "more than one" rule `loop_is_expandable` already
+            // requires, widened to count a currently open pass too
+            // (a second pass already running, with the first
+            // finished, is still genuinely more than one, same as
+            // `expand_unnamed_loop`'s own "one row per logged
+            // interval, plus one more for each pass currently open"
+            // already treats it). `row.kind != RowKind::Loop` is what
+            // keeps a *named* loop directly inside the unnamed one's
+            // own body (sharing its path with the body, same as any
+            // other leaf would) from having its own real `⟲` count
+            // replaced by the outer loop's -- only a genuine
+            // unnamed-loop body row, never a named loop's own
+            // container row, ever takes this path at all.
+            let unnamed_loop_body = row.kind != RowKind::Loop
+                && model.has_events()
+                && plan.is_unnamed_loop_body_path(&row.path)
+                && model
+                    .step_intervals()
+                    .iter()
+                    .filter(|i| i.path == row.path)
+                    .count()
+                    + model.open_starts_at(&row.path).len()
+                    > 1;
             let first_pass = unnamed_loop_body
                 .then(|| unnamed_loop_first_pass_start(&row.path, model, run_start_ts))
                 .flatten();
@@ -386,8 +413,25 @@ pub fn build_time_rows(
                             // loop while it's still running -- shown
                             // as `?` until the last pass finishes,
                             // with the one in progress not counted
-                            // among `done`.
-                            total: (row.status.kind != StatusKind::Running).then_some(count as u64),
+                            // among `done`. Issue #654: decided from
+                            // whether the loop itself is still going
+                            // (a running-type status, or an event-
+                            // sourced pass still open), not from this
+                            // one row's own momentary status -- a
+                            // chain loop's shared body path can read
+                            // plain `Done` for a moment between two
+                            // passes, right after one ends and before
+                            // the next one's own `Start` event lands.
+                            total: {
+                                let loop_still_running =
+                                    matches!(
+                                        row.status.kind,
+                                        StatusKind::Running
+                                            | StatusKind::LikelyRunning
+                                            | StatusKind::RunningOrQueued
+                                    ) || !model.open_starts_at(&row.path).is_empty();
+                                (!loop_still_running).then_some(count as u64)
+                            },
                             eta_s: None,
                         }),
                     )
@@ -757,38 +801,61 @@ fn next_round_local_time(
     let local = zone.local(from_utc);
     let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let elapsed_s = (local.naive_local() - midnight).num_milliseconds() as f64 / 1000.0;
-    let mut next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
-    // A candidate local naive time is tried against `from_utc`'s own
-    // offset first, then re-checked against whatever offset the zone
-    // actually reports for the resulting instant -- not the same
-    // offset whenever a daylight-saving change falls between the
-    // two. Neither agreeing means the naive time itself never
-    // existed at all (a "spring forward" gap skips straight over an
-    // hour of local clock time) -- advancing to the next candidate
-    // tick and trying again, rather than returning an instant whose
-    // own real local label would silently disagree with the one this
-    // was asked for.
-    loop {
-        let next_local_naive =
-            midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
-        let to_utc = |offset: chrono::FixedOffset| {
-            offset
-                .from_local_datetime(&next_local_naive)
-                .single()
-                .unwrap_or_else(|| offset.from_utc_datetime(&next_local_naive))
-                .with_timezone(&chrono::Utc)
-        };
-        let first_guess = to_utc(*local.offset());
-        let first_local = zone.local(first_guess);
-        if first_local.naive_local() == next_local_naive {
-            return first_guess;
-        }
-        let second_guess = to_utc(*first_local.offset());
-        if zone.local(second_guess).naive_local() == next_local_naive {
-            return second_guess;
-        }
-        next_elapsed_s += tick_s;
+    let next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
+    let next_local_naive =
+        midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
+    // A plain `FixedOffset` is never itself ambiguous or has a gap --
+    // only a real zone's own *varying* offset (`zone.local`, checked
+    // below) can disagree with this.
+    let guess = local
+        .offset()
+        .from_local_datetime(&next_local_naive)
+        .single()
+        .expect("a fixed offset is never ambiguous or has a gap")
+        .with_timezone(&chrono::Utc);
+    if zone.local(guess).naive_local() == next_local_naive {
+        return guess;
     }
+    // The zone's own offset changes somewhere between `from_utc` and
+    // `guess` (a daylight-saving transition) -- a "spring forward"
+    // gap skips the elapsed time just asked for outright (it never
+    // existed), while a "fall back" repeat means an *earlier*
+    // elapsed time, already behind `from_utc`'s own stale reading,
+    // is due again under the new offset (issue #654: this is what
+    // left the whole repeated hour with no ticks of its own at all).
+    // Either way, finding exactly where the offset changes and
+    // re-deriving this tick from *that* instant's own local reading,
+    // rather than carrying on from the one `from_utc` already used,
+    // is what actually finds it -- a gap skips forward past it, a
+    // repeat re-ties the elapsed clock back to where the new offset
+    // picks up.
+    let transition = offset_transition_between(from_utc, guess, zone);
+    next_round_local_time(transition, tick_s, zone)
+}
+
+/// Binary-searches `(after, up_to]` for the instant `zone`'s own
+/// offset changes (issue #654's daylight-saving ticks) -- `zone.
+/// local(after).offset()` and `zone.local(up_to).offset()` must
+/// already differ, or there is nothing to find. Second-level
+/// resolution is enough for any real-world transition, which always
+/// falls on a whole minute.
+fn offset_transition_between(
+    after: chrono::DateTime<chrono::Utc>,
+    up_to: chrono::DateTime<chrono::Utc>,
+    zone: &dyn crate::format::ClockZone,
+) -> chrono::DateTime<chrono::Utc> {
+    let after_offset = *zone.local(after).offset();
+    let mut lo = after;
+    let mut hi = up_to;
+    while (hi - lo).num_seconds() > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if *zone.local(mid).offset() == after_offset {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
 }
 
 /// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
@@ -1799,6 +1866,33 @@ mod tests {
         );
     }
 
+    /// Issue #654: with a sub-hour tick interval, the repeated local
+    /// hour must still get ticks of its own, not a gap -- the
+    /// previous test's own 1-hour cadence happens to round-trip
+    /// either way, which never actually exercised this.
+    #[test]
+    fn axis_tick_columns_a_us_fall_back_span_still_ticks_within_the_repeated_hour() {
+        let zone = FallBackZone;
+        // 30-minute ticks: 4 real hours (04:00Z-08:00Z) over 100
+        // columns is 144s/column, landing on the 1800s candidate
+        // (900s needs 10 columns per tick, this is only ~6.25).
+        let ticks = axis_tick_columns("2026-11-01T04:00:00Z", 0.0, 4.0 * 3600.0, 100, &zone);
+        let offsets: Vec<f64> = ticks.iter().map(|(_, s, _)| *s).collect();
+        for pair in offsets.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "ticks must stay strictly increasing across the change: {ticks:?}"
+            );
+            assert!(
+                pair[1] - pair[0] <= 1800.0,
+                "no gap wider than one tick interval, including through the repeated hour: {ticks:?}"
+            );
+        }
+        let labels: Vec<&str> = ticks.iter().map(|(_, _, l)| l.as_str()).collect();
+        assert!(labels.contains(&"01:00"), "{labels:?}");
+        assert!(labels.contains(&"01:30"), "{labels:?}");
+    }
+
     /// A span crossing a local day labels the tick at local midnight
     /// with the date, since `00:00` alone would repeat with nothing
     /// to tell the days apart.
@@ -2586,6 +2680,52 @@ mod tests {
         assert_eq!(passes[1].label, "#2");
     }
 
+    /// Issue #654: between two chain passes, this path's own row can
+    /// read `Done` for a moment (the previous pass's own state,
+    /// right after it ends and before the next one's `Start` event
+    /// lands) -- an event-sourced open start the row's own momentary
+    /// status can't see yet still correctly keeps the total unknown.
+    #[test]
+    fn an_unnamed_loops_progress_stays_unknown_with_an_open_start_events_know_about() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        // The row's own status, read from state alone, momentarily
+        // says `Done` -- state hasn't caught up with the second
+        // pass's own start yet, even though events already have.
+        let mut done_row = tool_row("prime.u_nap");
+        done_row.status.kind = StatusKind::Done;
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let time_rows =
+            build_time_rows(&[done_row], &flat, &model, &plan, &header, &BTreeMap::new());
+        let progress = time_rows[0]
+            .loop_progress
+            .expect("an unnamed loop with logged passes has progress");
+        assert_eq!(progress.done, 1);
+        assert_eq!(
+            progress.total, None,
+            "an open start proves the loop is still going, whatever this row's own momentary status says"
+        );
+    }
+
     #[test]
     fn an_unnamed_loops_progress_shows_unknown_total_while_a_pass_runs() {
         let plan = unnamed_loop_plan();
@@ -2644,6 +2784,93 @@ mod tests {
             progress.total,
             Some(2),
             "once the loop ends, the total is the real count"
+        );
+    }
+
+    /// Issue #654: a single interval ever logged at an unnamed loop's
+    /// own body path is no pass count of its own -- the same path
+    /// taken once by something else entirely (`if: then: [loop: [a]]
+    /// else: [a]`, taking `else`) must not read `⟲ 1/1` on `a`.
+    #[test]
+    fn an_unnamed_loop_body_path_taken_only_once_shows_no_progress() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        let mut done_row = tool_row("prime.u_nap");
+        done_row.status.kind = StatusKind::Done;
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let time_rows =
+            build_time_rows(&[done_row], &flat, &model, &plan, &header, &BTreeMap::new());
+        assert_eq!(
+            time_rows[0].loop_progress, None,
+            "a single pass attempt is not a loop count of its own"
+        );
+    }
+
+    /// Issue #654: a named loop directly inside an unnamed loop's own
+    /// body shares that body's own path, but it is still a real
+    /// `RowKind::Loop` row with real progress of its own -- the
+    /// outer unnamed loop's own pass count must never replace it.
+    #[test]
+    fn a_named_loop_inside_an_unnamed_loops_body_keeps_its_own_progress() {
+        let plan = unnamed_loop_plan();
+        let flat = BTreeMap::new();
+        let mut model = RunModel::new();
+        for (id, (start, end)) in [
+            (1, ("2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z")),
+            (2, ("2026-01-01T00:00:05Z", "2026-01-01T00:00:10Z")),
+        ] {
+            model.observe_event(&crate::observe::Event::Start {
+                ts: start.to_string(),
+                id: Some(id),
+                path: "prime.u_nap".to_string(),
+            });
+            model.observe_event(&crate::observe::Event::End {
+                ts: end.to_string(),
+                id: Some(id),
+                path: "prime.u_nap".to_string(),
+                ok: true,
+                ms: Some(5_000),
+                error: None,
+            });
+        }
+        let mut named_loop_row = tool_row("prime.u_nap");
+        named_loop_row.kind = RowKind::Loop;
+        named_loop_row.loop_progress = Some(LoopProgress {
+            done: 3,
+            total: Some(5),
+            eta_s: None,
+        });
+        let header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        let time_rows = build_time_rows(
+            &[named_loop_row],
+            &flat,
+            &model,
+            &plan,
+            &header,
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            time_rows[0].loop_progress,
+            Some(LoopProgress {
+                done: 3,
+                total: Some(5),
+                eta_s: None
+            }),
+            "the named loop's own progress must survive, not the outer loop's pass count"
         );
     }
 

@@ -443,6 +443,11 @@ pub enum FocusDetail {
         /// step was built with, so a front end never needs its own
         /// wall clock to tell a stale summary from a live one.
         stale: bool,
+        /// How long `live.current_tool` has been running, from its
+        /// own `started_at` to `now` (issue #647) -- `None` while
+        /// `stale` (nothing is actually running any more to time) or
+        /// with no `current_tool`/unparsable `started_at` at all.
+        current_tool_elapsed_s: Option<f64>,
         note: &'static str,
         /// `meta.raw.transcript`, set once the session has finished
         /// (`meta.raw` only exists then) -- `None` while running, same
@@ -733,6 +738,7 @@ fn build_focused_step(
     model: &RunModel,
     state: Option<&Value>,
     now: &str,
+    run_ended_at: Option<&str>,
 ) -> FocusedStep {
     let node = node_for(row, flat);
     // Issue #631: a step known only from `--events` (a tree-loop
@@ -748,24 +754,38 @@ fn build_focused_step(
     // (`completed_at` - `created_at`), never `now - created_at`: once
     // the whole run has ended, `now` is wall-clock time at render,
     // long past the run's own end, which would otherwise inflate a
-    // finished step's duration by however long it's been since.
+    // finished step's duration by however long it's been since. A
+    // step that never got its own `completed_at` at all (an
+    // interrupted session's leftover, issue #647) falls back to
+    // `run_ended_at` instead of `now` when the caller has it (the
+    // run's own end, not osi's wall clock) -- the session ended with
+    // the run, so its own elapsed stops right there too.
     let elapsed_s =
         since_ts
             .as_deref()
             .and_then(|start| match node.and_then(|n| n.completed_at.as_deref()) {
                 Some(end) => duration_seconds(start, end),
-                None => duration_seconds(start, now),
+                None => duration_seconds(start, run_ended_at.unwrap_or(now)),
             });
     let details = details_for(&row.path, plan, model, state);
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
         let live = node.and_then(|n| n.live.clone()).map(Box::new);
         let stale = live.as_deref().is_some_and(|l| !l.is_recent(now));
+        // Issue #647: only while the session is actually running is
+        // its current tool call actually running too -- once stale,
+        // `current_tool` is whatever was last in flight when the
+        // session was interrupted, not something still ticking.
+        let current_tool_elapsed_s = (!stale)
+            .then(|| live.as_deref().and_then(|l| l.current_tool.as_ref()))
+            .flatten()
+            .and_then(|t| duration_seconds(&t.started_at, now));
         let raw = node.map(|n| agent_raw_summary(&n.meta)).unwrap_or_default();
         FocusDetail::Agent {
             asked: node.and_then(|n| agent_asked_text(&n.meta)),
             live,
             stale,
+            current_tool_elapsed_s,
             note: AGENT_LIVE_DATA_NOTE,
             raw_transcript: raw.transcript,
             raw_files_changed: raw.files_changed,
@@ -844,8 +864,25 @@ fn build_now_pane(
     let log_lines: Vec<String> = log.iter().rev().take(LOG_TAIL).rev().cloned().collect();
 
     let focus = if !matches!(header.status, RunStatus::Running) {
-        let stopped_agent = stopped_agent_row(rows, flat, plan)
-            .map(|row| build_focused_step(row, flat, plan, model, state, now));
+        // Issue #647: a stopped agent's own session ended with the
+        // run, so its "since" line must stop ticking at the run's
+        // end, not keep counting against osi's own wall clock --
+        // `run_ended_at` freezes only `elapsed_s`'s own fallback,
+        // never `stale` (`AgentLive::is_recent`), which must stay
+        // keyed on the real wall clock: a leftover `meta.live` is
+        // stale forever once the run has ended, no matter how long
+        // ago that was by the time it's actually viewed.
+        let stopped_agent = stopped_agent_row(rows, flat, plan).map(|row| {
+            build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+            )
+        });
         NowFocus::Ended(EndedSummary {
             outcome: header.status,
             start_ts: header.run_start_ts.clone(),
@@ -892,7 +929,7 @@ fn build_now_pane(
             .and_then(|p| running.iter().find(|r| r.path == p).copied())
             .or_else(|| running.iter().max_by_key(|r| r.depth).copied());
         if let Some(target) = target {
-            let mut step = build_focused_step(target, flat, plan, model, state, now);
+            let mut step = build_focused_step(target, flat, plan, model, state, now, None);
             if let Some(usual) = crate::history::display_key(&target.path, plan)
                 .and_then(|key| header.history_step_usual.get(&key))
             {
@@ -910,9 +947,9 @@ fn build_now_pane(
                         .unwrap_or_default()
                 });
             match last_finished {
-                Some(row) => {
-                    NowFocus::LastFinished(build_focused_step(row, flat, plan, model, state, now))
-                }
+                Some(row) => NowFocus::LastFinished(build_focused_step(
+                    row, flat, plan, model, state, now, None,
+                )),
                 None => NowFocus::None,
             }
         }
@@ -1162,8 +1199,10 @@ fn build_tokens_over_time(
     buckets
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_cost_card(
     rows: &[Row],
+    unfolded_rows: &[Row],
     header: &crate::render::Header,
     state: Option<&Value>,
     flat: &BTreeMap<String, NodeMeta>,
@@ -1183,19 +1222,35 @@ fn build_cost_card(
             let live = node_for(row, flat)?.live.as_ref()?;
             Some((row.label.clone(), live.tokens_sent, live.tokens_received))
         });
+    // Issue #641: the overview's own "top" line must read the same
+    // folded, relative label the Cost screen's own table shows for
+    // that same store (`plan › agent`, never the full dotted path) --
+    // `largest_stores` already builds exactly that label through the
+    // by-store tree, so this reads its own first (largest) row
+    // rather than keeping a second, unfolded scan of `flat` that
+    // could only ever report the raw path. `kinds`/`statuses`, from
+    // `unfolded_rows` (every real path, never collapsed into a
+    // breadcrumb), are what that tree needs to fold chains the same
+    // way the Cost screen's own does.
+    let unfolded_kinds: BTreeMap<String, RowKind> = unfolded_rows
+        .iter()
+        .map(|r| (r.path.clone(), r.kind))
+        .collect();
+    let unfolded_statuses: BTreeMap<String, RowStatus> = unfolded_rows
+        .iter()
+        .map(|r| (r.path.clone(), r.status.clone()))
+        .collect();
+    let top_store =
+        crate::cost::largest_stores("prime", flat, &unfolded_statuses, &unfolded_kinds, state)
+            .rows
+            .first()
+            .map(|row| (row.label.clone(), row.tokens_sent + row.tokens_received));
     CostCard {
         tokens_sent: header.tokens_sent,
         tokens_received: header.tokens_received,
         cost_usd: effective_cost_usd(state, flat),
         tokens_over_time: build_tokens_over_time(header, flat, now),
-        // Issue #632: the overview's own "largest store" must agree
-        // with the Cost screen's own ranking -- `crate::cost::
-        // top_store` is the same leaf-scan rule that screen's own
-        // table uses, read directly from `flat` rather than through
-        // the Cost screen's own by-store tree, which (DESIGN.md's
-        // performance rule) is built only while that screen is
-        // actually on display.
-        top_store: crate::cost::top_store(flat, "prime"),
+        top_store,
         in_flight: token_bar_in_flight_line(token_bar),
         stopped_agent,
     }
@@ -1247,7 +1302,13 @@ pub fn build_cost_screen(
     kinds: &BTreeMap<String, RowKind>,
     state: Option<&Value>,
     measure: crate::treemap::Measure,
+    model: &RunModel,
     now: &str,
+    // Issue #641: the front end's own number of distinct glyphs for
+    // the "tokens over time" chart's bands -- `crate::cost::cap_
+    // phase_bands`' own `max_bands`, kept here rather than hardcoded
+    // so core never has to know a glyph count of its own.
+    max_phase_bands: usize,
 ) -> CostScreen {
     let (tree, stores_without_measure) =
         crate::treemap::build_tree_for_measure("prime", flat, statuses, kinds, measure);
@@ -1262,8 +1323,16 @@ pub fn build_cost_screen(
     // document that is done) stops growing new buckets as real clock
     // time keeps advancing underneath it.
     let end = header.run_end_ts.as_deref().unwrap_or(now);
-    let tokens_over_time =
-        crate::cost::tokens_over_time_by_phase(header.run_start_ts.as_deref(), end, flat, &phases);
+    let tokens_over_time = crate::cost::cap_phase_bands(
+        crate::cost::tokens_over_time_by_phase(
+            header.run_start_ts.as_deref(),
+            end,
+            flat,
+            &phases,
+            model,
+        ),
+        max_phase_bands,
+    );
     CostScreen {
         measure,
         tree,
@@ -1313,7 +1382,16 @@ pub fn build_overview(
     );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(rows, header, state, flat, plan, token_bar, now);
+    let cost_card = build_cost_card(
+        rows,
+        unfolded_rows,
+        header,
+        state,
+        flat,
+        plan,
+        token_bar,
+        now,
+    );
     Overview {
         phase_strip,
         now_pane,
@@ -1397,7 +1475,7 @@ pub fn build_flow_screen(
             }
             _ => {
                 if let Some(row) = rows.iter().find(|r| r.path == path) {
-                    selected = Some(build_focused_step(row, flat, plan, model, state, now));
+                    selected = Some(build_focused_step(row, flat, plan, model, state, now, None));
                 }
             }
         }
@@ -1464,6 +1542,14 @@ pub struct TimeVsUsualRow {
     pub running: bool,
     pub p50_s: f64,
     pub mark: crate::time::VsUsualMark,
+    /// This row's own step's pooled "earlier versions" run count
+    /// (`history::StepStats::count`, issue #654) -- `TimeVsUsualPane
+    /// ::from_runs` pools across every row here regardless of
+    /// collapse or filter, so a front end that means to show only
+    /// the largest pooled count among the rows it actually draws
+    /// needs each row's own count to recompute that from, not the
+    /// pane's own pre-pooled figure.
+    pub pooled_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1754,7 +1840,7 @@ pub fn build_time_screen(
 
     let selected = selected_path
         .and_then(|path| rows.iter().find(|r| r.path == path))
-        .map(|row| build_focused_step(row, flat, plan, model, state, now));
+        .map(|row| build_focused_step(row, flat, plan, model, state, now, None));
     let zoom_extra = selected_path
         .and_then(|path| build_time_zoom_extra(path, &display_rows, plan, header, now_s));
 
@@ -1873,6 +1959,7 @@ fn build_vs_usual_pane(
             running,
             p50_s: p50,
             mark,
+            pooled_count: stats.count,
         });
     }
     let finish_ts = if earlier_versions {
@@ -2335,6 +2422,48 @@ mod tests {
         program
     }
 
+    /// [`program_with_ifs`], with its `if` unnamed -- the decision it
+    /// produces is inferred (issue #643's first follow-up), not read
+    /// straight from a real node's own `meta.branch`.
+    fn program_with_an_unnamed_if() -> electricity_bytecode::Program {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "osi-screens-test-unnamed-if-{}-{call}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("doc.yml");
+        std::fs::write(
+            &path,
+            r#"effects:
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: taken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["ok"]
+    else:
+      - name: untaken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["no"]
+"#,
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
+        std::fs::remove_dir_all(&tmp).ok();
+        program
+    }
+
     fn flat_from(json: Value) -> BTreeMap<String, NodeMeta> {
         crate::model::flatten_state(&json)
     }
@@ -2486,6 +2615,191 @@ mod tests {
         }
     }
 
+    /// Issue #647: a stopped agent's own "since" line must stop
+    /// ticking at the run's end -- rendering `osi show`'s own now
+    /// pane days after a cancelled run still reads the same elapsed
+    /// it would have right when the run ended, never osi's own wall
+    /// clock at render time.
+    #[test]
+    fn a_stopped_agents_elapsed_freezes_at_the_runs_end_not_osis_wall_clock() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
+                "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+            "fix": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                "live": {
+                    "engine": "pi", "updated_at": "2026-01-01T11:46:50Z",
+                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+                }
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let statuses = model.observe(&state, &plan, ProcessState::exited(true));
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-01-01T11:52:55Z",
+            &model,
+            None,
+        );
+        let mut header = base_header();
+        header.status = RunStatus::Cancelled;
+        header.run_end_ts = Some("2026-01-01T11:46:54Z".to_string());
+
+        let elapsed_at = |now: &str| {
+            let pane = build_now_pane(
+                &rows,
+                &flat,
+                &plan,
+                &model,
+                Some(&state),
+                &header,
+                &[],
+                None,
+                now,
+            );
+            match pane.focus {
+                NowFocus::Ended(summary) => summary
+                    .stopped_agent
+                    .expect("a leftover meta.live names a stopped agent")
+                    .elapsed_s
+                    .expect("since_ts is known"),
+                other => panic!("expected Ended, got {other:?}"),
+            }
+        };
+        let soon = elapsed_at("2026-01-01T11:46:55Z");
+        let long_after = elapsed_at("2026-02-01T00:00:00Z");
+        assert!((soon - 11.0).abs() < 1e-9); // 11:46:43 -> 11:46:54
+        assert_eq!(
+            soon, long_after,
+            "a stopped agent's own elapsed must not tick with osi's wall clock"
+        );
+    }
+
+    /// Issue #647: `running: <tool>` must not survive past the
+    /// session itself stopping -- `current_tool_elapsed_s` is `None`
+    /// once stale, which is what tells `agent_live_lines` to show
+    /// `last: <tool>` instead.
+    #[test]
+    fn a_stale_leftover_current_tool_gets_no_elapsed() {
+        let plan = PlanTree::empty();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fix": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "updated_at": "2026-01-01T11:46:50Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+                    }
+                }}
+            }}),
+        );
+        let row = Row {
+            path: "prime.fix".to_string(),
+            depth: 0,
+            label: "fix".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        let model = RunModel::new();
+        // Long after the heartbeat -- `is_recent` reads this leftover
+        // as stale, the same as a stopped run viewed much later.
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-01-01T12:00:00Z",
+            None,
+        );
+        match step.detail {
+            FocusDetail::Agent {
+                stale,
+                current_tool_elapsed_s,
+                ..
+            } => {
+                assert!(stale);
+                assert_eq!(current_tool_elapsed_s, None);
+            }
+            other => panic!("expected Agent, got {other:?}"),
+        }
+    }
+
+    /// Issue #647: a running tool call's own elapsed time, read from
+    /// `meta.live.current_tool.started_at` -- separate from the
+    /// session's own total (`FocusedStep::elapsed_s`), which is
+    /// `since_ts` to `now` regardless of which tool is running.
+    #[test]
+    fn a_live_current_tools_own_elapsed_is_computed_from_its_started_at() {
+        let plan = PlanTree::empty();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fix": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "updated_at": "2026-01-01T11:52:54Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"}
+                    }
+                }}
+            }}),
+        );
+        let row = Row {
+            path: "prime.fix".to_string(),
+            depth: 0,
+            label: "fix".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        let model = RunModel::new();
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-01-01T11:52:54Z",
+            None,
+        );
+        match step.detail {
+            FocusDetail::Agent {
+                stale,
+                current_tool_elapsed_s,
+                ..
+            } => {
+                assert!(!stale);
+                assert!((current_tool_elapsed_s.unwrap() - 24.0).abs() < 1e-9);
+            }
+            other => panic!("expected Agent, got {other:?}"),
+        }
+    }
+
     /// Issue #635: selecting a decision row on the Flow screen gives
     /// the selected pane the condition/branch detail instead of an
     /// ordinary `FocusedStep` -- `check` is a named `if` here, so it
@@ -2537,6 +2851,72 @@ mod tests {
         let decision = screen.selected_decision.expect("a decision selection");
         assert_eq!(decision.branch.as_deref(), Some("then"));
         assert!(!decision.inferred);
+        assert_eq!(
+            decision.condition,
+            Some(crate::plan::ConditionInfo {
+                mode: crate::plan::ConditionMode::Cel,
+                text: "true".to_string()
+            })
+        );
+    }
+
+    /// Issue #643's first follow-up: selecting an unnamed `if`'s own
+    /// inferred decision row (no real path of its own) gives the
+    /// selected pane the same condition/branch detail a named one's
+    /// does, not an ordinary `FocusedStep`.
+    #[test]
+    fn build_flow_screen_selected_inferred_decision_reads_the_condition_and_branch() {
+        let plan = PlanTree::from_program(&program_with_an_unnamed_if());
+        let state = json!({
+            "prime": {
+                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
+                "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:05Z"}}
+            }
+        });
+        let flat = flat_from(state.clone());
+        let mut model = RunModel::new();
+        let statuses = model.observe(&state, &plan, ProcessState::Running);
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
+        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
+        let (flow_rows, _) = crate::flow::build_flow_rows(&folded, &rows, &flat, &plan, &[]);
+        let inferred = flow_rows
+            .iter()
+            .find(|r| {
+                matches!(
+                    r.kind,
+                    crate::flow::FlowRowKind::Decision { inferred: true, .. }
+                )
+            })
+            .expect("an inferred decision row");
+        let screen = build_flow_screen(
+            &folded,
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            Some(inferred.path.as_str()),
+            &utc(),
+            "2026-10-08T11:00:10Z",
+        );
+        assert!(screen.selected.is_none());
+        let decision = screen.selected_decision.expect("a decision selection");
+        assert_eq!(decision.branch.as_deref(), Some("then"));
+        assert!(decision.inferred);
         assert_eq!(
             decision.condition,
             Some(crate::plan::ConditionInfo {
@@ -2882,12 +3262,77 @@ mod tests {
         assert!((total_s - 0.9).abs() < 1e-9);
     }
 
+    /// Issue #641: the overview's own "top" line reads the same
+    /// folded, relative label the Cost screen's own table would show
+    /// for that store (`plan › agent`, a single-child chain folded
+    /// into one breadcrumb) -- never the full dotted path
+    /// (`prime.plan.agent`) `crate::cost::largest_stores` itself
+    /// would never show either.
+    #[test]
+    fn top_store_uses_the_same_folded_relative_label_as_the_cost_table() {
+        let header = base_header();
+        let token_bar = TokenBar::default();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "plan": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"},
+                "agent": {"value": "y", "meta": {
+                    "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
+                    "tokens_sent_total": 100, "tokens_received_total": 50
+                }}
+            }
+        }});
+        let flat = flat_from(state.clone());
+        let unfolded_rows = [
+            Row {
+                path: "prime.plan".to_string(),
+                depth: 0,
+                label: "plan".to_string(),
+                kind: RowKind::Use,
+                status: RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.plan.agent".to_string(),
+                depth: 1,
+                label: "agent".to_string(),
+                kind: RowKind::Prompt,
+                status: RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let card = build_cost_card(
+            &[],
+            &unfolded_rows,
+            &header,
+            Some(&state),
+            &flat,
+            &PlanTree::empty(),
+            &token_bar,
+            "2026-10-08T11:52:55Z",
+        );
+        assert_eq!(card.top_store, Some(("plan › agent".to_string(), 150)));
+    }
+
     #[test]
     fn cost_is_hidden_until_any_effect_reports_it() {
         let header = base_header();
         let token_bar = TokenBar::default();
         let flat = BTreeMap::new();
         let no_cost = build_cost_card(
+            &[],
             &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
@@ -2898,6 +3343,7 @@ mod tests {
         );
         assert_eq!(no_cost.cost_usd, None);
         let with_cost = build_cost_card(
+            &[],
             &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
@@ -2946,6 +3392,7 @@ mod tests {
         );
         let card = build_cost_card(
             &[],
+            &[],
             &header,
             None,
             &flat,
@@ -2954,6 +3401,75 @@ mod tests {
             "2026-10-08T11:52:55Z",
         );
         assert_eq!(card.cost_usd, Some(2.25));
+    }
+
+    /// Issue #641: with more top-level phases than the front end has
+    /// distinct glyphs for (`max_phase_bands`), the chart's own
+    /// series cap to that many, the smallest ones folded into one
+    /// `other` band -- never silently reusing a glyph for two
+    /// different phases.
+    #[test]
+    fn the_chart_caps_its_own_bands_to_max_phase_bands() {
+        let header = base_header();
+        let mut flat = BTreeMap::new();
+        let mut statuses = BTreeMap::new();
+        let mut kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let mut rows = Vec::new();
+        for i in 0..8 {
+            let path = format!("prime.p{i}");
+            flat.insert(
+                path.clone(),
+                NodeMeta {
+                    created_at: Some("2026-10-08T11:04:58Z".to_string()),
+                    completed_at: Some("2026-10-08T11:05:58Z".to_string()),
+                    error: None,
+                    branch: None,
+                    progress_done: None,
+                    progress_total: None,
+                    progress_eta_s: None,
+                    live: None,
+                    value: Value::Null,
+                    meta: json!({
+                        "adapter": "scripted",
+                        "tokens_sent_total": (i + 1) * 10,
+                        "tokens_received_total": 0
+                    }),
+                },
+            );
+            let status = RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            };
+            statuses.insert(path.clone(), status.clone());
+            kinds_map.insert(path.clone(), RowKind::Prompt);
+            rows.push(Row {
+                path: path.clone(),
+                depth: 1,
+                label: format!("p{i}"),
+                kind: RowKind::Prompt,
+                status,
+                duration_s: Some(60.0),
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            });
+        }
+        let model = RunModel::new();
+        let screen = build_cost_screen(
+            &rows,
+            &header,
+            &flat,
+            &statuses,
+            &kinds_map,
+            None,
+            crate::treemap::Measure::Total,
+            &model,
+            "2026-10-08T11:52:55Z",
+            6,
+        );
+        assert_eq!(screen.tokens_over_time.len(), 6);
+        assert_eq!(screen.tokens_over_time.last().unwrap().0, "other");
     }
 
     #[test]
@@ -3099,7 +3615,15 @@ mod tests {
             }}),
         );
         let row = agent_row("prime.agent1");
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:55Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: Some(live),
@@ -3134,7 +3658,15 @@ mod tests {
             }}),
         );
         let row = agent_row("prime.agent1");
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:55Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: Some(live),
@@ -3178,7 +3710,15 @@ mod tests {
             skip_reason: None,
             retrying: false,
         };
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:56Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:56Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: None,
@@ -3241,7 +3781,15 @@ mod tests {
             }}),
         );
         let row = agent_row("prime.agent1");
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:55Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: Some(live), ..

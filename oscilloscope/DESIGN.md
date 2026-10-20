@@ -544,9 +544,13 @@ actually have). Two branches that would read as the same step names
 read `◆ if → ?` rather than guessing. A named loop with a known total of
 exactly one pass, or an unsettled (`dynamic`) total once the loop
 itself has finished with only one pass observed, merges its own
-container row with that one pass row into a single `⟲ <name>  pass N
-of M` line; more than one pass keeps one row per pass, as the
-orchestration pane already did. The pane's own
+container row with that one pass row into a single `<status glyph>
+⟲ <name>  pass N of M` line; more than one pass keeps one row per
+pass, as the orchestration pane already did -- but the loop
+container's own row then reads `<status glyph> ⟲ <name>` too, not
+just its plain status glyph (issue #643): one rule for a loop row's
+own glyph, merged or not, the same order the Time screen's own
+`⟲ N/M` suffix keeps a loop's identity next to its status either way. The pane's own
 footer totals every quick step in the run (from `unfolded_rows`, the
 same way the overview's own flow card already counts them) and a
 health line (failed/retrying/warning counts, read off the already-
@@ -767,25 +771,33 @@ already shows, same as before; the scroll position follows whatever
 those leave visible.
 
 **The details pane** moves above the orchestration pane (issue #535).
-For any node whose `meta` has `prompt_sent` (a prompt), two blocks come
+For any node that is a prompt effect (`meta.prompt_chars` recorded --
+every `runtime.state.prompt_sent` mode keeps it, #587), two blocks come
 right after the `path`/`type` lines, before the rest of the meta list:
-`sent  ↑ N tokens` with a snippet of `meta.prompt_sent`, and `received
+`sent  ↑ N tokens` with a snippet of the sent text, and `received
  ↓ N tokens` with a snippet of the reply — `meta.answer` when present
 (the raw reply for `boolean`/`number` prompts), else the node's own
 value. Both token counts are `model::node_tokens` (the same `_total`-
 first rule the header/token bar/state pane/the Cost screen's treemap
 and table all use); a still-
 running prompt's `sent` shows the token bar's own in-flight estimate
-(`≈ceil(chars(prompt_sent)/4)`) and `received` reads "waiting for the
-reply", since neither engine reports output tokens before a prompt
-finishes. A prompt that failed before any reply shows its error as
-always, and no `received` block. Snippets collapse whitespace runs
-(including newlines) to one space and cut at 200 characters with `…`.
-`tokens_sent`/`tokens_received` drop out of the plain meta list for
-these nodes (the block headers already carry them), and the old
-`prompt_sent (v for full):`/`value (v for full):` blocks don't appear
-either — `v` still opens the full prompt or value. Every other node's
-details are unchanged.
+(`≈ceil(chars/4)` over `meta.prompt_chars`) and `received` reads
+"waiting for the reply", since neither engine reports output tokens
+before a prompt finishes. A prompt that failed before any reply shows
+its error as always, and no `received` block. Snippets collapse
+whitespace runs (including newlines) to one space and cut at 200
+characters with `…`. `tokens_sent`/`tokens_received` drop out of the
+plain meta list for these nodes (the block headers already carry
+them), and the old `prompt_sent (v for full):`/`value (v for full):`
+blocks don't appear either — `v` still opens the full prompt or value.
+Under `runtime.state.prompt_sent: full` or `head:<N>` the snippet is
+the recorded text (a `head:<N>` one as is, marker included); under
+`sha256`, where the text itself was never kept, it is a placeholder,
+`not recorded (N characters, sha256 <first 12 hex>)`, built from
+`meta.prompt_chars` and `meta.prompt_sent_sha256`
+(`model::prompt_sent_or_placeholder`) — `v` shows the same placeholder
+rather than falling through to the value. Every other node's details
+are unchanged.
 
 Measured on both engines with the scripted adapter: a model-mode `if`/
 `while` condition's own container node gets `meta.answer`, `adapter`,
@@ -904,9 +916,9 @@ own rules are unchanged:
     always equal to the header's own `↑`/`↓`, since both read the token
     rule below.
   - **What's in flight:** how many prompts are running, and an
-    estimated input for them, `≈ceil(chars(meta.prompt_sent) / 4)`. No
-    output estimate: neither engine reports a prompt's tokens before it
-    finishes.
+    estimated input for them, `≈ceil(chars / 4)` over `meta.
+    prompt_chars`. No output estimate: neither engine reports a
+    prompt's tokens before it finishes.
 
     The *count* comes from `render::Row`, not from the live state
     alone (issue #527's own PR): a tree-loop pass's prompt, and (on
@@ -926,18 +938,28 @@ own rules are unchanged:
     (§3), so such a row cannot be told apart from a running *tool* by
     path and events alone. A row that *does* have a state node applies
     `model::is_running_prompt`'s full criteria instead: `created_at`
-    and no `completed_at`, `meta.prompt_sent` actually written, and
-    `meta.waiting_for` empty — a prompt merely queued behind a
-    concurrency slot isn't processing yet (an event-only row can never
-    be merely queued in the first place: `on_effect_start` fires only
-    once a pass or branch actually begins).
+    and no `completed_at`, `meta.adapter`/`meta.model` set and `meta.
+    prompt_chars` recorded, and `meta.waiting_for` empty — a prompt
+    merely queued behind a concurrency slot isn't processing yet (an
+    event-only row can never be merely queued in the first place:
+    `on_effect_start` fires only once a pass or branch actually
+    begins). These fields all come from `runtime.state.prompt_sent`'s
+    own setting (#577), not `meta.prompt_sent` itself: `prompt_chars`
+    and the adapter/model pair are written together in every mode
+    (`full`, `head:<N>`, `sha256`), so a prompt running under `sha256`
+    -- where `meta.prompt_sent` stays `null` -- is counted exactly
+    like one running under `full` (#587). A model-mode `if`/loop
+    condition sets `adapter`/`model` too but never `prompt_chars`, so
+    it is never mistaken for a running prompt here.
 
-    The *estimate* only sums a running prompt's own `ceil(chars(meta.
-    prompt_sent) / 4)` when its `prompt_sent` is actually in state —
-    for one confirmed running by events alone, with no state node to
-    read at all, that can never be known, so the total is shown as a
-    lower bound (`≈52+`) rather than silently reading too low. When
-    *no* running prompt's `prompt_sent` is known at all, the estimate
+    The *estimate* sums each running prompt's own `ceil(chars / 4)`
+    from `meta.prompt_chars` when the run recorded it (every mode), or
+    else the length of whatever `meta.prompt_sent` text is actually
+    present (older state with no `prompt_chars` at all) -- for one
+    confirmed running by events alone, with no state node to read at
+    all, neither is available, so the total is shown as a lower bound
+    (`≈52+`) rather than silently reading too low. When *no* running
+    prompt's `prompt_chars`/`prompt_sent` is known at all, the estimate
     isn't merely low, it's entirely unknown — `≈0+` would read as a
     broken number (zero tokens, yet something's running?), and `now in
     ?` reads as if an estimate were coming once it wasn't going to;
@@ -1277,7 +1299,22 @@ interval, and nothing here is built at all for a screen not shown.
   `completed_at` of its own, since an ended run otherwise has no
   step left to focus on at all. It is named, with its last-known
   live block shown the same way a running or last-finished step's
-  own already is, never as running.
+  own already is, never as running. Its own `since`/elapsed line
+  (issue #647) freezes at the run's own end (`header.run_end_ts`,
+  passed into `screens::build_focused_step` as `run_ended_at`) rather
+  than ticking against osi's wall clock at render time -- the session
+  ended with the run, however long ago that now is; `stale` itself
+  (`AgentLive::is_recent`) stays keyed on the real wall clock,
+  unaffected, since a leftover `meta.live` reads as stale forever
+  once the run has ended, no matter when it's actually viewed. The
+  same leftover's last tool (`meta.live.current_tool`) is labelled
+  `last: <tool>`, never `running: <tool>` -- it is the last thing the
+  session was doing, not something still running, now that the
+  session itself has stopped. While a session genuinely is still
+  running, that same line instead reads `running: <tool> · <elapsed>`,
+  the tool's own time from `current_tool.started_at` to `now`
+  (`FocusDetail::Agent::current_tool_elapsed_s`) -- separate from
+  `FocusedStep::elapsed_s`, the session's own total.
 - **Time card:** the run's own start/end, elapsed, ETA, a bar of the
   phase strip's own durations (drawn as blocks scaled to the longest
   one, `tui.rs`'s own `draw_time_card`) and its slowest *finished*
@@ -1300,10 +1337,11 @@ interval, and nothing here is built at all for a screen not shown.
   only once the run has ended); a sparkline
   (`screens::build_tokens_over_time`) bucketing each effect's own
   sent-plus-received tokens by its own `completed_at` into twelve
-  equal spans across the run so far; the highest-token leaf
-  (`cost::top_store`, the same leaf-scan rule §6.3b's own
-  largest-stores table ranks first, so the two can't disagree about
-  which store is the run's biggest); once the run has ended, the
+  equal spans across the run so far; the highest-token store, folded and made
+  relative the same way §6.3b's own largest-stores table shows it
+  (`cost::largest_stores`' own first row, issue #641 -- never the
+  full dotted path, and the two can't disagree about which store is
+  the run's biggest, since both read the same by-store tree); once the run has ended, the
   run's own stopped agent's last-known tokens (issue #637), as
   `stopped <label>` with its sent/received figures -- `runtime.
   last_run.totals` (the figures above) never includes a session that
@@ -1502,12 +1540,28 @@ breadcrumb-folded the same way the overview's phase strip is), on a
 clock axis from the run's start to its own end (`header.run_end_ts`
 once the run has one, `now` while it's still going -- a finished run's
 chart, under `osi watch`, stops growing new buckets as real clock time
-keeps advancing underneath it): each effect's own tokens (sent +
-received) are counted into one of `cost::TOKENS_OVER_TIME_BUCKETS`
+keeps advancing underneath it): an ordinary effect's own tokens (sent
++ received) are counted into one of `cost::TOKENS_OVER_TIME_BUCKETS`
 (24) equal time spans by its own `completed_at`, the same rule the
 overview's own single-series sparkline (`screens::build_tokens_over_
 time`) uses, just bucketed per phase instead of summed across the
-whole run. `CostScreen` carries the exact start/end timestamps this
+whole run. An agent session (`meta.provider == "agent"`, issue #641)
+is different, since one can run for most of a document's whole span:
+while osi actually watches it, `RunModel::record_live_token_
+observations` (called alongside `observe` on every rebuild) keeps
+every distinct `meta.live.tokens_sent`/`tokens_received` reading it
+sees, each at the instant osi observed it -- `tokens_over_time_by_
+phase` counts each sample's own increase over the one before it into
+the bucket for its own observation instant, not the session's own
+`completed_at`, and once the session finishes, reconciles the
+difference between what was actually observed and its own final,
+authoritative total (`model::node_tokens`) into the bucket at its own
+`completed_at` -- the chart's own total for the step always ends up
+exactly right either way. A session never observed running at all (no
+recorded samples: a finished run opened fresh, or a watch that only
+started after it ended) instead spreads its own tokens evenly over its
+own span, `created_at` to `completed_at`, proportional to how much of
+each bucket's own clock-time window that span overlaps. `CostScreen` carries the exact start/end timestamps this
 bucketing used (`chart_start_ts`/`chart_end_ts`), so the chart's own
 clock-axis labels can never name a different span than the bars
 themselves cover. The chart rebins those buckets across exactly as
@@ -1522,8 +1576,14 @@ Each band also draws in its own fill glyph (`tui::phase_glyph`), not
 only its own colour (DESIGN.md's own "never colour alone" rule), and
 the bottom two rows (whenever there's room for them) are a clock axis
 (start, middle and end, `format::midpoint_clock_time` for the middle)
-and a glyph-and-label legend, rather than more bars. No projection to
-the run's own ETA yet, though issue #649 now gives one -- a later
+and a glyph-and-label legend, rather than more bars. With more
+top-level phases than `tui::PHASE_GLYPHS` has distinct glyphs for
+(issue #641), `cost::cap_phase_bands` keeps the `PHASE_GLYPHS.len() -
+1` phases with the largest total (summed across every bucket), in
+their original relative order, and folds every other phase into one
+further `other` band (bucket-wise summed), appended last -- a glyph
+is never reused for two different phases in the legend. No projection
+to the run's own ETA yet, though issue #649 now gives one -- a later
 issue (#641).
 
 **The largest-stores table** (`oscilloscope-core::cost::
@@ -1543,11 +1603,16 @@ rather than stripping a prefix back out of the root-relative label),
 shortened from the left with a leading `…` when it doesn't fit the
 pane's own width (`cost::shorten_breadcrumb_from_left` -- the leaf
 segment, never the leading ones, is what actually has to stay
-readable), tokens in/out, cost when reported, and its own share of the
-table's total; a row with nothing reported yet reads "tokens when
-done" (running) or "no tokens reported" (aborted/cancelled without
-finishing) instead of `↑0 t ↓0 t 0%`, the identical rule the treemap's
-own tiles use. `tui::draw_cost_table` filters those rows to whichever
+readable; the nearest `iter_N` to the leaf, shown as `pass N`, is kept
+too even once the plain segment itself drops away, issue #641 -- two
+loop passes whose own breadcrumb agrees on everything below their own
+`iter_N` would otherwise shorten to the exact same text), tokens
+in/out, cost when reported, and its own share of the table's total
+(`format::format_share_pct`: `<1%`, never a plain `0%` indistinguishable
+from an actual zero, issue #641); a row with nothing reported yet reads
+"tokens when done" (running) or "no tokens reported" (aborted/cancelled
+without finishing) instead of `↑0 t ↓0 t 0%`, the identical rule the
+treemap's own tiles use. `tui::draw_cost_table` filters those rows to whichever
 level `App::cost_level` says is currently zoomed into (the same
 self-healing walk the treemap itself uses) and reverses every row
 whose own path equals `App::cost_selected` *or* descends from it (a
@@ -1766,7 +1831,18 @@ midnight rather than stepped from the last by a fixed duration
 (`time::next_round_local_time`), so an hour tick lands on a local
 whole hour even in a zone offset by a half hour from UTC, or across a
 daylight-saving change -- never merely at the axis's own start, which
-is whatever odd second the run happened to begin at. A sub-minute
+is whatever odd second the run happened to begin at. A candidate
+whose own local reading, read back from the zone, disagrees with what
+was actually asked for means the offset itself changes somewhere in
+between -- `time::offset_transition_between` binary-searches for
+exactly where, and the whole computation restarts from there (issue
+#654): a "spring forward" gap skips the requested elapsed time
+outright (it never existed), while a "fall back" repeat means an
+earlier elapsed time, already behind by the stale reading this
+started from, is due again under the new offset -- without this, the
+whole repeated local hour got no ticks under an interval shorter than
+it (an hour-or-longer tick happened to round-trip either way, so this
+never showed there). A sub-minute
 tick is labelled `HH:MM:SS` rather than `HH:MM`, so a short run's axis
 still has labels; once the axis's own start and end fall on different
 local calendar dates, the tick at each local midnight is labelled
