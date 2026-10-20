@@ -75,7 +75,7 @@ pub struct Node {
     fallback: Option<NodeRef>,
     /// A single *fallback* key this overlay must never expose, even once
     /// *fallback* -- a real, still-mutating tracked node -- comes to
-    /// carry it later in the same pass (issue #501 review finding 2).
+    /// carry it later in the same pass (issue #501's review).
     /// [`exec::loop_::with_prev_overlay`] sets this to the current
     /// pass's own `iter_<idx>` key: that key doesn't exist in the real
     /// loop node yet when the overlay is built (`execute_loop`'s own
@@ -295,7 +295,7 @@ pub struct Store {
     pub root: NodeRef,
     /// Counts every [`Store::snapshot`] call -- test-only, so a test can
     /// prove a presence check (`{{> name}}` composition's own
-    /// `ScopeRoot::contains`, issue #487/#492 review finding 1) never
+    /// `ScopeRoot::contains`, issues #487/#492) never
     /// materializes a whole subtree just to answer a yes/no question,
     /// rather than asserting on the resulting text alone (which a
     /// correct-but-costly path would also get right).
@@ -559,7 +559,7 @@ impl Store {
     /// wins its whole key, in whichever position it first appears"
     /// [`IndexMap::insert`] already gives every other merge in this
     /// crate -- *including* a key some enclosing overlay shadows (issue
-    /// #501's second review, finding 2: a placeholder at that key's own
+    /// #501's second review: a placeholder at that key's own
     /// *natural* position, the same one Python's `{**d, k: v}`/`prime[
     /// name] = own` would have left it at, holds that position until
     /// whichever shallower hop actually owns the key overwrites it --
@@ -567,7 +567,7 @@ impl Store {
     /// value without moving it, so the final position is the first,
     /// deepest place this key was ever seen, never wherever the
     /// shallowest hop happened to insert it after skipping every deeper
-    /// one). A key some overlay *does* shadow (finding 3 on the first
+    /// one). A key some overlay *does* shadow (on the first
     /// review: without the skip half of this, a key `with_prev_
     /// overlay`'s three stacked overlays all happen to leave untouched
     /// -- the common case, since each only ever adds `prev`/the loop
@@ -584,7 +584,7 @@ impl Store {
     /// applied before paying for the value instead of after, without
     /// also reordering it the way plain omission would. [`Node::hidden`]
     /// is skipped entirely -- no placeholder, no later owner to overwrite
-    /// it -- unconditionally (finding 2 on the first review) -- see its
+    /// it -- unconditionally (per the first review) -- see its
     /// own doc comment.
     pub fn snapshot(&self, node: &NodeRef) -> Value {
         #[cfg(test)]

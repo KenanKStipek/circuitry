@@ -65,7 +65,7 @@ pub(crate) fn interrupted_text(token: &CancellationToken) -> String {
         // called once `token.is_set()` is already known true -- any
         // other/missing signum too. Deliberately one arm, not two: a
         // dedicated `Some(SIGINT)` match next to this would just
-        // repeat it (issue #431 review finding on PR #440).
+        // repeat it (PR #440's review of issue #431).
         _ => "Interrupted (Ctrl-C/SIGINT)".to_string(),
     }
 }
@@ -173,7 +173,7 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// [`CtxSource::Live`] entry, resolved through [`live_ctx`] exactly like
 /// any other live node (a detached node is an ordinary `NodeRef` in
 /// every other respect). This is the P0 "a nested container freezes its
-/// own ancestors' state" finding on PR #440, found a second time after
+/// own ancestors' state" case from PR #440's review, found a second time after
 /// an initial fix that gave the overlay a `Frozen(Value)` of its own --
 /// which looked identical to the tree's case above, but was wrong for
 /// exactly the reason the tree's case is safe: something *does* go on
@@ -307,7 +307,7 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
         // A typed tool failure keeps its own `cause` through the wrap --
         // `message` grows the label prefix, and `py_class` becomes
-        // `RuntimeError` (review finding 1 on PR #454: #442's own tree
+        // `RuntimeError` (PR #454: #442's own tree
         // text needs the error to survive a chain/tree wrap as a typed
         // `Raised`, not collapse to a bare `VmError::Message`; review
         // P2-1 on the second review: `core/dynamic.py`'s own `raise
@@ -349,7 +349,7 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
 /// itself, fresh, for the condition and for every branch step (that
 /// module's own doc comment: freezing it once here, before the branch
 /// even starts, is the P0 "a nested container freezes its own
-/// ancestors' state" finding on PR #440) -- exactly mirroring
+/// ancestors' state" case from PR #440's review) -- exactly mirroring
 /// `core/dynamic.py::_execute_effect`'s own per-effect-type dispatch,
 /// where only a `dynamic`/`if` child ever receives `ctx` as an
 /// `ctx_override`/live reference rather than a resolved value.
@@ -740,7 +740,7 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn a_raised_failures_cause_survives_the_chain_wrap_but_its_class_becomes_runtime_error() {
-        // Review finding 1 on PR #454: a chain/tree wrap must keep
+        // PR #454: a chain/tree wrap must keep
         // `VmError::Raised` a `Raised`, not collapse to a bare
         // `VmError::Message` -- a nested `dynamic`'s own error-collection
         // point (`execute_chain`/`execute_tree`, both of which call this

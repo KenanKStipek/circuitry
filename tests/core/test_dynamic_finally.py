@@ -242,8 +242,8 @@ def _dynamic_with_cancelling_prompt(exc: BaseException, *, on_error: str) -> tup
 
 def test_mcp_run_cancelled_propagates_even_with_on_error_skip() -> None:
     """A dynamic's on_error: skip only degrades an ordinary failure — an MCP
-    RunCancelled-like BaseException must still stop the run (#272 review,
-    finding 1), the same as it did before `finally:` existed."""
+    RunCancelled-like BaseException must still stop the run (issue #272),
+    the same as it did before `finally:` existed."""
     root, adapter = _dynamic_with_cancelling_prompt(
         _CancelledLikeMCP("cancelled"), on_error="skip"
     )
@@ -285,8 +285,7 @@ def test_finally_failure_with_dynamics_own_on_error_continue_does_not_fail_the_r
     tmp_path,
 ) -> None:
     """A dynamic's own on_error: continue covers a finally failure on an
-    otherwise-successful body, not just a body failure (#272 review,
-    finding 2)."""
+    otherwise-successful body, not just a body failure (issue #272)."""
     from circuitry.core.dynamic import DynamicDefinition
 
     orch = {
@@ -311,7 +310,7 @@ def test_finally_failure_with_dynamics_own_on_error_continue_does_not_fail_the_r
 def test_finally_duplicate_name_with_body_effect_is_a_compile_error(tmp_path) -> None:
     """A finally effect reusing a body effect's name would silently overwrite
     that state node at runtime (both share the dynamic's own child_store) —
-    caught at compile time instead (#272 review, finding 8)."""
+    caught at compile time instead (issue #272)."""
     orch = {
         "effects": [_write_tool("step", str(tmp_path / "ok.txt"))],
         "finally": [_write_tool("step", str(tmp_path / "other.txt"))],
@@ -323,8 +322,8 @@ def test_finally_duplicate_name_with_body_effect_is_a_compile_error(tmp_path) ->
 def test_sum_tokens_includes_a_tool_or_use_effects_own_expect_tokens() -> None:
     """A tool/use's own `expect: {mode: model}` spends tokens too (#273),
     recorded under meta.expect rather than meta directly \u2014 a parent
-    dynamic's own displayed token total must still include them (#273
-    review, finding 4, P2 part)."""
+    dynamic's own displayed token total must still include them (issue
+    #273's review)."""
     from circuitry.core.dynamic import _sum_tokens
 
     subtree = {
@@ -345,7 +344,7 @@ def test_sum_tokens_includes_a_tool_or_use_effects_own_expect_tokens() -> None:
 def test_finally_failure_path_matches_the_real_state_node(tmp_path) -> None:
     """A finally effect writes into the same child_store namespace as the
     body (no separate 'finally' segment in the state tree) \u2014 the wrapped
-    error's path should say so too (#272 review, finding 11)."""
+    error's path should say so too (issue #272)."""
     orch = {
         "effects": [_write_tool("step", str(tmp_path / "ok.txt"))],
         "finally": [_read_missing_tool("stop_server", str(tmp_path / "missing.txt"))],
