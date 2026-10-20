@@ -179,7 +179,7 @@ def test_document_null_plugins_block_cannot_drop_the_host_pin() -> None:
 def test_applied_host_settings_notice_tags_the_intersected_pin() -> None:
     """The "Applied host settings" notice says `allowed_commands` was
     intersected with the host pin, not applied as the document wrote it
-    (#316 review finding 3)."""
+    (issue #316)."""
     cfg = _trusted_cfg(
         runtime={"plugins": {"shell": {"allowed_commands": ["ls", "cat", "echo"]}}}
     )
