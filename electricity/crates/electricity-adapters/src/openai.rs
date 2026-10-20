@@ -24,7 +24,7 @@ const DETERMINISTIC_SEED: i64 = 0;
 /// `seed` only if one wasn't already set via `params`. `pub` so
 /// `tests/adapter_corpus.rs` replays `generate_adapter_corpus.py`'s
 /// own request-building cases through this exact function (issue
-/// #515 finding 5's first item -- `openai` had no request-building
+/// #515 -- `openai` had no request-building
 /// case at all).
 pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Dict {
     let mut payload = Dict::new();
@@ -54,7 +54,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> &str {
     }
 }
 
-/// `generate()`'s own request headers -- `pub` (review finding F6)
+/// `generate()`'s own request headers -- `pub`
 /// so `tests/adapter_corpus.rs` compares the recorded corpus headers
 /// against the adapter's own header-building code, not a list written
 /// by hand in the test a second time.
@@ -176,8 +176,8 @@ pub fn interpret_outcome(
 pub struct OpenAiAdapter {
     /// Raw -- `cfg.get("base_url") or default`; `.rstrip("/")`'d in
     /// [`Adapter::generate`] itself, the same point Python calls it
-    /// (after the API-key check, never at build time: review finding
-    /// F5, a non-string value must fail `generate()`, not preflight).
+    /// (after the API-key check, never at build time: a
+    /// non-string value must fail `generate()`, not preflight).
     pub base_url: Value,
     pub default_model: String,
 }
@@ -319,7 +319,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
-        // Review finding F5: the failure happens inside `generate()`,
+        // The failure happens inside `generate()`,
         // at the same point Python's own `self.base_url.rstrip("/")`
         // runs (after the API-key check, which must still run first).
         let _guard = env_guard().lock().unwrap();

@@ -137,7 +137,7 @@ async fn exchange_iam_token(
 
 /// `adapters/watsonx.py::_TOKEN_LOCK` -- one process-wide lock around
 /// the *whole* check-then-exchange-then-store sequence, never only
-/// the cache read/write either side of it. Review finding F9: holding
+/// the cache read/write either side of it. Holding
 /// it only around [`TokenCache::get`]/[`TokenCache::set`] (the prior
 /// shape here) still lets two concurrent calls that both miss the
 /// cache each start their own IAM exchange; an
@@ -179,7 +179,7 @@ pub struct WatsonXAdapter {
     /// self.base_url: return self.base_url.rstrip("/")`), so an empty
     /// string here is never a `rstrip_base_url` failure -- it falls
     /// through to the `WATSONX_REGION` default -- but a truthy
-    /// non-string value is (review finding F5; raised inside
+    /// non-string value is (raised inside
     /// `generate()`, after the IAM token exchange, matching Python's
     /// own call order: `_resolve_base_url` runs after `_get_token`).
     pub base_url: Value,
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_iam_token_renders_an_unexpected_response_with_pythons_str_not_debug() {
-        // Review finding F7, text taken from running
+        // Message taken from running
         // `f"watsonx IAM response missing access_token: {raw}"` directly
         // against `json.loads('{"foo": "bar", "num": 5, "nested": {"a": null}}')`:
         // Python's own `str()` of a dict, never Rust's `{:?}` `Debug`.
@@ -596,7 +596,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn two_concurrent_calls_with_the_same_api_key_still_share_one_iam_exchange() {
-        // Review finding F9: `get_token` now holds its own lock
+        // `get_token` now holds its own lock
         // across the *whole* check-then-exchange-then-store sequence
         // (`exchange_lock`), not just around the cache read/write
         // either side of it -- two calls launched at the same time
@@ -663,7 +663,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_fails_like_python_for_a_non_string_base_url_only_after_the_iam_exchange() {
-        // Review finding F5: Python's own `_resolve_base_url` runs
+        // Python's own `_resolve_base_url` runs
         // *after* `_get_token` -- the IAM listener below accepts
         // exactly one connection, proving the exchange still happens
         // (and the token is still cached) before the `AttributeError`
