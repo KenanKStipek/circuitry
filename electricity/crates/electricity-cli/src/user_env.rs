@@ -67,7 +67,7 @@ pub struct UserEnvResult {
 /// `std::env::home_dir()` is `Path.home()`'s own fallback order on
 /// Unix: `HOME` if set and non-empty, else a `getpwuid_r` lookup --
 /// matching `os.path.expanduser("~")` (what `Path.home()` calls), not
-/// just this one environment variable (#471 review finding 7: under
+/// just this one environment variable (#471: under
 /// `env -i`, with `HOME` unset entirely, cof's own fallback still
 /// finds a home directory; electricity's used to return `None` there).
 pub fn user_env_path() -> Option<PathBuf> {
@@ -114,8 +114,8 @@ fn invalid_entry_warning(path: &Path, key: &str) -> String {
 /// masked to the low 12 bits, *file_uid*/*current_uid* already read
 /// (by [`permission_refusal`]'s own `stat`/`getuid`, or a test's
 /// literal values) -- so a unit test can exercise an owner mismatch
-/// without ever needing a file this process doesn't own (#471 review
-/// finding 3: `getuid()` called *inside* the old single function left
+/// without ever needing a file this process doesn't own (#471:
+/// `getuid()` called *inside* the old single function left
 /// no seam for that).
 #[cfg(unix)]
 fn unsafe_reason(mode: u32, file_uid: u32, current_uid: u32, path: &Path) -> Option<String> {
@@ -226,8 +226,8 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
     // for reading at all -- `_get_stream` falls through to
     // `io.StringIO("")` instead, so a directory there parses as an
     // empty file (`loaded: true`, nothing supplied) rather than the
-    // `OSError` a real `fs::read` on a directory raises (#471 review
-    // finding 6: that would print its own spurious "could not be
+    // `OSError` a real `fs::read` on a directory raises (#471: that
+    // would print its own spurious "could not be
     // read" warning cof never does).
     let text = if metadata.is_dir() {
         String::new()
@@ -315,8 +315,8 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
         // Neither side's warning text ever names the *value* -- but
         // `set_var`'s panic message does (`failed to set environment
         // variable {key:?} to {value:?}`), and with no custom panic
-        // hook that would reach stderr verbatim (#471 review finding
-        // 2: a secret leak). A single-quoted key can contain `=`
+        // hook that would reach stderr verbatim (#471: a secret
+        // leak). A single-quoted key can contain `=`
         // (`'A=B'=secret`), and a literal NUL byte decodes as valid
         // UTF-8 inside a quoted or unquoted value -- both reachable
         // from a real file, not just a hostile one. Skipped, not
@@ -483,7 +483,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unsafe_reason_refuses_an_owner_mismatch_even_at_a_safe_mode() {
-        // #471 review finding 3's own probe: #468 requires this case,
+        // #471/#468 requires this case,
         // and `permission_refusal`'s own `getuid()` call left no way to
         // supply a different uid without owning two real uids --
         // `unsafe_reason` takes both as plain arguments instead.
@@ -569,9 +569,9 @@ mod tests {
 
     #[test]
     fn a_single_quoted_key_containing_equals_is_skipped_not_set() {
-        // #471 review finding 2's own probe: `std::env::set_var` panics
+        // `std::env::set_var` panics
         // on a key containing `=`, and the panic message would include
-        // the value -- this must never reach `set_var` at all.
+        // the value -- this must never reach `set_var` at all (#471: a secret leak).
         let _guard = ENV_MUTATION_LOCK.lock().unwrap();
         let dir = ScratchDir::new("secret-leak-key-equals");
         let path = dir.0.join(".env");
@@ -677,9 +677,9 @@ mod tests {
 
     #[test]
     fn a_nul_byte_in_a_value_is_skipped_not_set() {
-        // #471 review finding 2's other probe: a raw NUL decodes as
+        // A raw NUL decodes as
         // valid UTF-8, but `std::env::set_var` panics on one in a
-        // value, again printing the value in its own panic message.
+        // value, again printing the value in its own panic message (#471).
         let _guard = ENV_MUTATION_LOCK.lock().unwrap();
         let dir = ScratchDir::new("secret-leak-nul-value");
         let path = dir.0.join(".env");
@@ -756,8 +756,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_real_non_utf8_value_still_wins_over_the_file() {
-        // #471 review finding 8: the real environment wins on
-        // `var_os`, never on whether the real value happens to decode
+        // The real environment wins on
+        // `var_os` (#471), never on whether the real value happens to decode
         // as UTF-8 -- the same reasoning `real_env`'s own doc comment
         // gives for using `var_os` here rather than a `HashMap` lookup.
         use std::ffi::OsStr;

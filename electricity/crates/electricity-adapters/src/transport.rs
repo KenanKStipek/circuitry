@@ -439,7 +439,7 @@ fn send_error_outcome(err: SendError) -> CurlOutcome {
 /// before a single byte of the body arrived -- real curl keeps
 /// writing to stdout as bytes arrive, so whatever it received before
 /// the connection died is still there when it exits nonzero (issue
-/// #515 finding 4: the prior version of this function always
+/// #515: the prior version of this function always
 /// discarded it, matching `http_client`'s own urllib-parity clearing
 /// of [`http_client::RawResponse::body`] instead -- correct for the
 /// `http` *tool*, wrong for a curl-shelling adapter). A partial
@@ -867,7 +867,7 @@ mod tests {
         let url = format!("http://{addr}/x");
         let outcome = run_curl(&url, &[], None, 5).await.unwrap();
         assert_eq!(outcome.returncode, 18);
-        // Issue #515 finding 4: real curl keeps whatever it already wrote
+        // Issue #515: real curl keeps whatever it already wrote
         // to stdout before the connection died -- this must not come back
         // empty the way `http_client`'s own urllib-parity clearing (for
         // the `http` tool) would otherwise make it.

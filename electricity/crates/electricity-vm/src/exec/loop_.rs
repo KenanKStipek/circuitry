@@ -647,7 +647,7 @@ fn index_overlay(as_name: Option<&str>, item: Option<&Value>, idx: u32) -> Index
 /// read of a node's own direct entries -- *chain*'s own `Live` entry
 /// can itself be one of this module's own overlay nodes
 /// ([`plain_overlay`]'s rare multi-entry/`Frozen` fallback path is the
-/// only caller left after #484; issue #501 review finding 1 found the
+/// only caller left after #484; issue #501's review found the
 /// same direct-entry bug here, in the slow path a loop-inside-a-
 /// `dynamic`-inside-a-loop body takes).
 fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
@@ -720,7 +720,7 @@ fn layered(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef
 /// [`layered`], plus a single *hidden* key *fallback* must never expose
 /// through the result -- [`with_prev_overlay`]'s own use, to keep the
 /// current pass's not-yet-created `iter_<idx>` invisible through its
-/// own `prime.<loop_name>` overlay (issue #501 review finding 2). A
+/// own `prime.<loop_name>` overlay (issue #501's review). A
 /// no-op key if *fallback* is `None`: nothing to hide anything from.
 fn layered_hiding(
     entries: IndexMap<Value, Slot>,
@@ -767,7 +767,7 @@ fn single_live(chain: &CtxChain) -> Option<&NodeRef> {
 /// landing spot. A detached [`NodeRef`], pushed as a [`CtxSource::Live`]
 /// entry.
 ///
-/// Issue #484 finding 2 (tree `each`'s own, separate growth): *chain*
+/// Issue #484 (tree `each`'s own, separate growth): *chain*
 /// is the loop's own *outer_chain* -- the enclosing scope, unchanged
 /// across every single pass -- so the common case (*chain* is one
 /// `Live` entry, true for a loop anywhere but inside a tree dispatch's
@@ -1267,8 +1267,8 @@ async fn run_each_tree<'a>(
     let mut results: std::collections::BTreeMap<u32, (Value, IndexMap<Value, Slot>)> =
         Default::default();
     let mut errors: std::collections::BTreeMap<u32, VmError> = Default::default();
-    // `exec::dynamic::execute_tree`'s own split (finding O1
-    // on PR #462): `Cancelled` and a fatal-but-not-`Cancelled` result
+    // `exec::dynamic::execute_tree`'s own split (PR #462):
+    // `Cancelled` and a fatal-but-not-`Cancelled` result
     // (`VmError::Refused`) both stop dispatching new passes, like
     // `stop_on_error`, regardless of `on_error` -- but only `Cancelled`
     // skips the merge below entirely (cof's own no-state-write
@@ -1368,7 +1368,7 @@ async fn run_each_tree<'a>(
     }
 
     if interrupted {
-        // PR #549's review, finding 3: see `exec::dynamic::
+        // See `exec::dynamic::
         // execute_tree`'s own identical comment -- a cancelled tree
         // loop never merges, but its overlay must still come down here.
         observer.clear_tree_branches(&dispatch_path, &branches);
@@ -2272,7 +2272,7 @@ mod prev_overlay_differential_tests {
         );
     }
 
-    /// Issue #501's second review, finding on `Store::snapshot`: a
+    /// Issue #501's second review, on `Store::snapshot`: a
     /// shadowed key (`shots`, shadowed by `with_prev_overlay`'s own
     /// `prime` overlay once `prev` exists) must keep its own natural
     /// position -- here, before `other`, exactly as `loop_shaped_store`

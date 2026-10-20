@@ -123,7 +123,7 @@ impl ToolPlugin for UuidPlugin {
         // would abort the process on that allocation alone, before a
         // v5 call's own per-iteration `uuid5` ever gets a chance to
         // raise on its first iteration the way CPython's loop does
-        // (issue #460's own fix-pass finding 10). An unbounded `Vec`
+        // (issue #460's own fix pass). An unbounded `Vec`
         // still does the same real work CPython's own loop would for a
         // huge *count* of v1/v4 ids -- that's parity, not a bug; the
         // bug was paying for the whole allocation up front regardless

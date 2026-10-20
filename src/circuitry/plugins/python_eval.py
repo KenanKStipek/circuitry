@@ -284,8 +284,8 @@ def _run_sandboxed(
     embedder that ignores SIGINT) is ``SIG_IGN`` precisely so a hangup
     cannot kill it, and this child shares that process group -- resetting
     an inherited ``SIG_IGN`` to ``SIG_DFL`` would make the same hangup
-    kill this step's child when the run itself should carry on (#357
-    review finding 2).
+    kill this step's child when the run itself should carry on (issue
+    #357).
     """
     for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None and signal.getsignal(sig) is not signal.SIG_IGN:

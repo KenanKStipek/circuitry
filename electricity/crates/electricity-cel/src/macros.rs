@@ -3,7 +3,7 @@
 //! expression, not just a field selection, and to turn *any* failure to
 //! evaluate it into `false` rather than only the narrower set `cel`'s
 //! own safe-navigation primitives (`.?`/`[?]`) can be built from
-//! (DESIGN.md §7.2, issue #379 review findings 2 and 3 — the fourth
+//! (DESIGN.md §7.2, issue #379 and its fourth
 //! review).
 //!
 //! `cel`'s own `has_macro_expander` (`parser/macros.rs`) only accepts a
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn has_over_a_non_select_argument_parses_and_evaluates() {
-        // issue #379 review finding 3: `cel`'s own `has` macro only
+        // Issue #379: `cel`'s own `has` macro only
         // accepts a field selection; celpy evaluates `has()` over any
         // expression.
         assert_eq!(eval("has([1][0])"), Ok(Value::Bool(true)));
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn has_over_a_failing_root_is_false_not_an_error() {
-        // issue #379 review finding 2: a root that itself fails to
+        // Issue #379: a root that itself fails to
         // evaluate (an undeclared identifier) must resolve to `false`,
         // not propagate the failure.
         assert_eq!(eval("has(nope.x)"), Ok(Value::Bool(false)));

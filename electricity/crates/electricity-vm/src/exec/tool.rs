@@ -72,7 +72,7 @@ use indexmap::IndexMap;
 /// through -- [`resolve_plugin`]'s own result. An embedder's own
 /// long-lived [`electricity_tools::ToolPlugin`] instance borrows
 /// straight through; one [`electricity_tools::build_plugin`] just
-/// built owns its own box (review finding 6 on PR #454: resolving
+/// built owns its own box (PR #454: resolving
 /// *before* the limiter slot is acquired, as `core/tool.py::
 /// ToolRuntime.execute` does, needs a value this enum's own caller can
 /// hold across that wait -- a bare `&dyn ToolPlugin` can't borrow from
@@ -99,7 +99,7 @@ impl ResolvedPlugin<'_> {
 /// (`tool.py:724`) -- [`execute_tool`] calls this first, outside its
 /// own acquire `select!`, so a per-plugin config error fails the
 /// attempt immediately, never waiting for a concurrency slot it will
-/// only turn around and release unused (review finding 6 on PR #454).
+/// only turn around and release unused (PR #454).
 ///
 /// *registry* (still [`crate::RunContext::registry`]) is tried first --
 /// an embedder's own long-lived [`electricity_tools::ToolPlugin`]
@@ -117,8 +117,8 @@ impl ResolvedPlugin<'_> {
 /// through this same fallback, the way any other `build_plugin`-only
 /// provider would.
 ///
-/// `Err` is a typed [`electricity_tools::ToolError`] (review finding 1
-/// on PR #454 -- a previous revision wrapped it into a bare
+/// `Err` is a typed [`electricity_tools::ToolError`] (PR #454 --
+/// a previous revision wrapped it into a bare
 /// `VmError::Tool(String)` right here, throwing its own *py_class*/
 /// *cause* away before [`execute_tool`] could ever classify a failure
 /// for retry or report its real exception class) -- `build_plugin`'s
@@ -669,9 +669,9 @@ pub async fn execute_tool<R: ParamsCtx>(
         // provider's own HTTP-family status/cause classification would
         // otherwise say -- unlike an HTTP status, a failed `expect:`
         // carries no classification of its own, and the motivating case
-        // (a flaky image-generation result) is exactly "try again"
-        // (review P2-8 on PR #454's second review). Set only in the two
-        // `expect` branches below, never the dispatch-failure branch
+        // (a flaky image-generation result) is exactly "try again".
+        // Set only in the two `expect` branches below, never the
+        // dispatch-failure branch
         // above them.
         let mut expect_failed = false;
         // `core/tool.py`'s own `timeout_unresolved` (issue #564): a
@@ -712,7 +712,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                 // resolved here, outside the acquire `select!` below, so
                 // a per-plugin config error fails this attempt at once,
                 // never waiting for (and then releasing unused) a
-                // concurrency slot (review finding 6 on PR #454).
+                // concurrency slot (PR #454).
                 let plugin_result = match timeout_result {
                     Err(message) => Err(electricity_tools::ToolError {
                         py_class: electricity_tools::PyExc::ValueError,
@@ -817,7 +817,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 let Some(dispatch) = dispatch else {
                                     return Err(VmError::Cancelled);
                                 };
-                                // Review finding 6 on PR #467: a process-
+                                // A process-
                                 // backed tool's own `run_tracked` returns
                                 // `Err(ProcError::Cancelled)` *synchronously*
                                 // -- before its first `.await` -- the moment
@@ -1181,8 +1181,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             // M0-H; lane E's own HTTP-family tool is what first makes
             // *retryable* ever come back `false` here for a dispatch
             // failure -- never for a failed `expect:`, which is always
-            // retryable regardless of provider (review P2-8 on PR
-            // #454's second review, `expect_failed` above).
+            // retryable regardless of provider (`expect_failed` above).
             let retryable = !timeout_unresolved
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
@@ -2261,7 +2260,7 @@ mod tests {
         }
     }
 
-    /// Issue #513 review finding 4: a tool's own model `expect:` must
+    /// A tool's own model `expect:` (#513) must
     /// dispatch with [`resolve_timeout_seconds`]'s own result (this
     /// tool's `timeout_ms: 5000` resolves to 5s) -- never `run_ctx.
     /// adapter_timeout_seconds` (120 here), which is only for `if`/
@@ -2484,7 +2483,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_build_error_never_waits_for_the_limiter_or_sets_waiting_for() {
-        // Review finding 6 on PR #454: `core/tool.py::ToolRuntime.
+        // `core/tool.py::ToolRuntime.
         // execute` builds the plugin (`tool.py:702`) *before* the
         // limiter wait (`tool.py:724`), so a per-plugin config error
         // fails the attempt without ever touching the limiter. Proven
@@ -2924,8 +2923,8 @@ mod tests {
     }
 
     /// A test-only [`electricity_tools::ToolPlugin`] that always raises
-    /// a typed [`electricity_tools::ToolError`] -- review finding 1 on
-    /// PR #454's own probe: "a FailTool returning `ErrorCause::NoReply`/
+    /// a typed [`electricity_tools::ToolError`] -- PR #454's own
+    /// probe: "a FailTool returning `ErrorCause::NoReply`/
     /// `PyExc::ValueError` reaches `execute_tool` with both fields
     /// intact".
     struct RaisingTool;
@@ -3365,7 +3364,7 @@ mod tests {
     }
 
     #[tokio::test]
-    // Review finding 6 on PR #467: this test's own sibling above ("...
+    // This test's own sibling above ("...
     // still_runs_a_ready_slot_and_tool") already proves a ready slot
     // wins the *acquire* race even with the token already cancelled --
     // this proves the *other* half, for a dispatch that itself

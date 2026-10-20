@@ -10,8 +10,8 @@
 //! `builders()` has an entry for every M1 native-tool lane's own
 //! provider (`json`, plus `sleep`/`fail`/`flaky_build` under the
 //! `test-tools` feature, plus `shell`/`awk`/`imagemagick`/`ffmpeg`/`fs`/
-//! `env_vars`/`hash`/`uuid`/`clock`/`regex`/`http`/`validate_yaml` --
-//! review P2-2 on PR #454's second review), each one returning that
+//! `env_vars`/`hash`/`uuid`/`clock`/`regex`/`http`/`validate_yaml`),
+//! each one returning that
 //! lane's own stub plugin (whose own `execute` still fails with a
 //! not-implemented message) rather than this function's own
 //! "Unknown plugin" text -- so lane C/D1/D2/E/L2's own first PR only
@@ -51,9 +51,9 @@ fn builders() -> HashMap<&'static str, Builder> {
             Ok(Box::new(crate::json::JsonTool))
         },
     );
-    // Review P2-2 on PR #454's second review: every M1 native-tool
-    // lane's own provider is pre-registered here now, each builder
-    // returning that lane's own (still not-implemented) stub plugin --
+    // Every M1 native-tool lane's own provider is pre-registered
+    // here now, each builder returning that lane's own (still
+    // not-implemented) stub plugin --
     // so lane C/D1/D2/E/L2's own first PR only ever fills a body in
     // the file this map already names, never adds a line to this
     // shared `HashMap::insert` call sequence another lane might also
@@ -225,8 +225,8 @@ mod tests {
 
     #[test]
     fn build_plugin_strips_c0_control_whitespace_rusts_trim_does_not() {
-        // Review P2-f on PR #454: `plugins/factory.py::build_plugin`'s
-        // own `.strip().lower()` strips C0 control whitespace
+        // `plugins/factory.py::build_plugin`'s own
+        // `.strip().lower()` strips C0 control whitespace
         // (`\x1c`-`\x1f`) Rust's `str::trim` does not -- `py_strip` is
         // the shared port of that exact whitespace set.
         let plugin = build_plugin("\u{1c}JSON\u{1d}", &Value::None).unwrap();
@@ -257,10 +257,10 @@ mod tests {
         // "Supported plugins" list the message above names), but it's
         // M2 scope (#448's own "Out of scope" list) -- no M1 lane ever
         // builds it, so `builders()` never gets an entry for it, unlike
-        // `shell`/`fs`/`regex`/`http`/`validate_yaml` (review P2-2 on PR
-        // #454's second review: each of those is pre-registered here
-        // now, returning its own lane's still-not-implemented stub
-        // plugin, reachable only through a direct call like this one --
+        // `shell`/`fs`/`regex`/`http`/`validate_yaml` (each of those
+        // is pre-registered here now, returning its own lane's
+        // still-not-implemented stub plugin, reachable only through
+        // a direct call like this one --
         // the refusal walker's own `Supported::allows_provider` keeps a
         // real document with one of those providers from ever reaching
         // this function before its own lane flips the flag).
@@ -309,9 +309,9 @@ mod tests {
 
     #[test]
     fn every_m1_native_provider_builds_its_own_still_not_implemented_stub() {
-        // Review P2-2 on PR #454's second review: `builders()` now has
-        // an entry for every M1 native-tool lane's own provider, each
-        // returning that lane's own stub plugin -- `execute()` still
+        // `builders()` now has an entry for every M1 native-tool
+        // lane's own provider, each returning that lane's own stub
+        // plugin -- `execute()` still
         // fails with that plugin's own "not implemented yet" message,
         // but `build_plugin` itself no longer reports it as unknown.
         for name in [

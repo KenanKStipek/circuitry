@@ -22,8 +22,8 @@ struct UnknownZone;
 /// 0.1.3's own docs: it never evaluates the file's trailing POSIX-TZ
 /// rule string, so a "slim" tzdata build -- explicit transitions ending
 /// years ago, everything past them left to that rule -- would pin the
-/// zone at its last explicit transition's offset forever; #460's own
-/// fix-pass finding 5). `jiff`'s own `TimeZone::get` searches `TZDIR`/
+/// zone at its last explicit transition's offset forever; issue #460's
+/// own fix pass). `jiff`'s own `TimeZone::get` searches `TZDIR`/
 /// the usual zoneinfo search path first, falling back to its bundled
 /// database, matching `zoneinfo.TZPATH`'s own search order closely
 /// enough that every name this preview needs to resolve, it does.
@@ -377,7 +377,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Finding 5: the tz reader must evaluate a TZif file's own
+    // The tz reader must evaluate a TZif file's own
     // trailing POSIX-TZ rule (its "footer"), not just its explicit
     // transition table -- a "slim" tzdata build relies on exactly that
     // for every instant past its last explicit transition.

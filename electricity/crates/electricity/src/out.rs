@@ -12,7 +12,7 @@ use std::io;
 use std::path::Path;
 
 /// A path's own text exactly as Python's `str(pathlib.PurePosixPath(...))`
-/// would render it (PR #441 review finding 15): every `.`-only
+/// would render it (PR #441): every `.`-only
 /// segment and every doubled/trailing separator dropped, `..`
 /// segments kept literally (never resolved -- this is string
 /// normalization only, not `realpath`), collapsing to `.` for an
@@ -235,7 +235,7 @@ mod tests {
         // passes `sort_keys` (`cli/app.py`'s own
         // `console.print_json(json.dumps(payload))`) -- so this stays
         // in `ok, error, warnings, state_out` order regardless of
-        // `--pretty` (issue #431 PR #441 review finding 2).
+        // `--pretty` (issue #431, PR #441's review).
         let payload = failure_payload(
             "boom",
             &["careful".to_string()],
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn failure_payload_normalizes_a_leading_dot_slash_in_state_out() {
-        // PR #441 review finding 15: `str(Path("./x"))` is `"x"` in
+        // PR #441's review: `str(Path("./x"))` is `"x"` in
         // Python; `Path::display()` on a plain Rust `PathBuf` would
         // keep the `./` instead.
         let payload = failure_payload("boom", &[], Some(Path::new("./out.json")));

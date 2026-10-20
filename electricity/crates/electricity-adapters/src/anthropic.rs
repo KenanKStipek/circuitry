@@ -36,7 +36,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> &str {
     }
 }
 
-/// `generate()`'s own request headers -- `pub` (review finding F6)
+/// `generate()`'s own request headers -- `pub`
 /// so `tests/adapter_corpus.rs` compares the recorded corpus headers
 /// against the adapter's own header-building code, not a list written
 /// by hand in the test a second time.
@@ -339,7 +339,7 @@ pub fn interpret_outcome(
 /// `adapters/anthropic.py::AnthropicAdapter`.
 pub struct AnthropicAdapter {
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
-    /// comment (review finding F5).
+    /// comment.
     pub base_url: Value,
     pub default_model: String,
     pub max_tokens: i64,
@@ -565,7 +565,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
-        // Review finding F5: Python raises inside `generate()`, after
+        // Python raises inside `generate()`, after
         // the API-key check, not when the adapter is built.
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();

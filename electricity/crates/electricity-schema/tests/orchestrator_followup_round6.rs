@@ -1,6 +1,6 @@
-//! Regression tests for PR #502's round-6 fix (three P0s, each pinned
-//! against the exact schema/instance shape `probe-r6`/`probe-nan`/
-//! `probe-refgraph` record against real `cof run`).
+//! Regression tests for PR #502's round-6 fix, each pinned against the
+//! exact schema/instance shape `probe-r6`/`probe-nan`/`probe-refgraph`
+//! record against real `cof run`.
 
 use electricity_schema::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
 use electricity_value::{Dict, Value};
@@ -10,8 +10,8 @@ fn check(schema: &serde_json::Value, instance: &serde_json::Value) -> PromptSche
     validate_prompt_schema(&value_from_json(schema), &value_from_json(instance))
 }
 
-// --- P0-1: lazy `is_valid` leaking into `anyOf`/`oneOf` branch
-// evaluation, giving a wrong verdict under `not`/`if`/`contains` -------
+// --- lazy `is_valid` leaking into `anyOf`/`oneOf` branch evaluation,
+// giving a wrong verdict under `not`/`if`/`contains` -------------------
 
 /// `probe-r6` c0: once the first `anyOf` branch fails, lazy mode must
 /// never make the *second* branch stop after its own first keyword and
@@ -66,7 +66,7 @@ fn contains_wrapping_a_failing_one_of_rejects_the_array() {
     ));
 }
 
-// --- P0-2: a NaN (or zero) `multipleOf` divisor panicking -------------
+// --- a NaN (or zero) `multipleOf` divisor panicking -------------------
 
 // `serde_json::Value` can't hold a `NaN`/`Infinity` float at all (`json!`
 // silently turns one into `null`), so every schema/instance here that
@@ -160,7 +160,7 @@ fn an_infinite_instance_against_an_infinite_divisor_is_the_nan_text() {
     );
 }
 
-// --- P0-3: a factorial `$ref`-graph walk in `schema_is_fully_supported`
+// --- a factorial `$ref`-graph walk in `schema_is_fully_supported`
 
 /// *n* mutually-referencing `$defs`, each `{type: object, properties:
 /// {c: {type: array, items: {anyOf: [$ref to every N0..N(n-1)]}}}}`,

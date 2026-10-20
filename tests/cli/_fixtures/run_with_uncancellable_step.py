@@ -47,7 +47,7 @@ class _UncancellableBlockPlugin:
     ) -> ToolResult:
         del timeout_seconds
         Path(params["started"]).touch()
-        # Required test 2 (#385 review P1-3): after a configurable delay,
+        # Required test 2 (#385): after a configurable delay,
         # this worker thread sends itself a SECOND SIGINT via
         # `signal.pthread_kill` -- standing in for the OS routing a user's
         # second Ctrl-C to this thread rather than the main thread (POSIX

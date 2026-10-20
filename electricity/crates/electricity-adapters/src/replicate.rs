@@ -145,7 +145,7 @@ pub fn interpret_outcome(
 
 pub struct ReplicateAdapter {
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
-    /// comment (review finding F5).
+    /// comment.
     pub base_url: Value,
     pub default_model: String,
 }
@@ -267,7 +267,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_fails_like_python_for_a_non_string_base_url_after_earlier_checks() {
-        // Review finding F5: Python's own `self.base_url.rstrip("/")`
+        // Python's own `self.base_url.rstrip("/")`
         // runs inside `generate()`, after the API-token check and the
         // `owner/name` model-format check, not at build time.
         let _guard = env_guard().lock().unwrap();

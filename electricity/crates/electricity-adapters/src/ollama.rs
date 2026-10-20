@@ -62,7 +62,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// `generate()`'s own request headers -- `pub` (review finding F6) so
+/// `generate()`'s own request headers -- `pub` so
 /// `tests/adapter_corpus.rs` compares the recorded corpus headers
 /// against the adapter's own header-building code, not a list written
 /// by hand in the test a second time.
@@ -330,7 +330,7 @@ fn transport_failure_error(failure: TransportFailure) -> AdapterError {
 /// `adapters/ollama.py::OllamaAdapter`.
 pub struct OllamaAdapter {
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
-    /// comment (review finding F5). Unlike the curl-based adapters,
+    /// comment. Unlike the curl-based adapters,
     /// `generate()` has no earlier check to run first: Python's own
     /// `self.base_url.rstrip("/")` is the very first thing `generate()`
     /// touches, so a bad value fails immediately there too.
@@ -379,7 +379,7 @@ impl Adapter for OllamaAdapter {
 
     async fn check(&self) -> CheckResult {
         // `redact_host_url`'s own Python counterpart (`curl_support.py`,
-        // issue #515 review finding F8) coerces with `str()` first --
+        // issue #515) coerces with `str()` first --
         // a non-string `base_url` still produces a `host:` requirement,
         // not a crash, since this is already the branch reporting a
         // problem.
@@ -624,7 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_fails_like_python_for_a_non_string_base_url() {
-        // Review finding F5: `runtime.adapters.ollama.base_url: 5` must
+        // `runtime.adapters.ollama.base_url: 5` must
         // not silently fall back to the default URL -- Python keeps the
         // int and then raises `AttributeError: 'int' object has no
         // attribute 'rstrip'` the moment `self.base_url.rstrip("/")`
@@ -775,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_raises_type_error_for_an_unserializable_params_value() {
-        // Issue #515 finding 4: `json.dumps(payload)` raises Python's own
+        // Issue #515: `json.dumps(payload)` raises Python's own
         // `TypeError` for a value it can't serialize (bytes, a date, ...),
         // uncaught -- never `RuntimeError`.
         let mut params = Dict::new();
@@ -793,7 +793,7 @@ mod tests {
             .generate("m", "hi", &options, &call_ctx(&path, &token))
             .await
             .unwrap_err();
-        // Review finding F7, taken from running `json.dumps({"weird":
+        // Message taken from running `json.dumps({"weird":
         // bytes([1, 2, 3])})` directly.
         assert_eq!(err.message, "Object of type bytes is not JSON serializable");
         assert_eq!(err.py_class, PyExc::TypeError);

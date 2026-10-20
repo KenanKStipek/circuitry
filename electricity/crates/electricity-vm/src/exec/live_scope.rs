@@ -448,15 +448,15 @@ mod differential_tests {
         // Present but falsy, one level inside the `prime.a` section's
         // own pushed scope -- `zero` must resolve here and never fall
         // through to the root's own same-named, truthy `zero` below
-        // (finding 3 on PR #482: Mustache's "first scope where the key
+        // (PR #482: Mustache's "first scope where the key
         // resolves wins, even falsy" rule, exercised across the
         // section/root boundary that actually reaches `ScopeRoot`).
         store.set_leaf(&a, k("zero"), Value::from(0_i64));
 
         // A path that resolves, but to `None` -- distinct from a
         // missing key for `first_unresolved`'s own "unresolved or
-        // None" rule (finding 3: a strict CEL read of this path must
-        // raise the same way a missing one does).
+        // None" rule: a strict CEL read of this path must
+        // raise the same way a missing one does.
         store.set_leaf(&prime, k("nullable"), Value::None);
 
         // A date leaf, one level under `prime` -- `project`/
@@ -464,7 +464,7 @@ mod differential_tests {
         // so a CEL path reading one of this date's own named fields
         // (`prime.today.year`) must come out *unresolved*, never
         // narrowed into a resolved int the way a Mustache tag's own
-        // `getattr` fallback would (PR #551 review finding 1).
+        // `getattr` fallback would (PR #551's review).
         store.set_leaf(
             &prime,
             k("today"),
@@ -636,18 +636,18 @@ mod differential_tests {
         // no `input` key) -- the fallback has to reach all the way
         // back to the root scope, which is `ScopeRoot::lookup`'s own
         // multi-segment path, not `walk_dotted` on an already-pushed
-        // `Value` (finding 3).
+        // `Value`.
         "{{#prime.a}}{{input.n}}{{/prime.a}}",
         // A section over a truthy scalar: pushes `42` itself as the new
         // nearest scope, so `{{.}}` resolves to it, not to `prime.a.b`'s
-        // enclosing dict (finding 3: "a section over a scalar").
+        // enclosing dict ("a section over a scalar").
         "{{#prime.a.b}}{{.}}{{/prime.a.b}}",
         // `prime.a.zero` (0, falsy) must win over the root's own `zero`
         // (1, truthy) -- the nearest *resolving* scope wins even falsy,
-        // never the nearest *truthy* one (finding 3).
+        // never the nearest *truthy* one.
         "{{#prime.a}}{{zero}}{{/prime.a}}",
         // `input.n` is `5`, an int: indexing it like a sequence raises,
-        // on both paths alike (finding 3: an error-text case).
+        // on both paths alike (an error-text case).
         "{{input.n.0}}",
     ];
 
@@ -691,14 +691,14 @@ mod differential_tests {
         // `state.prime.today.year` must read as unresolved (false,
         // non-strict) on both paths alike, never narrowed by the live
         // path into a resolved `2026` the way a Mustache tag's own
-        // `getattr` fallback would (finding 1).
+        // `getattr` fallback would.
         "state.prime.today.year == 2026",
         "has(state.prime.today.year)",
     ];
 
     /// Exercised with `strict: true` -- `evaluate_condition`'s `strict`
     /// flag turns an unresolved `state.`-path read into an `Err` rather
-    /// than a logged, false result (finding 3: must be covered as well
+    /// than a logged, false result -- must be covered as well
     /// as the `strict: false` default [`CONDITIONS`] above uses).
     const CONDITIONS_STRICT: &[&str] = &[
         // Resolves, so strict has nothing to raise over -- a passing
@@ -706,13 +706,13 @@ mod differential_tests {
         "state.prime.a.b == 42",
         // Present, but `None` -- `first_unresolved`'s own "unresolved or
         // None" rule treats this exactly like a missing key, so strict
-        // raises here too (finding 3: "a value that resolves to `None`
+        // raises here too ("a value that resolves to `None`
         // under a strict condition").
         "state.prime.nullable == null",
         // A plain missing key, strict's ordinary case.
         "state.missing.key == 1",
         // A date's own field, which the attribute fallback never
-        // resolves in a `state.`-path read (finding 1) -- strict
+        // resolves in a `state.`-path read -- strict
         // raises here too, on both paths alike.
         "state.prime.today.year == 2026",
     ];

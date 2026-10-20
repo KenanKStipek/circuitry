@@ -139,7 +139,7 @@ pub struct RawResponse {
     /// swallowed into an otherwise-ordinary result (urllib's own
     /// `except HTTPError` handler, reached by a 4xx/5xx or an
     /// unfollowed/disallowed 3xx -- `src/http.rs`'s own job, issue
-    /// #485 review finding 8).
+    /// #485).
     pub body_error: Option<SendError>,
     /// Every body byte actually received before [`RawResponse::body_error`]
     /// (if any) cut the read short -- unlike [`RawResponse::body`], never
@@ -406,7 +406,7 @@ async fn connect(
     // URLError(err)`, `socket.timeout`'s own `str()` being just `timed
     // out`), never the unwrapped `TimeoutError` [`send`]'s own
     // status-line/body-read timeouts raise -- [`SendError::Connect`],
-    // not [`SendError::Timeout`] (issue #485 review finding 2).
+    // not [`SendError::Timeout`] (issue #485).
     let tcp = tokio::time::timeout(connect_deadline, TcpStream::connect((tcp_host, tcp_port)))
         .await
         .map_err(|_| SendError::Connect {
@@ -573,7 +573,7 @@ async fn connect_tunnel(
         // non-2xx `CONNECT` reply, caught and re-raised as `URLError`
         // by the same `except OSError` in `h.request()` [`connect`]'s
         // own doc comment above already describes) -- retryable, not
-        // [`SendError::Other`] (issue #485 review finding 7).
+        // [`SendError::Other`] (issue #485).
         return Err(SendError::Connect {
             kind: ConnectKind::Other,
             text: format!("proxy CONNECT to {host}:{port} failed: {status_line}"),
@@ -591,7 +591,7 @@ async fn connect_tunnel(
 /// own per-phase deadlines of the same duration -- each phase alone
 /// can never exceed the total, and this outer wrapper is what catches
 /// several phases each individually under the limit but summing past
-/// it (issue #485 review finding 13; this lane's own caller,
+/// it (issue #485; this lane's own caller,
 /// `src/http.rs`, never builds `Total`, only lane F2's adapters do).
 pub async fn send(
     client: &HttpClient,
@@ -655,7 +655,7 @@ async fn send_inner(
         // own codepoint (<= 0xFF) *is* its one-byte latin-1 encoding
         // -- `HeaderValue::from_str` would instead UTF-8-encode a
         // non-ASCII codepoint into two or more bytes, putting the
-        // wrong bytes on the wire (issue #485 review finding 3).
+        // wrong bytes on the wire (issue #485).
         let latin1_bytes: Vec<u8> = value.chars().map(|c| c as u8).collect();
         let header_value = http::HeaderValue::from_bytes(&latin1_bytes)
             .map_err(|e| SendError::Other(e.to_string()))?;
@@ -705,7 +705,7 @@ async fn send_inner(
         // itself latin-1), not UTF-8 -- each byte becomes the
         // codepoint of that same ordinal, never
         // `String::from_utf8_lossy`'s multi-byte decode/replacement
-        // (issue #485 review finding 3; this also makes a later
+        // (issue #485; this also makes a later
         // redirect's own `Location` re-quoting agree with urllib's,
         // since [`http_url::quote`] already treats a codepoint <=
         // 0xFF as the one byte to percent-encode).
@@ -785,7 +785,7 @@ async fn send_inner(
     }
     // Only a body-phase failure's own caller (`electricity-adapters::
     // transport::body_error_outcome`) ever reads `partial_body` at all
-    // (review finding F11) -- the success path leaves it empty rather
+    // -- the success path leaves it empty rather
     // than cloning the whole body for nothing.
     let partial_body = if body_error.is_some() {
         std::mem::take(&mut body_bytes)

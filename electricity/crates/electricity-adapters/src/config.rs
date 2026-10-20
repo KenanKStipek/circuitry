@@ -69,7 +69,7 @@ pub fn cfg_str_or(cfg: &Value, key: &str, default: &str) -> String {
 /// uses share this: `binary`/`default_model`/`thinking` (issue #520
 /// part B, B5) resolve -- or raise Python's own `TypeError` -- only
 /// where actually used ([`require_str`]/[`resolve_truthy_str`]);
-/// `base_url`/`endpoint` (issue #515, review finding F5) resolve via
+/// `base_url`/`endpoint` (issue #515) resolve via
 /// [`rstrip_base_url`] at each adapter's own later Python call site,
 /// since `self.base_url.rstrip("/")` there raises `AttributeError`
 /// lazily, not at build time (a watsonx IAM exchange, say, must still

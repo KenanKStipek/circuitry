@@ -169,7 +169,7 @@ fn write_conditional_meta_start(
 /// liveness: `Value` is owned data, not a reference, so it would
 /// freeze every nested value exactly as it stood at that one moment --
 /// the P0 "a nested container freezes its own ancestors' state"
-/// finding on PR #440, found *twice*: once for *ctx_chain* itself
+/// case from PR #440's review, found *twice*: once for *ctx_chain* itself
 /// (fixed by threading the chain this far at all, rather than a
 /// resolved `ctx: &Value`), and once more for the overlay this
 /// function rebuilds after every branch step ([`build_overlay`]) --
@@ -609,7 +609,7 @@ fn local_writes(
 /// [`crate::store::Node::flat_entries`] -- not a plain `.iter()`/Deref
 /// read of the node's own direct entries, which would silently drop
 /// every key reachable only through a [`crate::store::Node::fallback`]
-/// (issue #501 review finding 1: a loop body's `ctx_chain` can now be
+/// (issue #501's review: a loop body's `ctx_chain` can now be
 /// one of `exec::loop_`'s own overlay nodes, carrying only that pass's/
 /// step's own local keys directly, with everything else -- `item`,
 /// `input`, `prime`'s own sibling entries -- one or more fallback hops
@@ -668,8 +668,8 @@ fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
 /// clone (an `Rc` clone, the live node itself) reproduces that exactly,
 /// where cloning a already-materialized `Value` cannot (that copies the
 /// whole subtree, permanently losing liveness below the top level -- the
-/// P0 "a nested container freezes its own ancestors' state" finding on
-/// PR #440, found again on a second review after `CtxSource::Frozen`
+/// P0 "a nested container freezes its own ancestors' state" case from
+/// PR #440's review, found again on a second review after `CtxSource::Frozen`
 /// alone -- itself still a `Value` under the hood -- turned out to make
 /// exactly the same mistake one level later: a branch's *second* step
 /// could see a sibling *earlier* step's own write, but a container that

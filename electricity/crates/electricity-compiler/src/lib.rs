@@ -101,7 +101,7 @@
 //!   so this compiler never panics on it ([`compile::coerce`]'s own
 //!   module docs).
 //! - A handful of narrower whitespace/Unicode divergences, declined as
-//!   out of scope for this lane (PR #415's review, finding 19): the
+//!   out of scope for this lane (PR #415's review): the
 //!   `\x1c`-`\x1f` control characters Python's `str.strip()`/`.isspace()`
 //!   treat as whitespace but Rust's `char::is_whitespace` does not
 //!   ([`compose`]'s own module docs); [`compile::names`]'s own

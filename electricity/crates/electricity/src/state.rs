@@ -4,8 +4,8 @@
 //! _parse_env_vars`). `_load_state` is `migrate_legacy_state(inline)`
 //! (`core/state_ns.py::migrate_legacy_state`,
 //! [`electricity_compiler::state_ns::migrate_legacy_state`] here) --
-//! the *whole* root, not just an `input` projection of it (PR #441
-//! review finding 1d): every root key that is neither a namespace name
+//! the *whole* root, not just an `input` projection of it (PR #441):
+//! every root key that is neither a namespace name
 //! (`input`/`prime`/`runtime`) nor `_`-prefixed is lifted under a fresh
 //! `input` key appended at the end; a namespace-named or `_`-prefixed
 //! key (`-e _tag=x`, `-e prime=...`) is left exactly where it already
@@ -17,17 +17,17 @@
 //! [`seed_state`] is the reason a check failure from step 5 onward
 //! (load, allowlist, effective settings, complexity, concurrency,
 //! persistence) still reports the same root `cof run` of the same `-e`
-//! values would, instead of an empty `{"input": {}}` -- PR #441 review
-//! finding 3. [`run_orchestration`]'s own step 5 reseeds `state["input"]`
+//! values would, instead of an empty `{"input": {}}` -- PR #441.
+//! [`run_orchestration`]'s own step 5 reseeds `state["input"]`
 //! specifically (restoring a declared `type: string` input's own raw
-//! text, PR #441 review finding 1c) once the real document is loaded,
+//! text, PR #441) once the real document is loaded,
 //! replacing this module's sniff-only seed for that one namespace;
 //! every other root key this module writes is untouched from here on.
 //! Once [`electricity_compiler::pre_state_checks`]/[`build_input_
 //! namespace`] itself succeeds (step 10, `check_interface_inputs`), its
 //! own coerced/defaulted namespace *replaces* `state["input"]` outright
 //! (`run_orchestration`'s own job, not this module's, and a replace,
-//! not a merge -- PR #441 review finding 1a: a key the final namespace
+//! not a merge -- PR #441: a key the final namespace
 //! doesn't carry forward, e.g. an optional input whose seed was `null`,
 //! must not survive from this seed); on a step-10 failure, [`electricity_
 //! compiler::build_input_namespace_best_effort`] -- not this module --
@@ -64,12 +64,12 @@ pub fn seed_state(store: &Store, inputs: &indexmap::IndexMap<String, String>) {
 }
 
 /// Replaces `state["input"]` wholesale with *namespace* -- never a
-/// merge onto whatever is already there (PR #441 review finding 1a: a
+/// merge onto whatever is already there (PR #441: a
 /// key the new namespace doesn't carry forward must not survive from
 /// an earlier seed). The one place [`run_orchestration`] ever writes
 /// `state["input"]` after [`seed_state`]'s own initial write, whether
-/// re-seeding with the document's own raw-text restoration (step 5,
-/// finding 1c) or installing [`electricity_compiler::build_input_
+/// re-seeding with the document's own raw-text restoration (step 5)
+/// or installing [`electricity_compiler::build_input_
 /// namespace`]/[`build_input_namespace_best_effort`]'s own result
 /// (step 10).
 pub fn replace_input_namespace(store: &Store, namespace: indexmap::IndexMap<Value, Value>) {
@@ -158,7 +158,7 @@ mod tests {
         );
     }
 
-    // PR #441 review finding 1d.
+    // PR #441.
     #[test]
     fn seed_state_keeps_an_underscore_prefixed_root_key_at_the_root() {
         let store = Store::new();

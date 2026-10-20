@@ -65,7 +65,7 @@ pub(crate) fn interrupted_text(token: &CancellationToken) -> String {
         // called once `token.is_set()` is already known true -- any
         // other/missing signum too. Deliberately one arm, not two: a
         // dedicated `Some(SIGINT)` match next to this would just
-        // repeat it (issue #431 review finding on PR #440).
+        // repeat it (PR #440's review of issue #431).
         _ => "Interrupted (Ctrl-C/SIGINT)".to_string(),
     }
 }
@@ -173,7 +173,7 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// [`CtxSource::Live`] entry, resolved through [`live_ctx`] exactly like
 /// any other live node (a detached node is an ordinary `NodeRef` in
 /// every other respect). This is the P0 "a nested container freezes its
-/// own ancestors' state" finding on PR #440, found a second time after
+/// own ancestors' state" case from PR #440's review, found a second time after
 /// an initial fix that gave the overlay a `Frozen(Value)` of its own --
 /// which looked identical to the tree's case above, but was wrong for
 /// exactly the reason the tree's case is safe: something *does* go on
@@ -240,8 +240,8 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// resolves both lazily, a dotted segment at a time, off the live
 /// store itself. This function stays the real cost for every caller
 /// that still needs it: a `use` effect's own input render/`expect:`
-/// (`exec::use_`'s own call sites aren't narrowed either -- PR #482
-/// review finding 2, left as a follow-up: a `use` effect's own retry
+/// (`exec::use_`'s own call sites aren't narrowed either -- PR #482's
+/// review, left as a follow-up: a `use` effect's own retry
 /// loop does resolve its `{from:}`/template inputs lazily now through
 /// the same [`crate::exec::live_scope::LiveRoot`], but its `expect:`'s
 /// own `state` argument still collapses through this function, exactly
@@ -295,7 +295,7 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 /// Wraps *err* with *label*'s own `"<label>: <message>"` prefix
 /// (`core/dynamic.py`'s chain-flow wrap, `RuntimeError(f"{effect_path}:
 /// {e}")`, where `effect_path` is [`effect_label`]'s own result, not a
-/// full state path -- issue #431 review finding on PR #440: a nested
+/// full state path -- PR #440's review of issue #431: a nested
 /// `dynamic`'s own wrap must read `"<its own name>.<child>"`, never
 /// `"<child's full path>"`) -- except a cancellation, which Python's own
 /// `except Exception` (never `BaseException`) never catches, so it
@@ -307,10 +307,10 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
         // A typed tool failure keeps its own `cause` through the wrap --
         // `message` grows the label prefix, and `py_class` becomes
-        // `RuntimeError` (review finding 1 on PR #454: #442's own tree
+        // `RuntimeError` (PR #454: #442's own tree
         // text needs the error to survive a chain/tree wrap as a typed
-        // `Raised`, not collapse to a bare `VmError::Message`; review
-        // P2-1 on the second review: `core/dynamic.py`'s own `raise
+        // `Raised`, not collapse to a bare `VmError::Message`;
+        // `core/dynamic.py`'s own `raise
         // RuntimeError(...) from e` means the *wrapping* exception is
         // always a `RuntimeError`, never `e`'s own class -- `cause_class`
         // remembers *e*'s own `py_class` for `VmError::displayed_class`'s
@@ -349,7 +349,7 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
 /// itself, fresh, for the condition and for every branch step (that
 /// module's own doc comment: freezing it once here, before the branch
 /// even starts, is the P0 "a nested container freezes its own
-/// ancestors' state" finding on PR #440) -- exactly mirroring
+/// ancestors' state" case from PR #440's review) -- exactly mirroring
 /// `core/dynamic.py::_execute_effect`'s own per-effect-type dispatch,
 /// where only a `dynamic`/`if` child ever receives `ctx` as an
 /// `ctx_override`/live reference rather than a resolved value.
@@ -370,7 +370,7 @@ pub(crate) fn execute_op<'a>(
     token: &'a CancellationToken,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
-        // Review P2-4 on PR #454's second review: wired now (`core/
+        // Wired now (`core/
         // dynamic.py::DynamicRuntime._execute_effect`'s own single
         // `is_enabled` check, before dispatching to any effect type,
         // leaf or container -- disabling a container disables its
@@ -740,13 +740,13 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn a_raised_failures_cause_survives_the_chain_wrap_but_its_class_becomes_runtime_error() {
-        // Review finding 1 on PR #454: a chain/tree wrap must keep
+        // PR #454: a chain/tree wrap must keep
         // `VmError::Raised` a `Raised`, not collapse to a bare
         // `VmError::Message` -- a nested `dynamic`'s own error-collection
         // point (`execute_chain`/`execute_tree`, both of which call this
         // function) is exactly where #442's tree text would otherwise
-        // lose the real exception class entirely. Review P2-1 on the
-        // second review: `core/dynamic.py`'s own `raise RuntimeError(...)
+        // lose the real exception class entirely.
+        // `core/dynamic.py`'s own `raise RuntimeError(...)
         // from e` means the *wrapping* exception's own class is always
         // `RuntimeError`, never `e`'s class -- that survives one level
         // in as `cause_class` instead, for `VmError::displayed_class`.
@@ -774,8 +774,7 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn displayed_class_is_the_tools_own_class_before_any_wrap() {
-        // Review P2-1 on the second review's own first probe: a direct
-        // tool failure, never wrapped, displays its own real class --
+        // A direct tool failure, never wrapped, displays its own real class --
         // Python's `err.__cause__ or err` with `__cause__` still `None`.
         let raised = VmError::Raised {
             py_class: PyExc::ValueError,
@@ -788,8 +787,7 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn displayed_class_is_runtime_error_for_a_doubly_wrapped_chain_failure() {
-        // Review P2-1 on the second review's own second probe: a nested
-        // chain failure (two container wraps deep) displays
+        // A nested chain failure (two container wraps deep) displays
         // `RuntimeError` -- the *inner* wrap's own class, one level in
         // from the outer wrap, never the original leaf failure's class
         // two levels down (`err.__cause__ or err` peels exactly one

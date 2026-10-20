@@ -17,7 +17,7 @@ use std::fmt;
 
 /// A Python exception class name -- the one canonical copy every
 /// crate that needs to report one builds on (issue #449's gate lane;
-/// review finding 1 on PR #454 named `electricity-tools::PyExc` and
+/// PR #454 named `electricity-tools::PyExc` and
 /// `electricity-vm::adapter::PyExc` as two copies of the same thing,
 /// kept apart by a dependency-direction rule that doesn't actually
 /// hold -- `electricity-vm` already depends on `electricity-tools`).
@@ -64,7 +64,7 @@ pub enum PyExc {
     TimeoutError,
     UnicodeDecodeError,
     /// `int(float("inf"))`/`int(float("nan"))`'s own exception class
-    /// (review finding 5 on PR #454) -- CPython raises this, not
+    /// (PR #454) -- CPython raises this, not
     /// `ValueError`, for a non-finite float.
     OverflowError,
     /// `core/use.py`'s own cycle-detection raise (M1 lane I, issue
@@ -187,7 +187,7 @@ impl PyExc {
 
 impl PyExc {
     /// `True` for every variant that is a `ValueError` subclass in
-    /// Python (issue #513 review finding 1): `core/use.py`'s own
+    /// Python (issue #513's review): `core/use.py`'s own
     /// `except (ValueError, RecursionError)` split decides
     /// not-retried this way, via `isinstance`, so every subclass
     /// counts, not just the bare class. `RecursionError` itself is a
@@ -215,7 +215,7 @@ impl fmt::Display for PyExc {
 }
 
 /// A failed [`py_int`] coercion -- the Python exception class it would
-/// have raised (review finding 5 on PR #454: a caller that only kept
+/// have raised (PR #454: a caller that only kept
 /// the message text couldn't tell a `ValueError` from the
 /// `OverflowError` a non-finite float raises) plus CPython's own
 /// message text.
@@ -239,8 +239,7 @@ fn value_error(message: impl Into<String>) -> PyIntError {
 }
 
 /// `%.200R`'s own truncation (`Objects/longobject.c`'s own invalid-
-/// literal message, review P2-9 on PR #454's second review) --
-/// *value*'s own [`Value::py_repr`], truncated to its first 200
+/// literal message) -- *value*'s own [`Value::py_repr`], truncated to its first 200
 /// *characters* (not bytes: a multi-byte codepoint is never split),
 /// with no ellipsis added -- CPython's own `%R` precision truncation
 /// (`PyUnicode_Substring`) is a plain substring, never a "..." marker.
@@ -265,9 +264,8 @@ fn py_repr_truncated_200(value: &Value) -> String {
 /// arbitrary-precision and tolerates `_` digit grouping (`"1_0"` ==
 /// `10`); this returns `i64`, so a numeral outside that range, or one
 /// written with underscores, fails to parse here where CPython would
-/// succeed. The same gap applies to the `Value::Float` arm below
-/// (review P2-9 on PR #454's second review): `f.trunc() as i64` is
-/// Rust's own saturating float-to-int cast, silently clamping to
+/// succeed. The same gap applies to the `Value::Float` arm below:
+/// `f.trunc() as i64` is Rust's own saturating float-to-int cast, silently clamping to
 /// `i64::MAX`/`MIN` for a float whose truncated value doesn't fit --
 /// CPython raises `OverflowError` instead (`int(1e30)`), the same
 /// class [`py_int`] already raises for a non-finite float, just not
@@ -1123,15 +1121,15 @@ mod tests {
     fn py_int_reports_cpythons_own_text_for_a_bad_string() {
         let err = py_int(&Value::Str("x".to_string())).unwrap_err();
         // CPython's own `repr('x')` is single-quoted, not Rust's
-        // double-quoted `{:?}` (review finding 5 on PR #454).
+        // double-quoted `{:?}` (PR #454).
         assert_eq!(err.message, "invalid literal for int() with base 10: 'x'");
         assert_eq!(err.py_class, PyExc::ValueError);
     }
 
     #[test]
     fn py_int_truncates_a_long_bad_string_to_200_chars_like_percent_200_r() {
-        // Review P2-9 on PR #454's second review: CPython's own
-        // invalid-literal message formats the repr with `%.200R`, a
+        // CPython's own invalid-literal message formats the repr
+        // with `%.200R`, a
         // plain substring truncation to 200 characters, no ellipsis.
         let long = "x".repeat(250);
         let err = py_int(&Value::Str(long)).unwrap_err();
@@ -1203,7 +1201,7 @@ mod tests {
 
     #[test]
     fn round6_rounds_odd_multiples_of_one_over_128_half_to_even() {
-        // Review finding 7 on PR #454: a 6-digit tie only happens at an
+        // A 6-digit tie only happens at an
         // odd multiple of 1/128 -- `generate_round6_corpus.py`'s own
         // random draws essentially never hit one, so the half-even
         // claim went untested without cases picked specifically to land

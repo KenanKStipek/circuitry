@@ -97,7 +97,7 @@ fn float_cmp(f: f64, other: f64) -> Option<Ordering> {
 /// `f64` first and so loses precision once `i` needs more than 53 bits
 /// (`9007199254740993`, one above `2^53`, rounds to the same `f64` as
 /// `9007199254740992.0`). Python's `float.__lt__`/`int.__lt__` compare
-/// the two exactly, never rounding the `int` operand first (finding 8).
+/// the two exactly, never rounding the `int` operand first.
 /// `None` for a `NaN` *f*, same as [`float_cmp`].
 fn float_cmp_i64(f: f64, i: i64) -> Option<Ordering> {
     if f.is_nan() {
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn bytes_ordering_works() {
-        // finding 2: a previous version of this fell back to
+        // A previous version of this fell back to
         // `Value::partial_cmp`, which has no `Bytes` arm.
         assert_eq!(eval("b'a' < b'b'"), Ok(Value::Bool(true)));
         assert_eq!(eval("b'ab' <= b'ab'"), Ok(Value::Bool(true)));
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn null_ordering_raises() {
-        // finding 2: `Value::partial_cmp` returned `Some(Equal)` for
+        // `Value::partial_cmp` returned `Some(Equal)` for
         // `(Null, Null)`, making `null <= null` `true` where celpy (and
         // plain `cel`) raise.
         assert!(eval("null <= null").is_err());
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn bool_against_a_number_is_tolerant() {
-        // finding 8: `BoolType` is a plain `int` subclass with no
+        // `BoolType` is a plain `int` subclass with no
         // ordering override in celpy, so it behaves like one on either
         // side, unlike `int` itself.
         assert_eq!(eval("true < 2"), Ok(Value::Bool(true)));
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn float_against_a_big_int_compares_exactly() {
-        // finding 8: `9007199254740993` (one above `2^53`) rounds to the
+        // `9007199254740993` (one above `2^53`) rounds to the
         // same `f64` as `9007199254740992.0` under a naive cast, making
         // `<` wrongly `false` instead of `true`.
         assert_eq!(
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn nan_resolves_every_comparison_to_false_without_raising() {
-        // finding 8: celpy's plain `float` comparison never raises for a
+        // celpy's plain `float` comparison never raises for a
         // `NaN` operand; `cel`'s own comparer does.
         let nan = f64::NAN;
         let env = Arc::new(cel::Env::stdlib());

@@ -836,8 +836,7 @@ def _resolve_effect_text(
 #: prompt that nests itself exponentially (e.g. 30 levels of
 #: ``p_n: "{{> p_n+1}}{{> p_n+1}}"``, which `cof check`'s own cycle check
 #: doesn't catch, since each level names a *different* prompt) passing
-#: `cof check` and then exhausting memory at run time (#396 second-review
-#: finding 9).
+#: `cof check` and then exhausting memory at run time (#396).
 _MAX_EXPANDED_CHARS = 8 * 1024 * 1024
 
 

@@ -1167,7 +1167,7 @@ add(doc(text="effects: []\nflow: bogus\n"))
 CASES[-1]["name"] = "unknown_flow_value"
 
 
-# --- Finding 18: an explicit `null` name/template is "absent", not --
+# --- An explicit `null` name/template is "absent", not --
 # --- "the wrong type" ---------------------------------------------
 
 add(doc(text=(
@@ -1208,7 +1208,7 @@ add(doc(text=(
 CASES[-1]["name"] = "explicit_null_yield_template_must_have_template"
 
 
-# --- Finding 20: `inline`'s syntax check runs against the raw, --------
+# --- `inline`'s syntax check runs against the raw, --------
 # --- untrimmed text, so a leading blank line doesn't shift the --------
 # --- "at line N" a malformed-template message carries -----------------
 
@@ -1221,7 +1221,7 @@ add(doc(text=(
 CASES[-1]["name"] = "inline_checked_against_the_untrimmed_text"
 
 
-# --- Findings 15/16: is-not-None coercions and integer saturation ----
+# --- Is-not-None coercions and integer saturation ----
 
 add(doc(text=(
     "effects:\n"
@@ -1533,7 +1533,7 @@ add(doc(text=(
 CASES[-1]["name"] = "prompt_template_file_missing"
 
 
-# --- Findings 5/6: check order within a single effect -----------------------
+# --- Check order within a single effect -----------------------------------
 
 add(doc(text=(
     "effects:\n"
@@ -1569,7 +1569,7 @@ CASES[-1]["files"]["child.yml"] = "effects: []\n"
 CASES[-1]["name"] = "use_inputs_templates_checked_before_references"
 
 
-# --- Second review of #415, finding 2: validate_bare_input_refs runs --
+# --- Second review of #415: validate_bare_input_refs runs --
 # --- before declared prompts/composition -- matching -----------------
 # --- compile_orchestration's own order (mod.rs) -- not just before a --
 # --- single effect's own checks (above). `prompts:`/`{{> name}}` -----
@@ -1608,7 +1608,7 @@ add({
 })
 
 
-# --- Finding 7: collect '' on an unnamed loop is not rejected ---------------
+# --- Collect '' on an unnamed loop is not rejected --------------------------
 
 add(doc(text=(
     "effects:\n"
@@ -1635,7 +1635,7 @@ add(doc(text=(
 CASES[-1]["name"] = "collect_whitespace_only_on_unnamed_loop_is_fine"
 
 
-# --- Finding 8: prompt/yield params/inputs are raw, never checked ----------
+# --- Prompt/yield params/inputs are raw, never checked ---------------------
 
 add(doc(text=(
     "effects:\n"
@@ -1676,7 +1676,7 @@ add(doc(text=(
 CASES[-1]["name"] = "prompt_inputs_in_a_loop_body_are_not_reference_checked"
 
 
-# --- Finding 9: a custom prime_template is never Mustache-checked ----------
+# --- A custom prime_template is never Mustache-checked ---------------------
 
 add(doc(text=(
     "effects:\n"
@@ -1691,7 +1691,7 @@ add(doc(text=(
 CASES[-1]["name"] = "reflector_prime_template_is_never_mustache_checked"
 
 
-# --- Finding 4: a reflector's inner scope is scope_child(scope, name) ------
+# --- A reflector's inner scope is scope_child(scope, name) ----------------
 
 add(doc(text=(
     "effects:\n"
@@ -1708,7 +1708,7 @@ add(doc(text=(
 CASES[-1]["name"] = "reflector_inner_duplicate_name_reports_the_inner_scope"
 
 
-# --- Finding 12: group references, checked against Circuitry ---------------
+# --- Group references, checked against Circuitry --------------------------
 
 add({
     "name": "concurrency_group_references_everywhere_an_effect_can_set_one",
@@ -1777,7 +1777,7 @@ add({
     # Decision 1: a `use` cycle that loops back through the *entry*
     # document itself, entered from the a.yml side -- a three-hop
     # cycle, deliberately a different shape from `use_cycle_two_hop`'s
-    # own two-hop one (second review of #415, finding 6: this case
+    # own two-hop one (second review of #415: this case
     # used to be byte-for-byte identical to that one).
     "name": "use_cycle_through_entry_document_entered_from_a",
     "files": {
@@ -1809,7 +1809,7 @@ add({
 })
 
 add({
-    # Second review of #415, finding 4: `use_cycle_through_a_child_with_
+    # Second review of #415: `use_cycle_through_a_child_with_
     # a_duplicate_key` repeats the *same* value ("name: s" twice), so it
     # doesn't actually prove last-key-wins -- this probe's duplicate
     # `path:` key has two *different* values, and the *later* one
@@ -1847,7 +1847,7 @@ add({
 })
 
 add({
-    # Finding 13: a duplicate key in a `use` *child* (never the entry
+    # A duplicate key in a `use` *child* (never the entry
     # document, which Circuitry's main loader -- not
     # `core/cycle_check.py::load_orch`'s plain `yaml.safe_load` --
     # reads) must not hide a cycle through it.

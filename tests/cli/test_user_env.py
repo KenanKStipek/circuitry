@@ -130,7 +130,7 @@ def test_group_readable_env_file_loads_with_warning():
 def test_windows_has_no_getuid_but_still_loads(monkeypatch: pytest.MonkeyPatch):
     """`os.getuid` doesn't exist on Windows; `load_user_env` must skip the
     POSIX ownership/mode checks there rather than raising `AttributeError`
-    for every `cof` command once `.env` exists (#349 review finding 2)."""
+    for every `cof` command once `.env` exists (issue #349)."""
     monkeypatch.delattr(os, "getuid", raising=False)
     _write_env(f"OPENAI_API_KEY={_CANARY}\n")
 

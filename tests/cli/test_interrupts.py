@@ -122,8 +122,8 @@ def test_second_sigint_exits_on_a_platform_without_sighup(monkeypatch) -> None:
     """On a platform with no `signal.SIGHUP` at all (Windows), a second
     SIGINT/SIGTERM during cleanup must still reach `os._exit` -- the
     handler's own SIGHUP check used to compare against `signal.SIGHUP`
-    unconditionally, raising `AttributeError` here instead (#357 review
-    finding 1)."""
+    unconditionally, raising `AttributeError` here instead (issue
+    #357)."""
     exit_codes: list[int] = []
 
     def _fake_exit(code: int) -> None:

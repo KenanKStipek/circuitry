@@ -70,7 +70,7 @@ class OpentelemetryPlugin:
         #: exact same ``effect_path`` at once; without this, the second
         #: branch's ``on_effect_start`` would overwrite the first's entry
         #: and its `on_effect_complete`` would then end the wrong branch's
-        #: span (#331 finding 7). ``threading.get_ident()`` disambiguates
+        #: span (issue #331). ``threading.get_ident()`` disambiguates
         #: which entry belongs to which completing call — a span's own
         #: start and complete always fire on the same thread, whatever else
         #: is running concurrently.
@@ -148,8 +148,8 @@ class OpentelemetryPlugin:
                 # like the exact-path push/pop below. Any still-open entry
                 # is a correct parent; the most recently opened one is the
                 # closest guess when more than one is open (an unnamed
-                # container reused across concurrent branches, #331 finding
-                # 7 — inherently ambiguous without a name to tell them apart).
+                # container reused across concurrent branches, issue #331 —
+                # inherently ambiguous without a name to tell them apart).
                 return entries[-1][2]
         return self._run_ctx
 
@@ -306,7 +306,7 @@ class OpentelemetryPlugin:
         """Remove and return *this call's own* span at *effect_path* — the
         entry whose start fired on this same thread, not any other
         concurrent branch's entry sharing the same (unnamed-container)
-        path (#331 finding 7)."""
+        path (issue #331)."""
         entries = self._spans.get(effect_path)
         if not entries:
             return None

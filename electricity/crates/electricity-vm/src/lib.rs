@@ -169,14 +169,13 @@ pub enum VmError {
     /// to the same shape with [`electricity_tools::ToolError::message`]'s
     /// own `RuntimeError`/[`electricity_tools::ErrorCause::None`]
     /// default -- what [`crate::exec::tool::execute_tool`] returns for
-    /// `on_error: fail` once retries are exhausted (review finding 1 on
-    /// PR #454: the previous `Tool(String)` shape threw its own
+    /// `on_error: fail` once retries are exhausted (PR #454:
+    /// the previous `Tool(String)` shape threw its own
     /// [`electricity_tools::ToolError`]'s *py_class*/*cause* away at
     /// [`crate::exec::tool::run_tool`], which #442's tree text and lane
     /// E's own HTTP-family retry rule both need). [`crate::exec::
     /// wrap_effect_error`] keeps *cause* unchanged through a chain/tree
-    /// wrap but, review P2-1 on PR #454's second review, rewrites
-    /// *py_class* to `RuntimeError` on every wrap (`core/dynamic.py`'s
+    /// wrap but rewrites *py_class* to `RuntimeError` on every wrap (`core/dynamic.py`'s
     /// own `raise RuntimeError(...) from e`: the wrapping exception is
     /// always a `RuntimeError`, never *e*'s own class) and sets
     /// *cause_class* to the wrapped error's own previous *py_class* --

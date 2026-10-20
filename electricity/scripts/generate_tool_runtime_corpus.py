@@ -17,7 +17,7 @@ Python function with that exact signature to call. Its cases instead run
 the literal expression `core/tool.py::_capped_raw` uses for the truncated
 preview -- `encoded[:_RAW_META_MAX_BYTES].decode("utf-8", errors="ignore")`
 -- against hand-built byte strings that straddle the cut with a multi-byte
-codepoint, which is the real behaviour under test (finding 5).
+codepoint, which is the real behaviour under test.
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 3.11 in CI). Usage: python3 generate_tool_runtime_corpus.py [--check]
@@ -124,8 +124,8 @@ def build_json_tool_cases() -> list[dict]:
     cases.append(json_tool_case({"mode": "stringify", "input": {"a": 1}, "indent": 2}))
     cases.append(json_tool_case({"mode": "stringify", "input": None}))
     cases.append(json_tool_case({"mode": "stringify", "input": [1, "a", None, True]}))
-    # Non-string keys collapse under Python's own dict/JSON-key rules
-    # (finding 6's "non-string keys" probe): `True` and `1` collide as
+    # Non-string keys collapse under Python's own dict/JSON-key rules:
+    # `True` and `1` collide as
     # dict keys (`True == 1`), so only the last-written entry survives.
     cases.append(
         json_tool_case(
@@ -157,7 +157,7 @@ def build_json_tool_cases() -> list[dict]:
     cases.append(
         json_tool_case({"mode": "extract", "input": "not json", "path": "a"})
     )
-    # Finding 2's own probe: an extract index too large to fit an i64
+    # An extract index too large to fit an i64
     # never raises in Python -- `int()` parses it fine, then indexing a
     # real list with it raises `IndexError`, which `_walk_path` turns
     # into an ordinary miss.
@@ -225,7 +225,7 @@ def build_redaction_cases() -> list[dict]:
     cases.append(redact_case(True))
     cases.append(redact_case(None))
 
-    # --- finding 3: Python's `$` (no re.MULTILINE) also matches just
+    # --- Python's `$` (no re.MULTILINE) also matches just
     # before a single trailing newline ---
     cases.append(redact_case("sk-" + "a" * 20 + "\n"))
     cases.append(redact_case("sk-" + "a" * 20 + "\n\n"))  # two newlines: no longer matches
@@ -238,7 +238,7 @@ def build_redaction_cases() -> list[dict]:
     )
     cases.append(redact_case({"api_key\n": "x"}))
 
-    # --- finding 4: redact_url vs. urlsplit/urlunsplit ---
+    # --- redact_url vs. urlsplit/urlunsplit ---
     cases.append(redact_case(" https://u:p@h"))  # leading space, lstripped
     cases.append(redact_case("ht\ttps://u:p@h"))  # embedded tab, dropped
     cases.append(redact_case("HTTPS://u:p@h"))  # scheme lowercased
@@ -270,8 +270,8 @@ def build_cap_raw_cases() -> list[dict]:
     cases.append(build_cap_raw_probe("one_over_the_limit", b"a" * (_RAW_META_MAX_BYTES + 1)))
 
     # A 2/3/4-byte UTF-8 codepoint straddling the cut at every possible
-    # split point -- finding 5's own probe (`"\u00e9" * 40000`, a 2-byte
-    # codepoint) generalized to 3- and 4-byte codepoints too.
+    # split point, generalized from a 2-byte codepoint
+    # (`"\u00e9" * 40000`) to 3- and 4-byte codepoints too.
     for codepoint, label in ((b"\xc3\xa9", "2byte"), (b"\xe4\xb8\xad", "3byte"), (b"\xf0\x9f\x8e\x89", "4byte")):
         for split in range(1, len(codepoint)):
             prefix_len = _RAW_META_MAX_BYTES - split

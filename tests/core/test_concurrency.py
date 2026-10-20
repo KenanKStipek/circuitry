@@ -198,7 +198,7 @@ def test_global_cap_and_group_cap_compose() -> None:
 
 
 def test_group_waiters_do_not_hold_global_slots() -> None:
-    """Group acquisition happens before the global one (#274 review P1):
+    """Group acquisition happens before the global one (#274):
     a leaf queued behind a full group must not occupy a global slot while
     it waits, or it would starve every ungrouped leaf in the run."""
     limiter = RunConcurrencyLimiter(max_concurrency=2, groups={"gpu": 1})

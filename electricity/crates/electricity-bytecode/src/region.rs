@@ -18,7 +18,7 @@ pub enum Condition {
 impl Condition {
     /// `ConditionDef.mode`/`LoopWhileDef.mode`'s own string spelling --
     /// an `if` node's `meta.mode` (`core/conditional.py`'s own `meta`
-    /// dict, issue #408's finding 5; the M0-H VM only ever executes the
+    /// dict, issue #408; the M0-H VM only ever executes the
     /// `Cel` variant, the compiler's `mode: model` default notwithstanding
     /// -- [`crate::refusal`] refuses a `Model` condition before the run
     /// starts).

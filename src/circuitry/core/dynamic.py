@@ -507,7 +507,7 @@ class DynamicRuntime:
                         # thread's contextvars into the worker (#362).
                         # ``child_store`` directly, not ``self.defn.name`` on
                         # the outer ``store`` — see loop.py's own tree-flow
-                        # dispatch for why (#370 review F2).
+                        # dispatch for why (#370).
                         with nested_container(child_store, None):
                             for idx, effect in enumerate(self.defn.effects):
                                 # One `deferred_signal_region` around both
@@ -535,7 +535,7 @@ class DynamicRuntime:
                             futures, tree_errors=tree_errors, store=store
                         )
                         # ``stop_on_error`` breaks out of that drain after
-                        # the first failure (#385 review F1) while other
+                        # the first failure (#385) while other
                         # branches can still be running — their futures
                         # are only *cancelled* if the pool hasn't dequeued
                         # them yet, never force-stopped. Waiting for them
@@ -643,7 +643,7 @@ class DynamicRuntime:
         if self.defn.finally_effects:
             try:
                 # Suppress this run's own cancellation check for the
-                # duration of `finally:` (#356 review F1) — a `finally:`
+                # duration of `finally:` (#356) — a `finally:`
                 # must still run in full after Ctrl-C/SIGTERM, including
                 # any nested dynamic/loop/use/conditional it contains, not
                 # abort the moment one of them polls the already-cancelled

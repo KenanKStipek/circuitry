@@ -54,7 +54,7 @@ def test_apply_effect_overrides_targets_top_level_and_nested_paths() -> None:
 def test_apply_effect_overrides_addresses_a_finally_effect() -> None:
     """A profile addresses a cleanup effect the same way it addresses a body
     one — `finally:` shares its dynamic's own scope, not a separate
-    namespace (#272 review, finding 5)."""
+    namespace (issue #272)."""
     orch = {
         "effects": [
             {

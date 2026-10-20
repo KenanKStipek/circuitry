@@ -77,7 +77,7 @@ impl EffectPath {
     /// [`PathSegment::Name`] `concretize` would have formatted it as
     /// (`iter_<N>`), so the result never carries a `Pass` segment.
     /// `electricity_vm::Frame::effect_path` (issue #449's gate lane,
-    /// review findings 2/8 on PR #454) uses this instead of
+    /// PR #454) uses this instead of
     /// `concretize` so it can compose a `use`/decomposition child's own
     /// nesting prefix onto the result by segment, not by string
     /// surgery.

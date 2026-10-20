@@ -248,7 +248,7 @@ def test_prompt_runtime_without_a_limiter_is_unaffected() -> None:
 
 def test_prompt_runtime_waiting_for_meta_is_visible_while_blocked() -> None:
     """Same visibility `test_tool_runtime_waiting_for_meta_is_visible_while_blocked`
-    proves for a tool, for a prompt (#274 review P2: only the tool side had
+    proves for a tool, for a prompt (#274: only the tool side had
     a test)."""
     adapter = _TrackingAdapter(delay=0.1)
     limiter = RunConcurrencyLimiter(groups={"gpu": 1})
@@ -290,7 +290,7 @@ def test_prompt_runtime_zero_retries_still_releases_the_slot() -> None:
     """A ``default_prompt_retries`` of 0 makes the retry loop run zero
     times, falling through `execute`'s dispatch `try` with no `return` and
     no exception — the one path the old hand-written release calls missed
-    (#274 review P2). A second prompt under the same cap of 1 must still
+    (#274). A second prompt under the same cap of 1 must still
     get its slot; joined with a timeout so a reintroduced leak fails loudly
     instead of hanging the suite."""
     adapter = _TrackingAdapter()
@@ -326,7 +326,7 @@ def test_prompt_runtime_zero_retries_still_releases_the_slot() -> None:
 def test_prompt_runtime_on_error_continue_releases_the_slot_on_failure() -> None:
     """A failed dispatch (`on_error: continue`) must release its slot in
     the `except` path too — proven by a second prompt under the same cap
-    of 1 still dispatching, joined with a timeout (#274 review P2)."""
+    of 1 still dispatching, joined with a timeout (#274)."""
 
     class _FailingAdapter:
         name = "failing"

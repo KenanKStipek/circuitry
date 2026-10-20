@@ -279,7 +279,7 @@ async fn unknown_url_type_cases_match_pythons_valueerror() {
         // (`http://example.com/x`, `https://example.com/x`) name a
         // real external host. Running `execute` on those would be a
         // real DNS lookup/connection attempt (this lane's own
-        // network-isolation rule, issue #485 review finding 5) --
+        // network-isolation rule, issue #485) --
         // skip the call entirely rather than let it reach the
         // network only to discard the result.
         let Some(message) = expected_error else {
@@ -407,8 +407,8 @@ async fn request_header_cases_keep_every_user_header_capitalize_collapsed() {
         // check on each expected line individually, catches the case
         // `contains` alone would pass: a lingering *second* line under
         // the same name with the user's own, now-overwritten value
-        // still on the wire alongside the correct one (issue #485
-        // review finding 6's own "weak assertions" -- `contains` can't
+        // still on the wire alongside the correct one (issue #485's
+        // review, "weak assertions" case -- `contains` can't
         // tell "exactly this one line" apart from "this line, plus
         // another the collapse should have erased").
         let expected_names: std::collections::BTreeSet<&str> =

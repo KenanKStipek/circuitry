@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate electricity-schema's `validate_prompt_schema` golden corpus from
 Python's own ``jsonschema.validate`` (issue #498 ruling 6, tightened by PR
-#502's review finding 2, ruling 2).
+#502's review, ruling 2).
 
 ``core/prompt.py::PromptRuntime._validate_schema`` calls
 ``jsonschema.validate(value, schema)``, which raises
@@ -149,7 +149,7 @@ def cases() -> list[dict]:
             {"a": "ok"},
         ),
         # Multi-error tie-break shapes (follow-up to PR #502's
-        # review, finding 2): Python's own `jsonschema.exceptions.
+        # review): Python's own `jsonschema.exceptions.
         # by_relevance` compares the error's own *path* element-by-element
         # as a real, second tie-break component -- not just path *length*
         # -- so two same-depth violations don't necessarily resolve to
@@ -458,7 +458,7 @@ def cases() -> list[dict]:
         _case('probe_schema5_c0', {'$defs': {'name': {'type': 'string'}}, 'properties': {'a': {'type': 'string'}, 'z': {'anyOf': [{'type': 'object', 'properties': {'n': {'$ref': '#/$defs/name'}}}, {'type': 'null'}]}}}, {'a': 1, 'z': {'n': 'ok'}}),
         _case('probe_schema5_c1', {'$defs': {'obj': {'type': 'object'}}, 'properties': {'a': {'type': 'string'}, 'z': {'anyOf': [{'$ref': '#/$defs/obj', 'required': ['k']}, {'type': 'null'}]}}}, {'a': 1, 'z': {}}),
         # Not pinned here (`unevaluatedProperties`, issue #498's own
-        # follow-up, finding N2): not implemented by the
+        # follow-up): not implemented by the
         # engine, so the `jsonschema` crate decides and renders this
         # one -- and the crate's own `unevaluatedProperties` keyword
         # has a *second*, independent bug beyond this crate's own
@@ -476,7 +476,7 @@ def cases() -> list[dict]:
         _case('probe_schema5_c7', {'properties': {'a': {'type': 'string'}, 'z': {'multipleOf': 3}}}, {'a': 1, 'z': 1e+17}),
         _case('probe_schema5_c8', {'patternProperties': {}, 'additionalProperties': False}, {'x': 1}),
         _case('probe_schema5_c9', {'properties': {'a': {'type': 'string'}, 'z': {'maximum': 9007199254740992}}}, {'a': 1, 'z': 9007199254740993}),
-        # PR #502's round-4 fix, finding F1: a schema that is itself
+        # PR #502's round-4 fix: a schema that is itself
         # recursive (a `$ref` cycle back to an ancestor) is a real,
         # finite-instance-terminating shape -- a tree (`recursive_tree_
         # ref_*`) or a linked list (`recursive_self_ref_*`) -- that
@@ -529,7 +529,7 @@ def cases() -> list[dict]:
             {"v": 1, "c": {"v": 1, "c": {"v": "bad"}}},
         ),
         # PR #502's round-4 fix: a parallel review of the engine found
-        # more wrong verdicts (findings F3-F10), confirmed against real
+        # more wrong verdicts, confirmed against real
         # `cof run` by probe-schema7's own c0-c20 (NaN/Infinity instances
         # aren't representable in plain JSON, so those live in
         # `prompt_schema_tests` -- Rust unit tests -- instead).
@@ -612,7 +612,7 @@ def cases() -> list[dict]:
             # only to retry via `Fraction(1e308) / Fraction(0.5)`, exact
             # and never overflowing -- `1e308`'s own exact binary value
             # really is a multiple of `0.5` (issue #498's own
-            # follow-up, finding V5, probe-schema9 c6).
+            # follow-up, probe-schema9 c6).
             "multiple_of_a_large_float_instance_overflows_to_the_fraction_fallback",
             {"multipleOf": 0.5},
             1e308,

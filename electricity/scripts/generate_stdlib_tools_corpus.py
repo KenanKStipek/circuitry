@@ -216,8 +216,8 @@ def build_fs_cases(root: Path) -> list[dict]:
 
 def build_encode_run_hash_cases() -> list[dict]:
     """A *run* of consecutive unencodable characters gets one error for
-    the whole run, not one per character (issue #460's own fix-pass
-    finding 3 -- "日本".encode("ascii")'s own text)."""
+    the whole run, not one per character (issue #460's own fix pass --
+    "日本".encode("ascii")'s own text)."""
     return [
         hash_case(
             "ascii_encode_error_run_of_two",

@@ -174,7 +174,7 @@ fn set_band(meta: &mut Value, name: &str, model: &str) {
 }
 
 /// The exact text `core/prompt.py::_score_and_route`'s unknown-pin
-/// `ValueError` raises (§3 finding 7): `{valid}` is every named band,
+/// `ValueError` raises (issue #516 §3): `{valid}` is every named band,
 /// sorted, or the "no named bands configured" text when none are.
 fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySettings) -> VmError {
     let mut names: Vec<&str> = settings
@@ -206,7 +206,7 @@ fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySett
 /// meta, routed model)`. Both halves are independent (K1's own crate
 /// docs, "K2's calling contract"); see issue #516 §3/§7 for the full
 /// rule set this follows. The `?` this can fail with is only ever the
-/// unknown-pinned-band `ValueError` (§3 finding 7) -- reachable now
+/// unknown-pinned-band `ValueError` (§3) -- reachable now
 /// that J2 (issue #518) populates [`PromptOp::routing_override`] from
 /// a profile's per-effect `routing:` override; `validate_profile_
 /// routing_pins` already rejects an unknown band before the run, so
@@ -276,7 +276,7 @@ pub(crate) fn score_and_route(
             // effect will run without a recorded score", self.defn.name,
             // exc_info=True)` -- the traceback lines `exc_info=True` adds
             // are not `WARNING:` lines and are not reproduced (issue #516
-            // §3 finding 6).
+            // §3).
             let name_repr = Value::Str(name.to_string()).py_repr();
             log::warn!(
                 "Complexity scoring failed for prompt {name_repr}; the effect will run without a recorded score"
@@ -818,7 +818,7 @@ mod tests {
         let mut prompt = template_op("hi");
         prompt.routing_override = Some(RoutingOverride::Named("big".to_string()));
         // A 400-digit integer overflows `f64`, forcing `score()` to
-        // `Err` (issue #516 §3 finding 6/case `complexity-scoring-
+        // `Err` (issue #516 §3, case `complexity-scoring-
         // failure-warns`).
         let mut params = Dict::new();
         params.insert(

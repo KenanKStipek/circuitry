@@ -115,7 +115,7 @@ def test_walk_collects_tool_provider_in_root_finally() -> None:
     """A cleanup tool only referenced from `finally:` is a real dependency
     too — a missing/disallowed one should be caught at preflight, not only
     discovered at runtime after the (possibly expensive) body already ran
-    (#272/#273 review, finding 5)."""
+    (issues #272/#273)."""
     orch = {
         "effects": [{"type": "tool", "name": "t", "provider": "ffmpeg"}],
         "finally": [{"type": "tool", "name": "cleanup", "provider": "comfyui"}],

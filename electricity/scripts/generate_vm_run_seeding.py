@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Golden `--out`/stdout for `-e` seeding's own success-path corner cases
-(issue #431's run-wiring step 4/10; PR #441 review finding 1), built on
+(issue #431's run-wiring step 4/10), built on
 `_run_corpus.py` the same way `generate_vm_run_failures.py` is.
 
-`generate_vm_run_failures.py` covers finding 1b/1c (a pre-execution
-failure's own partial `state["input"]`); this generator covers 1a (an
-optional, `null`-valued `-e` input must not survive into a *successful*
-run's own `state["input"]`) and 1d (`-e` keys that are not lifted under
-`input` at all -- a namespace name or `_`-prefixed key, or `extra` when
-an `-e input=...` entry already wins outright -- must still land at the
-state root, exactly as `core/state_ns.py::migrate_legacy_state` leaves
-them).
+`generate_vm_run_failures.py` covers a pre-execution failure's own
+partial `state["input"]`; this generator covers the success path
+instead -- an optional, `null`-valued `-e` input must not survive into
+a *successful* run's own `state["input"]`, and `-e` keys that are not
+lifted under `input` at all (a namespace name or `_`-prefixed key, or
+`extra` when an `-e input=...` entry already wins outright) must still
+land at the state root, exactly as `core/state_ns.py::migrate_legacy_state`
+leaves them.
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 3.11 in CI). Usage:

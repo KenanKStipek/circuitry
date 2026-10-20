@@ -614,7 +614,7 @@ class LoopRuntime:
                         )
                         # Built empty, before the try, and filled by a
                         # plain loop rather than a dict comprehension
-                        # (#385 review P1): a ``KeyboardInterrupt``/
+                        # (#385): a ``KeyboardInterrupt``/
                         # ``RunCancelledBySignal`` landing mid-comprehension
                         # left this name unbound, so the ``except`` below
                         # calling ``future_to_idx.keys()`` raised
@@ -643,7 +643,7 @@ class LoopRuntime:
                             # outer ``store``: an unnamed loop's ``child_store``
                             # *is* ``store`` (see above), so this also covers
                             # the transparent case without formatting a
-                            # ``None`` name into the path (#370 review F2).
+                            # ``None`` name into the path (#370).
                             with nested_container(child_store, None):
                                 for idx, iter_ctx in iter_ctxs:
                                     # One `deferred_signal_region` around
@@ -876,7 +876,7 @@ class LoopRuntime:
                                     # otherwise a run with any earlier
                                     # on_error: continue failure would
                                     # undercount `done` for every pass after
-                                    # it (#331 finding 6).
+                                    # it (issue #331).
                                     progress = _loop_progress(_loop_t0, idx + 1, total)
                                     meta["progress"] = progress
                                     if _status is not None:
@@ -901,8 +901,8 @@ class LoopRuntime:
                                 # (see the `finally` above); leaving `done`
                                 # frozen here would freeze the line and
                                 # overestimate the ETA across a run with any
-                                # on_error: continue/break failures (#331
-                                # finding 6).
+                                # on_error: continue/break failures (issue
+                                # #331).
                                 if meta is not None:
                                     progress = _loop_progress(_loop_t0, idx + 1, total)
                                     meta["progress"] = progress
@@ -1090,7 +1090,7 @@ class LoopRuntime:
                             # leaving `done` frozen here would freeze the
                             # line and overestimate the ETA across a run
                             # with any on_error: continue/break failures
-                            # (#331 finding 6).
+                            # (issue #331).
                             if meta is not None:
                                 progress = _loop_progress(
                                     _loop_t0, iteration_count + 1, self.defn.max_iterations
@@ -1342,7 +1342,7 @@ Should the loop continue? Answer (yes/no):"""
         # path already includes this loop's name when it has one
         # (``Store.child``), so ``model_call`` is passed ``None`` rather than
         # ``self.defn.name`` again, which would double it (``prime.lp.lp``)
-        # (#370 review F1). Each re-check re-asks at the same path, consumed
+        # (#370). Each re-check re-asks at the same path, consumed
         # in order like any other retry/re-ask.
         with model_call(store, None):
             res = self.adapter.generate(
@@ -1499,7 +1499,7 @@ Should the loop continue? Answer (yes/no):"""
         # would freeze whatever the enclosing scope looked like one step ago.
         base_ctx = ctx
         for effect in self.defn.body:
-            # A cancelled run (#356 review F3) must not start the next
+            # A cancelled run (#356) must not start the next
             # body effect either — the check at this method's own entry
             # only guards the first one. A body effect whose own
             # ``on_error: continue``/``skip`` swallows a killed branch's
@@ -1841,7 +1841,7 @@ class _LoopIterTracker:
         self._color = color
         self._ancestors = ancestors or []
         #: The loop's own name, for the `name k/N, ~ETA left` header row
-        #: (#331 finding 3) — None for an unnamed loop, which has no
+        #: (issue #331) — None for an unnamed loop, which has no
         #: `meta.progress` to show (same gating as the chain/while status
         #: line).
         self._loop_name = loop_name
@@ -1892,7 +1892,7 @@ class _LoopIterTracker:
         # Render ancestor context lines above the iteration items
         lines = _render_ancestors(self._ancestors, self._SPINNER)
 
-        # The loop's own `k/N, ~ETA left` header (#331 finding 3) — a tree
+        # The loop's own `k/N, ~ETA left` header (issue #331) — a tree
         # loop's progress is otherwise invisible: the ancestor line above
         # shows only that the loop is running, not how far through it is.
         if self._loop_name and progress is not None:

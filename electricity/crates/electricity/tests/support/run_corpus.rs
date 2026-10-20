@@ -28,7 +28,7 @@ pub struct CorpusCase {
     pub name: String,
     pub inputs: Value,
     /// The case's own orchestration document text, when the generator
-    /// recorded one (PR #441 review finding 9: a case's document lives
+    /// recorded one (PR #441: a case's document lives
     /// in the golden file itself, not copy-pasted into the Rust test
     /// too) -- `None` for an older golden file whose generator never
     /// wrote this field at all, so every existing corpus stays

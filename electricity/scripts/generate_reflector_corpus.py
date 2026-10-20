@@ -13,8 +13,8 @@ with no real `Store` needed:
   fields, lone braces -- records the rendered text plus whether the
   `.format()` call itself raised (`fell_back`), independent of the
   function's own `logger.warning` side effect.
-- `_best_effort_context`/`_best_effort_goal`, called directly (review
-  finding 7 on PR #510's first review: an earlier draft of this script
+- `_best_effort_context`/`_best_effort_goal`, called directly (PR
+  #510's first review: an earlier draft of this script
   re-implemented `_best_effort_context`'s own redact/`json.dumps`/
   truncate body instead of calling it) -- both only ever read
   `_run_root_state(store)`, and that function's own `getattr(store,
@@ -229,7 +229,7 @@ def context_cases() -> list[dict]:
         context_case({"model": "caf\u00e9-\U0001f600", "adapter": "openai", "plugins": []}),
         # A secret-shaped *value* inside one of the three fields
         # `_best_effort_context`'s own summary keeps (`model`/`adapter`/
-        # `plugins`) -- review finding 7 on PR #510's first review: an
+        # `plugins`) -- PR #510's first review: an
         # earlier draft put `api_key` as a sibling top-level key, which
         # the summary-building step drops before redaction ever runs,
         # so it never actually exercised `redact()` at all.

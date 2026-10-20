@@ -750,7 +750,7 @@ async fn named_while_min_iterations_runs_without_consulting_the_condition() {
     );
 }
 
-/// Review of #466, finding 1 (the condition-error half): a failing
+/// Review of #466 (the condition-error half): a failing
 /// *condition* under the default `on_error: fail` had the same bug as
 /// a failing body (see `named_while_failing_body_under_on_error_fail_
 /// keeps_the_real_iteration_count`) -- the `OnError::Fail` arm of the
@@ -799,7 +799,7 @@ async fn named_while_failing_condition_under_on_error_fail_keeps_the_real_iterat
     );
 }
 
-/// Review of #466, finding 1: a failing body under the default
+/// Review of #466: a failing body under the default
 /// `on_error: fail` used to leave `state.iteration_count` at its
 /// default (0) because the Fail branch returned before the only line
 /// that copied the local counter into `RunState`. cof's own
@@ -843,7 +843,7 @@ async fn named_while_failing_body_under_on_error_fail_keeps_the_real_iteration_c
     );
 }
 
-/// Review of #466, finding 2: the while-condition's own ctx used to go
+/// Review of #466: the while-condition's own ctx used to go
 /// through `step_overlay` (`scope_ctx`'s own `prime` mirroring), so
 /// `prime.<loop>.iter` leaked a `{index, count}` dict that cof's own
 /// plain `{**ctx, "iter": ...}` construction never adds. A condition
@@ -888,7 +888,7 @@ async fn named_while_condition_ctx_does_not_leak_iter_into_prime() {
 }
 
 /// A `generate` that always answers `"yes"`, with token counts --
-/// issue #513 review finding 4: lets a model `while`'s own container-
+/// issue #513's review: lets a model `while`'s own container-
 /// level `record_totals` hook be exercised end to end.
 struct YesAdapter;
 
@@ -982,7 +982,7 @@ async fn run_with_adapter(
     .await
 }
 
-/// Issue #513 review finding 4: a named model `while`'s own completing
+/// Issue #513's review: a named model `while`'s own completing
 /// pass calls `record_totals` exactly once.
 #[tokio::test]
 async fn a_named_model_while_calls_record_totals_once_on_success() {
@@ -1406,7 +1406,7 @@ async fn named_tree_each_registers_every_pass_before_dispatch_and_clears_at_merg
 
 #[tokio::test]
 async fn a_cancelled_tree_loop_still_clears_its_overlay() {
-    // PR #549's review, finding 3: see `dynamic.rs`'s own identical
+    // PR #549's review: see `dynamic.rs`'s own identical
     // test -- a cancelled tree loop never merges, but its overlay
     // must still come down.
     let store = Store::new();
@@ -1630,7 +1630,7 @@ fn cancel_once_op(path: EffectPath, name: &str) -> Op {
     }
 }
 
-/// Review of #466, finding 3: `execute_loop` used to reset `value` to
+/// Review of #466: `execute_loop` used to reset `value` to
 /// `None` unconditionally on every call (`store.set_leaf`), rather
 /// than `node.setdefault("value", None)` as `core/loop.py` does. Only
 /// observable when a call bails out *before* its own final write (a
@@ -1713,7 +1713,7 @@ async fn value_on_a_reused_node_survives_a_cancellation_that_skips_the_final_wri
     );
 }
 
-/// Review of #466, finding 4: `core/loop.py`'s success path pops
+/// Review of #466: `core/loop.py`'s success path pops
 /// `meta.failed_passes` when empty, but its own `except` path never
 /// pops -- it only ever sets the key, when non-empty. A reused node's
 /// stale `failed_passes` from an earlier run must survive a
@@ -1787,7 +1787,7 @@ async fn failed_passes_on_a_reused_node_survives_a_later_bounds_error_under_fail
     );
 }
 
-/// Review of #466, finding 6: Python's own `effective_concurrency`
+/// Review of #466: Python's own `effective_concurrency`
 /// formula (`max(1, min(max_concurrency, total))`) applies even when
 /// `total` is 0 -- `electricity-vm` used to special-case `total == 0`
 /// back to a flat 0 instead, changing the `dispatch` event's own
@@ -1863,7 +1863,7 @@ async fn unnamed_tree_each_dispatches_at_the_enclosing_containers_own_path() {
     assert_eq!(observer.paths.borrow().as_slice(), &["prime".to_string()]);
 }
 
-/// Review of #466, finding 5: `_resolve_collection`'s own error text
+/// Review of #466: `_resolve_collection`'s own error text
 /// uses `type(x).__name__` (`"date"`/`"datetime"`), not
 /// `Value::type_name`'s fuller `"datetime.date"`/`"datetime.datetime"`.
 #[tokio::test]
@@ -2027,7 +2027,7 @@ async fn a_refused_tree_pass_stops_dispatch_but_still_merges() {
 }
 
 // ---------------------------------------------------------------------
-// Issue #501 review finding 1 (P0): an `if` with two or more branch
+// An `if` with two or more branch
 // steps inside a loop body must still see the enclosing scope -- the
 // loop's own `item`, an earlier sibling step's write, an outer root
 // key, and (named chain flow) `prime.<loop>.prev` -- from its second
@@ -2424,7 +2424,7 @@ async fn two_step_if_in_a_named_tree_each_sees_the_enclosing_scope() {
 
 #[tokio::test]
 async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_enclosing_scope() {
-    // Issue #501 review finding 1's own second repro: a `dynamic`
+    // Issue #501's review, second repro: a `dynamic`
     // pushes a second `Live` entry onto the inherited chain
     // (`exec::dynamic::execute_dynamic`'s own doc comment), so the
     // *inner* loop's own `outer_chain` here is never the single-`Live`
@@ -2552,7 +2552,7 @@ async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_encl
 }
 
 // ---------------------------------------------------------------------
-// Issue #501's second review (P0, confirmed at runtime): a named loop's
+// A named loop's
 // `with_prev_overlay` must hide the current pass's own `iter_<idx>`
 // only when it's genuinely new -- a *reused* real loop node (a named
 // loop inside an unnamed outer loop, or `--state`-resumed persisted

@@ -49,8 +49,8 @@ fn non_json_error(prefix: &str, stdout: &str) -> AdapterError {
     }
 }
 
-/// `chat_completion()`'s own request headers -- `pub` (review
-/// finding F6) so `tests/adapter_corpus.rs` compares the recorded
+/// `chat_completion()`'s own request headers -- `pub` so
+/// `tests/adapter_corpus.rs` compares the recorded
 /// corpus headers against the adapter's own header-building code,
 /// not a list written by hand in the test a second time.
 pub fn request_headers(api_key: &str, extra_headers: &[(String, String)]) -> Vec<(String, String)> {
@@ -187,7 +187,7 @@ fn data_url(image: &electricity_vm::adapter::ImageInput) -> String {
 /// `tests/adapter_corpus.rs` replays `generate_adapter_corpus.py`'s
 /// own request-building cases through this exact function, the same
 /// one [`chat_completion`] itself calls, rather than reassembling the
-/// payload by hand in the test (issue #515 finding 5's third item).
+/// payload by hand in the test (issue #515).
 pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Dict {
     let mut payload = Dict::new();
     dict_insert(&mut payload, "model", Value::Str(model.to_string()));
@@ -293,7 +293,7 @@ pub fn parse_chat_response(raw: &Value) -> Result<(String, Option<String>), Adap
 #[derive(Debug, Clone)]
 pub struct OpenAiCompatibleConfig {
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
-    /// comment (review finding F5): `.rstrip("/")`'d in
+    /// comment: `.rstrip("/")`'d in
     /// [`chat_completion`] itself, at the same point Python calls it
     /// (after the API-key check), never at build time.
     pub base_url: Value,
@@ -1115,7 +1115,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
-        // Review finding F5: every OpenAI-compatible provider shares
+        // Every OpenAI-compatible provider shares
         // the one `_openai_compat.py::chat_completion` call that
         // raises `AttributeError` on `self.base_url.rstrip("/")`,
         // *after* its own API-key check, not at build time.

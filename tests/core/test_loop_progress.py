@@ -165,8 +165,8 @@ def test_each_chain_loop_progress_counts_a_failed_pass_as_done() -> None:
     """Tree flow counts a failed pass toward ``done`` the moment its branch
     finishes (success or error). A chain loop under ``on_error: continue``
     used to leave ``done`` frozen on a failed pass instead — the line would
-    freeze and the ETA would overestimate the remaining time (#331 finding
-    6)."""
+    freeze and the ETA would overestimate the remaining time (issue
+    #331)."""
 
     @dataclass
     class _BoomOnSecond:
@@ -266,7 +266,7 @@ def test_progress_display_on_shows_one_status_line(monkeypatch: pytest.MonkeyPat
 def test_three_nested_named_chain_loops_with_progress_display_do_not_deadlock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for #331 finding 1: the progress-status guard used to
+    """Regression for issue #331: the progress-status guard used to
     decide ownership *and* yield inside the same non-reentrant lock, so the
     third of three nested named loops on one thread blocked forever waiting
     on a lock the still-suspended second loop's generator never released.
@@ -333,7 +333,7 @@ class _NullStatus:
 def test_tree_loop_iter_tracker_renders_a_progress_header(monkeypatch: pytest.MonkeyPatch) -> None:
     """A tree loop's animated per-iteration tracker otherwise has no
     `k/N, ~ETA left` line at all — only per-iteration pending/running/done
-    rows and an ancestor line with just an elapsed timer (#331 finding 3).
+    rows and an ancestor line with just an elapsed timer (issue #331).
     """
     tracker = loop_mod._LoopIterTracker(
         total=4,

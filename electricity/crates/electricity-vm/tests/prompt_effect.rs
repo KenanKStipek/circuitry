@@ -632,7 +632,7 @@ fn reply_with(
     })
 }
 
-/// Issue #498 finding 1 (review of PR #502): a `use` child's own
+/// Issue #498 (review of PR #502): a `use` child's own
 /// `record_totals` calls must reach the parent run's totals too, the
 /// same way `effect_start`/`effect_complete`/`write` already do
 /// (`exec::use_::ChildObserver`'s own forwarding, before this fix the
@@ -708,7 +708,7 @@ effects:
     );
 }
 
-/// Issue #498 finding 2 (review of PR #502): a render failure must
+/// Issue #498 (review of PR #502): a render failure must
 /// also call `record_totals` before `effect_complete` -- on a reused
 /// node, a render failure must not leave the run's totals double-
 /// counting (or under-counting) an earlier pass's tokens (ruling 7).
@@ -730,7 +730,7 @@ async fn a_render_failure_also_calls_record_totals_before_effect_complete() {
     );
 }
 
-/// Issue #498 finding 3 (review of PR #502): `_record_reply` starts
+/// Issue #498 (review of PR #502): `_record_reply` starts
 /// from the reply's own warnings and appends the truncation warning
 /// *after* them (`prompt.py:1225-1238`) -- not the other way around.
 #[tokio::test]
@@ -1378,7 +1378,7 @@ async fn py_repr_of_the_wrapper_message_includes_a_raw_reply() {
     );
 }
 
-/// Follow-up, finding N12: a real HTTP adapter's own
+/// A real HTTP adapter's own
 /// `generate()` call must race cancellation too, not just the backoff
 /// sleep/limiter wait around it -- otherwise Ctrl-C/SIGTERM during a
 /// prompt would wait out the whole call (up to its own timeout) and
@@ -1473,7 +1473,7 @@ async fn cancelling_mid_generate_stops_the_run_without_recording_an_attempt() {
 /// A token cancelled *between* two fallback attempts (after the first
 /// one's own ordinary failure, before the second one ever dispatches)
 /// must stop the chain there -- checked at the top of every attempt,
-/// not just the first (follow-up, finding N12).
+/// not just the first.
 #[tokio::test]
 async fn cancelling_between_fallback_attempts_never_dispatches_the_next_one() {
     struct CancelsThenPanics {
@@ -1634,7 +1634,7 @@ async fn a_routed_model_becomes_the_fallback_chains_default_model() {
     );
 }
 
-/// Issue #516 §3 finding 7: an unknown pinned band raises before
+/// Issue #516 §3: an unknown pinned band raises before
 /// `effect_start`, so no start/complete pair fires -- and `on_error:
 /// skip` never gets a chance to absorb it, the same way it never
 /// absorbs the fatal refusals above (the `?` in `exec/prompt.rs`

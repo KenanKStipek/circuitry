@@ -5,7 +5,7 @@
 //! `additionalProperties`+`patternProperties` filter) -- the one place
 //! either crate needs to turn Python `re` syntax into `fancy-regex`
 //! syntax, moved out from under `electricity-tools` (PR #502's round-4
-//! fix, finding F2) so `electricity-schema` can depend on it without
+//! fix) so `electricity-schema` can depend on it without
 //! also pulling in every other tool plugin.
 //!
 //! See [`translate`]'s own module docs for what this does and does not

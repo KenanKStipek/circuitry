@@ -3,8 +3,8 @@
 //! `params_json` overlay (`core/tool.py::_render_params`/
 //! `_render_params_json`/`_deep_merge_params`, ported exactly). Every
 //! Mustache leaf renders through [`crate::compose::render_with_composition`]
-//! rather than calling `render_template` directly (review finding 1 on
-//! PR #454): a document containing a `{{> name}}` partial is refused
+//! rather than calling `render_template` directly (PR #454): a
+//! document containing a `{{> name}}` partial is refused
 //! before a run starts, so that function's own pass-through path is
 //! this file's whole behaviour today, and lane P's own landing never
 //! has to add *declared_prompts*/*effect_names* to this file's own
@@ -419,8 +419,8 @@ mod tests {
     /// Every render site needs an environment argument
     /// ([`render_with_composition`]'s own *declared_prompts*/
     /// *effect_names*) now even though nothing in this module's own
-    /// tests exercises composition itself (review finding 1 on PR
-    /// #454) -- empty is the correct value for every document with no
+    /// tests exercises composition itself (PR #454) -- empty is
+    /// the correct value for every document with no
     /// `prompts:` map, same as [`crate::compose`]'s own tests use.
     fn empty_env() -> (IndexMap<String, String>, BTreeSet<String>) {
         (IndexMap::new(), BTreeSet::new())
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn a_partial_leaf_runs_through_composition_not_templates_own_rejection() {
-        // Review finding 1's own probe on PR #454: `render_node` always
+        // PR #454's own probe: `render_node` always
         // renders a template leaf through `render_with_composition`,
         // never `render_template` directly, so a `{{> name}}` leaf
         // reaches real `{{> name}}` expansion (M1-P, #487) rather than

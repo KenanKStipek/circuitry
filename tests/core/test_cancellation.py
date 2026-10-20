@@ -1,4 +1,4 @@
-"""Unit tests for `core.cancellation` (#356 review F1/F6): the `cleanup()`
+"""Unit tests for `core.cancellation` (#356): the `cleanup()`
 suppression scope, its propagation into a worker thread via
 `submit_with_context`, and the `armed` gate on starting a tracked child in
 its own process group.
@@ -198,7 +198,7 @@ def test_armed_defaults_false_and_toggles() -> None:
 def test_kill_process_group_kills_only_the_child_when_it_shares_our_own_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#357 review N1: a child never started with `start_new_session`
+    """#357: a child never started with `start_new_session`
     (an unarmed token — the SDK, the MCP server, the REST host, any
     embedder) shares this interpreter's own process group. `killpg` on it
     would SIGKILL this process and its whole group along with the child;
@@ -262,7 +262,7 @@ def test_kill_process_group_ignores_permissionerror_from_killpg(
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific killpg/zombie quirk")
 def test_killpg_sigkill_raises_permissionerror_on_an_unreaped_zombie_pgid() -> None:
-    """#385 review P2: confirms, against the real OS rather than a mock,
+    """#385: confirms, against the real OS rather than a mock,
     what actually raises the `PermissionError` `kill_process_group`/
     `_repeat_group_kill` swallow -- not pgid reuse by an unrelated
     process (same-user reuse would make `killpg` succeed), but macOS
@@ -286,7 +286,7 @@ def test_killpg_sigkill_raises_permissionerror_on_an_unreaped_zombie_pgid() -> N
 def test_track_kills_a_process_added_after_cancellation_was_already_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#357 review N2: `request()` only kills the processes it can already
+    """#357: `request()` only kills the processes it can already
     see at the moment it's called. A process registered via `track()`
     right after that snapshot must not run unseen to completion —
     `track()` itself must kill it immediately if cancellation is already
@@ -475,7 +475,7 @@ def _deliver_sigusr1_after(tid_holder: dict[str, int], *, delay: float = 0.3) ->
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_wait_for_cancelled_branches_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385 review P0: an earlier revision bounded this wait to a fixed
+    """#385: an earlier revision bounded this wait to a fixed
     grace period, so a branch still running once it elapsed could outlive
     `cli.interrupts.sigterm_as_interrupt`'s own `token.reset()` and start
     a further effect with nothing left to track or kill it. The real fix
@@ -513,7 +513,7 @@ def test_wait_for_cancelled_branches_notices_a_signal_delivered_to_a_worker_thre
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_sleep_or_raise_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385 review P1 (wider inventory): a retry backoff can run on the
+    """#385 (wider inventory): a retry backoff can run on the
     *main* thread too (a sequential chain's own retry, not just a tree-
     flow worker's) -- the one single `Event.wait(seconds)` this used to do
     for the whole backoff is exactly the kind of blocking call that defers
@@ -546,7 +546,7 @@ def test_sleep_or_raise_notices_a_signal_delivered_to_a_worker_thread() -> None:
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_acquire_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385 review P1 (wider inventory): `adapters.cyberdiner`'s own
+    """#385 (wider inventory): `adapters.cyberdiner`'s own
     `max_in_flight` semaphore wait is untimed and can run on the main
     thread (a plain sequential chain's own model call) -- a slot that
     never frees must still notice a signal delivered elsewhere.
@@ -578,7 +578,7 @@ def test_acquire_promptly_notices_a_signal_delivered_to_a_worker_thread() -> Non
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_poll_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385 review P1 (wider inventory): `plugins.python_eval`'s own
+    """#385 (wider inventory): `plugins.python_eval`'s own
     `read_conn.poll(wall_seconds)` is bounded by the step's own timeout,
     but that can still be minutes long -- this must still notice a signal
     delivered elsewhere well before the child ever responds.
@@ -614,7 +614,7 @@ def test_poll_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_communicate_promptly_notices_a_signal_delivered_to_a_worker_thread() -> None:
-    """#385 review P1 (wider inventory): `run_tracked`'s own
+    """#385 (wider inventory): `run_tracked`'s own
     `proc.communicate(timeout=timeout)` is bounded only by the step's own
     timeout -- a long curl/ffmpeg call, with a Rich `Live` refresh thread
     alive alongside it -- so this must still notice a signal delivered to
@@ -698,7 +698,7 @@ def test_communicate_promptly_delivers_all_stdin_across_slices(
 
 
 def test_run_tracked_unicode_encode_error_in_stdin_fails_the_step() -> None:
-    """#385 review P2: the stdin writer thread must encode in the
+    """#385: the stdin writer thread must encode in the
     *calling* thread, not its own -- a lone surrogate (or any character
     the stdin encoding can't represent) used to raise `UnicodeEncodeError`
     inside `communicate()` itself and fail the step; writing straight to
@@ -712,7 +712,7 @@ def test_run_tracked_unicode_encode_error_in_stdin_fails_the_step() -> None:
 
 
 def test_run_tracked_writer_thread_handles_bytes_input() -> None:
-    """#385 review P2 (test tidiness): the writer thread's `text=False`
+    """#385 (test tidiness): the writer thread's `text=False`
     path -- `stdin` is already a raw byte stream with no `.buffer` to
     unwrap, and *input* is already `bytes`, not `str` to encode."""
     result = run_tracked(
@@ -724,7 +724,7 @@ def test_run_tracked_writer_thread_handles_bytes_input() -> None:
 
 
 def test_run_tracked_writer_thread_handles_empty_input() -> None:
-    """#385 review P2 (test tidiness): `input=\"\"` closes stdin at once,
+    """#385 (test tidiness): `input=\"\"` closes stdin at once,
     the same as before the writer thread existed -- the child must see
     immediate EOF, not hang waiting for input that will never arrive."""
     result = run_tracked(
@@ -737,7 +737,7 @@ def test_run_tracked_writer_thread_handles_empty_input() -> None:
 
 
 def test_run_tracked_writer_thread_child_never_reads_stdin() -> None:
-    """#385 review P2 (test tidiness): a child that exits without ever
+    """#385 (test tidiness): a child that exits without ever
     reading its stdin must not hang `run_tracked` -- the writer thread's
     own write gets `BrokenPipeError` once the child's read end closes,
     and that is swallowed, not raised into the main thread."""
@@ -812,7 +812,7 @@ def test_communicate_promptly_stdin_wrapper_finalizer_does_not_block_the_main_th
 def test_communicate_promptly_does_not_repeat_the_group_kill_during_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#385 review P2 (test tidiness): cancellation can be set while a
+    """#385 (test tidiness): cancellation can be set while a
     `finally:` step's own subprocess call runs inside `token.cleanup()`
     -- that must not trigger the repeat kill either, the same gate
     `_communicate_promptly` already applies to its *first* kill via

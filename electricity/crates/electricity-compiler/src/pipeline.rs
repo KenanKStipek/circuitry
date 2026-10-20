@@ -580,7 +580,7 @@ pub fn build_input_namespace(
 /// declares none) -- [`build_input_namespace`]'s own preamble, shared
 /// with [`build_input_namespace_best_effort`] so the two functions'
 /// starting point can never drift apart.
-/// Public (PR #441 review finding 1c): `electricity`'s own run wiring
+/// Public (PR #441): `electricity`'s own run wiring
 /// re-seeds `state["input"]` with this exact namespace -- never
 /// `apply_declared_inputs`'d, so still just the sniffed-and-string-
 /// restored `-e` values -- as soon as the real document is loaded, so
@@ -682,7 +682,7 @@ pub fn apply_declared_inputs(
 /// *document*'s own `-e`-seeded input namespace, coerced as far as
 /// [`build_input_namespace`] gets before its first violation, then left
 /// exactly as that violation leaves it -- never itself an error (issue
-/// #431 PR #441 review finding 3's own "mirror `check_interface_inputs`'
+/// #431 PR #441's own "mirror `check_interface_inputs`'
 /// in-place edit of `input` on failure"): a key [`apply_declared_inputs`]
 /// processed before the first one that fails keeps its own default or
 /// coercion; every key at or after it (including the one that failed)
@@ -961,7 +961,7 @@ pub fn pre_state_checks(
 /// [`pre_state_checks`]'s own steps 6 (part 2)/7/9 -- everything it
 /// runs *before* [`build_input_namespace`] (step 10) -- split out on
 /// its own so a caller can tell the two kinds of failure apart (PR
-/// #441 review finding 1b): a failure here means `build_input_
+/// #441): a failure here means `build_input_
 /// namespace`/[`build_input_namespace_best_effort`] never ran at all,
 /// so `state["input"]` must stay exactly whatever it already was
 /// (lane D2's run wiring), not get the partial, best-effort coercion
@@ -1687,7 +1687,7 @@ mod tests {
         // `1:` parses as `Value::Int(1)`, not the string `"1"` -- its
         // own `default:` must land under that exact literal key, the
         // same key Python's own `inputs[key] = default` would write to
-        // (issue #432's review, finding 7).
+        // (issue #432's review).
         let doc = interface_doc_with_key(
             Value::Int(1.into()),
             vec![
@@ -1741,8 +1741,8 @@ mod tests {
         assert_eq!(namespace.get(&vkey("c")), Some(&Value::from("cli-c")));
     }
 
-    /// Two declared inputs, processed in order (issue #431 PR #441
-    /// review finding 3): the first one ever defaulted/coerced keeps
+    /// Two declared inputs, processed in order (issue #431, PR #441):
+    /// the first one ever defaulted/coerced keeps
     /// that mutation even though the second one -- absent, `required`,
     /// no `default:` -- fails, exactly as `check_interface_inputs`'s
     /// own eager, mutate-as-you-go Python loop leaves `state["input"]`
