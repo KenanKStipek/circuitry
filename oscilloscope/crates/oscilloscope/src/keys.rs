@@ -897,7 +897,7 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
 }
 
 /// `visible_rows`, further narrowed to exactly what the Flow screen's
-/// own pane draws (issue #635's P0): a path the Flow screen hides
+/// own pane draws (issue #635): a path the Flow screen hides
 /// entirely (the untaken branch's own real steps) or merges away (a
 /// single-pass loop's own pass) never appears in `flow_rows` under
 /// its own path at all, so filtering by "does a real row in

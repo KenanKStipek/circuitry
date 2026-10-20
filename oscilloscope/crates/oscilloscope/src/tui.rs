@@ -152,7 +152,7 @@ fn scroll_indicator(selected: Option<usize>, total: usize, viewport: usize) -> O
     Some(format!(" {position}/{total} "))
 }
 
-/// Finding F6: unit tests for [`scroll_indicator`] on their own,
+/// Unit tests for [`scroll_indicator`] on their own,
 /// beyond the rendered goldens that already exercise it indirectly.
 #[cfg(test)]
 mod scroll_tests {
@@ -2303,7 +2303,7 @@ mod flow_columns_tests {
 
 /// Resolves `app.selected_path` (set by an ordinary move, or by
 /// follow/`⏎`-on-overview picking a real tree path directly) to
-/// the Flow pane's own drawn row (issue #635's P0): a path under a
+/// the Flow pane's own drawn row (issue #635): a path under a
 /// single-pass loop's own merged pass maps to that loop's row, and a
 /// path hidden entirely under a decision's untaken branch maps to
 /// that branch's own dim summary line -- `rows` is checked for an
@@ -2449,7 +2449,7 @@ fn draw_flow_pane(
     let show_condition = frame_width >= thresholds::FLOW_CONDITION_LINE_MIN_WIDTH;
     let visible_paths: std::collections::BTreeSet<&str> =
         visible.iter().map(|r| r.path.as_str()).collect();
-    // Issue #635's P0: the one list of drawn lines, in the exact
+    // Issue #635: the one list of drawn lines, in the exact
     // order they're drawn -- a real row collapse/filter/errors-only
     // would hide, by the same rule `visible_paths` already applies
     // elsewhere; the synthetic rows this module invents (an unnamed
@@ -5052,7 +5052,7 @@ mod golden_tests {
         PlanTree::from_program(&program)
     }
 
-    /// Finding F6/M1: a selected, finished prompt at 120×40 -- the
+    /// A selected, finished prompt at 120×40 -- the
     /// `sent`/`received` blocks must land right after `path`/`type`,
     /// before `plan`/the meta list, and each snippet must cap at
     /// [`SNIPPET_MAX_LINES`] wrapped lines so both blocks stay on

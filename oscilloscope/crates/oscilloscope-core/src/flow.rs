@@ -56,7 +56,7 @@ pub enum FlowRowKind {
     /// if it's empty), never a row per untaken step"). `paths` is the
     /// untaken side's own real root paths (never drawn, since
     /// [`untaken_root_paths`] hides them) -- a caller mapping a
-    /// selection that fell on one of them (issue #635's P0: follow,
+    /// selection that fell on one of them (issue #635: follow,
     /// or a stale manual selection, can both land on a hidden
     /// untaken step) back onto something actually drawn needs exactly
     /// these.
@@ -65,7 +65,7 @@ pub enum FlowRowKind {
 
 /// Whether `kind` is a real orchestration-pane row -- one the
 /// overview's own collapse/filter/errors-only state can hide, and
-/// `keys::visible_rows` already knows about (issue #635's P0): a
+/// `keys::visible_rows` already knows about (issue #635): a
 /// named `if`'s decision row counts (it shares that `if`'s own real
 /// path), but the untaken branch's dim summary and an unnamed `if`'s
 /// synthesised decision never do -- neither has a path of its own in

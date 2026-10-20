@@ -2131,7 +2131,7 @@ fn run_tui(
         // only and the selection itself can change on a key alone),
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
-        // Issue #635's P0: on the Flow screen, movement must land only
+        // Issue #635: on the Flow screen, movement must land only
         // on a row the Flow pane actually draws, never on a step
         // hidden under an untaken branch or merged into its own
         // single-pass loop row -- `visible_rows_for_flow` narrows the
@@ -3322,7 +3322,7 @@ fn run_tui_watch(
                 &now_str,
             );
         }
-        // Issue #635's P0: same narrowing as `osi <doc>`'s own main
+        // Issue #635: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
         let visible = match &flow_screen {
             Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
