@@ -3790,6 +3790,137 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    fn agent_running_state_for_transcript_path_test() -> serde_json::Value {
+        serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                "provider": "agent",
+                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z"}
+            }}
+        }})
+    }
+
+    /// Issue #637: transcript tailing only ever happens for the one
+    /// step actually on screen -- the overview's own focused step on
+    /// screen 0, Flow's selected step on screen 2, and nothing at all
+    /// on screen 1 or 3, even though the very same agent step exists
+    /// in state either way.
+    #[test]
+    fn focused_agent_transcript_path_is_none_off_the_overview_and_flow_screens() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = agent_running_state_for_transcript_path_test();
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let rendered = oscilloscope_core::render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T00:00:01Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &rendered.token_bar,
+            &[],
+            None,
+            "2026-01-01T00:00:01Z",
+        );
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            Some("prime.fix"),
+            &LocalZone,
+            "2026-01-01T00:00:01Z",
+        );
+
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Overview;
+        assert_eq!(
+            focused_agent_transcript_path(&app, Some(&overview), Some(&flow_screen)),
+            Some("/tmp/agent-live-path-test.jsonl".to_string())
+        );
+
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        assert_eq!(
+            focused_agent_transcript_path(&app, Some(&overview), Some(&flow_screen)),
+            Some("/tmp/agent-live-path-test.jsonl".to_string())
+        );
+
+        for screen in [
+            oscilloscope_core::screens::Screen::Time,
+            oscilloscope_core::screens::Screen::Cost,
+        ] {
+            app.screen = screen;
+            assert_eq!(
+                focused_agent_transcript_path(&app, Some(&overview), Some(&flow_screen)),
+                None,
+                "no screen but overview/flow ever names a transcript to tail"
+            );
+        }
+    }
+
+    /// Issue #637's own bound, checked at this function's own level
+    /// too (`observe::tail_transcript_lines` already has its own byte
+    /// -level test): a step whose own `meta.live` has no `transcript`
+    /// at all, or isn't an agent, never names a path to tail either.
+    #[test]
+    fn focused_agent_transcript_path_is_none_for_a_finished_step_with_no_live_left() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": "t"},
+            "fix": {"value": "done", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "agent"}}
+        }});
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let rendered = oscilloscope_core::render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            1.0,
+            "t2",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &rendered.token_bar,
+            &[],
+            None,
+            "t2",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Overview;
+        assert_eq!(
+            focused_agent_transcript_path(&app, Some(&overview), None),
+            None
+        );
+    }
+
     /// Issue #635: "it keeps at most 2,000 lines" -- pushing well
     /// past that cap must leave the buffer at exactly
     /// `MAX_STORY_LINES`, having dropped the *oldest* lines first,
