@@ -1758,23 +1758,31 @@ the run is going, never once it has ended.
 (run-relative seconds, the same offset `history::StepRecord::start_s`
 uses) onto the axis's own columns -- full cells, then one partial-
 block glyph (`▏`…`█`, `time::partial_block`) for the column the bar's
-own end falls inside. A running row's own end is already `now` (a
-row's `duration_s` already counts up to now while it runs, the same
-rule every other screen's own duration column follows), so the only
-extra thing a running row needs is a `▶` head in place of its own
-partial-block end.
+own end falls inside, in the row's own status colour. A running
+row's own end is already `now` (a row's `duration_s` already counts
+up to now while it runs, the same rule every other screen's own
+duration column follows), so the only extra thing a running row
+needs is a `▶` head in place of its own partial-block end -- one
+column to the left of the now line rather than under it, so the two
+stay visible side by side instead of the line simply overwriting the
+head.
 
 **Ghost bars** (`░`, `time::step_ghost_bar`): a pending step's own
 p50 `start_s`/`end_s` from history (`history::StepStats::start_p50_s`/
 `end_p50_s`, pooled across every ok run of its own path the same
 "earlier versions" way `busy_p50_s` already is), shifted by
-`Header::history_vs_usual_s` -- how far ahead or behind the run is at
-its own ETA anchor. Both that shift and the step's own p50 figures
-need the same thresholds the whole-run ETA already does, so there
-are no ghost bars without 3 ok runs of the same document version, and
-none at all after an edit (a different hash resets `history_vs_usual_s`
-to `None`, which is the one condition this needs). The last row,
-`planned`, is a ghost from now to the ETA (`time::planned_ghost_bar`).
+`time::vs_usual_shift_s` -- how far ahead or behind the run is at its
+own ETA anchor. That shift is gated on `Header::history_same_hash_
+count` reaching the same 3-run threshold the whole-run ETA itself
+needs, not on `Header::history_vs_usual_s` directly: that field stays
+`None` until some step has actually finished (`history::compute_eta`'s
+own anchor) even with plenty of same-hash runs already in hand, so
+gating on it directly hid every ghost bar until the first step
+finished -- exactly when they matter most. Before any step finishes,
+the shift is simply `0.0` (the anchor is the run's own start). There
+are still no ghost bars below 3 ok runs of the same document version,
+or without the step's own p50 figures. The last row, `planned`, is a
+ghost from now to the ETA (`time::planned_ghost_bar`).
 
 **Loop collapse and expand:** a loop row is drawn collapsed by
 default -- its own bar already spans first-pass-start to last-pass-
@@ -1791,57 +1799,112 @@ of its own in either engine's real state -- only its children do; a
 tree loop's own pass container happens to have one, but aggregating
 either way gives the same answer when it's the only node in its own
 subtree) -- two tree passes running at once simply overlap, shown as
-such, never merged away. An unnamed loop's own passes, which share one
-path, come from `RunModel::step_intervals` by event id order (`#1`,
-`#2`, …) -- without `--events` they can't be told apart, so the row
-stays one and `⏎` is a no-op (`TimeRow::loop_expandable` is `false`).
+such, never merged away. An unnamed loop's own body never gets a `RowKind::Loop` row at all
+(§1.3: it writes no path segment of its own, so it takes its
+enclosing scope's own kind, a leaf's); its own passes, which
+therefore all share that one leaf's path, come from `RunModel::
+step_intervals` by event id order (`#1`, `#2`, …) instead of from
+`iter_N` children -- without `--events` they can't be told apart, so
+the row stays one and `⏎` is a no-op (`TimeRow::loop_expandable` is
+`false`). `time::loop_is_expandable`'s own unnamed branch finds this
+by checking the leaf's own *parent* path for a `PlanEntryKind::Loop
+{ named: false, .. }` entry -- the control node's own entry, like its
+row, sits at the enclosing scope's path, one level up from the leaf.
 Drawing always hides every row under any loop's own path from the
 base tree, collapsed or expanded, since the Time screen's own pass
 rows (or lack of them) are what stands in for them either way.
 
-**The strips**, all built from the same already-known intervals
-(`RunModel::step_intervals`, bucketed by `time::bucket_weighted`) and
-rows:
-- **events/min:** one point per logged start and end event (or, past
-  the interval log's own 50,000-entry cap, the per-minute counts it
-  keeps instead, `RunModel::overflowed_minute_counts`, folded in at
-  each minute's own midpoint). Without `--events` at all
+**The strips** carry raw points, not pre-bucketed heights --
+`screens::TimeStrips` holds `events_points`/`decisions`/`in_flight_
+intervals` as-is, and `tui.rs` buckets them (`time::bucket_weighted`/
+`time::in_flight_heights`) at whatever width and `+`/`-`/`=` visible
+window the bars themselves are drawn at right now, the same
+`TimeLayout` both the timeline and the strips share each frame.
+Bucketing once at a separate, fixed resolution instead (this
+screen's own first pass at it) couldn't keep up with the bars' own
+zoom, and let an in-flight strip run past the now line. The now line
+is overlaid on every strip the same way it is on every bar row.
+- **events/min:** one point per logged start and end event, plus a
+  currently running leaf's own start (`RunModel::step_intervals` has
+  no entry for one until it finishes), plus -- past the interval
+  log's own 50,000-entry cap -- the per-minute counts it keeps
+  instead (`RunModel::overflowed_minute_counts`), folded in at each
+  minute's own midpoint. Without `--events` at all
   (`RunModel::has_events`), the strip reads `(from state)` and the
   same `created_at`/`completed_at` transitions `observe` already
-  tracks stand in for events.
+  tracks stand in for events. While the only running step is an
+  agent and the strip's own rate over the last minute has actually
+  dropped (`time::quiet_agent`), it ends in `quiet = agent`.
 - **decisions:** a `◆` at each named `if`'s own first `Decision`
   story line (`diff::LogKind::Decision`), one per path -- an unnamed
   `if`'s own inferred decision isn't marked, for now.
-- **in flight:** a sweep over every row's own `[start_s, end_s]`
-  (`time::in_flight_heights`), counted by overlap rather than by
-  point, ending in the run's own peak concurrency and, when any
-  running node currently carries `meta.waiting_for`
-  (`time::queued_now`), how many are queued behind a slot right now.
+- **in flight:** a sweep over every *leaf* row's own `[start_s,
+  end_s]` (`time::in_flight_heights`; a container never counts
+  alongside the one leaf actually running inside it), counted by
+  overlap rather than by point, ending in the run's own peak
+  concurrency and, when any running node currently carries `meta.
+  waiting_for` (`time::queued_now`), how many are queued behind a
+  slot right now. Both the suffix figures and the start/duration
+  columns drop below 90 columns, the same width the timeline's own
+  columns do.
 
 **The zoom pane:** the selected step's own `FocusedStep` (reused
 from `screens::build_focused_step`, the same one Flow's own selected
-pane already builds) decides what it shows. For an agent
-(`FocusDetail::Agent`), `time::agent_zoom_bands` turns its own
-transcript's tool calls into bands by kind (`transcript::ToolKind`,
-the same classification `tool_glyph` already gives the overview's own
-activity strip -- moved into `oscilloscope-core` for exactly this, so
-the two screens never disagree), with a `think` band covering every
-gap between them (and from the session's own start to the first call,
-and from the last call to now while it's still running). The footer's
-own turns/tool-calls/busiest-tool figures (`time::zoom_agent_footer`)
-read `meta.live`'s own `tools.<name>.ms` while running, or `meta.raw`'s
-`tool_counts` once finished -- transcript tailing now also covers
-screen `1`, and a finished agent's own `meta.raw.transcript` (not just
-a running one's `meta.live.transcript`), since this is the first
-screen that ever shows a finished agent's own bands.
+pane already builds) decides what it shows, together with
+`screens::TimeZoomExtra` (`build_time_screen`'s own extra data for
+this one pane): a container's direct children, or a prompt/tool's
+own p50/p90 marks -- both built only for the selected row, since
+neither has anywhere else to be read from.
+
+- **A container** (`TimeZoomExtra::Container`): its direct children
+  (one level of depth down, never recursed into) as rows with bars
+  on the container's own axis -- its own start to its own end (or
+  now). Past the pane's own height, the rest fold into one
+  `+N more` line (`zoom_container_budget`) rather than overflowing.
+- **A prompt or tool** (`TimeZoomExtra::StepBar`): one bar across its
+  own start-to-end (or now) window, widened past that when needed so
+  its own p50/p90 (`Header::history_step_usual`) both land on it as
+  marks, with the actual figures underneath; `waiting for the
+  reply` for a still-running prompt, `running` for a still-running
+  tool.
+- **An agent** (`FocusDetail::Agent`): `time::agent_zoom_bands` turns
+  its own transcript's tool calls into bands by kind
+  (`transcript::ToolKind`, the same classification `tool_glyph`
+  already gives the overview's own activity strip -- moved into
+  `oscilloscope-core` for exactly this, so the two screens never
+  disagree), with a `think` band covering every gap between them
+  (and from the session's own start to the first call, and from the
+  last call to now while it's still running). Each kind draws as its
+  own row, one band kind per line, since an agent can call the same
+  kind of tool more than once in a session. When the transcript's own
+  tailed window doesn't reach back to the session's own start
+  (`transcript::TranscriptView::truncated`, from `observe::
+  transcript_tail_truncated`), the earliest band's own row leads with
+  a dim `…` instead of reading as a long, genuine gap. With no
+  transcript at all, the pane falls back to a plain `running: <tool>`
+  line from `meta.live.current_tool`, or the brief-window note
+  (`screens::AGENT_LIVE_DATA_NOTE`) with neither. The footer's own
+  turns/tool-calls/busiest-tool figures (`time::zoom_agent_footer`)
+  read `meta.live`'s own `tools.<name>.ms` while running, or `meta.
+  raw`'s `tool_counts` once finished -- transcript tailing now also
+  covers screen `1`, and a finished agent's own `meta.raw.transcript`
+  (not just a running one's `meta.live.transcript`), since this is
+  the first screen that ever shows a finished agent's own bands.
 
 **"vs usual"** (`time::vs_usual_mark`): a step with 5 or more runs of
 history is marked `▲`/`▼` outside its own p10/p90, else `≈`; with 3 or
-4, more than 20% from p50 either way. Below 3, the pane reads
-`history: N of 3 runs of this version` instead of any rows. After an
-edit (`time::vs_usual_is_earlier_versions`, the same `history_vs_
-usual_s` condition ghost bars gate on), the title reads `vs usual ·
-earlier versions` and the footer carries no finish time.
+4, more than 20% from p50 either way -- a still-*running* step never
+reads `▼` purely for not having gotten as far as p10/20%-under yet,
+only `≈` until it either finishes or actually passes the upper bound.
+Below 3 ok runs of the current document hash, with no pooled step
+history from earlier versions either, the pane reads `history: N of 3
+runs of this version` instead of any rows (`time::vs_usual_too_few_
+runs`). With some pooled history to fall back on -- including right
+after an edit, where the current hash's own count is `0` -- the title
+instead reads `vs usual · earlier versions`
+(`time::vs_usual_is_earlier_versions`) and the footer carries no
+finish time; with history off entirely, neither applies and the
+title carries no suffix at all.
 
 **Zoom** (`App::time_zoom`, `+`/`-`/`=`): a fraction of the whole
 axis, narrowed or widened by `tui.rs`'s own `time_visible_window`
@@ -1881,7 +1944,7 @@ duration), no axis at all.
 - **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSI_E2E_ELECTRICITY=1`.
 - **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/log/token-bar/header change each, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSI_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
 - **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents using only `tool`/`json`, `dynamic`, a CEL `if` and `finally:`, recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
-- **The Time screen (issue #650).** `oscilloscope-core/src/time.rs` unit-tests every pure piece on its own: tick choice across spans from 30s to 6h; `bar_cells`'s own partial-block end, an exact cell boundary (no partial glyph), and a running bar clamped to the axis's own end; `now_column` outside the axis; ghost bars shifted by the vs-usual gap, and `None` below the run threshold or with no shift to apply; loop expand for a named chain loop (including one whose own `iter_N` carries no `{value, meta}`, only its child does -- the real shape a live PTY run against `cof` caught), a named tree loop's two overlapping passes both keeping their own real span, an unnamed loop's passes by event id, and an unnamed loop with no `--events` staying one row; the events/min strip with and without events (and its own per-minute overflow tail folded in), decisions keeping only the first sighting per path, in-flight heights by overlap, and `queued_now`; the zoom pane's agent bands (gaps covered by `think`, a still-running call extended to now, no calls at all) and its footer's busiest-tool percentage; and vs-usual marks at the 3- and 5-run thresholds, `earlier_versions`, and the too-few-runs case. `oscilloscope-core/src/screens.rs` covers `build_time_screen` end to end against a real compiled plan: a running row's own bar and the now line, and a loop row's passes spliced in only once `app.time_expanded_loops` names it. `oscilloscope-core/tests/time_parity.rs` mirrors `flow_parity.rs`: the same row paths/labels/statuses (never timing) on both engines' recorded fixtures, including a's and b's own quick-steps fold agreeing. `tui.rs`'s own golden tests cover the Time screen at 120×40, 100×30, 80×24 and 70×20, running and finished, with and without history, a collapsed and an expanded loop, and a running agent in the zoom pane; a 400-pass loop still collapses to one row, and the existing 2,000-node timing test now also builds and draws the Time screen within the same budget. `oscilloscope/tests/e2e_tui_pty.rs`'s `pressing_1_during_a_live_run_opens_the_time_screen` presses `1` during a live `cof` run, checks a running row's own bar and the now line, navigates to a finished loop row and presses `⏎` for one row per pass, then `+` and `=`. `oscilloscope/tests/e2e_history.rs` gains an electricity-only run history test and one that pools a `cof` run and an `electricity` run of the identical document under one `document_hash`.
+- **The Time screen (issue #650).** `oscilloscope-core/src/time.rs` unit-tests every pure piece on its own: tick choice across spans from 30s to 6h, and that ticks stay about 10 columns apart at any width; `bar_cells`'s own partial-block end, an exact cell boundary (no partial glyph), and a running bar clamped to the axis's own end; `now_column` outside the axis; ghost bars shifted by `vs_usual_shift_s` (zero before any step finishes, `None` below the same-hash run threshold or after an edit with nothing pooled to fall back on), and `None` below the run threshold or with no shift to apply; loop expand for a named chain loop (including one whose own `iter_N` carries no `{value, meta}`, only its child does -- the real shape a live PTY run against `cof` caught), a named tree loop's two overlapping passes both keeping their own real span, double-digit pass indices sorting correctly against single-digit ones (`iter_9` next to `iter_10`, the one case a naive string-prefix check alone would get wrong), an unnamed loop's own body leaf (never a `RowKind::Loop` row, against a real compiled plan) expanding its passes by event id, and the same leaf with no `--events` staying one row; the events/min strip with and without events (and its own per-minute overflow tail folded in, and a currently running leaf's own start alongside a finished interval's), `quiet_agent`'s own lone-running-prompt-at-a-low-rate rule, decisions keeping only the first sighting per path, in-flight heights by overlap, and `queued_now`; the zoom pane's agent bands (gaps covered by `think`, a still-running call extended to now, no calls at all) and its footer's busiest-tool percentage; vs-usual marks at the 3- and 5-run thresholds (including that a still-running step never reads faster-than-usual early), `earlier_versions` correctly telling "too few runs at all" apart from "enough pooled history, just not of this hash", and the too-few-runs case. `oscilloscope-core/src/screens.rs` covers `build_time_screen` end to end against a real compiled plan: a running row's own bar and the now line, a loop row's passes spliced in only once `app.time_expanded_loops` names it, and `TimeZoomExtra` for a container (direct children only, not a grandchild) and for a running tool/prompt (`running`/`waiting for the reply`) and a finished one with pooled p50/p90. `oscilloscope-core/tests/time_parity.rs` mirrors `flow_parity.rs`: the same row paths/labels/statuses (never timing) on both engines' recorded fixtures, including a's and b's own quick-steps fold agreeing. `tui.rs` unit-tests `time_bar_string`'s own running head and failed end, `overlay_now_line`'s own head-stays-one-cell-left-of-the-now-line rule, `multi_segment_bar`, and `zoom_container_budget`'s own `+N more` reserve, all directly rather than only through a golden. `tui.rs`'s own golden tests cover the Time screen at 120×40, 100×30, 80×24 and 70×20, running and finished, with and without history, a collapsed and an expanded loop, and a running agent in the zoom pane with a real transcript (bands, footer, and a dim `…` once the tail is marked as not reaching the session's own start) and, separately, with none at all (`running: <tool>`); a 400-pass loop still collapses to one row, the existing 2,000-node timing test also builds and draws the Time screen within the same budget, and a second 2,000-node timing fixture uses real clock times rather than the shared fixture's unparseable ones, so its own timing actually exercises the bar/strip arithmetic rather than measuring blank rows. `oscilloscope/tests/e2e_tui_pty.rs`'s `pressing_1_during_a_live_run_opens_the_time_screen` presses `1` during a live `cof` run, checks a running row's own bar and the now line, navigates to a finished loop row and presses `⏎` for one row per pass, then `+` and `=`, each checked against its own incremental output rather than the whole buffer (which already contained everything either key's own check was looking for). `oscilloscope/tests/e2e_history.rs` gains an electricity-only run history test and one that pools a `cof` run and an `electricity` run of the identical document under one `document_hash`. `oscilloscope-core/src/history.rs` covers `build_record` folding overflowed passes into `(other)` once the interval log's own cap is reached.
 
 ---
 

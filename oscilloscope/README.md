@@ -221,20 +221,28 @@ in the run's own peak, and `N queued` when a prompt is waiting on a
 concurrency slot).
 
 The zoom pane (bottom left) is the selected step's own timeline: a
-container's own children as rows; an agent's own tool calls as one band
-per kind (read, edit, bash, other) from its transcript, with a `think`
-band covering the time between calls, and a footer (`turn 14 · 31 tools ·
-bash 4m10s (67%)`) from its live summary while running or `meta.raw`
-once finished; a prompt or tool's own bar, with its usual (p50/p90)
-marked when history has it.
+container's own direct children as rows with bars, one more fold line
+(`+N more`) past what the pane's own height fits; an agent's own tool
+calls as one band per kind (read, edit, bash, other) from its
+transcript, with a `think` band covering the time between calls, a dim
+`…` ahead of the earliest band when the transcript's own tailed window
+doesn't reach back to the session's start, a plain `running: <tool>`
+with no transcript at all, and a footer (`turn 14 · 31 tools · bash
+4m10s (67%)`) from its live summary while running or `meta.raw` once
+finished; a prompt or tool's own bar, with its usual (p50/p90) marked
+when history has it, and `waiting for the reply`/`running` while it's
+still going.
 
 "vs usual" (bottom right) lists each timed row's own `now`, `p50`, and
 a mark — `▲` slower, `▼` faster, `≈` usual (outside p10–p90 with 5 or
-more runs, more than 20% from p50 with 3 or 4) — with a footer
-(`finish ~12:05 · usual 11:58–12:09 · from 7 runs`). After an edit, the
-title reads `vs usual · earlier versions` instead, with no finish time;
-with fewer than 3 runs, the pane reads `history: 1 of 3 runs of this
-version` instead of any rows.
+more runs, more than 20% from p50 with 3 or 4; a still-running row
+reads `≈` rather than `▼` until it actually finishes faster, or passes
+the usual upper bound) — with a footer (`finish ~12:05 · usual
+11:58–12:09 · from 7 runs`). With fewer than 3 runs of the current
+document version but some history from earlier ones, the title reads
+`vs usual · earlier versions` instead (right after an edit included),
+with no finish time; with no history at all, the pane reads
+`history: 1 of 3 runs of this version` instead of any rows.
 
 `+`/`-` zoom the axis in and out, around now while follow is on or
 around the selection otherwise; `=` fits the whole run again. `tab`
@@ -344,7 +352,8 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 |---|---|
 | `0` | the overview |
 | `2` | flow (this screen) |
-| `3` | cost (below); `1` (time) does nothing yet |
+| `1` | time (above) |
+| `3` | cost (below) |
 | `↑↓` / `j`/`k` | move (the focused pane's own selection, or the selected/story pane's scroll) |
 | `PgUp`/`PgDn` | move a page |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
