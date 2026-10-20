@@ -1710,12 +1710,12 @@ fn build_flow_screen_if_active(
 }
 
 /// Issue #637: the transcript path for whichever step is actually on
-/// screen right now -- the overview's own focused step (running or
-/// last-finished) on screen 0, Flow's selected step on screen 2 --
-/// `None` on every other screen, and `None` for a step that isn't an
-/// agent currently being live-tracked at all (finished, or never an
-/// agent in the first place). Transcript tailing only ever happens
-/// for this one path.
+/// screen right now -- the overview's own focused step (running,
+/// last-finished, or an ended run's own stopped agent) on screen 0,
+/// Flow's selected step on screen 2 -- `None` on every other screen,
+/// and `None` for a step that isn't an agent currently being
+/// live-tracked at all (finished, or never an agent in the first
+/// place). Transcript tailing only ever happens for this one path.
 fn focused_agent_transcript_path(
     app: &App,
     overview: Option<&oscilloscope_core::screens::Overview>,
@@ -1725,6 +1725,7 @@ fn focused_agent_transcript_path(
     let step = match app.screen {
         Screen::Overview => overview.and_then(|o| match &o.now_pane.focus {
             NowFocus::Running(step, _) | NowFocus::LastFinished(step) => Some(step),
+            NowFocus::Ended(summary) => summary.stopped_agent.as_ref(),
             _ => None,
         }),
         Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),

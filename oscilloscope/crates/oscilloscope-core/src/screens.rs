@@ -519,6 +519,11 @@ pub struct EndedSummary {
     pub tokens_sent: u64,
     pub tokens_received: u64,
     pub cost_usd: Option<f64>,
+    /// The agent node still holding `meta.live` with no `completed_at`
+    /// once the whole run has ended (issue #637: an interrupted run's
+    /// agent reads `stopped`, not silently dropped) -- `None` for an
+    /// ordinary finished or failed run with no session left mid-way.
+    pub stopped_agent: Option<FocusedStep>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -596,6 +601,12 @@ pub struct CostCard {
     pub tokens_over_time: Vec<u64>,
     pub top_store: Option<(String, u64)>,
     pub in_flight: String,
+    /// The ended run's own stopped agent (issue #637) -- its label,
+    /// and its last-known `meta.live.tokens_sent`/`tokens_received`
+    /// (either may be `None`, same as the live summary itself) --
+    /// since `tokens_sent`/`tokens_received` above never include a
+    /// session that never completed.
+    pub stopped_agent: Option<(String, Option<u64>, Option<u64>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -631,6 +642,23 @@ fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -
                 .and_then(|e| e.provider.clone())
         });
     provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"))
+}
+
+/// Issue #637: once the whole run has ended, the first agent row
+/// still holding `meta.live` with no `completed_at` of its own --
+/// an interrupted session, never removed because nothing was left
+/// running to remove it (`docs/plugins/agent.md`: "a watcher shows
+/// it as stopped"). `None` once every agent either finished normally
+/// or never started at all.
+fn stopped_agent_row<'a>(
+    rows: &'a [Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> Option<&'a Row> {
+    rows.iter().find(|r| {
+        is_agent_row(r, flat, plan)
+            && node_for(r, flat).is_some_and(|n| n.live.is_some() && n.completed_at.is_none())
+    })
 }
 
 fn build_focused_step(
@@ -740,6 +768,8 @@ fn build_now_pane(
     let log_lines: Vec<String> = log.iter().rev().take(LOG_TAIL).rev().cloned().collect();
 
     let focus = if !matches!(header.status, RunStatus::Running) {
+        let stopped_agent = stopped_agent_row(rows, flat, plan)
+            .map(|row| build_focused_step(row, flat, plan, model, state, now));
         NowFocus::Ended(EndedSummary {
             outcome: header.status,
             start_ts: header.run_start_ts.clone(),
@@ -747,6 +777,7 @@ fn build_now_pane(
             tokens_sent: header.tokens_sent,
             tokens_received: header.tokens_received,
             cost_usd: effective_cost_usd(state, flat),
+            stopped_agent,
         })
     } else {
         // The document root is "running" for the whole run, which
@@ -1007,12 +1038,26 @@ fn build_tokens_over_time(
 }
 
 fn build_cost_card(
+    rows: &[Row],
     header: &crate::render::Header,
     state: Option<&Value>,
     flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
     token_bar: &TokenBar,
     now: &str,
 ) -> CostCard {
+    // Issue #637: `header.tokens_sent`/`received` (`runtime.last_run.
+    // totals`, or the subtree fallback) never carry a session that
+    // never completed -- its own `meta.live` is the only place its
+    // last-known figures ever existed, so the stopped agent's own
+    // tokens are reported separately here rather than folded in.
+    let stopped_agent = (!matches!(header.status, RunStatus::Running))
+        .then(|| stopped_agent_row(rows, flat, plan))
+        .flatten()
+        .and_then(|row| {
+            let live = node_for(row, flat)?.live.as_ref()?;
+            Some((row.label.clone(), live.tokens_sent, live.tokens_received))
+        });
     CostCard {
         tokens_sent: header.tokens_sent,
         tokens_received: header.tokens_received,
@@ -1027,6 +1072,7 @@ fn build_cost_card(
         // actually on display.
         top_store: crate::cost::top_store(flat, "prime"),
         in_flight: token_bar_in_flight_line(token_bar),
+        stopped_agent,
     }
 }
 
@@ -1142,7 +1188,7 @@ pub fn build_overview(
     );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(header, state, flat, token_bar, now);
+    let cost_card = build_cost_card(rows, header, state, flat, plan, token_bar, now);
     Overview {
         phase_strip,
         now_pane,
@@ -2058,17 +2104,21 @@ mod tests {
         let token_bar = TokenBar::default();
         let flat = BTreeMap::new();
         let no_cost = build_cost_card(
+            &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
             &flat,
+            &PlanTree::empty(),
             &token_bar,
             "2026-10-08T11:52:55Z",
         );
         assert_eq!(no_cost.cost_usd, None);
         let with_cost = build_cost_card(
+            &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
             &flat,
+            &PlanTree::empty(),
             &token_bar,
             "2026-10-08T11:52:55Z",
         );
@@ -2110,7 +2160,15 @@ mod tests {
                 meta: json!({"cost_usd": 0.75}),
             },
         );
-        let card = build_cost_card(&header, None, &flat, &token_bar, "2026-10-08T11:52:55Z");
+        let card = build_cost_card(
+            &[],
+            &header,
+            None,
+            &flat,
+            &PlanTree::empty(),
+            &token_bar,
+            "2026-10-08T11:52:55Z",
+        );
         assert_eq!(card.cost_usd, Some(2.25));
     }
 

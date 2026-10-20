@@ -609,6 +609,16 @@ fn focus_lines(
             if let Some(cost) = summary.cost_usd {
                 lines.push(Line::from(format!("${cost:.2}")));
             }
+            // Issue #637: an agent session that never completed has
+            // no `NowFocus::Running`/`LastFinished` of its own left
+            // to be the overview's focus once the run has ended --
+            // named and shown here instead, with its own last-known
+            // live block, reusing exactly what a running or
+            // last-finished step's own focus already renders.
+            if let Some(agent) = &summary.stopped_agent {
+                lines.push(Line::from(""));
+                lines.extend(focus_step_lines(agent, None, transcript_view, ctx));
+            }
             lines
         }
         NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), transcript_view, ctx),
@@ -1189,6 +1199,20 @@ fn draw_cost_card(
             "top {path} {}",
             oscilloscope_core::format::format_tokens(*total)
         )));
+    }
+    // Issue #637: `card.tokens_sent`/`tokens_received` above never
+    // include a session that never completed (`runtime.last_run.
+    // totals` doesn't have one) -- its last-known figures are shown
+    // here instead, marked as stopped rather than folded into the
+    // card's own running total.
+    if let Some((label, sent, received)) = &card.stopped_agent {
+        let sent = sent
+            .map(oscilloscope_core::format::format_tokens)
+            .unwrap_or_else(|| "—".to_string());
+        let received = received
+            .map(oscilloscope_core::format::format_tokens)
+            .unwrap_or_else(|| "—".to_string());
+        lines.push(Line::from(format!("stopped {label} ↑{sent} ↓{received}")));
     }
     let in_flight_style = with_highlight(Style::default(), ctx.highlight("tokenbar"));
     lines.push(Line::styled(card.in_flight.clone(), in_flight_style));
@@ -3035,9 +3059,16 @@ fn flow_selected_step_lines(
             };
             doing.push(Line::from(text));
         }
+        // `live.is_some()` without `running` is an agent node whose
+        // own run has already ended (cancelled, failed or aborted,
+        // issue #637): `meta.live` is left behind with no
+        // `completed_at`, and `stale` (computed from `now` the
+        // instant this step was built) is always `true` by then, so
+        // this never reads as running -- only `stopped`, with
+        // whatever figures the session last reported.
         FocusDetail::Agent {
             live, note, stale, ..
-        } if running => {
+        } if running || live.is_some() => {
             if let (Some(since), Some(elapsed)) = (
                 step.since_ts
                     .as_deref()
@@ -3059,7 +3090,8 @@ fn flow_selected_step_lines(
                     // lines` must not print a second one.
                     doing.extend(agent_live_lines(live, transcript_view, ctx, false));
                 }
-                None => doing.push(Line::styled(*note, dim)),
+                None if running => doing.push(Line::styled(*note, dim)),
+                None => {}
             }
         }
         _ => {}
@@ -3859,6 +3891,43 @@ mod golden_tests {
         state
     }
 
+    /// Issue #637's acceptance item 2: the whole run has ended --
+    /// SIGINT lands mid the agent's first tool call, same shape
+    /// `oscilloscope/tests/fixtures/agent_live_pi_cancelled` recorded
+    /// from a real `cof` run (`cancel_state.py`) -- `prime` itself
+    /// carries DESIGN.md §2.1 rule 7's own "Interrupted" error, but
+    /// `fix`'s own `meta.live` is still there, with no `completed_at`
+    /// of its own: `NowFocus::Ended` with no step of its own to focus
+    /// on otherwise.
+    fn agent_cancelled_state() -> Value {
+        json!({
+            "runtime": {"last_run": {"completed_at": "2026-01-01T11:46:54Z"}},
+            "prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
+                "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+                "fix": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "params_rendered": {"engine": "pi", "prompt": "Fix the bug.\nSee the issue for details."},
+                    "live": {
+                        "engine": "pi", "model": null, "session_id": "s1",
+                        "transcript": "/tmp/fix-transcript.jsonl",
+                        "attempt": 1, "phase": "turn",
+                        "started_at": "2026-01-01T11:46:43Z", "updated_at": "2026-01-01T11:46:50Z",
+                        "turns": 1, "tool_calls": 1,
+                        "tools": {"bash": {"calls": 1, "ms": 0}},
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"},
+                        "tokens_sent": 2100, "tokens_received": 40, "cost_usd": 0.012,
+                        "tokens_cached_in": 800, "tokens_cache_write": 100,
+                        "context_tokens": 2100, "context_window": null,
+                        "turn_tokens": [2100],
+                        "files_changed": null, "lines_added": null, "lines_removed": null
+                    }
+                }}
+            }
+        })
+    }
+
     /// The transcript lines `agent_running_state`'s own `fix` step
     /// would have written by the time it reached `meta.live.turns ==
     /// 14` -- enough for the now pane / selected pane's own `doing:`
@@ -4256,6 +4325,31 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Issue #637's acceptance item 2: once the whole run has ended
+    /// (not just this one step's own heartbeat gone stale while the
+    /// run keeps going, `overview_now_pane_shows_an_interrupted_
+    /// agents_leftover_as_stopped` above), the now pane's own
+    /// `NowFocus::Ended` names the stopped agent and still shows its
+    /// last-known live block.
+    #[test]
+    fn overview_now_pane_cancelled_agent_at_120x40() {
+        let state = agent_cancelled_state();
+        let text = overview_agent_snapshot_at(120, 40, &state, None, ProcessState::exited(true));
+        assert!(text.contains("stopped"), "{text}");
+        assert!(
+            text.contains("fix"),
+            "the stopped agent must be named:\n{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_cancelled_agent_at_80x24() {
+        let state = agent_cancelled_state();
+        let text = overview_agent_snapshot_at(80, 24, &state, None, ProcessState::exited(true));
+        insta::assert_snapshot!(text);
+    }
+
     #[test]
     fn flow_selected_pane_running_agent_at_120x40() {
         let state = agent_running_state();
@@ -4294,6 +4388,30 @@ mod golden_tests {
     fn flow_selected_pane_finished_agent_at_80x24() {
         let state = agent_finished_state();
         let process = ProcessState::exited(false);
+        let text = flow_agent_snapshot_at(80, 24, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #637's acceptance item 2: the run has ended, but `fix`
+    /// is still selected -- its own `FocusedStep` never came from
+    /// `NowFocus` at all here (Flow's own selection, issue #635), so
+    /// this exercises `flow_selected_step_lines`'s own guard
+    /// directly: `fix`'s `RowStatus::kind` reads `Cancelled`, never
+    /// `Running`, and must still show `stopped` with its last-known
+    /// figures rather than nothing at all.
+    #[test]
+    fn flow_selected_pane_cancelled_agent_at_120x40() {
+        let state = agent_cancelled_state();
+        let process = ProcessState::exited(true);
+        let text = flow_agent_snapshot_at(120, 40, &state, None, process);
+        assert!(text.contains("stopped"), "{text}");
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_cancelled_agent_at_80x24() {
+        let state = agent_cancelled_state();
+        let process = ProcessState::exited(true);
         let text = flow_agent_snapshot_at(80, 24, &state, None, process);
         insta::assert_snapshot!(text);
     }
