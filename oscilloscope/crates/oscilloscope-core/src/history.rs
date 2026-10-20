@@ -221,17 +221,6 @@ fn build_steps(
         }
     }
 
-    // One pass over the distinct overflowed paths, not one per
-    // logged interval: a path with several logged passes before it
-    // overflowed must have its own dropped tail counted once, not
-    // once per pass already logged.
-    let mut overflow_passes: BTreeMap<String, u64> = BTreeMap::new();
-    for (path, count) in model.overflowed_pass_counts() {
-        if let Some(key) = display_key(path, plan) {
-            *overflow_passes.entry(key).or_insert(0) += u64::from(*count);
-        }
-    }
-
     let mut steps: BTreeMap<String, StepRecord> = BTreeMap::new();
     for (key, intervals) in by_key {
         let ranges: Vec<(f64, f64)> = intervals.iter().map(|i| (i.start_s, i.end_s)).collect();
@@ -244,7 +233,7 @@ fn build_steps(
             .map(|i| i.end_s)
             .fold(f64::NEG_INFINITY, f64::max);
         let busy_s = merged_busy_s(ranges);
-        let passes = intervals.len() as u64 + overflow_passes.remove(&key).unwrap_or(0);
+        let passes = intervals.len() as u64;
         let ok = intervals.iter().all(|i| i.ok);
         let tokens_sent = sum_optional(intervals.iter().map(|i| i.tokens_sent));
         let tokens_received = sum_optional(intervals.iter().map(|i| i.tokens_received));
@@ -264,23 +253,24 @@ fn build_steps(
         );
     }
 
-    // Every path whose passes all came after the cap has no logged
-    // interval at all, so it never went through the loop above --
-    // without this, its passes would simply vanish from the record.
-    for (key, passes) in overflow_passes {
-        steps.insert(
-            key,
-            StepRecord {
-                start_s: 0.0,
-                end_s: 0.0,
-                busy_s: 0.0,
-                passes,
-                tokens_sent: None,
-                tokens_received: None,
-                cost_usd: None,
-                ok: true,
-            },
-        );
+    // Past the interval log's own cap, a dropped pass's path is no
+    // longer kept (issue #649: "then keeps only counts per minute"),
+    // so there is no key left to attribute it to -- the whole total
+    // folds into `(other)` instead, created here if nothing else
+    // already overflowed into it.
+    let overflow_total = model.overflowed_total_passes();
+    if overflow_total > 0 {
+        let other = steps.entry(OTHER_STEP.to_string()).or_insert(StepRecord {
+            start_s: 0.0,
+            end_s: 0.0,
+            busy_s: 0.0,
+            passes: 0,
+            tokens_sent: None,
+            tokens_received: None,
+            cost_usd: None,
+            ok: true,
+        });
+        other.passes += overflow_total;
     }
 
     cap_steps(steps)
@@ -797,6 +787,14 @@ pub struct StepStats {
     pub busy_p50_s: Option<f64>,
     pub busy_p10_s: Option<f64>,
     pub busy_p90_s: Option<f64>,
+    /// p50 of the step's own `start_s`/`end_s` (run-relative
+    /// seconds), pooled the same "earlier versions" way `busy_p50_s`
+    /// is -- the Time screen's own ghost bars (issue #650), shifted
+    /// by how far ahead or behind the current run is at its ETA
+    /// anchor. `None` below [`P50_MIN_RUNS`], same threshold as every
+    /// other p50 here.
+    pub start_p50_s: Option<f64>,
+    pub end_p50_s: Option<f64>,
     /// p50 of `run.wall_s - step.end_s`, pooled across every ok run
     /// of this path, any hash -- shown generically for a step, but
     /// never read by [`compute_eta`] itself; see
@@ -891,6 +889,14 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
             .iter()
             .filter_map(|r| r.steps.get(key).map(|s| r.wall_s - s.end_s))
             .collect();
+        let start_s: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key).map(|s| s.start_s))
+            .collect();
+        let end_s: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key).map(|s| s.end_s))
+            .collect();
         per_step.insert(
             key.clone(),
             StepStats {
@@ -898,6 +904,8 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
                 busy_p50_s: percentile_with_threshold(&busy, 50.0, P50_MIN_RUNS),
                 busy_p10_s: percentile_with_threshold(&busy, 10.0, P10_P90_MIN_RUNS),
                 busy_p90_s: percentile_with_threshold(&busy, 90.0, P10_P90_MIN_RUNS),
+                start_p50_s: percentile_with_threshold(&start_s, 50.0, P50_MIN_RUNS),
+                end_p50_s: percentile_with_threshold(&end_s, 50.0, P50_MIN_RUNS),
                 remaining_after_p50_s: percentile_with_threshold(&remaining, 50.0, P50_MIN_RUNS),
             },
         );
@@ -1210,6 +1218,39 @@ mod tests {
         assert!(plan_stats.busy_p50_s.is_some());
     }
 
+    /// Issue #650's own ghost bars need a step's usual `start_s`/
+    /// `end_s`, not just its usual `busy_s` -- pooled the same
+    /// "earlier versions" way.
+    #[test]
+    fn compute_stats_pools_per_step_start_and_end_times() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step(10.0, 20.0, 10.0, 1, true));
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps
+            .insert("plan".to_string(), step(12.0, 22.0, 10.0, 1, true));
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps
+            .insert("plan".to_string(), step(14.0, 24.0, 10.0, 1, true));
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        assert_eq!(plan_stats.start_p50_s, Some(12.0));
+        assert_eq!(plan_stats.end_p50_s, Some(22.0));
+    }
+
+    /// Below [`P50_MIN_RUNS`], there aren't enough runs for a usual
+    /// start/end either.
+    #[test]
+    fn compute_stats_leaves_start_and_end_p50_unset_with_too_few_runs() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step(10.0, 20.0, 10.0, 1, true));
+        let stats = compute_stats(&[r1], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        assert_eq!(plan_stats.start_p50_s, None);
+        assert_eq!(plan_stats.end_p50_s, None);
+    }
+
     #[test]
     fn newest_20_of_more_runs_are_used_for_statistics() {
         let mut records = Vec::new();
@@ -1490,6 +1531,48 @@ mod tests {
         );
     }
 
+    /// Past the interval log's own cap (issue #649), a dropped
+    /// pass's own path is no longer kept at all -- `build_record`
+    /// folds the whole total into `(other)` rather than attributing
+    /// it to whatever path happened to be running when the cap hit.
+    #[test]
+    fn build_record_folds_overflowed_passes_into_other() {
+        let mut model = RunModel::new();
+        for i in 0..(crate::model::MAX_STEP_INTERVALS + 5) {
+            let id = i as i64 + 1;
+            model.observe_event(&crate::observe::Event::Start {
+                ts: "2026-01-01T00:00:00Z".to_string(),
+                id: Some(id),
+                path: "prime.loop.nap".to_string(),
+            });
+            model.observe_event(&crate::observe::Event::End {
+                ts: "2026-01-01T00:00:01Z".to_string(),
+                id: Some(id),
+                path: "prime.loop.nap".to_string(),
+                ok: true,
+                ms: Some(1000),
+                error: None,
+            });
+        }
+        let state = serde_json::json!({
+            "runtime": {"last_run": {
+                "run_id": "r1", "document_hash": "h1",
+                "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:02:00Z",
+                "totals": {"effects_run": 1, "tokens_sent": 0, "tokens_received": 0},
+            }},
+            "prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:02:00Z", "error": null,
+            }},
+        });
+        let record = build_record("/doc.yml", Some("cof"), &state, &model, &PlanTree::empty())
+            .expect("a completed, hashed, non-dry run is recorded");
+        let other = record
+            .steps
+            .get(OTHER_STEP)
+            .expect("the overflow folds into (other)");
+        assert_eq!(other.passes, 5, "only the 5 pushes past the cap overflowed");
+    }
+
     /// A real (not [`PlanTree::empty`]) plan, so `build_record` takes
     /// its actual plan-known-or-`(other)` branch: a top-level tool
     /// is recorded by its own name, a chain loop's two passes
@@ -1643,6 +1726,152 @@ mod tests {
             .get(OTHER_STEP)
             .expect("my_use and its own undeclared child fold into (other)");
         assert!(other.passes >= 1);
+    }
+
+    /// Issue #650's own seam: a tree loop's two passes can run at
+    /// once, so their intervals overlap in time -- the step's own
+    /// `busy_s` must count that overlap once, not sum both passes'
+    /// own durations.
+    #[test]
+    fn build_record_counts_a_tree_loops_overlapping_passes_busy_s_once() {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopId, NodeKind, OnError, Op, Program, Region, ToolOp,
+        };
+
+        fn tool_op(path: EffectPath, name: &str) -> Op {
+            Op {
+                path,
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                    provider: "shell".to_string(),
+                    params: electricity_bytecode::ParamNode::Literal(
+                        electricity_value::Value::None,
+                    ),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: Default::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }
+        }
+
+        let root_path = EffectPath::root();
+        let loop_path = root_path.push_name("items");
+        let pass0 = loop_path.push_pass(LoopId(0));
+        let pass1 = loop_path.push_pass(LoopId(1));
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path.clone(),
+                    name: Some("items".to_string()),
+                    kind: NodeKind::Control(Region::Loop {
+                        name: Some("items".to_string()),
+                        spec: electricity_bytecode::LoopSpec::Each {
+                            in_path: "prime.xs".to_string(),
+                            as_name: "x".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool_op(pass0.push_name("nap"), "nap")],
+                            overlay: true,
+                        }),
+                        flow: electricity_bytecode::LoopFlow::Tree,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+        let _ = pass1;
+
+        let mut model = RunModel::new();
+        // Two tree-flow passes of the same loop body, each with its
+        // own event id -- pass 0 runs 00:00:10-00:00:25, pass 1 runs
+        // 00:00:15-00:00:30, a 10s overlap in the middle.
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:10Z".to_string(),
+            id: Some(1),
+            path: "prime.items.iter_0.nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:15Z".to_string(),
+            id: Some(2),
+            path: "prime.items.iter_1.nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:25Z".to_string(),
+            id: Some(1),
+            path: "prime.items.iter_0.nap".to_string(),
+            ok: true,
+            ms: Some(15_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:30Z".to_string(),
+            id: Some(2),
+            path: "prime.items.iter_1.nap".to_string(),
+            ok: true,
+            ms: Some(15_000),
+            error: None,
+        });
+
+        let state = serde_json::json!({
+            "runtime": {
+                "last_run": {
+                    "run_id": "r1",
+                    "document_hash": "h1",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:00:30Z",
+                    "totals": {"effects_run": 2, "tokens_sent": 1, "tokens_received": 1},
+                },
+            },
+            "prime": {
+                "value": null,
+                "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:30Z", "error": null},
+            },
+        });
+        let record = build_record("/doc.yml", Some("cof"), &state, &model, &plan)
+            .expect("a completed, hashed, non-dry run is recorded");
+
+        let nap = record
+            .steps
+            .get("items.iter_*.nap")
+            .expect("the tree loop's two passes normalize to one iter_* entry");
+        assert_eq!(nap.passes, 2);
+        // Each pass alone is 15s, 30s summed, but they overlap for
+        // 10s in the middle, so the merged union (00:10-00:30) is
+        // only 20s.
+        assert_eq!(nap.busy_s, 20.0);
     }
 
     #[test]

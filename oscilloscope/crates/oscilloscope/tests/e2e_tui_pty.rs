@@ -161,6 +161,33 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
     }
 }
 
+/// [`wait_for_pattern`], but only looking at bytes written at or
+/// after `since_len` -- some labels this screen draws (a tree loop's
+/// own breadcrumbed pass containers, "pass 1 of 2") can share a
+/// substring with what a *different* action is meant to produce (the
+/// Time screen's own `⏎`-expanded pass rows, "pass 1"), already
+/// on screen from selecting the row at all, well before the action
+/// under test ever runs -- scanning the whole buffer would let that
+/// stale match satisfy this wait immediately, before the real thing
+/// has happened at all.
+fn wait_for_pattern_since(
+    buf: &Arc<Mutex<Vec<u8>>>,
+    since_len: usize,
+    pattern: &[u8],
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if buf.lock().unwrap()[since_len..]
+            .windows(pattern.len())
+            .any(|w| w == pattern)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// [`wait_for_pattern`], read straight off `master` itself rather
 /// than a [`drain_continuously`] buffer -- the one test below that
 /// needs to close `master` itself afterward can't hand it to
@@ -664,6 +691,130 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
         assert!(
             rendered.contains("tate"),
             "expected the state tree's own border title in the selected pane's own place after pressing s; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #650: pressing `1` opens the Time screen during a live
+/// run, which shows a running row's own bar and the now line;
+/// `⏎` on a finished loop row expands it into one row per pass;
+/// `+` and `=` zoom the axis and fit it back without the screen
+/// breaking.
+#[test]
+fn pressing_1_during_a_live_run_opens_the_time_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    name: fan\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: tool\n        name: nap\n        provider: shell\n        params:\n          command: echo\n          args: [\"x\"]\n          allowed_commands: [\"echo\"]\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let before_1 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_1..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("timeline"),
+            "expected the timeline pane's own border title after pressing 1; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains('┃'),
+            "expected the now line on the running row's own bar; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("slow"),
+            "expected the running step's own row; got:\n{rendered:?}"
+        );
+    }
+
+    // Turns follow off, then jumps to the first row (`prime`) and
+    // down twice to land on `fan` deterministically (`items` is the
+    // one step before it) -- more robust than counting rows up from
+    // the running step, since whether `fan`'s own two passes fold
+    // into one "quick steps" summary or stay separate rows isn't
+    // this test's concern. Each key is its own write, with enough of
+    // a pause after for a redraw to land before the next.
+    for key in [&b"f"[..], b"g", b"j", b"j"] {
+        send_bytes(&mut master, key);
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    wait_for_pattern_since(
+        &captured_buf,
+        before_enter,
+        b"pass 1",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("pass 1") && rendered.contains("pass 2"),
+            "expected one row per pass after ⏎ on the loop row; got:\n{rendered:?}"
+        );
+    }
+
+    // A live run's own spinner and clock redraw every ~300ms
+    // regardless of what `+`/`=` do, so a mere non-empty incremental
+    // diff here would prove nothing about the axis itself --
+    // `pressing_plus_then_equals_changes_the_timelines_own_tick_
+    // labels`, on an already-finished run where nothing else can
+    // cause a redraw, is what actually proves that. This just checks
+    // neither key breaks the screen entirely on a still-running one.
+    send_bytes(&mut master, b"+");
+    std::thread::sleep(Duration::from_millis(300));
+    send_bytes(&mut master, b"=");
+    std::thread::sleep(Duration::from_millis(300));
+    {
+        let snapshot = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&snapshot);
+        assert!(
+            rendered.contains("timeline"),
+            "the timeline pane must still be showing after + and =; got:\n{rendered:?}"
         );
     }
 
@@ -1747,6 +1898,231 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         rendered.contains("mfailed"),
         "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// The screen a terminal would show after `bytes`, replayed onto a
+/// `rows` x `cols` grid. osi's renderer writes absolute cursor moves
+/// (`ESC [ row ; col H`), colour codes, mode switches and text, and
+/// each frame redraws only the cells that changed, so reading labels
+/// straight off the stream sees fragments of them. Replaying it gives
+/// the real screen, whatever cells a frame happened to redraw.
+fn screen_grid(bytes: &[u8], rows: usize, cols: usize) -> Vec<Vec<char>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut r, mut c) = (0usize, 0usize);
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let mut fin = None;
+                    for p in chars.by_ref() {
+                        if p.is_ascii_alphabetic() || p == '@' || p == '~' {
+                            fin = Some(p);
+                            break;
+                        }
+                        params.push(p);
+                    }
+                    match fin {
+                        Some('H') | Some('f') => {
+                            let mut it = params
+                                .split(';')
+                                .map(|n| n.parse::<usize>().unwrap_or(1).max(1));
+                            r = it.next().unwrap_or(1) - 1;
+                            c = it.next().unwrap_or(1) - 1;
+                        }
+                        Some('J') if params == "2" => {
+                            for row in grid.iter_mut() {
+                                row.fill(' ');
+                            }
+                        }
+                        Some('K') if params.is_empty() || params == "0" => {
+                            if let Some(row) = grid.get_mut(r) {
+                                for cell in row.iter_mut().skip(c) {
+                                    *cell = ' ';
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(']') => {
+                    // An operating-system command runs to BEL or ESC \.
+                    while let Some(p) = chars.next() {
+                        if p == '\x07' {
+                            break;
+                        }
+                        if p == '\x1b' {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                Some('(') | Some(')') => {
+                    chars.next();
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '\r' => c = 0,
+            '\n' => r += 1,
+            _ if ch.is_control() => {}
+            _ => {
+                if r < rows && c < cols {
+                    grid[r][c] = ch;
+                }
+                c += 1;
+            }
+        }
+    }
+    grid
+}
+
+/// The tick labels on the Time screen's clock axis: the row right
+/// under the timeline box's own top border, read off a replayed
+/// screen. The header and the start columns hold clock times too, so
+/// only that row is read.
+fn axis_tick_labels(bytes: &[u8]) -> Vec<String> {
+    let grid = screen_grid(bytes, 40, 120);
+    let Some(top) = grid
+        .iter()
+        .position(|row| row.iter().collect::<String>().contains("┌ timeline"))
+    else {
+        return Vec::new();
+    };
+    let Some(label_row) = grid.get(top + 1) else {
+        return Vec::new();
+    };
+    label_row
+        .iter()
+        .collect::<String>()
+        .split(|ch: char| !(ch.is_ascii_digit() || ch == ':' || ch == '-'))
+        .filter(|tok| tok.len() >= 5 && tok.contains(':'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Polls the replayed screen until `ok` holds for its axis labels,
+/// returning the last labels seen either way.
+fn wait_for_axis_labels(
+    captured: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ok: impl Fn(&[String]) -> bool,
+) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let labels = axis_tick_labels(&captured.lock().unwrap());
+        if ok(&labels) || std::time::Instant::now() > deadline {
+            return labels;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Issue #650's own `+`/`=` keys zoom the Time screen's own axis in
+/// and fit it back -- on a run that has already finished, so nothing
+/// else (a ticking clock, a spinner) can cause the screen to redraw
+/// at all, proves each key really did change the axis's own tick
+/// labels, not merely produce *some* unrelated output.
+#[test]
+fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    write_engine_double(bin_dir.path(), "electricity");
+
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"a\"]}\n  - name: b\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"b\"]}\n  - name: c\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"c\"]}\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let events = concat!(
+        "{\"v\":1,\"seq\":0,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n",
+        "{\"v\":1,\"seq\":1,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.a\"}\n",
+        "{\"v\":1,\"seq\":2,\"ts\":\"2024-01-01T00:01:40Z\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.a\",\"ok\":true,\"ms\":100000}\n",
+        "{\"v\":1,\"seq\":3,\"ts\":\"2024-01-01T00:01:40Z\",\"ev\":\"start\",\"id\":2,\"path\":\"prime.b\"}\n",
+        "{\"v\":1,\"seq\":4,\"ts\":\"2024-01-01T00:03:20Z\",\"ev\":\"end\",\"id\":2,\"path\":\"prime.b\",\"ok\":true,\"ms\":100000}\n",
+        "{\"v\":1,\"seq\":5,\"ts\":\"2024-01-01T00:03:20Z\",\"ev\":\"start\",\"id\":3,\"path\":\"prime.c\"}\n",
+        "{\"v\":1,\"seq\":6,\"ts\":\"2024-01-01T00:05:00Z\",\"ev\":\"end\",\"id\":3,\"path\":\"prime.c\",\"ok\":true,\"ms\":100000}\n",
+        "{\"v\":1,\"seq\":7,\"ts\":\"2024-01-01T00:05:00Z\",\"ev\":\"run_end\",\"ok\":true}\n",
+    );
+    let state = concat!(
+        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2024-01-01T00:05:00Z\",",
+        "\"totals\":{\"wall_time_s\":300.0,\"effects_run\":4,\"tokens_sent\":0,\"tokens_received\":0,\"cost_usd\":0.0}}},",
+        "\"prime\":{\"value\":true,\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:05:00Z\",\"error\":null,\"flow\":\"chain\"},",
+        "\"a\":{\"value\":\"a\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:01:40Z\",\"exit_code\":0,\"provider\":\"shell\"}},",
+        "\"b\":{\"value\":\"b\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:01:40Z\",\"completed_at\":\"2024-01-01T00:03:20Z\",\"exit_code\":0,\"provider\":\"shell\"}},",
+        "\"c\":{\"value\":\"c\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:03:20Z\",\"completed_at\":\"2024-01-01T00:05:00Z\",\"exit_code\":0,\"provider\":\"shell\"}}}}",
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let path_env = path_with(bin_dir.path());
+    let child = spawn_osi_on_pty_with_env(
+        &home,
+        &slave_path,
+        &[
+            doc_arg,
+            config_arg,
+            OsStr::new("--engine"),
+            OsStr::new("electricity"),
+            OsStr::new("--out-dir"),
+            out_dir_arg,
+        ],
+        &[
+            ("PATH", path_env.as_os_str()),
+            ("OSI_DOUBLE_EVENTS", OsStr::new(events)),
+            ("OSI_DOUBLE_STATE", OsStr::new(state)),
+            ("OSI_DOUBLE_EXIT", OsStr::new("0")),
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    // The double sleeps briefly before writing its own complete,
+    // already-finished run in one burst (same timing
+    // `a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted`
+    // relies on) -- settled well before switching screens, so `1`'s
+    // own incremental redraw below is the Time screen's first paint,
+    // not still catching up on the run's own ending.
+    std::thread::sleep(Duration::from_millis(1500));
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
+    let labels_before = wait_for_axis_labels(&captured_buf, |l| !l.is_empty());
+    assert!(
+        !labels_before.is_empty(),
+        "the Time screen's axis shows no tick labels"
+    );
+
+    send_bytes(&mut master, b"+");
+    let labels_after_plus = wait_for_axis_labels(&captured_buf, |l| l != labels_before.as_slice());
+    assert_ne!(
+        labels_after_plus, labels_before,
+        "+ must zoom the axis in and change its tick labels"
+    );
+
+    send_bytes(&mut master, b"=");
+    let labels_after_equals =
+        wait_for_axis_labels(&captured_buf, |l| l == labels_before.as_slice());
+    assert_eq!(
+        labels_after_equals, labels_before,
+        "= must fit the whole run again, back to the same tick labels as before +"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
 
     assert_no_leftover_process(work.path());
 }

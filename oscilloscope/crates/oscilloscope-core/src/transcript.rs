@@ -57,6 +57,12 @@ pub struct TranscriptView {
     pub calls: Vec<ToolCall>,
     pub tests: Option<TestOutcome>,
     pub last_reply: Option<String>,
+    /// `observe::transcript_tail_truncated`'s own answer for this
+    /// read -- the Time screen's zoom pane (issue #650) dims a
+    /// leading `…` ahead of the earliest band when this is set,
+    /// since the window it tailed doesn't reach back to the
+    /// session's own start.
+    pub truncated: bool,
 }
 
 /// The exact test-runner commands issue #637 names: a `tool_start`
@@ -80,6 +86,60 @@ fn is_test_command(target: &str) -> bool {
     TEST_RUNNERS.iter().any(|needle| target.contains(needle))
 }
 
+/// A tool name's own activity glyph (issue #637's `░read ▒edit
+/// █bash`, issue #650's zoom-pane bands) -- a substring match on the
+/// lower-cased name, so it reads both engines' own casing (pi's
+/// lowercase, Claude Code's `Read`/`Edit`/`Bash`) the same way, and
+/// still assigns *some* glyph to an MCP tool or any other name
+/// neither engine's own built-ins use. The overview's tool strip and
+/// the Time screen's zoom pane both read this one classification, so
+/// they never disagree about which band a call falls into.
+pub fn tool_glyph(tool: &str) -> char {
+    let lower = tool.to_ascii_lowercase();
+    if lower.contains("edit") || lower.contains("write") {
+        '▒'
+    } else if lower.contains("bash")
+        || lower.contains("run")
+        || lower.contains("shell")
+        || lower.contains("exec")
+    {
+        '█'
+    } else if lower.contains("read")
+        || lower.contains("grep")
+        || lower.contains("find")
+        || lower.contains("glob")
+        || lower.contains("ls")
+        || lower.contains("search")
+    {
+        '░'
+    } else {
+        '·'
+    }
+}
+
+/// [`tool_glyph`]'s own classification, as a band kind rather than a
+/// glyph -- the Time screen's zoom pane (issue #650) groups a
+/// running agent's tool calls into one band per kind, the same four
+/// buckets the glyph strip already uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Read,
+    Edit,
+    Bash,
+    Other,
+}
+
+impl ToolKind {
+    pub fn classify(tool: &str) -> ToolKind {
+        match tool_glyph(tool) {
+            '▒' => ToolKind::Edit,
+            '█' => ToolKind::Bash,
+            '░' => ToolKind::Read,
+            _ => ToolKind::Other,
+        }
+    }
+}
+
 /// Builds a [`TranscriptView`] from already-tailed JSONL lines, in the
 /// order they appear in the tail (oldest first). An unparseable or
 /// unrecognised line, a `tool_end` whose `id` never had a matching
@@ -87,7 +147,7 @@ fn is_test_command(target: &str) -> bool {
 /// 64 KiB), and a `tool_start` with no `id` at all, are all skipped
 /// rather than treated as an error -- the same tolerance the tailer
 /// itself has for a cut-off last line or a replaced file.
-pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
+pub fn build_transcript_view(lines: &[Value], truncated: bool) -> TranscriptView {
     let mut calls: Vec<ToolCall> = Vec::new();
     let mut by_id: BTreeMap<u64, usize> = BTreeMap::new();
     let mut max_id: Option<u64> = None;
@@ -171,6 +231,7 @@ pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
         calls,
         tests,
         last_reply,
+        truncated,
     }
 }
 
@@ -188,7 +249,7 @@ mod tests {
         let lines = vec![line(
             json!({"t": "2024-01-01T00:00:00Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}),
         )];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.calls.len(), 1);
         assert!(view.calls[0].is_running());
         assert_eq!(view.tests, Some(TestOutcome::Running));
@@ -200,7 +261,7 @@ mod tests {
             json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}),
             json!({"t": "t1", "type": "tool_end", "id": 1, "ok": true, "ms": 41000}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert!(!view.calls[0].is_running());
         assert_eq!(view.tests, Some(TestOutcome::Ok));
     }
@@ -211,7 +272,7 @@ mod tests {
             json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k timeout"}),
             json!({"t": "t1", "type": "tool_end", "id": 1, "ok": false, "ms": 500}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.tests, Some(TestOutcome::Failed));
     }
 
@@ -223,7 +284,7 @@ mod tests {
             json!({"t": "t2", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k timeout"}),
             json!({"t": "t3", "type": "tool_end", "id": 2, "ok": true, "ms": 500}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.tests, Some(TestOutcome::Ok));
     }
 
@@ -233,14 +294,14 @@ mod tests {
             json!({"t": "t0", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
             json!({"t": "t1", "type": "tool_end", "id": 1, "ok": true, "ms": 5}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.tests, None);
     }
 
     #[test]
     fn a_tool_end_with_no_matching_start_in_this_window_is_skipped() {
         let lines = vec![json!({"t": "t1", "type": "tool_end", "id": 99, "ok": true, "ms": 5})];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert!(view.calls.is_empty());
     }
 
@@ -250,7 +311,7 @@ mod tests {
             json!({"type": "something_else"}),
             json!({"no_type_field": true}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert!(view.calls.is_empty());
         assert_eq!(view.tests, None);
     }
@@ -262,7 +323,7 @@ mod tests {
             json!({"t": "t1", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
             json!({"t": "t2", "type": "tool_end", "id": 1, "ok": true, "ms": 5}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.calls.len(), 2);
         assert!(view.calls[0].stopped);
         assert!(!view.calls[0].is_running());
@@ -280,7 +341,26 @@ mod tests {
             json!({"t": "t0", "type": "reply", "text": "first"}),
             json!({"t": "t1", "type": "reply", "text": "second"}),
         ];
-        let view = build_transcript_view(&lines);
+        let view = build_transcript_view(&lines, false);
         assert_eq!(view.last_reply, Some("second".to_string()));
+    }
+
+    #[test]
+    fn tool_glyph_reads_both_engines_own_casing() {
+        assert_eq!(tool_glyph("Edit"), '▒');
+        assert_eq!(tool_glyph("write"), '▒');
+        assert_eq!(tool_glyph("Bash"), '█');
+        assert_eq!(tool_glyph("shell_exec"), '█');
+        assert_eq!(tool_glyph("Read"), '░');
+        assert_eq!(tool_glyph("Grep"), '░');
+        assert_eq!(tool_glyph("mcp__custom__frobnicate"), '·');
+    }
+
+    #[test]
+    fn tool_kind_classify_matches_tool_glyph() {
+        assert_eq!(ToolKind::classify("Edit"), ToolKind::Edit);
+        assert_eq!(ToolKind::classify("Bash"), ToolKind::Bash);
+        assert_eq!(ToolKind::classify("Read"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("frobnicate"), ToolKind::Other);
     }
 }

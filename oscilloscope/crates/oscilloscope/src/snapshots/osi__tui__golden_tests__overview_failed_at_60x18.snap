@@ -1,8 +1,9 @@
 ---
 source: crates/oscilloscope/src/tui.rs
+assertion_line: 4737
 expression: text
 ---
-"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · failed 5m00s · 00:05:00   [0]  2  3 "
+"⠤⠤⠤⠤⠤⠤⠤⠤ …thing.yml · failed 5m00s · 00:05:00   [0]  1  2  3"
 "✗ a  →  ↷ b  →  ↷ fan                                       "
 "┌──────────────────────────────────────────────────────────┐"
 "│failed                                                    │"

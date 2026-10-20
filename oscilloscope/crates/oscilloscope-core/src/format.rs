@@ -121,6 +121,39 @@ pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
     Some(zone.local(utc).format("%H:%M:%S").to_string())
 }
 
+/// The Time screen's own clock axis: the round tick interval, in
+/// seconds, that keeps labels about `target_columns` columns apart
+/// over `span_s` spread across `width` columns -- the smallest of a
+/// single candidate list (1, 2, 5, 10, 15 or 30 seconds; 1, 2, 5, 10,
+/// 15 or 30 minutes; 1, 2, 3, 4, 6, 12 or 24 hours) that keeps ticks
+/// at least that far apart; beyond a day, the smallest whole number
+/// of days that still does. Spacing alone picks the candidate -- a
+/// short span still chosen sub-minute even when a round minute also
+/// exists inside it. Only a whole number of hours that divides a day
+/// evenly is ever offered: a 5h, 7h or 9h tick would land on a
+/// different local clock time every day, and drift further across a
+/// daylight-saving change -- `time::next_round_local_time` is what
+/// then keeps each one on its own local midnight, including across
+/// such a change and into a further whole day.
+pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f64 {
+    const CANDIDATES_S: [f64; 12] = [
+        1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0,
+    ];
+    const HOUR_DIVISORS_S: [f64; 7] = [3600.0, 7200.0, 10800.0, 14400.0, 21600.0, 43200.0, 86400.0];
+    let width = width.max(1) as f64;
+    let seconds_per_column = (span_s.max(0.0) / width).max(f64::MIN_POSITIVE);
+    let target_columns = target_columns.max(1) as f64;
+    for candidate in CANDIDATES_S.into_iter().chain(HOUR_DIVISORS_S) {
+        if candidate / seconds_per_column >= target_columns {
+            return candidate;
+        }
+    }
+    let days = (target_columns * seconds_per_column / 86400.0)
+        .ceil()
+        .max(1.0);
+    days * 86400.0
+}
+
 /// The midpoint between `start_ts` and `end_ts`, formatted the same
 /// way [`format_clock_time`] formats either end (the Cost screen's
 /// own chart axis, DESIGN.md: "a clock axis from the run's start to
@@ -254,6 +287,45 @@ mod tests {
         assert_eq!(format_tokens(1_000), "1.0 kt");
         assert_eq!(format_tokens(1_000_000), "1.0 Mt");
         assert_eq!(format_tokens(1_000_000_000), "1.0 Gt");
+    }
+
+    #[test]
+    fn clock_tick_picks_the_smallest_candidate_that_keeps_ticks_apart() {
+        // 80 columns is this crate's own typical timeline width.
+        assert_eq!(clock_tick_seconds(30.0, 80, 10), 5.0);
+        assert_eq!(clock_tick_seconds(120.0, 80, 10), 15.0);
+        assert_eq!(clock_tick_seconds(600.0, 80, 10), 120.0);
+        assert_eq!(clock_tick_seconds(1_200.0, 80, 10), 300.0);
+        assert_eq!(clock_tick_seconds(2_400.0, 80, 10), 300.0);
+        assert_eq!(clock_tick_seconds(3_600.0, 80, 10), 600.0);
+        assert_eq!(clock_tick_seconds(7_200.0, 80, 10), 900.0);
+        assert_eq!(clock_tick_seconds(14_400.0, 80, 10), 1800.0);
+        assert_eq!(clock_tick_seconds(21_600.0, 80, 10), 3600.0);
+    }
+
+    #[test]
+    fn clock_tick_falls_back_to_whole_hours_past_the_longest_candidate() {
+        // A 48h span over just 20 columns needs ticks far enough
+        // apart that even hourly ticks aren't enough on their own --
+        // the fallback rounds up to the next whole hour that is.
+        let tick = clock_tick_seconds(48.0 * 3600.0, 20, 10);
+        assert_eq!(tick % 3600.0, 0.0);
+        let seconds_per_column = 48.0 * 3600.0 / 20.0;
+        assert!(tick / seconds_per_column >= 10.0);
+    }
+
+    #[test]
+    fn clock_tick_keeps_labels_about_target_columns_apart_at_any_width() {
+        for width in [20, 40, 80, 120] {
+            for span_s in [30.0, 300.0, 3_600.0, 21_600.0] {
+                let tick = clock_tick_seconds(span_s, width, 10);
+                let seconds_per_column = span_s / width as f64;
+                assert!(
+                    tick / seconds_per_column >= 10.0,
+                    "tick {tick} too tight at width {width}, span {span_s}"
+                );
+            }
+        }
     }
 
     #[test]

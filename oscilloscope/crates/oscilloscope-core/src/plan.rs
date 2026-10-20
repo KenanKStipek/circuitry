@@ -3,7 +3,7 @@
 //! pattern matching against state and event paths, `use` grafting, and
 //! the fallback for a document that fails to compile.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use electricity_bytecode::{
@@ -367,6 +367,13 @@ pub struct PlanTree {
     /// #635) — empty with no plan at all, same as every other field
     /// here.
     unnamed_if_decisions: Vec<UnnamedIfDecision>,
+    /// Every display path an unnamed loop's own body directly
+    /// contributes (issue #650's Time screen: only a leaf here, never
+    /// a sibling at the same parent path, can expand into one row per
+    /// pass) — the same flattening `collect_branch_paths` gives a
+    /// named `if`'s branch, applied to every transparent loop's body
+    /// found while walking a chain.
+    unnamed_loop_body_paths: HashSet<String>,
 }
 
 impl PlanTree {
@@ -380,6 +387,7 @@ impl PlanTree {
             earlier_siblings: HashMap::new(),
             branch_alternates: HashMap::new(),
             unnamed_if_decisions: Vec::new(),
+            unnamed_loop_body_paths: HashSet::new(),
         }
     }
 
@@ -437,6 +445,15 @@ impl PlanTree {
         &self.unnamed_if_decisions
     }
 
+    /// Whether `path` is a leaf an unnamed loop's own body directly
+    /// contributes (issue #650's Time screen) — `false` for a sibling
+    /// at the same parent path that merely happens to sit next to
+    /// one, since this checks the leaf's own path, not its parent's.
+    pub fn is_unnamed_loop_body_path(&self, path: &str) -> bool {
+        self.unnamed_loop_body_paths
+            .contains(&normalize_pass_segments(path))
+    }
+
     pub fn from_program(program: &Program) -> Self {
         Self::from_program_with_options(program, None, &indexmap::IndexMap::new())
     }
@@ -489,6 +506,7 @@ impl PlanTree {
         let mut earlier_siblings = HashMap::new();
         let mut branch_alternates = HashMap::new();
         let mut unnamed_if_decisions = Vec::new();
+        let mut unnamed_loop_body_paths = HashSet::new();
         let mut ctx = WalkCtx {
             base_dir: base_dir.as_deref(),
             cycle_guard: &mut cycle_guard,
@@ -498,6 +516,7 @@ impl PlanTree {
             earlier_siblings: &mut earlier_siblings,
             branch_alternates: &mut branch_alternates,
             unnamed_if_decisions: &mut unnamed_if_decisions,
+            unnamed_loop_body_paths: &mut unnamed_loop_body_paths,
             loader,
         };
         walk_op(&program.root, None, None, &mut trie, &mut ctx);
@@ -510,6 +529,7 @@ impl PlanTree {
             earlier_siblings,
             branch_alternates,
             unnamed_if_decisions,
+            unnamed_loop_body_paths,
         }
     }
 
@@ -602,7 +622,28 @@ struct WalkCtx<'a> {
     earlier_siblings: &'a mut HashMap<String, Vec<String>>,
     branch_alternates: &'a mut HashMap<String, Vec<String>>,
     unnamed_if_decisions: &'a mut Vec<UnnamedIfDecision>,
+    unnamed_loop_body_paths: &'a mut HashSet<String>,
     loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
+}
+
+/// `path`, with every `iter_<n>` segment replaced by the `iter_*`
+/// placeholder `display_path` already uses for a named loop's pass --
+/// `unnamed_loop_body_paths` is keyed by display path, but a real row
+/// reached inside a named loop's pass carries the loop's concrete
+/// `iter_N`, not `iter_*`, so a lookup against that set must normalise
+/// first.
+fn normalize_pass_segments(path: &str) -> String {
+    path.split('.')
+        .map(|seg| {
+            let digits = seg.strip_prefix("iter_").unwrap_or("");
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                "iter_*"
+            } else {
+                seg
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn display_path(path: &EffectPath) -> String {
@@ -860,6 +901,16 @@ fn record_op_entry(
                 {
                     *named = false;
                 }
+                // An unnamed loop's own body paths are recorded here,
+                // regardless of which context reached it (a transparent
+                // chain member via `walk_block`, or a direct `Parallel`
+                // branch via `walk_op`) -- `record_op_entry` is the one
+                // place every loop, named or not, funnels its
+                // `PlanEntryKind` through.
+                if matches!(k, PlanEntryKind::Loop { .. }) {
+                    ctx.unnamed_loop_body_paths
+                        .extend(collect_branch_paths(region, graft));
+                }
             }
             k
         }
@@ -1072,6 +1123,8 @@ fn walk_block(
                     }
                 }
                 NodeKind::Control(Region::Loop { body, .. }) => {
+                    // `record_op_entry`, called just above, already
+                    // recorded this loop's own body paths.
                     walk_transparent_branch(body, graft, earlier, trie, ctx);
                 }
                 _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
@@ -1152,6 +1205,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             earlier_siblings: ctx.earlier_siblings,
             branch_alternates: ctx.branch_alternates,
             unnamed_if_decisions: ctx.unnamed_if_decisions,
+            unnamed_loop_body_paths: ctx.unnamed_loop_body_paths,
             loader: ctx.loader,
         };
         if let NodeKind::Control(region) = &child_program.root.kind {
@@ -2859,6 +2913,65 @@ mod tests {
         );
     }
 
+    /// Review finding (issue #650): an unnamed loop directly under a
+    /// tree `dynamic`'s own `Parallel` branches is reached through
+    /// `walk_op`, never `walk_block`'s own transparent-loop handling
+    /// -- `record_op_entry` is the one place both contexts funnel
+    /// their loop `PlanEntryKind` through, so its body paths are
+    /// still recorded.
+    #[test]
+    fn an_unnamed_loop_directly_under_a_tree_dynamic_is_recorded() {
+        let root_path = EffectPath::root();
+        let fan_path = root_path.clone().push_name("fan");
+        let a_path = fan_path.clone().push_name("a");
+        let u_nap_path = fan_path.clone().push_name("u_nap");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: fan_path.clone(),
+                name: Some("fan".to_string()),
+                kind: NodeKind::Control(Region::Parallel {
+                    branches: vec![
+                        tool_op(a_path, "a"),
+                        Op {
+                            path: fan_path,
+                            name: None,
+                            kind: NodeKind::Control(Region::Loop {
+                                name: None,
+                                spec: LoopSpec::Each {
+                                    in_path: "prime.items".to_string(),
+                                    as_name: "item".to_string(),
+                                    truncate: false,
+                                },
+                                body: Box::new(block(vec![tool_op(u_nap_path, "u_nap")])),
+                                flow: electricity_bytecode::LoopFlow::Chain,
+                                max_concurrency: None,
+                                max_iterations: None,
+                                min_iterations: 0,
+                                collect: None,
+                            }),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                    ],
+                    max_concurrency: None,
+                    stop_on_error: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        assert!(plan.is_unnamed_loop_body_path("prime.fan.u_nap"));
+        assert!(!plan.is_unnamed_loop_body_path("prime.fan.a"));
+    }
+
     /// An unnamed `if` directly inside a *named* loop's own pass body
     /// keeps the `iter_*` placeholder in its branches' own paths --
     /// resolving it against a real pass is the Flow model's own job
@@ -2917,6 +3030,83 @@ mod tests {
             decisions[0].then_paths,
             vec!["prime.fan.iter_*.nap".to_string()]
         );
+    }
+
+    /// Only `iter_<digits>` is a pass segment: a step that is really
+    /// named `iter_`, or `iter_x`, keeps its own name.
+    #[test]
+    fn normalize_pass_segments_needs_a_pass_number() {
+        assert_eq!(
+            normalize_pass_segments("prime.loop.iter_3.x"),
+            "prime.loop.iter_*.x"
+        );
+        assert_eq!(normalize_pass_segments("prime.iter_.x"), "prime.iter_.x");
+        assert_eq!(normalize_pass_segments("prime.iter_x"), "prime.iter_x");
+    }
+
+    /// An unnamed loop directly inside a *named* loop's own pass body
+    /// is recorded with the `iter_*` placeholder, same as an unnamed
+    /// `if` in the same spot -- a real row's own path carries the
+    /// pass's concrete `iter_N` instead, so `is_unnamed_loop_body_path`
+    /// must normalise it back before the lookup.
+    #[test]
+    fn an_unnamed_loop_inside_a_named_loops_pass_is_recognised_by_its_concrete_pass() {
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let nap_path = pass_path.clone().push_name("nap");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![Op {
+                path: loop_path,
+                name: Some("fan".to_string()),
+                kind: NodeKind::Control(Region::Loop {
+                    name: Some("fan".to_string()),
+                    spec: LoopSpec::Each {
+                        in_path: "prime.items".to_string(),
+                        as_name: "item".to_string(),
+                        truncate: false,
+                    },
+                    body: Box::new(block(vec![Op {
+                        path: pass_path.clone(),
+                        name: None,
+                        kind: NodeKind::Control(Region::Loop {
+                            name: None,
+                            spec: LoopSpec::Each {
+                                in_path: "prime.fan.sub".to_string(),
+                                as_name: "s".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(block(vec![tool_op(nap_path, "nap")])),
+                            flow: electricity_bytecode::LoopFlow::Chain,
+                            max_concurrency: None,
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }])),
+                    flow: electricity_bytecode::LoopFlow::Chain,
+                    max_concurrency: None,
+                    max_iterations: None,
+                    min_iterations: 0,
+                    collect: None,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let plan = PlanTree::from_program(&program_with_root(root));
+        assert!(plan.is_unnamed_loop_body_path("prime.fan.iter_0.nap"));
+        assert!(plan.is_unnamed_loop_body_path("prime.fan.iter_7.nap"));
+        assert!(!plan.is_unnamed_loop_body_path("prime.fan.iter_0.other"));
     }
 
     /// Issue #635: a model-mode condition's own display text is its

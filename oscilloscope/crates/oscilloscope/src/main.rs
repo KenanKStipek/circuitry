@@ -1771,17 +1771,53 @@ fn build_flow_screen_if_active(
     ))
 }
 
-/// Issue #637: the transcript path for whichever step is actually on
-/// screen right now -- the overview's own focused step (running,
-/// last-finished, or an ended run's own stopped agent) on screen 0,
-/// Flow's selected step on screen 2 -- `None` on every other screen,
-/// and `None` for a step that isn't an agent currently being
-/// live-tracked at all (finished, or never an agent in the first
-/// place). Transcript tailing only ever happens for this one path.
+/// Screen 1's own model (issue #650), built only while it's actually
+/// on display -- the same performance rule the other three screens'
+/// own `_if_active` builders follow.
+#[allow(clippy::too_many_arguments)]
+fn build_time_screen_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    plan: &oscilloscope_core::plan::PlanTree,
+    model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
+    story: &[oscilloscope_core::diff::LogLine],
+    now: &str,
+) -> Option<oscilloscope_core::screens::TimeScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Time {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    let selected_path = details_selection_path(app);
+    Some(oscilloscope_core::screens::build_time_screen(
+        &render_state.rows,
+        &flat,
+        plan,
+        model,
+        &render_state.header,
+        state,
+        story,
+        selected_path.as_deref(),
+        &app.time_expanded_loops,
+        now,
+    ))
+}
+
+/// Issue #637 (extended by #650 to screen 1): the transcript path for
+/// whichever step is actually on screen right now -- the overview's
+/// own focused step (running, last-finished, or an ended run's own
+/// stopped agent) on screen 0, Flow's and Time's own selected step on
+/// screens 2 and 1 -- `None` on every other screen. Tails a finished
+/// agent's own `meta.raw.transcript` too, not just a running one's
+/// `meta.live.transcript` -- the Time screen's zoom pane (issue #650)
+/// is the first thing that ever shows a finished agent's own bands,
+/// which need the transcript the same way a running one's do.
 fn focused_agent_transcript_path(
     app: &App,
     overview: Option<&oscilloscope_core::screens::Overview>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
 ) -> Option<String> {
     use oscilloscope_core::screens::{FocusDetail, NowFocus, Screen};
     let step = match app.screen {
@@ -1791,12 +1827,23 @@ fn focused_agent_transcript_path(
             _ => None,
         }),
         Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),
+        Screen::Time => time_screen.and_then(|t| t.selected.as_ref()),
         _ => None,
     }?;
     match &step.detail {
         FocusDetail::Agent {
             live: Some(live), ..
         } => live.transcript.clone(),
+        // Issue #650: once the session has finished, `meta.live` is
+        // gone, but `meta.raw.transcript` is the same file -- the
+        // zoom pane's own bands for a finished agent read it the
+        // same way a running one's `meta.live.transcript` already
+        // does.
+        FocusDetail::Agent {
+            live: None,
+            raw_transcript: Some(path),
+            ..
+        } => Some(path.clone()),
         _ => None,
     }
 }
@@ -1827,15 +1874,20 @@ fn tail_focused_transcript(
     app: &App,
     overview: Option<&oscilloscope_core::screens::Overview>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
     cache: &mut TranscriptTailCache,
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
-    let path = focused_agent_transcript_path(app, overview, flow_screen)?;
+    let path = focused_agent_transcript_path(app, overview, flow_screen, time_screen)?;
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
     if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
         return cache.view.clone();
     }
     let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
-    let view = oscilloscope_core::transcript::build_transcript_view(&lines);
+    let truncated = oscilloscope_core::observe::transcript_tail_truncated(
+        Path::new(&path),
+        TRANSCRIPT_TAIL_BYTES,
+    );
+    let view = oscilloscope_core::transcript::build_transcript_view(&lines, truncated);
     cache.path = Some(path);
     cache.len = len;
     cache.view = Some(view.clone());
@@ -2077,11 +2129,21 @@ fn run_tui(
         &story,
         &now_str,
     );
+    let mut time_screen = build_time_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        current_state.as_ref(),
+        &story,
+        &now_str,
+    );
     let mut transcript_cache = TranscriptTailCache::default();
     let mut transcript_view = tail_focused_transcript(
         &app,
         overview.as_ref(),
         flow_screen.as_ref(),
+        time_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
@@ -2284,10 +2346,20 @@ fn run_tui(
                 &story,
                 &now_str,
             );
+            time_screen = build_time_screen_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                current_state.as_ref(),
+                &story,
+                &now_str,
+            );
             transcript_view = tail_focused_transcript(
                 &app,
                 overview.as_ref(),
                 flow_screen.as_ref(),
+                time_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
@@ -2300,10 +2372,14 @@ fn run_tui(
         // hidden under an untaken branch or merged into its own
         // single-pass loop row -- `visible_rows_for_flow` narrows the
         // same real-`Row` list every other screen moves over to
-        // exactly those.
-        let visible = match &flow_screen {
-            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+        // exactly those. Issue #650: the same rule, for the Time
+        // screen's own collapsed loop rows.
+        let visible = match (&flow_screen, &time_screen) {
+            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
+                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };
@@ -2457,10 +2533,20 @@ fn run_tui(
                             &story,
                             &now_str,
                         );
+                        time_screen = build_time_screen_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            current_state.as_ref(),
+                            &story,
+                            &now_str,
+                        );
                         transcript_view = tail_focused_transcript(
                             &app,
                             overview.as_ref(),
                             flow_screen.as_ref(),
+                            time_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -2534,6 +2620,7 @@ fn run_tui(
                     overview.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
+                    time_screen.as_ref(),
                     transcript_view.as_ref(),
                     &mut cost_layout,
                 );
@@ -3288,11 +3375,21 @@ fn run_tui_watch(
         &story,
         &now_str,
     );
+    let mut time_screen = build_time_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &story,
+        &now_str,
+    );
     let mut transcript_cache = TranscriptTailCache::default();
     let mut transcript_view = tail_focused_transcript(
         &app,
         overview.as_ref(),
         flow_screen.as_ref(),
+        time_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
@@ -3525,18 +3622,31 @@ fn run_tui_watch(
                 &story,
                 &now_str,
             );
+            time_screen = build_time_screen_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                last_state.as_ref(),
+                &story,
+                &now_str,
+            );
             transcript_view = tail_focused_transcript(
                 &app,
                 overview.as_ref(),
                 flow_screen.as_ref(),
+                time_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
-        // Issue #635: same narrowing as `osi <doc>`'s own main
+        // Issue #635/#650: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
-        let visible = match &flow_screen {
-            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+        let visible = match (&flow_screen, &time_screen) {
+            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
+                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };
@@ -3657,10 +3767,20 @@ fn run_tui_watch(
                             &story,
                             &now_str,
                         );
+                        time_screen = build_time_screen_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            last_state.as_ref(),
+                            &story,
+                            &now_str,
+                        );
                         transcript_view = tail_focused_transcript(
                             &app,
                             overview.as_ref(),
                             flow_screen.as_ref(),
+                            time_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -3723,6 +3843,7 @@ fn run_tui_watch(
                     overview.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
+                    time_screen.as_ref(),
                     transcript_view.as_ref(),
                     &mut cost_layout,
                 );
@@ -3965,13 +4086,14 @@ mod tests {
         }})
     }
 
-    /// Issue #637: transcript tailing only ever happens for the one
-    /// step actually on screen -- the overview's own focused step on
-    /// screen 0, Flow's selected step on screen 2, and nothing at all
-    /// on screen 1 or 3, even though the very same agent step exists
+    /// Issue #637 (extended by #650 to screen 1): transcript tailing
+    /// only ever happens for the one step actually on screen -- the
+    /// overview's own focused step on screen 0, Flow's selected step
+    /// on screen 2, Time's selected step on screen 1, and nothing at
+    /// all on screen 3, even though the very same agent step exists
     /// in state either way.
     #[test]
-    fn focused_agent_transcript_path_is_none_off_the_overview_and_flow_screens() {
+    fn focused_agent_transcript_path_is_none_off_the_overview_flow_and_time_screens() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = agent_running_state_for_transcript_path_test();
@@ -4014,31 +4136,64 @@ mod tests {
             &LocalZone,
             "2026-01-01T00:00:01Z",
         );
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some("prime.fix"),
+            &Default::default(),
+            "2026-01-01T00:00:01Z",
+        );
 
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Overview;
         assert_eq!(
-            focused_agent_transcript_path(&app, Some(&overview), Some(&flow_screen)),
+            focused_agent_transcript_path(
+                &app,
+                Some(&overview),
+                Some(&flow_screen),
+                Some(&time_screen)
+            ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
 
         app.screen = oscilloscope_core::screens::Screen::Flow;
         assert_eq!(
-            focused_agent_transcript_path(&app, Some(&overview), Some(&flow_screen)),
+            focused_agent_transcript_path(
+                &app,
+                Some(&overview),
+                Some(&flow_screen),
+                Some(&time_screen)
+            ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
 
-        for screen in [
-            oscilloscope_core::screens::Screen::Time,
-            oscilloscope_core::screens::Screen::Cost,
-        ] {
-            app.screen = screen;
-            assert_eq!(
-                focused_agent_transcript_path(&app, Some(&overview), Some(&flow_screen)),
-                None,
-                "no screen but overview/flow ever names a transcript to tail"
-            );
-        }
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        assert_eq!(
+            focused_agent_transcript_path(
+                &app,
+                Some(&overview),
+                Some(&flow_screen),
+                Some(&time_screen)
+            ),
+            Some("/tmp/agent-live-path-test.jsonl".to_string())
+        );
+
+        app.screen = oscilloscope_core::screens::Screen::Cost;
+        assert_eq!(
+            focused_agent_transcript_path(
+                &app,
+                Some(&overview),
+                Some(&flow_screen),
+                Some(&time_screen)
+            ),
+            None,
+            "no screen but overview/flow/time ever names a transcript to tail"
+        );
     }
 
     /// Issue #637's own bound, checked at this function's own level
@@ -4082,7 +4237,7 @@ mod tests {
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Overview;
         assert_eq!(
-            focused_agent_transcript_path(&app, Some(&overview), None),
+            focused_agent_transcript_path(&app, Some(&overview), None, None),
             None
         );
     }

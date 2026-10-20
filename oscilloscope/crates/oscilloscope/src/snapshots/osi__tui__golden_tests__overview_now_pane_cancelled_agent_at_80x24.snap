@@ -1,8 +1,9 @@
 ---
 source: crates/oscilloscope/src/tui.rs
+assertion_line: 4621
 expression: text
 ---
-"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · cancelled 11.0s · 11:52:55   [0]  2  3                  "
+"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · cancelled 11.0s · 11:52:55   [0]  1  2  3               "
 "⊘ fix                                                                           "
 "11:46:43 · 11.0s                                                                "
 "┌ now ──────────────────────────────────────────┐┌─────────────────────────────┐"

@@ -1,8 +1,9 @@
 ---
 source: crates/oscilloscope/src/tui.rs
+assertion_line: 6041
 expression: text
 ---
-"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 5.0s · 00:00:00   0 overview  [2 flow]  3 cost                           "
+"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 5.0s · 00:00:00   0 overview  1 time  [2 flow]  3 cost                   "
 "┌ flow (do-thing · 3/3) ◆ decision ⟲ loop ▶ running ─────────┐┌ selected ──────────────────────────┐"
 "│✓ prime                                                     ││b                                   │"
 "│  ✓ a                                                       ││tool · shell                        │"

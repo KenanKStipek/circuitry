@@ -25,5 +25,6 @@ pub mod plan;
 pub mod render;
 pub mod screens;
 pub mod supervise;
+pub mod time;
 pub mod transcript;
 pub mod treemap;

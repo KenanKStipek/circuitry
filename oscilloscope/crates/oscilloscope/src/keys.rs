@@ -22,6 +22,11 @@ pub enum Pane {
     /// reached from `Details` by `tab` only while `screen == Flow`;
     /// every other screen's own cycle never visits it at all.
     Story,
+    /// The Time screen's own zoom pane (issue #650) -- reached from
+    /// `Tree` by `tab` only while `screen == Time`.
+    Zoom,
+    /// The Time screen's own vs usual pane.
+    VsUsual,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,9 +128,9 @@ pub struct App {
     /// asked ⏎ to expand in place -- the existing collapse key (`←`)
     /// removes a path from here, folding that group again.
     pub expanded_quick_steps: std::collections::BTreeSet<String>,
-    /// Which screen is on display (issue #626): `0`/`2` switch
-    /// here, `1`/`3` do nothing (`Screen::from_key` already refuses
-    /// them). Selection, follow, folding, filters and collapsed rows
+    /// Which screen is on display (issue #626, #632, #650): `0`-`3`
+    /// all switch here now. Selection, follow, folding, filters and
+    /// collapsed rows
     /// all live outside this field, so switching screens never
     /// touches them.
     pub screen: Screen,
@@ -165,6 +170,27 @@ pub struct App {
     /// `l` (issue #635): the Flow screen's story pane shows the full
     /// log instead. `l` again swaps back.
     pub flow_story_shows_log: bool,
+    /// The Time screen's own loop rows the user has expanded with
+    /// `⏎` (issue #650), by path -- the same path a collapsed loop's
+    /// own `TimeRow::path` has, so `⏎` again removes it, collapsing
+    /// it back to one row.
+    pub time_expanded_loops: std::collections::BTreeSet<String>,
+    /// The Time screen's own axis zoom (issue #650): the visible
+    /// span as a fraction of the whole axis `+`/`-` narrow or widen,
+    /// `None` meaning the whole run (`=`'s own "fit" state, and the
+    /// default). `tui::draw` is the only thing that turns this into
+    /// an actual `[start_s, end_s]` window, since only it knows the
+    /// axis's own full span and the now/selection centre to zoom
+    /// around.
+    pub time_zoom: Option<f64>,
+    /// The zoom pane's own scroll position and interior height
+    /// (issue #650), the same pairing `tree_scroll`/`tree_viewport`
+    /// already are.
+    pub time_zoom_scroll: usize,
+    pub time_zoom_viewport: usize,
+    /// The vs usual pane's own scroll position and interior height.
+    pub time_vs_usual_scroll: usize,
+    pub time_vs_usual_viewport: usize,
 }
 
 impl App {
@@ -199,7 +225,36 @@ impl App {
             story_viewport: 0,
             flow_selected_shows_state: false,
             flow_story_shows_log: false,
+            time_expanded_loops: std::collections::BTreeSet::new(),
+            time_zoom: None,
+            time_zoom_scroll: 0,
+            time_zoom_viewport: 0,
+            time_vs_usual_scroll: 0,
+            time_vs_usual_viewport: 0,
         }
+    }
+
+    /// `+`/`-`'s own step (issue #650: "zoom in/out around now"):
+    /// narrows or widens the visible fraction of the whole axis by
+    /// this ratio each press, clamped so it never zooms in past a
+    /// sliver or widens back out past the whole run (`=` resets to
+    /// that "fit" state directly, rather than relying on this ever
+    /// landing exactly on `1.0`).
+    const TIME_ZOOM_STEP: f64 = 0.7;
+    const TIME_ZOOM_MIN: f64 = 0.05;
+
+    pub fn time_zoom_in(&mut self) {
+        let current = self.time_zoom.unwrap_or(1.0);
+        self.time_zoom = Some((current * Self::TIME_ZOOM_STEP).max(Self::TIME_ZOOM_MIN));
+    }
+
+    pub fn time_zoom_out(&mut self) {
+        let next = self.time_zoom.unwrap_or(1.0) / Self::TIME_ZOOM_STEP;
+        self.time_zoom = if next >= 1.0 { None } else { Some(next) };
+    }
+
+    pub fn time_zoom_fit(&mut self) {
+        self.time_zoom = None;
     }
 
     /// The orchestration pane's own selection, resetting the details
@@ -426,16 +481,35 @@ impl App {
             }
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
-            // not by parsing its label.
+            // not by parsing its label. Issue #650: on the Time
+            // screen, ⏎ on a loop row instead toggles its own
+            // expansion into one row per pass -- a non-loop row, or a
+            // loop not yet expandable (`TimeRow::loop_expandable`,
+            // checked by the caller before this ever inserts a path:
+            // `oscilloscope_core::screens::build_time_screen` simply
+            // never expands an entry that stays in here with nothing
+            // to show for it), is a no-op either way. The two never
+            // both apply to the same row (a quick-steps summary is
+            // never a loop), so one key serves both.
             KeyCode::Enter if self.pane == Pane::Tree => {
-                if let Some(path) = &self.selected_path {
-                    if rows.iter().any(|r| {
-                        r.path == *path && r.kind == oscilloscope_core::render::RowKind::QuickSteps
-                    }) {
-                        self.expanded_quick_steps.insert(path.clone());
+                if let Some(path) = self.selected_path.clone() {
+                    let is_quick_steps = rows.iter().any(|r| {
+                        r.path == path && r.kind == oscilloscope_core::render::RowKind::QuickSteps
+                    });
+                    if is_quick_steps {
+                        self.expanded_quick_steps.insert(path);
+                    } else if self.screen == Screen::Time && !self.time_expanded_loops.remove(&path)
+                    {
+                        self.time_expanded_loops.insert(path);
                     }
                 }
             }
+            // Issue #650: `+`/`-` zoom the Time screen's own axis in
+            // and out, `=` fits the whole run again -- no-ops on
+            // every other screen.
+            KeyCode::Char('+') if self.screen == Screen::Time => self.time_zoom_in(),
+            KeyCode::Char('-') if self.screen == Screen::Time => self.time_zoom_out(),
+            KeyCode::Char('=') if self.screen == Screen::Time => self.time_zoom_fit(),
             // Issue #535: the state pane collapses/expands with the
             // same two keys, on its own independent collapsed set.
             KeyCode::Left if self.pane == Pane::State => {
@@ -469,7 +543,21 @@ impl App {
                         // the three-pane layout, so `tab` must not
                         // land on it with nothing to show or scroll.
                         Pane::Details | Pane::State if self.story_viewport > 0 => Pane::Story,
-                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                        _ => Pane::Tree,
+                    }
+                } else if self.screen == Screen::Time {
+                    // Issue #650: the Time screen's own cycle is
+                    // timeline -> zoom -> vs usual -> timeline --
+                    // skipping a pane `tui::draw` didn't actually
+                    // draw this frame (too small a terminal for the
+                    // three-pane layout), the same "must not focus a
+                    // pane with nothing to show or scroll" rule the
+                    // state pane and the Flow screen's story pane
+                    // already follow below.
+                    match self.pane {
+                        Pane::Tree if self.time_zoom_viewport > 0 => Pane::Zoom,
+                        Pane::Zoom if self.time_vs_usual_viewport > 0 => Pane::VsUsual,
+                        _ => Pane::Tree,
                     }
                 } else {
                     // On a small terminal the state pane isn't drawn
@@ -479,15 +567,14 @@ impl App {
                     match self.pane {
                         Pane::Tree => Pane::Details,
                         Pane::Details if self.state_viewport > 0 => Pane::State,
-                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                        _ => Pane::Tree,
                     }
                 };
             }
-            // Issue #626: `0`/`2` switch screens; `1`/`3` do
-            // nothing yet (`Screen::from_key` already refuses them,
-            // same as any other key with no binding). Selection,
-            // follow, folding, filters and collapsed rows are all
-            // outside `App::screen`, so none of them reset here.
+            // Issue #626, #632, #650: `0`-`3` all switch screens now.
+            // Selection, follow, folding, filters and collapsed rows
+            // are all outside `App::screen`, so none of them reset
+            // here.
             KeyCode::Char(c @ '0'..='3') => {
                 if let Some(screen) = Screen::from_key(c) {
                     self.screen = screen;
@@ -560,6 +647,8 @@ impl App {
             Pane::State => self.state_viewport.max(1),
             Pane::Details => self.details_viewport.max(1),
             Pane::Story => self.story_viewport.max(1),
+            Pane::Zoom => self.time_zoom_viewport.max(1),
+            Pane::VsUsual => self.time_vs_usual_viewport.max(1),
         }
     }
 
@@ -672,6 +761,24 @@ impl App {
             Pane::State => self.move_state_selection(state_rows, delta),
             Pane::Details => self.scroll_details(delta),
             Pane::Story => self.scroll_story(delta),
+            Pane::Zoom => self.scroll_time_zoom(delta),
+            Pane::VsUsual => self.scroll_time_vs_usual(delta),
+        }
+    }
+
+    fn scroll_time_zoom(&mut self, delta: i32) {
+        if delta < 0 {
+            self.time_zoom_scroll = self.time_zoom_scroll.saturating_sub((-delta) as usize);
+        } else {
+            self.time_zoom_scroll = self.time_zoom_scroll.saturating_add(delta as usize);
+        }
+    }
+
+    fn scroll_time_vs_usual(&mut self, delta: i32) {
+        if delta < 0 {
+            self.time_vs_usual_scroll = self.time_vs_usual_scroll.saturating_sub((-delta) as usize);
+        } else {
+            self.time_vs_usual_scroll = self.time_vs_usual_scroll.saturating_add(delta as usize);
         }
     }
 
@@ -716,6 +823,12 @@ impl App {
             }
             Pane::Story => {
                 self.story_scroll = if to_first { 0 } else { usize::MAX };
+            }
+            Pane::Zoom => {
+                self.time_zoom_scroll = if to_first { 0 } else { usize::MAX };
+            }
+            Pane::VsUsual => {
+                self.time_vs_usual_scroll = if to_first { 0 } else { usize::MAX };
             }
         }
     }
@@ -928,6 +1041,45 @@ pub fn visible_rows_for_flow<'a>(
         // selection to be.
         .filter(|r| {
             selectable.contains(r.path.as_str())
+                || app.selected_path.as_deref() == Some(r.path.as_str())
+        })
+        .collect()
+}
+
+/// The Time screen's own selectable rows (issue #650): the same real
+/// `Row` list every other screen moves over, minus whatever sits
+/// under a loop row -- the timeline collapses a loop to one row by
+/// default, so `j`/`k` must never land the selection on a pass it
+/// isn't drawing (the same real-`Row` list `draw_time_timeline`'s own
+/// `is_under_a_loop` filters, kept in sync here rather than
+/// recomputed differently by each caller). A row under a loop that is
+/// nonetheless `selected_path` (follow picked a leaf inside a loop
+/// that was collapsed afterwards) stays in, the same reason
+/// `visible_rows_for_flow` keeps a merged pass in -- dropping it here
+/// too would leave `move_tree_selection` with no `current` row to
+/// move from, so `j`/`k` would jump to the first or last row instead
+/// of moving one step from where the loop row shows the selection to
+/// be.
+pub fn visible_rows_for_time<'a>(
+    rows: &'a [Row],
+    time_rows: &[oscilloscope_core::screens::TimeDisplayRow],
+    app: &App,
+) -> Vec<&'a Row> {
+    let loop_prefixes: Vec<String> = time_rows
+        .iter()
+        .filter_map(|r| match r {
+            oscilloscope_core::screens::TimeDisplayRow::Row(tr)
+                if tr.kind == oscilloscope_core::render::RowKind::Loop =>
+            {
+                Some(format!("{}.", tr.path))
+            }
+            _ => None,
+        })
+        .collect();
+    visible_rows(rows, app)
+        .into_iter()
+        .filter(|r| {
+            !loop_prefixes.iter().any(|p| r.path.starts_with(p.as_str()))
                 || app.selected_path.as_deref() == Some(r.path.as_str())
         })
         .collect()
@@ -1736,12 +1888,12 @@ mod tests {
     }
 
     #[test]
-    fn one_does_nothing_but_three_switches_to_cost() {
+    fn one_switches_to_time_and_three_switches_to_cost() {
         let mut app = App::new(false);
         app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
         app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
-        assert_eq!(app.screen, Screen::Flow);
+        assert_eq!(app.screen, Screen::Time);
         app.handle_key(key(KeyCode::Char('3')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Cost);
     }
@@ -1992,5 +2144,167 @@ mod tests {
             Some("prime.next"),
             "must move one row past the loop, not jump to prime"
         );
+    }
+
+    fn time_display_row(path: &str, kind: RowKind) -> oscilloscope_core::screens::TimeDisplayRow {
+        oscilloscope_core::screens::TimeDisplayRow::Row(oscilloscope_core::time::TimeRow {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_s: None,
+            duration_s: None,
+            loop_progress: None,
+            has_children: false,
+            loop_expandable: false,
+            ghost: None,
+        })
+    }
+
+    /// A leaf under a collapsed loop (follow picked it, same as
+    /// `visible_rows_for_flow`'s own merged-pass case) must stay in
+    /// the list while it's `selected_path`, or `j`/`k` have no
+    /// current position to move from at all and jump to an end
+    /// instead.
+    #[test]
+    fn visible_rows_for_time_keeps_a_selected_path_hidden_under_a_collapsed_loop() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0.nap", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let time_rows = [
+            time_display_row("prime", RowKind::Root),
+            time_display_row("prime.fan", RowKind::Loop),
+            time_display_row("prime.next", RowKind::Tool),
+        ];
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.fan.iter_0.nap".to_string());
+        let visible = visible_rows_for_time(&rows, &time_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan", "prime.fan.iter_0.nap", "prime.next"],
+            "the selected leaf under the loop must stay in the list"
+        );
+    }
+
+    #[test]
+    fn visible_rows_for_time_drops_an_unselected_row_under_a_collapsed_loop() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0.nap", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let time_rows = [
+            time_display_row("prime", RowKind::Root),
+            time_display_row("prime.fan", RowKind::Loop),
+            time_display_row("prime.next", RowKind::Tool),
+        ];
+        let app = App::new(false);
+        let visible = visible_rows_for_time(&rows, &time_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan", "prime.next"],
+            "an unselected row under the loop is still hidden"
+        );
+    }
+
+    /// The regression itself: `j`/`k` from a selection follow placed
+    /// on a leaf inside a collapsed loop must move one row from where
+    /// the loop row shows it to be, not jump to the first or last row
+    /// because `move_tree_selection` can't find a current position.
+    #[test]
+    fn j_from_a_leaf_hidden_under_a_collapsed_loop_moves_to_the_next_row_not_to_the_top() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0.nap", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let time_rows = [
+            time_display_row("prime", RowKind::Root),
+            time_display_row("prime.fan", RowKind::Loop),
+            time_display_row("prime.next", RowKind::Tool),
+        ];
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.selected_path = Some("prime.fan.iter_0.nap".to_string());
+        let visible = visible_rows_for_time(&rows, &time_rows, &app);
+        app.handle_key(key(KeyCode::Char('j')), &visible, &[], false, false, &[]);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.next"),
+            "must move one row past the loop, not jump to prime"
+        );
+    }
+
+    #[test]
+    fn time_screens_tab_cycle_is_timeline_zoom_vs_usual_timeline() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.time_zoom_viewport = 10;
+        app.time_vs_usual_viewport = 10;
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Zoom);
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::VsUsual);
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn time_screens_tab_skips_a_pane_with_nothing_drawn_into_it() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.time_zoom_viewport = 0;
+        app.time_vs_usual_viewport = 0;
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(
+            app.pane,
+            Pane::Tree,
+            "neither pane is drawn below the three-pane layout"
+        );
+    }
+
+    #[test]
+    fn enter_on_the_time_screen_toggles_a_loop_rows_expansion() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.select_tree_path(Some("prime.loop".to_string()));
+        app.handle_key(key(KeyCode::Enter), &[], &[], false, false, &[]);
+        assert!(app.time_expanded_loops.contains("prime.loop"));
+        app.handle_key(key(KeyCode::Enter), &[], &[], false, false, &[]);
+        assert!(!app.time_expanded_loops.contains("prime.loop"));
+    }
+
+    #[test]
+    fn plus_minus_and_equals_zoom_the_time_screens_own_axis() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        assert_eq!(app.time_zoom, None);
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
+        let zoomed_in = app.time_zoom.expect("+ narrows the axis");
+        assert!(zoomed_in < 1.0);
+        app.handle_key(key(KeyCode::Char('=')), &[], &[], false, false, &[]);
+        assert_eq!(app.time_zoom, None);
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
+        app.handle_key(key(KeyCode::Char('-')), &[], &[], false, false, &[]);
+        assert_eq!(app.time_zoom, None, "- undoes a single + back to fit");
+    }
+
+    #[test]
+    fn plus_minus_and_equals_are_no_ops_off_the_time_screen() {
+        let mut app = App::new(false);
+        app.screen = Screen::Overview;
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
+        assert_eq!(app.time_zoom, None);
     }
 }
