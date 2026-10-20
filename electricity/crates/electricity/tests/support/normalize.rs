@@ -181,8 +181,8 @@ pub fn normalize_event(event: &Value, root: &str) -> Value {
 /// prefix, kept verbatim -- only `{exc}` itself (everything after the
 /// closing quote's own `": "`) is third-party text (`cel-python`'s own
 /// stringified exception tuple vs. this crate's `electricity-cel`'s
-/// own `Display`), so only that part is blanked (PR #441 review
-/// finding 7: the pre-fix version blanked Circuitry's own prefix too,
+/// own `Display`), so only that part is blanked (PR #441: the
+/// pre-fix version blanked Circuitry's own prefix too,
 /// and matched by shape -- any object with both an `expr` and an
 /// `error` key -- rather than this field's one real location). Falls
 /// back to blanking the whole string if it doesn't start with the
@@ -213,8 +213,8 @@ fn blanked_cel_detail(s: &str) -> String {
 }
 
 /// Blanks `meta.expect.error`'s own detail text, recursively -- never
-/// anywhere else an `error` key happens to appear (PR #441 review
-/// finding 7), by walking with the last two keys in hand rather than
+/// anywhere else an `error` key happens to appear (PR #441), by
+/// walking with the last two keys in hand rather than
 /// matching on shape: only a key named `error` whose immediate parent
 /// dict's own key (in whatever dict holds it) is `expect`, and *that*
 /// dict's own parent key is `meta`, is ever touched.

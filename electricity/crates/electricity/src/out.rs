@@ -12,7 +12,7 @@ use std::io;
 use std::path::Path;
 
 /// A path's own text exactly as Python's `str(pathlib.PurePosixPath(...))`
-/// would render it (PR #441 review finding 15): every `.`-only
+/// would render it (PR #441): every `.`-only
 /// segment and every doubled/trailing separator dropped, `..`
 /// segments kept literally (never resolved -- this is string
 /// normalization only, not `realpath`), collapsing to `.` for an

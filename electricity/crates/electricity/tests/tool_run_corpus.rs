@@ -3,7 +3,7 @@
 //! own tool-runtime-focused documents -- `success_chain`, a propagating
 //! tool error, `on_error: skip`, retries exhausted against a CEL
 //! `expect:`, a passing `expect:`, a raising `expect:` (the regression
-//! case for this PR's own finding 2), an `enabled_tools` allowlist
+//! case for a raising `expect:` regression), an `enabled_tools` allowlist
 //! refusal, a `params_json` merge, non-string param keys end to end,
 //! and redaction surfacing in `meta.params_rendered`).
 //!
@@ -95,7 +95,7 @@ fn an_allowlist_refusal_has_a_nonzero_returncode_and_writes_no_prime_state() {
 
 #[test]
 fn a_raising_cel_expect_fails_with_expect_failed_text() {
-    // This is this PR's own finding 2 regression, captured from the
+    // Captured from the
     // real CLI rather than just `ToolRuntime.execute` directly: a CEL
     // `expect:` that raises (`value.missing` on an empty dict) must
     // still fail with `expect failed: <expr>`, not the CEL evaluator's

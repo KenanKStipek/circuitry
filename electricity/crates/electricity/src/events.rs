@@ -14,7 +14,7 @@
 //! sharing one path until `electricity_vm::Frame` disambiguates them)
 //! can both be open on this single stack at once, so `on_complete`
 //! removes *its own* [`EventLog::on_start`] id from wherever it sits
-//! on the path's own stack (review finding 3 on PR #454), never just
+//! on the path's own stack (PR #454), never just
 //! the top -- a bare LIFO `pop` paired the wrong end with the wrong
 //! start whenever two such calls overlapped (`id`s came out reversed).
 

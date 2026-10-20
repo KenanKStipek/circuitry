@@ -202,7 +202,7 @@ fn sorted_keys(dict: &electricity_value::Dict, sort_keys: bool) -> Vec<Value> {
 /// [`emit_sequence`]'s own doc comment) with no flag to tell those
 /// apart.
 /// **Known gap, documented in DESIGN.md's own divergence table (issue
-/// #506's lane L1, review finding 8 on PR #510's first review):**
+/// #506's lane L1, PR #510's first review):**
 /// PyYAML's own `check_simple_key` switches a block-mapping key to the
 /// explicit `? key\n: value` form once that key's own emitted length
 /// reaches 128 characters or it spans more than one line -- this

@@ -1,5 +1,5 @@
 //! Exercises the golden corpus `electricity/scripts/generate_vm_run_
-//! seeding.py` writes (PR #441 review finding 1a/1d): `-e` seeding's
+//! seeding.py` writes (PR #441): `-e` seeding's
 //! own success-path corner cases -- an optional, `null`-valued input
 //! dropped on success (1a), and a root-level `-e` key that is never
 //! lifted under `input` at all (a namespace name, an `_`-prefixed key,
