@@ -1,4 +1,4 @@
-"""#385 review P1: a signal landing mid-dispatch, while a tree-flow
+"""#385: a signal landing mid-dispatch, while a tree-flow
 `dynamic`/parallel `loop` is still submitting branches to its
 `ThreadPoolExecutor`, must still be reported as a cancellation — not as
 `UnboundLocalError`.
@@ -123,7 +123,7 @@ def test_dynamic_tree_signal_during_submission_is_a_cancellation_not_unboundloca
     not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
 )
 def test_stop_on_error_tree_waits_for_a_running_sibling_before_a_signal_resets_the_token() -> None:
-    """#385 review P1 (F1): ``stop_on_error`` breaks ``_await_tree_branches``
+    """#385: ``stop_on_error`` breaks ``_await_tree_branches``
     after the *first* failure while a sibling can still be running --
     `dynamic.py`'s own ``else:`` clause then did a bare, unprotected
     ``executor.shutdown(wait=True)``, so a signal landing on the main

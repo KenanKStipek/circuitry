@@ -33,7 +33,7 @@ fancy-regex = "0.14"
 # `pattern`/`patternProperties`/`propertyNames.pattern`/the
 # `additionalProperties`+`patternProperties` filter all compile through
 # it rather than this crate's own, narrower ad hoc `\w`/`\s`/`\d`/`$`
-# rewrites (PR #502's round-4 fix, finding F2).
+# rewrites (PR #502's round-4 fix).
 electricity-pyre = { path = "../electricity-pyre" }
 # `validate_prompt_schema`'s own Python-`jsonschema`-style message text
 # (issue #498 ruling 6, tightened by PR #502's review and its own

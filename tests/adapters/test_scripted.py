@@ -233,7 +233,7 @@ def test_expect_model_mode_reask_consumes_in_order(tmp_path: Path) -> None:
 def test_if_model_mode_condition_wired(tmp_path: Path) -> None:
     """An `if` effect's own `mode: model` decision dispatches through the
     runtime's model-call identity, keyed at the conditional's own path
-    (#370 review F1 — previously ``conditional.py`` called the adapter
+    (#370 — previously ``conditional.py`` called the adapter
     directly, outside any ``model_call``, so ``scripted`` failed naming no
     path at all).
     """
@@ -272,7 +272,7 @@ def test_if_model_mode_condition_wired(tmp_path: Path) -> None:
 
 def test_while_model_mode_condition_wired(tmp_path: Path) -> None:
     """A loop's own `while: {mode: model}` re-check dispatches through the
-    runtime's model-call identity the same way (#370 review F1); each check
+    runtime's model-call identity the same way (#370); each check
     re-asks at the loop's own path, consumed in order like a retry.
     """
     orch = {
@@ -381,7 +381,7 @@ def test_named_tree_loop_path_includes_iter_index(tmp_path: Path) -> None:
 
 def test_unnamed_tree_loop_path_has_no_none_segment(tmp_path: Path) -> None:
     """An unnamed `flow: tree` loop's body is keyed at the enclosing
-    container's own path, not ``<prefix>.None.<body>`` (#370 review F2 —
+    container's own path, not ``<prefix>.None.<body>`` (#370 —
     previously ``nested_container(store, self.defn.name)`` formatted the
     loop's ``None`` name straight into the path). A single-item collection
     keeps this deterministic: every pass of an *unnamed* tree loop shares
@@ -484,7 +484,7 @@ def test_unknown_error_kind_rejected_at_load(tmp_path: Path) -> None:
     ],
 )
 def test_check_rejects_malformed_reply_entries(tmp_path: Path, entry: dict[str, Any]) -> None:
-    """#370 review F5: a fixture ``check()`` accepts must not then crash
+    """#370: a fixture ``check()`` accepts must not then crash
     with an unnamed ``AssertionError`` during the run — booleans, negative
     token counts, unknown keys, a ``text``+``error`` entry and an explicit
     ``status: null`` on a kind that needs one are all rejected at load time.
@@ -527,7 +527,7 @@ def test_leftover_export_writes_nothing_when_env_var_unset(
 def test_leftover_export_merges_every_registered_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PR #455 review finding 1: a fallback chain (or more than one
+    """PR #455's review: a fallback chain (or more than one
     ``provider: scripted`` prompt) builds a fresh instance per attempt, each
     loading its own, independent copy of the queue -- so the export must
     merge by the lowest remaining count *per path*, never by summing every

@@ -483,8 +483,8 @@ def assert_states_equal(actual: Any, expected: Any, *, path: str = "$") -> None:
         return
     # `NaN != NaN` under Python's own `==`, but a complexity score's
     # `signals.*.normalized`/`contribution` can legitimately be NaN on
-    # both engines for the same non-finite input (issue #516 §3 finding
-    # 10) -- two NaNs are the same divergence-free value here, not a
+    # both engines for the same non-finite input (issue #516 §3) --
+    # two NaNs are the same divergence-free value here, not a
     # mismatch.
     if (
         isinstance(actual, float)

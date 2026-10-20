@@ -275,7 +275,7 @@ effects:
 
 def test_unnamed_tree_loop_body_passes_get_distinct_ids_across_threads(tmp_path: Path) -> None:
     """An unnamed `flow: tree` loop runs every pass on its own worker
-    thread, all sharing the parent's path (#419 review finding 7) — the
+    thread, all sharing the parent's path (issue #419) — the
     per-thread stack keyed by path must still pair each pass's own
     `start` with its own `end`, not some other thread's."""
     orch = tmp_path / "unnamed_tree_loop.yml"
@@ -729,7 +729,7 @@ def test_run_end_is_emitted_after_the_live_state_mirrors_final_write(
 
 def test_run_library_events_writes_the_stream(tmp_path: Path, monkeypatch: Any) -> None:
     """`cof run-library --events <f>` wires the same stream as `cof run`
-    (#419 review finding 7: nothing previously exercised `run-library`)."""
+    (issue #419: nothing previously exercised `run-library`)."""
     import pytest
 
     pytest.importorskip("typer")

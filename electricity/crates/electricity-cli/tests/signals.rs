@@ -6,7 +6,7 @@
 //! `#![cfg(feature = "test-tools")]` below: this whole file compiles to
 //! nothing without that feature, so the ordinary `cargo test --workspace`
 //! gate (which never enables it) never even builds it, let alone runs
-//! or skips anything here -- PR #441 review finding 11: before this
+//! or skips anything here -- PR #441: before this
 //! gate existed, un-ignoring a test in this file without it would have
 //! made `cargo test --workspace` build a binary that refuses every
 //! `sleep`/`fail` dispatch (`extra_allowed_providers` is empty without
@@ -162,8 +162,8 @@ fn live_state_path(home: &TempHome) -> PathBuf {
 /// milliseconds is enough, but a busy one sharing this machine with
 /// other work (`LANE-CONTRACT.md`'s own warning) can stretch process
 /// startup well past what looked like a safe fixed margin in testing
-/// -- confirmed directly during this test's own review (PR #441
-/// finding 5): a 200ms fixed sleep here was intermittently too short
+/// -- confirmed directly during this test's own review (PR #441):
+/// a 200ms fixed sleep here was intermittently too short
 /// under load, sending SIGINT before the handler was installed and
 /// letting the OS's own default disposition kill the child instead.
 fn wait_until_running(home: &TempHome) {
@@ -182,8 +182,8 @@ fn wait_until_running(home: &TempHome) {
 
 /// *out*'s own `prime.cleanup` node (the `finally:` step [`LONG_SLEEP_DOC`]
 /// declares) is present with a real value -- `finally:` actually ran,
-/// not merely that the run exited with the right code (PR #441 review
-/// finding 9: no signal test checked this before).
+/// not merely that the run exited with the right code (PR #441:
+/// no signal test checked this before).
 fn assert_finally_ran(out: &Path) {
     let state: serde_json::Value = serde_json::from_str(&fs::read_to_string(out).unwrap()).unwrap();
     assert!(
@@ -250,7 +250,7 @@ fn sigterm_exits_143() {
     assert_eq!(status.code(), Some(143));
     assert!(out.exists());
     assert_finally_ran(&out);
-    // PR #441 review finding 9: SIGTERM/SIGHUP's own run_end.signal was
+    // SIGTERM/SIGHUP's own run_end.signal was
     // untested (neither test passed --events before).
     let events_text = fs::read_to_string(&events).unwrap();
     let run_end = events_text.lines().last().unwrap();
@@ -290,7 +290,7 @@ fn sighup_exits_129() {
     assert!(run_end.contains("\"SIGHUP\""));
 }
 
-/// PR #441 review finding 9: `nohup electricity ...` (SIGHUP already
+/// `nohup electricity ...` (SIGHUP already
 /// `SIG_IGN` on entry) must stay ignored -- a SIGHUP sent to the child
 /// does nothing at all, not even cancel the run; a *different* signal
 /// (SIGINT) still cancels it normally afterwards.
@@ -397,7 +397,7 @@ fn a_second_sigint_during_a_blocking_finally_exits_immediately_with_no_out() {
     // No `--out` at all for a second-signal exit (issue #431's Signals
     // section: "no `--out`, no `run_end`").
     assert!(!out.exists());
-    // PR #441 review finding 9: the events file got at least one write
+    // The events file got at least one write
     // (run_start, and likely a start for the root `sleep`) before the
     // second signal cut the process off -- but never a run_end line,
     // which only `EventLog::run_end` (called after `execute_root`

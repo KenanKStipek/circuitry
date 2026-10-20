@@ -117,7 +117,7 @@ def _hermetic_global_config(
     result are isolated regardless of that marker, ahead of the early return
     below — opting out of config-discovery isolation is not an invitation to
     load the developer's real private ``.env`` into this pytest process's
-    environment (#349 review finding 1).
+    environment (issue #349).
     """
     # Same isolation for the library source cache (`cof library refresh`):
     # ahead of the `real_config_discovery` early return below, so a test
@@ -153,8 +153,8 @@ def _hermetic_global_config(
     # binds its own copy for the "secrets file mode" warning — without this,
     # a `real_config_discovery` test that invokes the CLI (several do) loads
     # the developer's real `~/.config/circuitry/.env` into `os.environ`,
-    # un-tracked by `monkeypatch`, for the rest of the pytest process (#349
-    # review finding 1). `_last_user_env_result` is reset too, so a stale
+    # un-tracked by `monkeypatch`, for the rest of the pytest process
+    # (issue #349). `_last_user_env_result` is reset too, so a stale
     # result left over by an earlier test in the same process can't be
     # mistaken for this test's own `load_user_env()` call (or lack of one).
     monkeypatch.setattr(config_module, "GLOBAL_CONFIG_DIR", fake_dir)

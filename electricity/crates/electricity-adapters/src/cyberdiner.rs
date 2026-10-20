@@ -7,7 +7,7 @@
 //! [`electricity_tools::http_client`] directly, the same transport
 //! primitive the `http` tool (`electricity_tools::http`) uses, rather
 //! than [`crate::transport::run_curl`]'s curl-flavored header set and
-//! exit-code mapping. Review finding F3 on issue #515's PR: every
+//! exit-code mapping. Issue #515's own review: every
 //! point below reuses the `http` tool's own urllib logic directly
 //! (`electricity_tools::http::resolve_proxy_target`/`http_url::urljoin`,
 //! `TimeoutModel::PerOperation`) rather than re-deriving it, the same
@@ -141,7 +141,7 @@ fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
 }
 
 /// `adapters/cyberdiner.py::_resolve_tier` -- *default_tier* is raw
-/// config (review finding F10: a truthy non-string value raises the
+/// config (a truthy non-string value raises the
 /// same `AttributeError` Python's own `(default_tier or "").strip()`
 /// does, but only when *model* is blank -- Python's own `or` never
 /// evaluates the right side at all when the left is already truthy).
@@ -256,7 +256,7 @@ fn urllib_headers(
 /// `req.host` -- host[:port] exactly as the current hop's own URL
 /// writes it: an explicit port is never dropped even when it matches
 /// the scheme's own default, and none is ever filled in for an
-/// implicit one (review finding F3; `electricity_tools::http::
+/// implicit one (`electricity_tools::http::
 /// http.rs`'s own `netloc_host_as_written` doc comment -- confirmed
 /// directly against CPython, distinct from `transport.rs::
 /// host_header_value`'s curl-flavored default-port omission every
@@ -281,7 +281,7 @@ fn netloc_for_proxy(parsed: &ParsedUrl) -> String {
     }
 }
 
-/// Review finding F3's own proxy bullet: urllib's own environment
+/// urllib's own environment
 /// convention and proxy-URL/auth parsing
 /// (`electricity_tools::http::resolve_proxy_target`, shared with the
 /// `http` tool directly), never `transport::resolve_curl_proxy`'s
@@ -304,7 +304,7 @@ fn connect_target_for(parsed: &ParsedUrl, port: u16) -> ConnectTarget {
     }
 }
 
-/// Review finding F1/F3e: a [`SendError`] this crate's own `http`
+/// A [`SendError`] this crate's own `http`
 /// tool already classifies correctly (`electricity_tools::http::
 /// send_error_to_tool_error`'s own doc comment) -- *url* is used only
 /// for [`SendError::Connect`]'s own wrapped shape
@@ -372,7 +372,7 @@ fn transport_failure_error(url: &str, failure: TransportFailure) -> AdapterError
 /// urllib.error.HTTPError as exc: ... raise RuntimeError(f"cyberdiner:
 /// HTTP {exc.code} from {url}: {exc.reason}" + (f" — {detail}" if
 /// detail else ""))`). *detail* is `exc.read()`'s own text,
-/// **unchanged** (review finding F4: no trim, no truncation -- Python
+/// **unchanged** (no trim, no truncation -- Python
 /// only ever omits it when it's the empty string) -- when the body
 /// read itself failed mid-transfer, Python's own `except Exception:
 /// detail = ""` means *detail* is simply absent, not an error of its
@@ -418,7 +418,8 @@ fn non_json_error(url: &str, text: &str) -> AdapterError {
 /// failure here has no `except HTTPError` handler of its own to
 /// swallow it into (unlike a 4xx/5xx), so it propagates the same
 /// unwrapped shape [`send_error`] gives a hard [`http_client::send`]
-/// failure (review finding F3's own body-error-ordering bullet).
+/// failure -- the body error is checked before the body is parsed,
+/// the same order every other call site here uses.
 fn interpret_success(url: &str, response: RawResponse) -> Result<Dict, AdapterError> {
     if let Some(body_error) = response.body_error {
         return Err(send_error(url, body_error));
@@ -460,8 +461,7 @@ fn interpret_error(url: &str, response: RawResponse) -> AdapterError {
 /// status pair is followed at all, and an unfollowed 3xx (no
 /// `Location`, a disallowed method/status, or the redirect cap below)
 /// falls straight into the ordinary non-2xx error path -- urllib
-/// treats *any* non-2xx as an `HTTPError`, never only `>= 400`
-/// (review finding F3).
+/// treats *any* non-2xx as an `HTTPError`, never only `>= 400`.
 async fn request_json(
     method: &str,
     url: &str,
@@ -561,12 +561,12 @@ fn cancelled_error(job_id: &Value) -> AdapterError {
 /// `adapters/cyberdiner.py::CyberdinerAdapter`.
 pub struct CyberdinerAdapter {
     /// Raw -- `cfg.get("expo_url") or ""`. See `openai.rs::
-    /// OpenAiAdapter::base_url`'s own doc comment (review finding F5):
+    /// OpenAiAdapter::base_url`'s own doc comment:
     /// `.rstrip("/")`'d in `generate()`/`check()` themselves, after
     /// the same earlier checks Python runs first.
     pub expo_url: Value,
     /// Raw -- `cfg.get("token") or ""`. Never itself a source of a
-    /// non-string failure (review finding F10): Python's own
+    /// non-string failure: Python's own
     /// `f"Bearer {self.token}"` renders any value with `str()`,
     /// never raising.
     pub token: Value,
@@ -577,7 +577,7 @@ pub struct CyberdinerAdapter {
     pub poll_interval_ms: i64,
     pub timeout_seconds: i64,
     /// `None` when `max_in_flight` is unset/`0` (unbounded, the
-    /// default) -- review finding F2: a Rust adapter's *default*
+    /// default) -- a Rust adapter's *default*
     /// instance is reused across every call on one run
     /// (`exec/prompt.rs`'s own doc comment), exactly like Python's
     /// long-lived `self`, so a semaphore scoped to this instance
@@ -794,7 +794,7 @@ impl Adapter for CyberdinerAdapter {
         options: &GenerateOptions,
         call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
-        // `max_in_flight` (review finding F2) -- bounds how many
+        // `max_in_flight` bounds how many
         // `generate()` calls may hold a submitted-but-not-yet-terminal
         // job at once, enforced with the same semaphore shared across
         // every call on this adapter instance Python's own
@@ -848,7 +848,7 @@ impl Adapter for CyberdinerAdapter {
         // `try/except Exception` around the probe itself -- a
         // non-string `expo_url` raises uncaught out of `check()`
         // entirely, for `preflight.py::call_check`'s own "check()
-        // raised ..." fold (review finding F5; confirmed by running
+        // raised ..." fold (confirmed by running
         // `CyberdinerAdapter(expo_url=5, token="x").check()` directly:
         // `missing=[]`, discarding whatever this function already
         // pushed above, exactly like `scripted.rs`'s own
@@ -931,7 +931,7 @@ fn new_semaphore(max_in_flight: i64) -> Option<tokio::sync::Semaphore> {
 pub fn build_cyberdiner(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     // `raw_valid_tiers = cfg.get("valid_tiers") or ()`; `if
     // isinstance(raw_valid_tiers, str): raw_valid_tiers = (raw_valid_tiers,)`
-    // (review finding F10) -- a configured string wraps as a single
+    // -- a configured string wraps as a single
     // tier, rather than being dropped as a non-list.
     let valid_tiers: Vec<String> = match crate::config::cfg_get(cfg, "valid_tiers") {
         Some(Value::Str(s)) if !s.is_empty() => {
@@ -1183,7 +1183,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_retries_a_503_on_submit() {
-        // Review finding F1: an HTTP error classifies by status the
+        // An HTTP error classifies by status the
         // same way a curl-based adapter's own `classify_curl_exit`
         // does -- a 503 is retryable.
         let addr = spawn_sequence_server(vec![http_response(503, "Service Unavailable", "")]);
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_retries_a_connection_refused_submit() {
-        // Review finding F1: `urllib.error.URLError` (a connect-phase
+        // `urllib.error.URLError` (a connect-phase
         // failure) is unconditionally retryable, the same as a curl
         // exit this crate already retries (6/7/28/35/52/56).
         let addr = crate::test_support::closed_port();
@@ -1272,7 +1272,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_fails_like_python_for_a_non_string_default_tier_when_model_is_blank() {
-        // Review finding F10: `(default_tier or "").strip()` raises
+        // `(default_tier or "").strip()` raises
         // when *model* is blank and `default_tier` is a truthy
         // non-string -- never reached at all when a model is pinned.
         let mut a = adapter("https://expo.example.test");
@@ -1413,7 +1413,7 @@ mod tests {
     #[tokio::test]
     async fn check_reports_check_raised_for_a_non_string_expo_url() {
         // Confirmed by running `CyberdinerAdapter(expo_url=5, token="x")
-        // .check()` directly (review finding F5): unlike `ollama`'s own
+        // .check()` directly: unlike `ollama`'s own
         // `check()`, cyberdiner's has no `try/except` around the
         // `.rstrip("/")` call at all, so it propagates uncaught for
         // `call_check`'s own fold.
@@ -1487,7 +1487,7 @@ mod tests {
 
     #[tokio::test]
     async fn max_in_flight_bounds_concurrent_jobs() {
-        // Review finding F2: a `max_in_flight: 1` instance lets only
+        // A `max_in_flight: 1` instance lets only
         // one `generate()` call hold a submitted job at a time -- the
         // second call's own submit request only reaches the mock
         // server after the first call's own job completes and frees

@@ -160,7 +160,7 @@ def test_nested_tree_loops_with_use_children_global_and_group_cap_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both caps active at once, each at 1 — the group-first acquisition
-    order (#274 review P1) must not deadlock a leaf that needs both a
+    order (#274) must not deadlock a leaf that needs both a
     group slot and a global one."""
     plugin = _TrackingPlugin()
     monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)

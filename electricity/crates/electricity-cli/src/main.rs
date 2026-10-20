@@ -306,8 +306,8 @@ fn sighup_is_already_ignored() -> bool {
 }
 
 /// A dedicated OS thread, with its own minimal Tokio runtime, watching
-/// SIGINT/SIGTERM/SIGHUP from the moment it's installed (PR #441 review
-/// finding 5) -- installed *before* config load, so this stays
+/// SIGINT/SIGTERM/SIGHUP from the moment it's installed (PR #441) --
+/// installed *before* config load, so this stays
 /// responsive even while the main thread is deep in synchronous work
 /// (config/document load, every pre-execution check) with no `await`
 /// point of its own for a signal to be noticed at.
@@ -510,7 +510,7 @@ fn install_warning_logger() {
     log::set_max_level(log::LevelFilter::Warn);
 }
 
-/// #471 review finding 2, belt and braces: `user_env::load_user_env`
+/// #471, belt and braces: `user_env::load_user_env`
 /// already checks a key/value before ever calling `std::env::set_var`
 /// (the one call in this binary's startup path that could panic with
 /// a `.env` value in its own message, `failed to set environment
@@ -544,7 +544,7 @@ fn install_secret_safe_panic_hook() {
 /// error prints nothing on stdout, not even the failure payload.
 ///
 /// Returns `Err` when a successful run's own state can't be serialized
-/// for stdout (issue #512 review finding 3) -- a value `json_safe_
+/// for stdout (issue #512) -- a value `json_safe_
 /// default`/`dumps_default_str` still can't encode (a non-string dict
 /// key, ...), distinct from the `Date`/`DateTime`/`Bytes` fallback both
 /// engines already handle. Nothing is written to stdout in that case;
@@ -560,7 +560,7 @@ fn print_stdout_contract(
         // `state_out` names *out_path* only when a file was actually
         // written there -- a refusal (or any other `state: None`
         // failure) leaves `--out` unwritten even when `--out` was given
-        // (PR #441 review finding 8), so this is `None` whenever
+        // (PR #441), so this is `None` whenever
         // `result.state` is, regardless of what the caller asked for.
         let state_out = out_path.filter(|_| result.state.is_some());
         write_stdout(&electricity::out::failure_payload(
@@ -582,7 +582,7 @@ fn print_stdout_contract(
 }
 
 /// `Warning: ...` lines, and nothing else -- issue #431's "CLI output"
-/// decision's own stderr contract (PR #441 review finding 4, K1): a
+/// decision's own stderr contract (PR #441): a
 /// run failure's own error already went out on stdout, inside the
 /// `{"ok": false, ...}` payload [`print_stdout_contract`] just wrote --
 /// `cli/app.py::run`'s own non-TTY failure path (`json_out`) prints
@@ -629,7 +629,7 @@ fn exit_code_for(result: &RunResult) -> ExitCode {
 }
 
 fn run_action(run_args: RunArgs) -> ExitCode {
-    // PR #441 review finding 5: armed *before* config load (issue
+    // Armed *before* config load (issue
     // #431's own step 1), on a dedicated OS thread with its own Tokio
     // runtime -- responsive to a signal even while this thread is deep
     // in the synchronous config/document load and every pre-execution
@@ -643,7 +643,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // `CircuitryGroup.invoke` catches a `ConfigError` *around* the
     // whole CLI command, before `run()`'s own JSON-output logic is
     // ever reached, so unlike every other failure this prints no
-    // stdout payload at all, `--out` or not (PR #441 review finding 8).
+    // stdout payload at all, `--out` or not (PR #441).
     // `config_error` resolves *config_path* exactly once for this
     // whole invocation, at `cof run`'s own point in its resolution
     // order (`cli/app.py` resolves config at ~:1127, before the
@@ -668,7 +668,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // happens in the CLI layer *before* `-e` is ever parsed
     // (`cli/app.py` resolves the document at ~:1150, `_parse_env_vars`
     // only at ~:1270) -- checked here, before step 2 below, for the
-    // same reason (PR #441 review finding 5: `-e badtext` plus a
+    // same reason (PR #441: `-e badtext` plus a
     // missing document must still exit 1, not 2). Unlike the config-
     // error check above, `cof` prints this one on *stdout*
     // (`console.print`, not `err_console.print` -- `app.py:1156`), so
@@ -815,8 +815,8 @@ fn main() -> ExitCode {
     // the user's private `.env` for every subcommand, *before* that
     // subcommand's own argument parsing can fail with a usage error --
     // Click has already run the group callback by the time a
-    // subcommand's own missing/invalid argument raises (#471 review
-    // finding 7). The one exception is `-V`/`-h`: `_root`'s `--version`
+    // subcommand's own missing/invalid argument raises (#471).
+    // The one exception is `-V`/`-h`: `_root`'s `--version`
     // callback is `is_eager=True`, short-circuiting before `_root`'s
     // own body -- `cof --version` never loads the file or prints its
     // warnings, so neither does this. Loading here, once, before

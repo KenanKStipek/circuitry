@@ -170,7 +170,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   nothing to look for: no punctuation marks a block scalar's start
 //   other than the indicator consumed into the *previous* event's own
 //   span).
-// - **Unicode line-break characters inside a scalar** (finding 3, PR
+// - **Unicode line-break characters inside a scalar** (PR
 //   #388's third review). PyYAML's `Reader.forward` (`reader.py`)
 //   counts U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH SEPARATOR) and
 //   U+0085 (NEL) as line breaks, exactly like `\n`, even inside a
@@ -200,7 +200,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   prefix and duplicate-key position on the far side of a lone `\r`;
 //   fixed by counting a lone `\r` as a line break there too.
 // - **Unicode decimal digits under an explicit `!!int`/`!!float` tag**
-//   (finding 3, PR #388's third review): Python's `int()`/`float()`
+//   (PR #388's third review): Python's `int()`/`float()`
 //   accept any Unicode decimal digit (Arabic-Indic, fullwidth, ...),
 //   not just ASCII `0`-`9`; `num_bigint::BigInt::from_str_radix` and
 //   Rust's `f64::from_str` don't. Pinned in the golden corpus (an
@@ -230,7 +230,7 @@ pub const MAX_NODES: usize = 1_000_000;
 //   pinned in the golden corpus or fixed; left as a follow-up.
 // - **A `=` key retagged through one merge, but not through a
 //   sibling's direct (non-merge) reference to the same shared anchor**
-//   (finding 8, PR #388's third review): `SafeConstructor
+//   (PR #388's third review): `SafeConstructor
 //   .flatten_mapping` only retags a bare `=` key to `str` when
 //   reached *through* `<<:`; PyYAML's `MappingNode`s are shared and
 //   mutable, so once one mapping's merge flattens an anchored source

@@ -1,6 +1,6 @@
 //! CLI-level signal/cancellation tests for a *process-backed* tool
-//! (`shell`), as issue #459's own test plan asks for and review
-//! finding 8 on PR #467 names as missing: `electricity-cli/tests/
+//! (`shell`), as issue #459's own test plan asks for and PR #467
+//! names as missing: `electricity-cli/tests/
 //! signals.rs` only ever exercises the `sleep` test-tool (a plain
 //! async sleep, no real child process of its own), so none of those
 //! tests could ever catch a process-runtime regression -- a leaked

@@ -32,7 +32,7 @@ const DEFAULT_MAX_ERRORS: i64 = 20;
 /// CPython's own `ValueError` (`day is out of range for month`, ...)
 /// escape uncaught, since it is never a `yaml.YAMLError` that
 /// `_validate_document`'s `except yaml.YAMLError` could catch
-/// (review finding 5 on PR #524).
+/// (PR #524).
 fn validate_document(document: &str, run_compile: bool) -> Result<Vec<String>, ToolError> {
     if electricity_value::pycompat::py_strip(document).is_empty() {
         return Ok(vec![
@@ -112,8 +112,7 @@ impl ToolPlugin for ValidateYamlPlugin {
                 // `OverflowError`/`ValueError` CPython never catches here
                 // (`except (TypeError, ValueError)` doesn't name
                 // `OverflowError`) -- it escapes bare, unwrapped, with no
-                // "must be an integer:" prefix (review finding 4 on PR
-                // #524).
+                // "must be an integer:" prefix (PR #524's review).
                 Err(err) if err.py_class == PyExc::OverflowError => {
                     return Err(ToolError {
                         py_class: PyExc::OverflowError,

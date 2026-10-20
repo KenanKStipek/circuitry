@@ -195,8 +195,8 @@ def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
         lsof_output = lsof.stdout or lsof.stderr or "(no output)"
     except FileNotFoundError:
         # A missing `lsof` binary must not hide the `ps` report already
-        # collected above behind an unrelated FileNotFoundError (#385
-        # review P2) -- this is diagnostics for a test failure, not
+        # collected above behind an unrelated FileNotFoundError (#385)
+        # -- this is diagnostics for a test failure, not
         # something the failure itself should depend on.
         lsof_output = "(lsof not available on this machine)"
     sections.append(

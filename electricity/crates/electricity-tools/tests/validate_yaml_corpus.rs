@@ -108,9 +108,9 @@ struct Case {
     params: std::collections::BTreeMap<String, TaggedValue>,
     raised: bool,
     error: Option<String>,
-    /// Only present when `raised`: `type(exc).__name__` (review finding 3
-    /// on PR #524 -- previously only the message text was recorded, so a
-    /// `ValueError` and the `OverflowError` finding 4 adds couldn't be
+    /// Only present when `raised`: `type(exc).__name__` (PR #524's
+    /// review -- previously only the message text was recorded, so a
+    /// `ValueError` and the `OverflowError` another case adds couldn't be
     /// told apart here).
     #[serde(default)]
     py_class: Option<String>,
@@ -121,7 +121,7 @@ struct Case {
     errors: Option<Vec<ErrorTag>>,
     /// Several schema errors compare as a multiset of locations (DESIGN.md's
     /// own Hazards section: Python sorts by `str(err)`, electricity by
-    /// `(location, message)`) -- review finding 3 on PR #524.
+    /// `(location, message)`) -- PR #524's review.
     #[serde(default)]
     errors_unordered: bool,
 }

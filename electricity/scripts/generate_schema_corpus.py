@@ -414,7 +414,7 @@ def orchestration_cases() -> list[dict]:
             {"effects": [{}, {}]},
         ),
         (
-            # Issue #528, review finding 1's own repro: a container missing
+            # Issue #528's own repro: a container missing
             # its own required field that holds a child also missing the
             # same field -- two identical-message, identical-keyword errors
             # whose schema paths differ only by the outer one being a strict
@@ -526,7 +526,7 @@ def _structural_case(name: str, document: Any) -> dict:
 def structural_cases() -> list[dict]:
     invalid: list[tuple[str, Any]] = [
         (
-            # Issue #528, review finding 3: a near-miss unknown key right
+            # Issue #528's review: a near-miss unknown key right
             # next to two schema errors on the same effect (the issue's own
             # acceptance bullet, "unknown keys next to schema errors") --
             # `structural_errors` reports the near-miss first (the likelier

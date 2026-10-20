@@ -404,7 +404,7 @@ fn os_path_basename(path: &str) -> &str {
 /// [`run_agent_cli`]'s own timeout text (`agent_cli.py:258-262`), pulled
 /// out so the differential corpus's `timeout_text_cases` can replay it
 /// directly rather than only through a hand-written `py_format_g` check
-/// (review finding 3 on PR #525: the corpus generated this text but
+/// (PR #525: the corpus generated this text but
 /// nothing in Rust ever called the function that builds the sentence
 /// `run_agent_cli` actually raises). Takes the *binary* as configured,
 /// not its basename, the same as [`run_agent_cli`]'s own `cmd[0]`.
@@ -418,7 +418,7 @@ pub fn timeout_message(binary: &str, timeout_seconds: f64) -> String {
 
 /// A `Duration` for [`RunOpts::timeout`] that never panics the way
 /// `Duration::from_secs_f64` does on a non-finite or too-large `f64`
-/// (review finding 8 on PR #525) -- `timeout_seconds` reaches here from
+/// (PR #525) -- `timeout_seconds` reaches here from
 /// run-time config, so `inf`/`NaN`/an out-of-range value must saturate,
 /// never crash the call. `f64::max` already turns `NaN` into `0.0`
 /// (`NaN.max(y)` returns `y` in Rust, unlike Python's `max`).
@@ -667,7 +667,7 @@ pub fn parse_claude_output(
 /// real CLI usage figure reaches and this module does not reproduce).
 /// The running `i64` sums saturate at the bound (`saturating_add`)
 /// rather than panicking in debug or silently wrapping to a negative
-/// number in release (review finding 8 on PR #525) -- Python's own `int`
+/// number in release (PR #525) -- Python's own `int`
 /// never overflows, so this is a safety net against an implausible
 /// CLI-reported figure, not a text Python output ever pins.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -776,7 +776,7 @@ fn py_format_g(x: f64) -> String {
     let precision: i32 = 6;
     // The exponent comes from Rust's own correctly-rounded scientific
     // formatter, never a `log10().floor()` estimate refined by a
-    // division (review finding 7 on PR #525): `ax / 10f64.powi(exp)` is
+    // division (PR #525): `ax / 10f64.powi(exp)` is
     // itself an inexact float, so a 7+-digit value that rounds up at the
     // 6th significant digit (`9999995.0`, which Python's `%g` carries to
     // `1e+07`) could round the wrong way, and the division approach
@@ -1568,7 +1568,7 @@ mod tests {
         // `\x1c` (one of the four C0 "other line/paragraph separator"
         // controls `str.splitlines()` treats as a boundary) is the same
         // quirk as U+2028, pinned separately since nothing covered it
-        // (review finding 2 on PR #525).
+        // (PR #525).
         let event = assistant_message_end("ok");
         let truncated = event.replace("ok", "line1\x1cline2");
         let stdout = format!("{}\n{}\n", assistant_message_end("fallback"), truncated);
@@ -1581,7 +1581,7 @@ mod tests {
     fn parse_pi_output_a_raw_c1_next_line_separator_inside_an_event_splits_that_line() {
         // `\x85` (NEL, a C1 control `str.splitlines()` also treats as a
         // boundary) -- the same quirk as U+2028, pinned separately since
-        // nothing covered it (review finding 2 on PR #525).
+        // nothing covered it (PR #525).
         let event = assistant_message_end("ok");
         let truncated = event.replace("ok", "line1\u{85}line2");
         let stdout = format!("{}\n{}\n", assistant_message_end("fallback"), truncated);
@@ -1640,7 +1640,7 @@ mod tests {
         // With `cat` alone, electricity's own inherited stdin (CI runs
         // with `/dev/null` attached) would also make `cat` print nothing,
         // so an empty `result.stdout` can't by itself prove a pipe was
-        // ever attached (review finding 9 on PR #525). `test -p
+        // ever attached (PR #525). `test -p
         // /dev/stdin` fails on an inherited `/dev/null` (a character
         // device) and succeeds on a real pipe, closed or not, so its exit
         // code pins the shape of the fd `run_agent_cli` wired up.
@@ -1692,8 +1692,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_agent_cli_a_dropped_future_kills_the_child_and_its_grandchild() {
-        // The issue asks for "the CLI and a child it started" (review
-        // finding 9 on PR #525): a bare `sleep 8522` has no grandchild to
+        // The issue asks for "the CLI and a child it started" (PR
+        // #525): a bare `sleep 8522` has no grandchild to
         // prove the whole process group dies, only the direct child.
         // `sh -c 'sleep 8522 & wait'` makes `sh` the direct child and the
         // backgrounded `sleep 8522` its grandchild.
@@ -1865,7 +1865,7 @@ mod tests {
         // `env_remove` (never an `env` map, issue #520's settled question
         // 3) exists precisely because a `HashMap<String, String>` can't
         // hold a variable that isn't valid UTF-8 at all -- unlike
-        // `merged_env`, which would drop it (review finding 5 on PR #525).
+        // `merged_env`, which would drop it (PR #525).
         // `od` turns the inherited bytes into plain ASCII hex so this
         // test's own stdout stays valid UTF-8 for `run_tracked`'s decode.
         use std::os::unix::ffi::OsStrExt;
@@ -1944,8 +1944,8 @@ mod tests {
 
     #[test]
     fn py_format_g_handles_a_round_trip_carry_into_the_next_exponent() {
-        // The naive `ax / 10f64.powi(exp)` division this replaced (review
-        // finding 7 on PR #525) rounds `9999995.0`'s mantissa to
+        // The naive `ax / 10f64.powi(exp)` division this replaced (PR
+        // #525) rounds `9999995.0`'s mantissa to
         // `10.00000`, never reshaping the exponent the way Python's `%g`
         // carries it to `1e+07`.
         assert_eq!(py_format_g(9999995.0), "1e+07");

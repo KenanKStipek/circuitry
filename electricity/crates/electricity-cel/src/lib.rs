@@ -614,7 +614,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
 
     // Narrowed to what the expression actually reads (`_project` in
     // `core/cel_eval.py`): a big int elsewhere in `state`, unread, must
-    // not make the conversion below fail (finding 3), and converting is
+    // not make the conversion below fail, and converting is
     // cheaper for a large `state` than a handful of paths warrant.
     let projected_state = if collected.reads_whole_state {
         state.clone()

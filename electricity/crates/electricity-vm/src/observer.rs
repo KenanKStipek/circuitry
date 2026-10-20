@@ -67,7 +67,7 @@ pub trait RunObserver {
 
     /// A tree `dynamic`/`each` loop is about to dispatch -- `--events`'s
     /// own `dispatch` event (`branches`: `n` itself, `concurrency`:
-    /// `min(max_workers, n)`; issue #431 review finding on PR #440 --
+    /// `min(max_workers, n)`; PR #440's review of issue #431 --
     /// this pairing was backwards).
     fn dispatch(&self, _path: &EffectPath, _branches: usize, _concurrency: usize) {}
 
@@ -116,7 +116,7 @@ pub trait RunObserver {
     /// (an `O(size of the tree so far)` recursive clone) purely to hand
     /// it to a `graft_child_write` nobody reads never has to pay for
     /// that snapshot at all (`exec::use_`'s own `ChildObserver::write`,
-    /// lane I's review finding on PR #472: a long loop inside a `use`
+    /// lane I's review of PR #472: a long loop inside a `use`
     /// child used to pay one such snapshot per child write regardless
     /// of `--live-state`). `electricity` (lib)'s own `Observer` is the
     /// only implementation that ever returns `true`, and only when a
@@ -145,7 +145,7 @@ pub trait RunObserver {
     /// *node_path* no longer needs this tree's own overlay -- it has
     /// merged. *branches* must be the exact same [`NodeRef`]s this
     /// tree's own [`RunObserver::register_tree_branches`] call passed
-    /// (not merely the same *node_path*): PR #549's review, finding 1,
+    /// (not merely the same *node_path*): PR #549's review --
     /// an unnamed tree loop that is a direct branch of another tree
     /// registers at the *same* path as the outer tree's own container
     /// (an unnamed loop/dynamic branch appends no name segment of its

@@ -35,7 +35,7 @@ instead:
     handler is actually installed — see :attr:`CancellationToken.armed`);
     just the process itself otherwise, since ``killpg`` on a process still
     sharing this interpreter's own process group would take this process
-    down with it (#357 review N1).
+    down with it (#357).
 
 A queued-but-not-yet-started ``ThreadPoolExecutor`` future is handled
 separately, by ``executor.shutdown(cancel_futures=True)`` at each tree-flow
@@ -101,7 +101,7 @@ def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) ->
 
     A child only ever gets its own process group when it was started with
     ``start_new_session=True`` — :func:`run_tracked` only does that while
-    :attr:`CancellationToken.armed` is set (#357 review N1). Otherwise the
+    :attr:`CancellationToken.armed` is set (#357). Otherwise the
     child's ``pgid`` *is* this interpreter's own ``getpgrp()``, so
     ``killpg`` on it would SIGKILL this process and its whole group along
     with the child — e.g. an unarmed timeout under the SDK, the MCP
@@ -264,7 +264,7 @@ class CancellationToken:
 
     def __init__(self) -> None:
         self._event = _Event()
-        # RLock, not a plain Lock (#356 review F4): the signal handler's
+        # RLock, not a plain Lock (#356): the signal handler's
         # own call to request() takes this same lock from the *main*
         # thread, synchronously, wherever that thread's Python bytecode
         # happened to be interrupted — including inside track()/reset(),
@@ -373,7 +373,7 @@ class CancellationToken:
         process (``cli.interrupts.sigterm_as_interrupt``'s own scope).
 
         :func:`run_tracked` only starts a tracked child in its own process
-        group (``start_new_session``) while this is true (#356 review F5)
+        group (``start_new_session``) while this is true (#356)
         — unarmed (an embedder: the SDK, the MCP server, the REST host, or
         a direct unit test of this module), a shell step keeps its normal
         controlling-terminal access (``ssh``/``sudo``/a credential prompt
@@ -507,14 +507,14 @@ class CancellationToken:
         (POSIX, started with ``start_new_session=True``) — otherwise it
         falls back to killing just *proc* itself, since *proc* sharing this
         interpreter's own process group would mean a group-kill took this
-        process down with it too (#357 review N1).
+        process down with it too (#357).
 
         :func:`run_tracked` already calls :meth:`check` before ``Popen``,
         but cancellation can still be requested in the gap between that
         check and this registration -- :meth:`request` only kills the
         processes it can already see, so a process added right after it
-        took its snapshot would otherwise run to completion unseen (#357
-        review N2). Close that race here: if cancellation is already set
+        took its snapshot would otherwise run to completion unseen (#357).
+        Close that race here: if cancellation is already set
         the moment *proc* is registered, kill it immediately.
         """
         with self._lock:
@@ -963,8 +963,7 @@ def _feed_stdin(stdin: Any, data: bytes) -> None:
     (a lone surrogate, or a character the locale's own encoding can't
     represent) raises synchronously there and fails the step the same
     way it always has, rather than surfacing only as a traceback from
-    this thread's own excepthook while the child just sees EOF (#385
-    review P2).
+    this thread's own excepthook while the child just sees EOF (#385).
 
     ``BrokenPipeError`` means the reader (the child, or whatever still
     held its read end) is gone — nothing left to write to, so this just
@@ -1146,7 +1145,7 @@ def _communicate_promptly(
         # own thread -- so a `UnicodeEncodeError` surfaces synchronously
         # and fails this step the same way it always has, instead of
         # only ever printing from the writer thread's own excepthook
-        # while the child just sees EOF (#385 review P2). `text=True`
+        # while the child just sees EOF (#385). `text=True`
         # gives a `TextIOWrapper` with its own `.buffer`, the raw byte
         # stream `communicate()` itself writes/reads through -- the same
         # invariant `subprocess.Popen.communicate` itself enforces (text

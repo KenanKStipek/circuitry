@@ -319,13 +319,13 @@ def build_corpus() -> list[dict]:
         condition("has(state.input.n)", {}),
         # A patched clone of `state` to make a prior `has()` gracious would
         # leak into this second, longer `has()` read of the same prefix
-        # (issue #379 review finding 1): cel-python's own `has()` is "the
+        # (issue #379's review): cel-python's own `has()` is "the
         # argument evaluated without error", never conjured data.
         condition("!has(state.a.b) || has(state.a.b.c)", {}),
         condition("has(state.a.b) || has(state.a.b.c)", {}),
         # `has()` through a non-map value partway down the chain (a
         # disabled node writes `{"value": None}`): cel-python's `has()`
-        # reports `False`, not an evaluation error (finding 1).
+        # reports `False`, not an evaluation error.
         condition(
             "has(state.prime.x.value.price)",
             {"prime": {"x": {"value": None}}},
@@ -439,15 +439,14 @@ def build_corpus() -> list[dict]:
         condition("state.prime.tick.value.price <= 10", {}, strict=False),
         # Circuitry's own strict message is built with Python's `repr()`
         # (`{expr!r}`/`{unresolved!r}`), not a bare `'...'` wrap: a `'` in
-        # the expression switches to double quotes (issue #379 review
-        # finding 2).
+        # the expression switches to double quotes (issue #379's review).
         condition(
             "state.prime.tick.value == 'open'", {}, strict=True, exact_error=True
         ),
     ]
 
     # --- big ints: too large for CEL's 64-bit int, the expression reads it
-    # (issue #379 review finding 3) -------------------------------------
+    # (issue #379's review) -----------------------------------------------
     # Not included here: `evaluate_cel_expect` with a big int in
     # `value`/`meta`/`state` is a deliberate, documented deviation
     # (electricity-cel's lib.rs docs) rather than something this
@@ -471,7 +470,7 @@ def build_corpus() -> list[dict]:
     # `UintType`/`DoubleType` never override ordering, so crossing
     # numeric types is fine when *they* are the left operand -- the
     # restriction is asymmetric, unlike `==`/`!=`'s spec-mandated
-    # heterogeneous exemption (issue #379 review finding 4) --------------
+    # heterogeneous exemption (issue #379's review) ------------------------
     cases += [
         condition("state.n < 1.5", {"n": 1}),
         condition("state.n > 1.5", {"n": 1}),
@@ -520,7 +519,7 @@ def build_corpus() -> list[dict]:
     # --- a Duration's truthiness is "nonzero", not always true: the top-
     # level expression result (not a CEL `bool(...)` call, which doesn't
     # accept a duration) is what `evaluate_cel`'s own `bool(result)` sees
-    # (issue #379 review finding 7) --------------------------------------
+    # (issue #379's review) -----------------------------------------------
     cases += [
         condition("state.a - state.b", {"a": aware_10_utc, "b": aware_10_utc}),
         condition("state.a - state.b", {"a": aware_15_plus1, "b": aware_10_utc}),
@@ -551,7 +550,7 @@ def build_corpus() -> list[dict]:
         expect("meta.missing == 1", value={}, meta={}, state={}),
     ]
 
-    # --- re-review of #379, finding 1: `paths::project` must not corrupt
+    # --- re-review of #379: `paths::project` must not corrupt
     # a scalar a longer, has()-guarded path extends past it. A previous
     # version inserted `{}` over an already-placed, non-dict value the
     # moment a longer path tried to continue through it, which made an
@@ -571,7 +570,7 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- re-review of #379, finding 3 (+4): has() beyond a plain dotted
+    # --- re-review of #379: has() beyond a plain dotted
     # chain. `cel`'s own, native `has()` only evaluates gracefully for
     # the *last* segment; everything before it is a plain selection that
     # raises the moment it hits an index, a missing key or the wrong
@@ -594,7 +593,7 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- re-review of #379, finding 2 (+8): the ordering matrix's
+    # --- re-review of #379: the ordering matrix's
     # remaining gaps --------------------------------------------------
     cases += [
         # `bytes` ordering: a previous fix-pass fallback (`Value::partial_cmp`)
@@ -620,7 +619,7 @@ def build_corpus() -> list[dict]:
         expect("value < 1", value=None),
     ]
 
-    # --- re-review of #379, finding 5: equality/`in` inside a container.
+    # --- re-review of #379: equality/`in` inside a container.
     # celpy's own `ListType`/`MapType.__eq__` delegate to each element's
     # `__eq__`, which for `IntType`/`UintType`/`DoubleType` raises unless
     # the other side is the exact same type -- caught by the top-level
@@ -635,7 +634,7 @@ def build_corpus() -> list[dict]:
         condition("state.x in ['a', 'b']", {"x": 1}),
     ]
 
-    # --- re-review of #379, finding 2/9: exact message text, more
+    # --- re-review of #379: exact message text, more
     # characters. `{expr!r}` (Python's `repr()`) switches outer quote and
     # escapes based on content; each of these exercises a character the
     # first fix pass's probe (a bare `'`) didn't.
@@ -744,11 +743,11 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- third review of #379, finding 1: `in` must decide `false` on a
+    # --- third review of #379: `in` must decide `false` on a
     # type mismatch that doesn't actually raise in celpy (a plain Python
     # `==` resolving through the two-sided `NotImplemented` fallback),
     # not raise on every mismatch -- a regression the second fix pass
-    # introduced trying to fix finding 5 below.
+    # introduced trying to fix the case below.
     cases += [
         condition("'b' in state.tags", {"tags": ["a", None]}),
         # YAML 1.1 reads a bare `yes`/`no` as a `bool`.
@@ -756,7 +755,7 @@ def build_corpus() -> list[dict]:
         expect("!(value.status in ['failed'])", value={"status": None}),
     ]
 
-    # --- third review of #379, finding 3: list indexing is celpy's own
+    # --- third review of #379: list indexing is celpy's own
     # `list.__getitem__` (Python's), not `cel`'s native one -- negative
     # wraps from the end, `bool` is `0`/`1`, a `double` always raises,
     # both inside `has()` and out.
@@ -770,7 +769,7 @@ def build_corpus() -> list[dict]:
         condition("state.l[true] == 2", {"l": [1, 2]}),
     ]
 
-    # --- third review of #379, finding 2: `has()`'s own safe-navigation
+    # --- third review of #379: `has()`'s own safe-navigation
     # rewrite previously only accepted an identifier or a literal as the
     # root of the chain it rewrites, leaving anything else (a macro or
     # function-call result) to `cel`'s own, non-graceful `has()`.
@@ -781,7 +780,7 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- third review of #379, finding 6: `has()`'s own index *key*
+    # --- third review of #379: `has()`'s own index *key*
     # expression needs the same strict-operator/nested-`has()` rewriting
     # as everything else, not `cel`'s native evaluation of it -- a nested
     # `has()` over a two-level-missing chain inside the key is exactly
@@ -793,7 +792,7 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- third review of #379, finding 7: `paths::project` must not
+    # --- third review of #379: `paths::project` must not
     # corrupt a `NaN` leaf a longer, `has()`-guarded path extends past it
     # -- comparing the freshly read and already-placed values for
     # equality to decide whether to keep descending is itself `false` for
@@ -806,7 +805,7 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- third review of #379, finding 5: celpy's `BoolType` has no
+    # --- third review of #379: celpy's `BoolType` has no
     # `__eq__` override, so a `bool` on the *left* of an `int`/`uint`
     # resolves through the plain `int` it subclasses instead of raising
     # -- an asymmetry the reverse order, and `double` either way, don't
@@ -817,7 +816,7 @@ def build_corpus() -> list[dict]:
         condition("true in [1]", {}),
     ]
 
-    # --- third review of #379, finding 8: comparing a `double` against
+    # --- third review of #379: comparing a `double` against
     # an `int`/`uint` must not round the integer operand to the nearest
     # representable `double` first -- Python's own `float`/`int`
     # comparison is exact.
@@ -828,7 +827,7 @@ def build_corpus() -> list[dict]:
         ),
     ]
 
-    # --- fourth review of #379, finding 1: a bare `string`/`bytes`
+    # --- fourth review of #379: a bare `string`/`bytes`
     # operand indexes by character/byte, and `in` iterates it the same
     # way, matching celpy's own `str`/`bytes.__getitem__` and
     # `for c in container` -- `cel`'s own `_[_]`/`@in` have no indexer
@@ -843,7 +842,7 @@ def build_corpus() -> list[dict]:
         condition("97 in state.b", {"b": b"abc"}),
     ]
 
-    # --- fourth review of #379, findings 2 and 3: `has(X)` is "X
+    # --- fourth review of #379: `has(X)` is "X
     # evaluated without error", for *any* `X` -- an argument that was
     # never a field selection (`cel`'s own `has()` macro fails to even
     # parse this), and a root that is itself a macro/function-call result
@@ -855,7 +854,7 @@ def build_corpus() -> list[dict]:
         condition("has(state.results.filter(r, r.ok)[0].id)", {}),
     ]
 
-    # --- fourth review of #379, finding 6: a nested `list`/`map`
+    # --- fourth review of #379: a nested `list`/`map`
     # comparison inside `in` must compare every element before deciding,
     # not stop at the first one that raises -- celpy's own container
     # equality folds its elements with CEL's error-absorbing `&&`, where
@@ -865,7 +864,7 @@ def build_corpus() -> list[dict]:
         condition("{'a': 1, 'b': 2} in [{'a': 1.0, 'b': 3}]", {}),
     ]
 
-    # --- fourth review of #379, finding 1/5: celpy's own `IntType`/
+    # --- fourth review of #379: celpy's own `IntType`/
     # `UintType.__eq__` is `@type_matched` and raises on the other
     # integer type as a map key rather than finding the entry the way
     # `cel`'s own cross-converting map indexing does.

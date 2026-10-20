@@ -168,7 +168,7 @@ pub(crate) fn merged_env(
     }
     // `vars_os()`, not `vars()` -- `std::env::vars()` panics while
     // iterating the moment any inherited variable isn't valid UTF-8
-    // (review finding 4 on PR #467), reachable whenever a
+    // (PR #467), reachable whenever a
     // `runtime.plugins.{awk,imagemagick,ffmpeg}.env` override is
     // configured at all, on a process whose own environment holds any
     // such variable (CPython copes by decoding with surrogateescape;
@@ -854,7 +854,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_binary_reports_a_not_a_directory_os_error_for_a_cwd_that_is_a_file() {
-        // Review finding 3 on PR #467: a spawn failure other than a
+        // A spawn failure other than a
         // missing binary (here, `cwd` naming a plain file, not a
         // directory -- `ENOTDIR`) must surface as its own `OSError`
         // text/class, never collapse into the same "cancelled" text as
@@ -940,7 +940,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn merged_env_does_not_panic_on_a_non_utf8_inherited_variable() {
-        // Review finding 4 on PR #467: `std::env::vars()` panics while
+        // `std::env::vars()` panics while
         // iterating the moment *any* inherited variable isn't valid
         // UTF-8, reachable whenever a `runtime.plugins.<name>.env`
         // override is configured at all.
@@ -1024,7 +1024,7 @@ mod tests {
         // `binary not found: ...`" bullet (issue #459) -- a missing
         // `cwd` is `ENOENT`, the same `FileNotFoundError` a missing
         // binary itself raises, unlike `cwd` naming a *file*
-        // (`ENOTDIR`, review finding 3 on PR #467, its own distinct
+        // (`ENOTDIR`, its own distinct
         // `NotADirectoryError` test elsewhere in this module).
         let token = CancellationToken::new();
         let missing_dir = std::env::temp_dir().join(format!(

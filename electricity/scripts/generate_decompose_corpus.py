@@ -494,8 +494,8 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
     )
 
     # The inline check (step 4) -- every way it can fail, run through the
-    # real `_validate_plan` rather than re-typed (review finding 2 on PR
-    # #524): a PyYAML scan error, a non-mapping document, a document
+    # real `_validate_plan` rather than re-typed (PR #524's review):
+    # a PyYAML scan error, a non-mapping document, a document
     # missing the required `effects` key, a near-miss key (a Circuitry-own
     # structural error), and the "two loaders" hazard's own duplicate key
     # (caught here by the same duplicate-key loader the merge contract and
@@ -640,7 +640,7 @@ def build_failure_cases() -> list[dict[str, Any]]:
 def build_max_depth_and_success_cases() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """`maybe_decompose`'s own two inline record constructions (`:195-203`,
     `:259-263`), reached by actually running the real function end to end
-    (review finding 7 on PR #524: these were re-typed dict expressions
+    (PR #524's review: these were re-typed dict expressions
     before, never the real function's own output) -- the depth ceiling
     (`_run_planner`/`_execute_plan` never even called, since the ceiling is
     checked first) and a full plan/validate/execute pass with

@@ -136,7 +136,7 @@ def test_document_shell_other_key_untouched_by_the_ceiling() -> None:
 def test_document_null_allowed_commands_cannot_drop_the_host_pin() -> None:
     """A trusted document setting `allowed_commands: null` does not erase
     the host pin -- the ceiling applies whenever the host has one, not only
-    when the document also gave a list (#316 review finding 1)."""
+    when the document also gave a list (issue #316)."""
     cfg = _trusted_cfg(
         runtime={"plugins": {"shell": {"allowed_commands": ["ls", "cat"]}}}
     )
@@ -179,7 +179,7 @@ def test_document_null_plugins_block_cannot_drop_the_host_pin() -> None:
 def test_applied_host_settings_notice_tags_the_intersected_pin() -> None:
     """The "Applied host settings" notice says `allowed_commands` was
     intersected with the host pin, not applied as the document wrote it
-    (#316 review finding 3)."""
+    (issue #316)."""
     cfg = _trusted_cfg(
         runtime={"plugins": {"shell": {"allowed_commands": ["ls", "cat", "echo"]}}}
     )

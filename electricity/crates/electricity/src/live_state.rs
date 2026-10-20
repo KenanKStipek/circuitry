@@ -7,7 +7,7 @@
 //! its own, and no second thread for a `--live-state` write to race a
 //! store borrow against either -- but it still never takes a snapshot
 //! (`Store::saved`) or does I/O from inside [`RunObserver::write`]
-//! itself (PR #441 review finding 7): that hook fires synchronously,
+//! itself (PR #441): that hook fires synchronously,
 //! *from inside* whatever `exec::dynamic`/`exec::tool` call just wrote
 //! to the store, which may still be holding a `RefCell` borrow a step
 //! or two up its own call stack -- `Store::saved` walking the same
@@ -58,7 +58,7 @@ const MAX_TEMP_NAME_ATTEMPTS: u32 = 1000;
 /// Opens a fresh, exclusively-created temp file for *path*'s own
 /// atomic write, alongside it in the same directory -- `tempfile::
 /// mkstemp`'s own two defenses, ported directly rather than `fs::
-/// write`'s plain "truncate or create" (PR #441 review finding 3):
+/// write`'s plain "truncate or create" (PR #441):
 ///
 /// - `O_CREAT | O_EXCL` (`create_new(true)`): fails outright if
 ///   *anything* already exists at the candidate path, symlink
@@ -211,7 +211,7 @@ fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
 ///
 /// A branch that *has* started but not yet finished its own first
 /// effect is a known, deliberate difference from cof, not a match for
-/// it (PR #549's review, finding 2; `electricity/DESIGN.md` §13, Q11):
+/// it (PR #549's review; `electricity/DESIGN.md` §13, Q11):
 /// every electricity effect type writes an in-progress `meta` node
 /// (`created_at` set, `completed_at` still `None`) the moment it
 /// starts, the same as a plain chain effect already does, so that
@@ -282,7 +282,7 @@ pub struct LiveStateMirror {
     ///
     /// Each path maps to a `Vec`, not a single entry -- more than one
     /// overlay can legitimately share the exact same path (PR #549's
-    /// review, finding 1): a `use` child whose own document has a
+    /// review): a `use` child whose own document has a
     /// top-level `flow: tree` registers that tree's branches at the
     /// same path the child's own graft already uses (the child frame
     /// maps the child root to the `use` node's own path, and an
@@ -353,7 +353,7 @@ impl LiveStateMirror {
     /// `GraftEntry::Child` overlay (the child it named finished) -- a
     /// no-op if nothing was grafted there (or it was already cleared).
     /// Leaves any `GraftEntry::Tree` entry at the same path untouched
-    /// (PR #549's review, finding 1): a tree nested directly at a
+    /// (PR #549's review): a tree nested directly at a
     /// `use` child's own root path must keep overlaying after the
     /// child's own graft is gone.
     pub fn clear_graft(&self, node_path: &EffectPath) {
@@ -370,7 +370,7 @@ impl LiveStateMirror {
     /// [`electricity_vm::RunObserver::register_tree_branches`]'s own
     /// implementation: records *branches* (cloned `Rc`s, cheap) as a
     /// *new* tree overlay at *node_path*, always pushed, never
-    /// replacing an existing entry there (PR #549's review, finding 1:
+    /// replacing an existing entry there (PR #549's review:
     /// two sibling trees, or a child graft and a tree, can share a
     /// path). Unlike [`Self::graft_child_write`] this never marks a
     /// write pending on its own -- it runs once, before any branch has
@@ -391,7 +391,7 @@ impl LiveStateMirror {
     /// *branches*, this exact tree's own `NodeRef`s, not merely its
     /// path) has merged -- a no-op if nothing matching was registered
     /// there (or it was already cleared). Matches by `Rc::ptr_eq` on
-    /// the first branch (PR #549's review, finding 1): *branches* is
+    /// the first branch (PR #549's review): *branches* is
     /// never empty in practice (both callers guard the zero-branch
     /// case before ever registering), and two distinct trees never
     /// share the same `NodeRef` allocation, so this removes exactly
@@ -769,7 +769,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    // PR #441 review finding 3.
+    // PR #441.
     #[test]
     fn the_final_file_is_mode_0600() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -989,7 +989,7 @@ mod tests {
     /// one of its own branches, registered at `prime.outer.inner`, both
     /// apply, shallowest path first, the same way a nested `use`'s own
     /// graft already composes with its parent's. Unlike an earlier
-    /// version of this test (PR #549's review, finding 4), the outer
+    /// version of this test (PR #549's review), the outer
     /// branch writes something of its own (`note`) *and* an `inner`
     /// skeleton (`value`/`meta`) its own nested tree then overlays onto
     /// -- so shallowest-path-first order is actually load-bearing here:
@@ -1055,7 +1055,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// PR #549's review, finding 1: a `use` child's own graft and a
+    /// PR #549's review: a `use` child's own graft and a
     /// tree's own overlay can legitimately share one path (a `use`
     /// child whose document has a top-level `flow: tree`, where the
     /// child frame maps the child root to the `use` node's own path
@@ -1149,7 +1149,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// PR #549's review, finding 1: an outer tree and an inner,
+    /// PR #549's review: an outer tree and an inner,
     /// unnamed tree nested one of its branches can register at the
     /// *exact same path* (an unnamed tree loop/dynamic branch appends
     /// no name segment of its own, `exec::loop_::run_each_tree`'s own
@@ -1236,7 +1236,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// PR #549's review, finding 1: two concurrent *sibling* unnamed
+    /// PR #549's review: two concurrent *sibling* unnamed
     /// tree loops (neither nested in the other) can also register at
     /// the same path, if both are direct, unnamed branches of the same
     /// enclosing tree -- a shared key between them resolves the same

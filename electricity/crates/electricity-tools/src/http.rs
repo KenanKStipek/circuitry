@@ -37,7 +37,7 @@ fn runtime_error(message: impl Into<String>) -> ToolError {
 /// failures" section) -- shared between a hard failure from
 /// [`http_client::send`] itself and a deferred
 /// [`http_client::RawResponse::body_error`] a 2xx has no handler to
-/// swallow (review finding 8).
+/// swallow.
 fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
     match err {
         SendError::Connect { text, .. } => ToolError {
@@ -90,7 +90,7 @@ fn unknown_url_type_failure(original_url: &str, scheme: &str) -> ToolError {
 /// `HTTPRedirectHandler.http_error_302`'s own `"%s - Redirection to
 /// url '%s' is not allowed" % (msg, newurl)` -- pinned against real
 /// CPython in `generate_http_corpus.py`'s own `redirect_reason_cases`
-/// (issue #485 review finding 6), since this file never actually
+/// (issue #485), since this file never actually
 /// raises through a real `HTTPRedirectHandler` to get the text from
 /// CPython itself.
 pub fn disallowed_redirect_scheme_reason(msg: &str, newurl: &str) -> String {
@@ -878,7 +878,7 @@ fn present(value: Option<&Value>) -> Option<&Value> {
 /// Python truthiness, for `dict(params.get("headers") or {})`'s own
 /// `or {}` fallback below -- `None`/`False`/a numeric zero/any empty
 /// `str`/`list`/`dict` all take the `{}` branch, never reaching
-/// `dict()` at all (issue #485 review finding 11: a template that
+/// `dict()` at all (issue #485: a template that
 /// renders `headers:` to `""` is the realistic case this matters
 /// for). Mirrors `electricity_template::render::truthy` exactly;
 /// duplicated rather than shared across the crate boundary for one
@@ -1153,7 +1153,7 @@ fn to_string_pairs(pairs: &[(Value, Value)]) -> Vec<(String, String)> {
 /// userinfo stripped (same as [`split_netloc`] already strips), but
 /// the port kept or omitted exactly as written, never filled in with
 /// the scheme's own default. `proxy_bypass_environment`'s own *host*
-/// argument (issue #485 review finding 7: a synthetic default port
+/// argument (issue #485: a synthetic default port
 /// always appended, as this function used to, makes a `no_proxy`
 /// entry with no port of its own -- the common case -- never match a
 /// request whose URL also never wrote one).
@@ -1180,7 +1180,7 @@ struct ParsedProxy {
 /// [`splittype_with_rest`]'s own scheme match only counts when what
 /// follows actually starts with `/`, exactly like CPython's own
 /// `r_scheme.startswith("/")` check) -- the authority-form case
-/// (issue #485 review finding 7) is the common one: an `http_proxy`
+/// (issue #485) is the common one: an `http_proxy`
 /// value is almost always written as `host:port` with no `http://`
 /// prefix at all.
 fn parse_proxy(proxy: &str) -> ParsedProxy {
@@ -1224,7 +1224,7 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
 /// `pub` (not `pub(crate)`): `electricity-adapters::cyberdiner` --
 /// the one adapter that speaks urllib's own wire shape instead of
 /// curl's -- reuses this directly for its own proxy resolution
-/// (issue #515 review finding F3), rather than re-deriving urllib's
+/// (issue #515), rather than re-deriving urllib's
 /// proxy-URL/auth parsing a second time.
 pub fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::ProxyTarget> {
     let host_for_bypass = netloc_host_as_written(netloc);
@@ -1352,8 +1352,8 @@ impl ToolPlugin for HttpPlugin {
                 // IPv6 literal. urllib never adds or omits a port
                 // here: an explicit `:80`/`:443` that happens to match
                 // the scheme's own default still appears in the
-                // header; an absent port stays absent (issue #485
-                // review finding 10 -- confirmed directly against
+                // header; an absent port stays absent (issue #485 --
+                // confirmed directly against
                 // CPython, not `host_header_value`'s own default-port
                 // omission, which is `http.client`'s own *connection*
                 // target, a different thing).
@@ -1463,7 +1463,7 @@ impl ToolPlugin for HttpPlugin {
                 // `with urlopen(...) as resp: ... resp.read()` -- a
                 // 2xx has no `except HTTPError` handler of its own to
                 // swallow a body-read failure into, unlike every
-                // other status below (issue #485 review finding 8).
+                // other status below (issue #485).
                 if let Some(body_error) = response.body_error.clone() {
                     return Err(send_error_to_tool_error(body_error, &original_url));
                 }
@@ -1638,7 +1638,7 @@ mod proxy_parse_tests {
         // common case: no `http://` prefix at all. `_splittype`
         // matches scheme="proxy.corp", rest="3128", which doesn't
         // start with `/`, so the *whole* original string is the
-        // authority (issue #485 review finding 7's own worked
+        // authority (issue #485's own worked
         // example).
         let parsed = parse_proxy("proxy.corp:3128");
         assert_eq!(parsed.hostport, "proxy.corp:3128");
@@ -1689,7 +1689,7 @@ mod proxy_parse_tests {
         // header) is the netloc exactly as written -- urllib never
         // omits a port that happens to match the scheme's own default
         // (confirmed directly against CPython: `http://h:80/` sends
-        // `Host: h:80`, issue #485 review finding 10).
+        // `Host: h:80`, issue #485).
         assert_eq!(netloc_host_as_written("h:80"), "h:80");
         assert_eq!(netloc_host_as_written("h"), "h");
     }

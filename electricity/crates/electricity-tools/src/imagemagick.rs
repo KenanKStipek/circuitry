@@ -7,8 +7,8 @@ use crate::{ToolError, ToolPlugin};
 use electricity_value::Value;
 
 /// `plugins/imagemagick.py::make_plugin` -- fallible, like every
-/// other `make_plugin`/`_build_*` in this crate (review P2-6 on PR
-/// #454's second review: this stub used to be infallible, but
+/// other `make_plugin`/`_build_*` in this crate (this stub used to
+/// be infallible, but
 /// Python's own `plugin_env_override` raises on a malformed `runtime.
 /// plugins.imagemagick.env`, so a real body here needs `?`, not a
 /// function lane C would have to widen the return type of first).

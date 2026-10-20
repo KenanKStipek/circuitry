@@ -1,10 +1,10 @@
 //! Exercises the golden `--out`/stdout corpus `electricity/scripts/
-//! generate_vm_run_failures.py` writes (PR #441 review finding 9):
+//! generate_vm_run_failures.py` writes (PR #441):
 //! every one of `electricity::run_orchestration`'s own pre-execution
 //! failure paths (load, effective-settings shape, complexity,
 //! concurrency, persistence validation, a missing required input,
-//! structural, compile, an unknown concurrency group, two of PR #441
-//! review finding 1's own -e-seeding corner cases), each compared
+//! structural, compile, an unknown concurrency group, two of PR #441's
+//! own -e-seeding corner cases), each compared
 //! against a real `cof run`'s own normalized `--out` state and full
 //! stdout bytes. Every case's own document (and config/`-e` inputs,
 //! for the two that have one) lives in the golden file itself
@@ -170,8 +170,7 @@ fn expected_state(case: &CorpusCase) -> Json {
 /// property message and Python `jsonschema`'s (DESIGN.md §1/§12:
 /// third-party text only has to fail at the same place, never match
 /// word for word) -- so [`ErrorCompare::LocationPrefix`] can still
-/// assert full equality rather than merely a shared prefix (PR #441
-/// review finding 7).
+/// assert full equality rather than merely a shared prefix (PR #441).
 fn normalize_quotes(s: &str) -> String {
     s.replace('"', "'")
 }

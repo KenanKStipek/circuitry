@@ -27,8 +27,8 @@ use std::collections::BTreeSet;
 /// (`dynamic`/`if`/`loop`/reflector, each recursing through
 /// [`containers::compile_effects_in_scope`] once per level) can
 /// overflow even a generously sized stack long before it overflows
-/// `electricity-yaml`'s own structural depth limit (512): review
-/// finding 1 on PR #415 measured a 2 MiB-stack overflow at roughly 210
+/// `electricity-yaml`'s own structural depth limit (512): PR #415's
+/// review measured a 2 MiB-stack overflow at roughly 210
 /// levels in a debug build. `electricity_yaml::MAX_DEPTH` bounds *what
 /// parses*; this bounds *what this compiler will recurse into*, well
 /// below that, with a distinct, clean [`CompileError`] instead.

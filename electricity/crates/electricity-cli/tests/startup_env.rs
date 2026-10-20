@@ -135,7 +135,7 @@ fn a_non_utf8_environment_variable_does_not_stop_the_dump_ir_path_either() {
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_environment_variable_does_not_stop_the_private_dotenv_from_loading() {
-    // #471 review finding 8: every test above leaves no `.env` in its
+    // Every test above leaves no `.env` in its
     // temp `HOME`, so `user_env::load_user_env_at`'s own `vars_os()`
     // snapshot (taken for `${VAR}` interpolation) is never actually
     // exercised with a non-UTF-8 entry in it -- this one puts a real

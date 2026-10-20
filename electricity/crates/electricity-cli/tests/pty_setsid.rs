@@ -1,4 +1,4 @@
-//! A pty-based regression test for review finding 1 on PR #467: a
+//! A pty-based regression test for PR #467: a
 //! process-backed tool's child must get `setsid()`, not merely its own
 //! process group (`setpgid`) -- otherwise a child that touches the
 //! inherited controlling terminal (`ffmpeg`'s own startup `tcsetattr`,

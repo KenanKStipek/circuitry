@@ -56,7 +56,7 @@ impl ToolPlugin for EnvVarsPlugin {
                 // `std::env::var` panics on a non-UTF-8 value (`cof`'s
                 // own `os.environ.get` applies `surrogateescape`,
                 // never raising); `to_string_lossy` never panics --
-                // issue #460's own fix-pass finding 1.
+                // issue #460's own fix pass.
                 Value::Str(
                     std::env::var_os(&name)
                         .map(|v| v.to_string_lossy().into_owned())
@@ -80,7 +80,7 @@ impl ToolPlugin for EnvVarsPlugin {
             let mut items = Dict::new();
             // `std::env::vars()` panics on a non-UTF-8 key or value;
             // `vars_os()` + `to_string_lossy()` never does (issue
-            // #460's own fix-pass finding 1 -- `cof run`'s own
+            // #460's own fix pass -- `cof run`'s own
             // `os.environ.items()` decodes with `surrogateescape` and
             // carries on, never raising).
             for (name_os, value_os) in std::env::vars_os() {
@@ -198,8 +198,8 @@ mod tests {
         // `std::env::vars()`/`std::env::var()` panic on a non-UTF-8
         // key or value (`library/std/src/env.rs`'s own `.unwrap()`);
         // `cof run`'s own `os.environ` decodes with `surrogateescape`
-        // instead, never raising -- issue #460's own fix-pass finding
-        // 1. `get`'s own `std::env::var_os` + `to_string_lossy` fix is
+        // instead, never raising -- issue #460's own fix pass.
+        // `get`'s own `std::env::var_os` + `to_string_lossy` fix is
         // covered by this same code path (both modes share it).
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;

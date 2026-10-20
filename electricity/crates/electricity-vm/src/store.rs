@@ -62,7 +62,7 @@ pub enum Slot {
 /// chain_slots`/`dict_slots` already pay once per `if`-branch-step/rare
 /// multi-entry-chain call, never per pass) -- plain `.iter()`/`.get()`/
 /// Deref on such a node silently drops every key *fallback* alone
-/// carries (issue #501 review finding 1: `exec::conditional`'s
+/// carries (issue #501's review: `exec::conditional`'s
 /// `chain_slots`/`dict_slots` did exactly that for a release, losing an
 /// `if`'s enclosing scope from its second branch step on inside any
 /// loop body). [`Store::saved`] never sees an overlay node at all: it
@@ -75,7 +75,7 @@ pub struct Node {
     fallback: Option<NodeRef>,
     /// A single *fallback* key this overlay must never expose, even once
     /// *fallback* -- a real, still-mutating tracked node -- comes to
-    /// carry it later in the same pass (issue #501 review finding 2).
+    /// carry it later in the same pass (issue #501's review).
     /// [`exec::loop_::with_prev_overlay`] sets this to the current
     /// pass's own `iter_<idx>` key: that key doesn't exist in the real
     /// loop node yet when the overlay is built (`execute_loop`'s own
@@ -247,7 +247,7 @@ pub fn node_with_fallback(entries: IndexMap<Value, Slot>, fallback: NodeRef) -> 
 
 /// [`node_with_fallback`], plus [`Node::hidden`] -- a single key
 /// *fallback* must never expose through this overlay, even once
-/// *fallback* itself comes to carry it (issue #501 review finding 2).
+/// *fallback* itself comes to carry it (issue #501's review).
 pub fn node_with_fallback_hiding(
     entries: IndexMap<Value, Slot>,
     fallback: NodeRef,
@@ -295,7 +295,7 @@ pub struct Store {
     pub root: NodeRef,
     /// Counts every [`Store::snapshot`] call -- test-only, so a test can
     /// prove a presence check (`{{> name}}` composition's own
-    /// `ScopeRoot::contains`, issue #487/#492 review finding 1) never
+    /// `ScopeRoot::contains`, issues #487/#492) never
     /// materializes a whole subtree just to answer a yes/no question,
     /// rather than asserting on the resulting text alone (which a
     /// correct-but-costly path would also get right).
@@ -559,7 +559,7 @@ impl Store {
     /// wins its whole key, in whichever position it first appears"
     /// [`IndexMap::insert`] already gives every other merge in this
     /// crate -- *including* a key some enclosing overlay shadows (issue
-    /// #501's second review, finding 2: a placeholder at that key's own
+    /// #501's second review: a placeholder at that key's own
     /// *natural* position, the same one Python's `{**d, k: v}`/`prime[
     /// name] = own` would have left it at, holds that position until
     /// whichever shallower hop actually owns the key overwrites it --
@@ -567,7 +567,7 @@ impl Store {
     /// value without moving it, so the final position is the first,
     /// deepest place this key was ever seen, never wherever the
     /// shallowest hop happened to insert it after skipping every deeper
-    /// one). A key some overlay *does* shadow (finding 3 on the first
+    /// one). A key some overlay *does* shadow (on the first
     /// review: without the skip half of this, a key `with_prev_
     /// overlay`'s three stacked overlays all happen to leave untouched
     /// -- the common case, since each only ever adds `prev`/the loop
@@ -584,7 +584,7 @@ impl Store {
     /// applied before paying for the value instead of after, without
     /// also reordering it the way plain omission would. [`Node::hidden`]
     /// is skipped entirely -- no placeholder, no later owner to overwrite
-    /// it -- unconditionally (finding 2 on the first review) -- see its
+    /// it -- unconditionally (per the first review) -- see its
     /// own doc comment.
     pub fn snapshot(&self, node: &NodeRef) -> Value {
         #[cfg(test)]
@@ -1082,7 +1082,6 @@ mod tests {
         }
     }
 
-    /// Issue #501's third review (P1 -- "the watermark has no test"):
     /// `peek`/`snapshot`/`Node::flat_entries` must all agree a
     /// watermarked overlay hides a key its own `fallback` gains *after*
     /// the watermark was taken.

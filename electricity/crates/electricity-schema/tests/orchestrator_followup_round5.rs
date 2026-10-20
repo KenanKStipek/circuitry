@@ -1,5 +1,5 @@
 //! Regression tests for PR #502's round-5 fix (issue #498's own
-//! follow-up, findings C1/C2/V1-V7) -- each pinned against
+//! follow-up) -- each pinned against
 //! the exact schema/instance shape `probe-schema9`/`probe-pct` record
 //! against real `cof run`. Parsed through [`electricity_json::loads`],
 //! not `serde_json::Value` (a `BTreeMap`-backed `Map`, alphabetical
@@ -15,7 +15,7 @@ fn check(schema_json: &str, instance_json: &str) -> PromptSchemaCheck {
     validate_prompt_schema(&schema, &instance)
 }
 
-/// Finding V1: a `$ref` that doesn't resolve, once an instance actually
+/// A `$ref` that doesn't resolve, once an instance actually
 /// reaches it, is Python's own `referencing.exceptions.PointerToNowhere`
 /// -- wrapped by `jsonschema`'s own `_WrappedReferencingError.__str__`
 /// into `f"{type(cause).__name__}: {cause}"` -- never an ordinary
@@ -41,7 +41,7 @@ fn a_ref_that_doesnt_resolve_once_reached_is_pointer_to_nowhere_not_a_silent_acc
     }
 }
 
-/// Finding V2: `jsonschema.validate`'s own `check_schema` step validates
+/// `jsonschema.validate`'s own `check_schema` step validates
 /// every `pattern`/`patternProperties` key against its draft's
 /// metaschema *before* anything else, regardless of where in the
 /// document it sits -- `\p{L}+` is genuinely Python-`re`-invalid (`bad
@@ -57,7 +57,7 @@ fn a_python_invalid_pattern_nested_under_properties_is_a_schema_error() {
     );
 }
 
-/// The same finding, a `(?<name>...)` named group -- Python's own `re`
+/// Likewise a `(?<name>...)` named group -- Python's own `re`
 /// only ever accepts `(?P<name>...)`.
 #[test]
 fn a_python_invalid_named_group_pattern_is_a_schema_error() {
@@ -68,7 +68,7 @@ fn a_python_invalid_named_group_pattern_is_a_schema_error() {
     );
 }
 
-/// Finding V3: a pattern that translates (Python's own `re.compile`
+/// A pattern that translates (Python's own `re.compile`
 /// accepts it) but `fancy-regex` can't build at all -- a backreference
 /// inside a lookbehind -- must never be silently treated as a match; it
 /// is an explicit, documented failure instead (probe-schema9 c4,
@@ -87,7 +87,7 @@ fn a_pattern_fancy_regex_cannot_build_is_an_explicit_failure_never_a_silent_matc
     }
 }
 
-/// Finding V4: a pattern that exhausts `fancy-regex`'s own backtracking
+/// A pattern that exhausts `fancy-regex`'s own backtracking
 /// limit -- even sized the same way `electricity-tools::regex` sizes its
 /// own (`electricity_pyre::backtrack_limit_for`) -- must never be
 /// silently treated as a match either (probe-schema9 c5: `[a-z]+$`
@@ -103,7 +103,7 @@ fn a_backtrack_limit_error_is_an_explicit_failure_never_a_silent_match() {
     }
 }
 
-/// Finding V5: `_keywords.multipleOf`'s own `Fraction` fallback --
+/// `_keywords.multipleOf`'s own `Fraction` fallback --
 /// `int(instance / dB)` overflows for a large `instance`/small `float`
 /// divisor pair, caught only to retry exactly via `Fraction`, which is
 /// exact and never overflows (probe-schema9 c6: `1e308` against
@@ -119,7 +119,7 @@ fn multiple_of_overflow_falls_back_to_the_exact_fraction_check() {
     );
 }
 
-/// Finding V6: each `patternProperties` key can translate fine on its
+/// Each `patternProperties` key can translate fine on its
 /// own while the `"|"`-joined alternation `additionalProperties`'s own
 /// filter builds from all of them together is genuinely Python-invalid
 /// (a global inline flag, `(?i)`, must lead the *whole* expression, not
@@ -140,7 +140,7 @@ fn a_joined_pattern_properties_alternation_that_fails_to_compile_is_a_schema_err
     );
 }
 
-/// Finding V7: `Validator.is_valid` (`not`/`if`/`contains`'s own
+/// `Validator.is_valid` (`not`/`if`/`contains`'s own
 /// building block) is `next(iter_errors(instance), None) is None` --
 /// lazy, pulling at most *one* error from the entire nested generator
 /// tree. `type` is `5`'s own only violation here, and it comes first:
@@ -154,7 +154,7 @@ fn not_with_a_ref_sibling_a_prior_keyword_already_failed_never_reaches_it() {
     assert_eq!(check(schema, "5"), PromptSchemaCheck::Valid);
 }
 
-/// Finding C2: a `$ref` fragment containing a `%` immediately followed
+/// A `$ref` fragment containing a `%` immediately followed
 /// by a multi-byte UTF-8 character used to byte-slice the original
 /// `&str` by an offset landing inside that character's own encoding,
 /// panicking -- never reached now that percent-decoding works on raw
@@ -169,7 +169,7 @@ fn a_ref_fragment_with_a_percent_before_a_multibyte_character_never_panics() {
     }
 }
 
-/// Finding C2, randomized: an arbitrary `$ref` fragment -- percent
+/// The same, randomized: an arbitrary `$ref` fragment -- percent
 /// signs, multi-byte UTF-8, JSON Pointer escapes, all mixed together in
 /// any order -- must never panic, whatever it resolves to (or doesn't).
 #[test]

@@ -1,6 +1,6 @@
 """ResilientConsole must survive a hung-up tty during a Live/Status region, not
-just a plain ``print`` (#357 review finding 1), but must not swallow an
-unrelated OSError from a redirected file or pipe (#357 review finding 4)."""
+just a plain ``print`` (issue #357), but must not swallow an
+unrelated OSError from a redirected file or pipe (issue #357)."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def test_status_survives_a_terminal_hangup() -> None:
     """A spinner's own flush on exit must not let a plain OSError (EIO)
     escape -- Rich's own `_check_buffer` only ever catches `BrokenPipeError`,
     which would otherwise skip `cof run`'s `--out`/`--last` writes and its
-    exit-130/143/129 mapping (#357 review finding 1)."""
+    exit-130/143/129 mapping (issue #357)."""
     tty = _HungUpTTY()
     console = ResilientConsole(file=tty, force_terminal=True)
     try:
@@ -90,8 +90,8 @@ def test_print_survives_a_terminal_hangup() -> None:
 
 def test_print_does_not_swallow_a_full_disk() -> None:
     """A write failing for a reason other than a gone terminal/reader (here,
-    `ENOSPC`) must still raise -- only `EIO`/`EPIPE` are best-effort (#357
-    review finding 4)."""
+    `ENOSPC`) must still raise -- only `EIO`/`EPIPE` are best-effort
+    (issue #357)."""
     disk = _FullDisk()
     console = ResilientConsole(file=disk, force_terminal=False)
     try:

@@ -1,7 +1,7 @@
 //! Lane H (#461) follow-up to `signals.rs` (issue #431's own acceptance
 //! criteria): SIGINT mid-`loop`, chain and tree flow -- the two
 //! "Cancellation tests" sub-section cases #461's own test plan called
-//! for and the writer's PR left unbuilt (#466 review finding 9). A
+//! for and the writer's PR left unbuilt (#466). A
 //! fresh file, not an edit to `signals.rs` itself (lane B/D's own file,
 //! `docs/spec/vm-lanes.md`): same helpers, duplicated rather than
 //! shared across `tests/` binaries, same convention `signals.rs`'s own

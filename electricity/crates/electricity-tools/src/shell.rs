@@ -86,7 +86,7 @@ impl ToolPlugin for ShellPlugin {
             if let Some(pin) = &self.pinned_allowed_commands {
                 if effect_allowed_set.contains(&command) {
                     // `sorted(pin)` -- a Python *list* sort, which keeps
-                    // duplicates (review finding 7 on PR #467); the
+                    // duplicates (PR #467); the
                     // pin itself is a list, never deduplicated into a
                     // set the way the effective allowlist below is.
                     let mut pin_sorted = pin.clone();
@@ -122,7 +122,7 @@ impl ToolPlugin for ShellPlugin {
             Some(Value::List(items)) => items,
             // `params.get("args") or []` -- any *falsy* value (`None`,
             // `""`, `false`, `0`, `{}`...), not just a missing/`None`
-            // key, runs with no arguments (review finding 5 on PR #467);
+            // key, runs with no arguments (PR #467);
             // only a *truthy* non-list value is an error.
             None => &[],
             Some(v) if !crate::subprocess_tool::is_truthy(v) => &[],
@@ -380,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_falsy_non_list_args_value_runs_with_no_arguments() {
-        // `params.get("args") or []` (review finding 5 on PR #467): an
+        // `params.get("args") or []` (PR #467): an
         // empty string, `false`, `0` and `{}` are all falsy, so each
         // runs with no arguments, same as an absent/`None` `args`.
         let token = CancellationToken::new();
@@ -530,7 +530,7 @@ mod tests {
         let result = plugin.check();
         assert!(result.ok);
         assert!(result.missing.is_empty());
-        // Review finding 8 on PR #467: the acceptance criterion is
+        // PR #467: the acceptance criterion is
         // `check()` matching `ShellPlugin.check` field for field, not
         // just `ok`/`missing` -- the exact message text too.
         assert_eq!(

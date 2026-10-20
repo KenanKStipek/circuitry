@@ -146,7 +146,7 @@ def test_real_config_discovery_marker_still_isolates_the_user_env_path() -> None
     with that marker invoke the CLI, whose root callback calls
     ``load_user_env()`` on every run; before this, that read the developer's
     real ``~/.config/circuitry/.env`` into ``os.environ`` for the rest of the
-    pytest process, untracked by ``monkeypatch`` (#349 review finding 1)."""
+    pytest process, untracked by ``monkeypatch`` (issue #349)."""
     from circuitry.cli import config as config_module
     from circuitry.cli import doctor as doctor_module
 

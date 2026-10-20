@@ -63,7 +63,7 @@ async fn a_missing_config_file_writes_no_state_at_all() {
 
 #[tokio::test]
 async fn a_structural_check_failure_still_seeds_input_from_e_values() {
-    // PR #441 review finding 3: `-e` values reach `state["input"]`
+    // `-e` values reach `state["input"]`
     // at the seed step (run-wiring step 4), *before* the document is
     // even loaded -- so a structural failure (step 14, long after)
     // still carries them, exactly as `cof run`'s own `_load_state`
@@ -100,7 +100,7 @@ async fn a_structural_check_failure_still_seeds_input_from_e_values() {
 
 #[tokio::test]
 async fn a_missing_required_input_keeps_an_earlier_input_keys_own_default() {
-    // PR #441 review finding 3's second half: a failure *inside*
+    // A failure *inside*
     // `check_interface_inputs` itself still mirrors Python's own
     // in-place mutation of `state["input"]` as far as it got.
     let dir = temp_dir("partial-interface-failure");
@@ -386,8 +386,8 @@ async fn a_config_default_model_is_recorded_as_its_own_source() {
     // strictly *before* the structural check this document fails at
     // (step 14) -- so this structural failure's own state already
     // carries the config file's `default_model`, not just proves the
-    // file parsed (PR #441 review finding 9: this test's own former
-    // comment, claiming the opposite order, was stale).
+    // file parsed -- this test's own former
+    // comment, claiming the opposite order, was stale.
     let state = result
         .state
         .expect("a pre-step-14 failure still writes state");
@@ -439,7 +439,7 @@ async fn an_unknown_tool_provider_is_refused_before_a_structural_error_elsewhere
     assert!(result.error.unwrap().contains("git"));
 }
 
-/// PR #441 review finding 4: a document that turns a (valid) `runtime.
+/// A document that turns a (valid) `runtime.
 /// persistence` block on is refused with the preview marker right
 /// after that block's own validation, no state written -- a malformed
 /// one still fails the ordinary way (`validate_persistence`'s own job,
@@ -463,7 +463,7 @@ async fn a_configured_persistence_backend_is_refused_with_no_state_written() {
     assert!(error.contains("runtime.persistence"));
 }
 
-/// PR #441 review finding 2: `enabled: 1` (or any other Python-truthy
+/// `enabled: 1` (or any other Python-truthy
 /// non-`true` value) must refuse exactly like `enabled: true` -- a
 /// literal-`true`-only check would let this run and silently ignore
 /// the persistence block, where `cof run` would write snapshots.
@@ -571,12 +571,12 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
     assert!(lines.last().unwrap().contains("\"run_end\""));
 }
 
-/// PR #441 review finding 17's own "missing test": a token already
+/// A token already
 /// cancelled *before* `execute_root` ever starts -- possible today
 /// against the real interpreter (lane B2 has landed), unlike when this
-/// finding was first written against the stub. The interrupt text,
+/// test was first written against the stub. The interrupt text,
 /// `RunResult::signal`, and `--events`' own `run_end.signal` all come
-/// from the same place (finding 13: keyed off `VmError::Cancelled`
+/// from the same place (keyed off `VmError::Cancelled`
 /// specifically).
 #[tokio::test]
 async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
@@ -620,7 +620,7 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
     assert!(run_end.contains("\"run_end\""));
     assert!(run_end.contains("\"SIGINT\""));
 
-    // PR #441 review finding 9: a cancelled run's own totals are
+    // A cancelled run's own totals are
     // untested -- `effects_run` is 1 (not 0, even though the token was
     // already cancelled before the document's one declared tool effect
     // ever dispatched): `RunObserver::effect_complete` fires once for
@@ -665,7 +665,7 @@ async fn signal_is_none_for_an_uncancelled_failure() {
     assert_eq!(result.signal, None);
 }
 
-/// PR #441 review finding 8: a signal already pending when a pre-
+/// A signal already pending when a pre-
 /// execution check fails (here, the same structural check [`signal_
 /// is_none_for_an_uncancelled_failure`] uses) is reported as an
 /// interrupted run -- the check's own real error text and exit 1, not
@@ -699,7 +699,7 @@ fn signal_exit_codes_match_the_posix_convention() {
     assert_eq!(Signal::Sighup.exit_code(), 129);
 }
 
-/// PR #441 review finding 10: without `--live-state`, `run_orchestration`
+/// Without `--live-state`, `run_orchestration`
 /// never needs a timer driver at all -- built on a bare `rt` Tokio
 /// runtime (no `enable_time`/`enable_all`), the select-against-a-sleep-
 /// tick loop this test's own document would otherwise panic inside
@@ -863,7 +863,7 @@ async fn a_profile_swapping_a_tools_provider_to_an_unsupported_one_is_refused_by
     assert!(error.contains("mcp"));
 }
 
-/// Review finding 1 on PR #526's own review: a *disabled* tool naming
+/// A *disabled* tool naming
 /// a plugin Circuitry knows but this build can't build is still
 /// refused with the preview marker, no state written -- the refusal
 /// walker skips a disabled subtree entirely (issue #518 Scope §4), so

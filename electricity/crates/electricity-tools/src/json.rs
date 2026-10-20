@@ -528,8 +528,8 @@ mod tests {
     async fn stringify_mode_stringifies_a_non_string_key_the_way_json_dumps_does() {
         // A `yes:`/`1:` YAML key survives as `Value::Bool`/`Value::Int`
         // all the way to the `json` tool (the compiler keeps `ParamNode
-        // ::Map` keyed by `Value`, not `String` -- issue #431's finding
-        // 4) -- only `stringify`'s own JSON encoding finally turns it
+        // ::Map` keyed by `Value`, not `String` -- issue #431) --
+        // only `stringify`'s own JSON encoding finally turns it
         // into text, the same `"true"`/`"1"` text `json.dumps` writes
         // for a non-`str` key, never `"True"`/`Value::py_str`'s own
         // Python-repr spelling.

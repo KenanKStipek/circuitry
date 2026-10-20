@@ -62,7 +62,7 @@ _EDGE_CASES = [
     -5e-324,
     1.7976931348623157e308,  # near f64::MAX
     -1.7976931348623157e308,
-    # Exact 6-digit ties (review finding 7 on PR #454): a tie at the 6th
+    # Exact 6-digit ties (PR #454's review): a tie at the 6th
     # decimal digit only happens at an odd multiple of 1/128 (the only
     # binary fractions whose decimal expansion ends in exactly
     # "...xxxxx5" at the 7th digit) -- random floats essentially never

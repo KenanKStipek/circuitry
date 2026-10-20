@@ -4,14 +4,14 @@
 //! Python-`re`-to-`fancy-regex` translation turns into a lookaround
 //! (non-MULTILINE `$`, `\b`/`\B`, any lookbehind) can exhaust the
 //! crate's own default on an ordinary multi-hundred-KB input even
-//! though the real per-character cost is tiny (PR #480 review R8:
+//! though the real per-character cost is tiny (PR #480:
 //! `\bzebra\b` findall with no match, 20,000 lines of `item N value
 //! M`, `\s+$` on 1.2 MB -- all fail against `fancy-regex`'s default
 //! even though `cof` succeeds instantly). Shared by
 //! `electricity-tools::regex` (moved out from under it, PR #502's
 //! round-5 fix) and `electricity-schema::engine` (`pattern`/
-//! `patternProperties` -- issue #498's own follow-up,
-//! finding V4), the two places either crate needs a backtrack-limit
+//! `patternProperties` -- issue #498's own follow-up),
+//! the two places either crate needs a backtrack-limit
 //! sized to the text actually being matched rather than the crate's
 //! own flat default.
 //!

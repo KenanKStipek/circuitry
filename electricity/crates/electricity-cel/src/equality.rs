@@ -1,7 +1,6 @@
 //! Strict-type equality and containment: the one place celpy's own
 //! `==`/`!=`/`in` diverge from `cel`'s own, more permissive rules once a
-//! `list`/`map` or `in` is involved (DESIGN.md §7.2, issue #379 review
-//! finding 5).
+//! `list`/`map` or `in` is involved (DESIGN.md §7.2, issue #379).
 //!
 //! A top-level `==`/`!=` between two scalars already matches the CEL
 //! spec in plain `cel` (cross-numeric equal, cross-type otherwise
@@ -49,8 +48,8 @@
 //! `in` over a bare `string`/`bytes` operand (not a `list`/`map`) is
 //! celpy's own `for c in container` (`evaluation.py`), which iterates a
 //! `str` one Unicode character at a time and a `bytes` one `int` at a
-//! time — `cel`'s own `@in` has no indexer for either at all (fourth
-//! review finding 1). [`strict_in_fn`]'s `elements` covers both the
+//! time — `cel`'s own `@in` has no indexer for either at all.
+//! [`strict_in_fn`]'s `elements` covers both the
 //! same way the `list`/`map` arms already did.
 //!
 //! A nested `list`/`map` comparison — reachable only through `in`,
@@ -65,7 +64,7 @@
 //! first `Err` the `?` operator reached, including through a
 //! `HashMap`'s own unspecified iteration order for `Map` — a `false`
 //! result could flip to an error from one run to the next depending on
-//! which key happened to be visited first (fourth review finding 6).
+//! which key happened to be visited first.
 //! They now scan every element, deciding `false` immediately if any
 //! comparison is `Ok(false)` (nothing later can undo that) and only
 //! raising if every comparison that completed was `Ok(true)` or `Err`
@@ -160,7 +159,7 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
         // the *left* of an `int`/`uint` resolves through the plain `int`
         // it subclasses rather than reaching the other side's
         // `@type_matched` — `true == 1`/`true == 1u` is `true`, not a
-        // raise (finding 5). The reverse order (`int`/`uint` first) has
+        // raise. The reverse order (`int`/`uint` first) has
         // no arm here on purpose: it falls to the catch-all below and
         // raises, matching celpy exactly.
         (Value::Bool(x), Value::Int(y)) => Ok(i64::from(*x) == *y),
@@ -169,8 +168,8 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
             if x.len() != y.len() {
                 return Ok(false);
             }
-            // Scans every pair before raising (module docs, finding
-            // 6): a `false` pair anywhere wins over an `Err` anywhere
+            // Scans every pair before raising: a `false` pair
+            // anywhere wins over an `Err` anywhere
             // else, matching celpy's own error-absorbing `&&` fold.
             let mut saw_error = false;
             for (xi, yi) in x.iter().zip(y.iter()) {
@@ -186,8 +185,8 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
             if x.map.len() != y.map.len() {
                 return Ok(false);
             }
-            // Key sets compared first, independently of any value
-            // (module docs, finding 6): a differing key set decides
+            // Key sets compared first, independently of any value:
+            // a differing key set decides
             // `false` on its own, the same way celpy's own dict `==`
             // never even reaches a value comparison for one.
             if x.map.keys().any(|key| !y.map.contains_key(key)) {
@@ -211,8 +210,8 @@ fn strict_eq(a: &Value, b: &Value) -> Result<bool, ()> {
 
 /// Whether celpy actually raises comparing *a* and *b* once no exact-type
 /// (or `bool`-vs-`int`/`uint`) arm above matched — the distinction
-/// [`strict_eq`]'s catch-all needs and its own flat `Err` used to erase
-/// (finding 1): a plain Python `==` between two celpy values of
+/// [`strict_eq`]'s catch-all needs and its own flat `Err` used to erase:
+/// a plain Python `==` between two celpy values of
 /// unrelated, *both* non-numeric, non-container types resolves through
 /// the two-sided `NotImplemented` fallback to `false` with no exception
 /// (a `string`/`bytes`/`timestamp`/`duration`/`bool`/`null` against a
@@ -235,7 +234,7 @@ fn raises_on_mismatch(a: &Value, b: &Value) -> bool {
 /// [`strict_eq`] can't decide (`core/cel_eval.py`'s `_spec_eq`): equal
 /// only if both operands are themselves numeric and their values match
 /// — never true for two containers, which is what makes `[1, 2] == [1.0,
-/// 2.0]` `false` (finding 5) rather than `cel`'s own, permissive
+/// 2.0]` `false` rather than `cel`'s own, permissive
 /// cross-numeric list equality.
 fn spec_eq(a: &Value, b: &Value) -> bool {
     strict_eq(a, b)
@@ -328,10 +327,10 @@ fn strict_ne_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
 /// is found; otherwise, the type error the scan hit along the way if it
 /// hit one, else `false`. Unlike `==`/`!=`, there's no top-level fallback
 /// here — `1 in [1.0]` and `state.x in ['a', 'b']` with `x` an int both
-/// raise in celpy (finding 5), not just decide `false`. A bare `string`
+/// raise in celpy, not just decide `false`. A bare `string`
 /// or `bytes` operand iterates its characters or bytes the same way a
-/// `for c in container` loop over a celpy `str`/`bytes` does (module
-/// docs, fourth review finding 1) — `'lo' in 'hello'` is `false` (no
+/// `for c in container` loop over a celpy `str`/`bytes` does —
+/// `'lo' in 'hello'` is `false` (no
 /// single character equals the two-character item), not an error.
 fn strict_in_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
     if ftx.args.len() != 2 {
@@ -444,7 +443,7 @@ mod tests {
 
     #[test]
     fn list_equality_does_not_cross_numeric_types() {
-        // finding 5: celpy's own `ListType.__eq__` raises comparing an
+        // celpy's own `ListType.__eq__` raises comparing an
         // `IntType` element to a `DoubleType` one, which celpy's
         // top-level override then turns into `false` (neither list is
         // itself numeric) — unlike `cel`'s own, permissive list equality.
@@ -494,7 +493,7 @@ mod tests {
 
     #[test]
     fn in_decides_false_on_a_benign_mismatch_instead_of_raising() {
-        // finding 1: `'b' in ['a', None]` is `false` in celpy (a `string`
+        // `'b' in ['a', None]` is `false` in celpy (a `string`
         // against `null` resolves via the two-sided `NotImplemented`
         // fallback, no exception) — a prior fix made `strict_in_fn` raise
         // on *every* type mismatch, regressing this.
@@ -508,7 +507,7 @@ mod tests {
 
     #[test]
     fn bool_on_the_left_of_int_or_uint_compares_by_value() {
-        // finding 5: celpy's `BoolType` has no `__eq__` override, so
+        // celpy's `BoolType` has no `__eq__` override, so
         // `true == 1`/`true == 1u` resolve through the plain `int` it
         // subclasses rather than raising — unlike the reverse order.
         assert_eq!(eval("true == 1"), Ok(Value::Bool(true)));
@@ -523,7 +522,7 @@ mod tests {
 
     #[test]
     fn in_over_a_string_iterates_characters() {
-        // fourth review finding 1: `cel`'s own `@in` has no indexer for
+        // `cel`'s own `@in` has no indexer for
         // a bare string; celpy's `operator_in` loops over its
         // characters.
         assert_eq!(eval("'h' in 'hello'"), Ok(Value::Bool(true)));
@@ -552,7 +551,7 @@ mod tests {
 
     #[test]
     fn nested_list_equality_does_not_depend_on_which_pair_raises_first() {
-        // fourth review finding 6: the second pair (`2 == 3`) decides
+        // The second pair (`2 == 3`) decides
         // `false` on its own; a version that stopped at the first
         // raising pair (`1 == 1.0`) would raise instead.
         assert_eq!(eval("[1, 2] in [[1.0, 3]]"), Ok(Value::Bool(false)));
@@ -560,7 +559,7 @@ mod tests {
 
     #[test]
     fn nested_map_equality_checks_key_sets_before_any_value() {
-        // fourth review finding 6: a mismatched key set decides `false`
+        // A mismatched key set decides `false`
         // without comparing any value, so this can never raise
         // regardless of a `HashMap`'s own iteration order.
         for _ in 0..20 {

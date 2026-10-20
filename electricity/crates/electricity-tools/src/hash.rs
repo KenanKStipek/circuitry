@@ -23,8 +23,8 @@ const SUPPORTED_ALGORITHMS_SORTED: &[&str] = &[
 /// One hasher per algorithm, each updated in 64KiB chunks -- `hashlib`'s
 /// own `hasher.update(chunk)` loop (`plugins/hash.py`'s own doc
 /// comment: "a file path read in 64KB chunks"), ported so `from_path`
-/// never has to hold a whole file in memory (issue #460's own fix-pass
-/// finding 2: `std::fs::read` on a multi-GB file cost electricity a
+/// never has to hold a whole file in memory (issue #460's own fix
+/// pass: `std::fs::read` on a multi-GB file cost electricity a
 /// multi-GB allocation it never needed).
 enum Hasher {
     Md5(md5::Md5),
@@ -369,8 +369,8 @@ mod tests {
     #[tokio::test]
     async fn from_path_hashes_a_file_larger_than_one_chunk_without_loading_it_whole() {
         // `hashlib`'s own 64KiB-chunk streaming loop (`plugins/
-        // hash.py`'s own doc comment) -- issue #460's own fix-pass
-        // finding 2: `std::fs::read` would have held the whole file in
+        // hash.py`'s own doc comment) -- issue #460's own fix pass:
+        // `std::fs::read` would have held the whole file in
         // memory at once; three chunks' worth of repeated bytes
         // exercises the loop boundary without needing a multi-GB fixture.
         let dir = std::env::temp_dir().join(format!(

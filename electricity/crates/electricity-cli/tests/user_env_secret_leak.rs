@@ -1,4 +1,4 @@
-//! #471 review finding 2: a malformed private `.env` must never put a
+//! Issue #471: a malformed private `.env` must never put a
 //! value on stderr or stdout -- `user_env.rs`'s own unit tests already
 //! check the in-process result (`UserEnvResult.skipped`, the real
 //! environment left untouched); these run the actual binary, the only

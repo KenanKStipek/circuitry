@@ -967,7 +967,7 @@ async fn attempt_once<R: ParamsCtx>(
             // with no graft at all. Grafting unconditionally here, on
             // every attempt, would let a key only a now-discarded
             // attempt's own child ever wrote survive a later successful
-            // retry (review finding 8 on PR #472) -- so the record is
+            // retry (PR #472) -- so the record is
             // only *collected* here (a live `NodeRef`, not a `Value`
             // snapshot, to keep `graft_child_record`'s own node-identity
             // preservation) and [`execute_use`] grafts it, only once it
@@ -1101,8 +1101,8 @@ async fn attempt_once<R: ParamsCtx>(
             // use.py`'s `except (ValueError, RecursionError)` makes,
             // via `isinstance` -- so every `ValueError` subclass
             // counts, not just the bare class ([`PyExc::
-            // is_value_error_class`]'s own doc comment; review
-            // finding 1 on PR #514 named the real adapters'
+            // is_value_error_class`]'s own doc comment; PR #514
+            // named the real adapters'
             // `UnicodeDecodeError` for a non-UTF-8 response body as
             // the subclass this used to miss): not retried for that
             // set plus `RecursionError`, retried for everything else
@@ -1159,7 +1159,7 @@ async fn attempt_once<R: ParamsCtx>(
 
 /// `core/use.py::UseRuntime.execute` -- see this module's own doc
 /// comment for the overall design. No longer a `live_ctx` snapshot
-/// taken eagerly here (issue #463, PR #482 review finding 2): a `use`
+/// taken eagerly here (issue #463, PR #482's review): a `use`
 /// effect's own input render/`expect:` call sites resolve
 /// `live_scope::LiveRoot` lazily, the same way `exec::tool` already
 /// does, so a `use` effect inside a loop is O(N) total, not O(N^2).
@@ -1185,8 +1185,8 @@ pub(crate) async fn execute_use(
 /// [`execute_use`]'s own real body, generic over *ctx*'s own
 /// [`ParamsCtx`] rather than requiring an already-resolved [`Value`]
 /// (`R = Value` is still exactly that, so every existing caller --
-/// `tests/use_corpus.rs`'s golden-corpus replay, review finding 5 on
-/// PR #472, which cannot name a [`CtxChain`]/[`CtxSource`] of its own:
+/// `tests/use_corpus.rs`'s golden-corpus replay, from PR #472's review,
+/// which cannot name a [`CtxChain`]/[`CtxSource`] of its own:
 /// both are `pub(crate)` to `exec/mod.rs` -- keeps compiling and
 /// behaving unchanged). `core/use.py`'s own `UseRuntime.execute(store,
 /// ctx)` takes *ctx* the exact same reference way; this function is
@@ -1363,7 +1363,7 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         let is_last_attempt = attempt_index + 1 >= max_attempts;
         // [`PyExc::is_value_error_class`] covers every `ValueError`
         // subclass Python's own `isinstance` check would (issue
-        // #513; review finding 1 on PR #514), not just the bare
+        // #513; PR #514), not just the bare
         // class -- `RecursionError` itself is a `RuntimeError`
         // subclass, checked separately.
         let retryable = !(py_class.is_value_error_class() || py_class == PyExc::RecursionError);
@@ -1447,7 +1447,7 @@ struct ChildObserver<'a> {
     root_path: EffectPath,
     child_store: &'a Store,
     /// Throttles [`RunObserver::write`]'s own snapshot-and-graft pair
-    /// (review finding 7 on PR #472): a long loop inside the child
+    /// (PR #472): a long loop inside the child
     /// calls `write()` once per leaf write, and a full [`Store::saved`]
     /// snapshot is `O(size of the child tree so far)` -- taking one on
     /// *every* call would make a child with an `N`-pass loop pay
@@ -1636,7 +1636,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
-    /// Review finding 8 on PR #472 (ruling R5): a
+    /// PR #472 (ruling R5): a
     /// retryable child-run failure must *collect* its own
     /// `record_children` record, never apply it -- only [`execute_use`]
     /// applies it, and only once it knows this attempt is the last one.
@@ -1920,7 +1920,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
 
     /// Captures the *timeout_seconds* a `use` effect's own model
     /// `expect:` dispatches with, replying `"yes"` so the attempt
-    /// succeeds -- issue #513 review finding 4: a `use` effect has no
+    /// succeeds -- issue #513's review: a `use` effect has no
     /// timeout of its own, so this call site must forward
     /// `run_ctx.adapter_timeout_seconds` verbatim, never a tool-shaped
     /// resolved value (that's `tool.rs`'s own call site instead).
@@ -1962,7 +1962,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         }
     }
 
-    /// Issue #513 review finding 4: the outer `execute_use_with_ctx`
+    /// Issue #513's review: the outer `execute_use_with_ctx`
     /// retry check, not just `attempt_once`'s own `Raised`
     /// classification, must not retry a `TemplateError` -- a render
     /// failure in the expect template itself (subscripting an `int`
@@ -2219,7 +2219,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         );
     }
 
-    /// Review finding 1 on PR #514: `UnicodeDecodeError` is a
+    /// PR #514: `UnicodeDecodeError` is a
     /// `ValueError` subclass in Python
     /// ([`PyExc::is_value_error_class`]'s own doc comment) -- the
     /// class electricity's real adapters raise for a response body
@@ -2340,7 +2340,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     /// A minimal, leaked `RunContext` carrying *declared_prompts*/
     /// *effect_names* -- the two inputs this module's own composition
     /// tests (`{{> name}}` through `use.inline`/`use.inputs`, issue
-    /// #492 review finding 5) actually vary; every other field is the
+    /// #492's review) actually vary; every other field is the
     /// same inert M0-H shape `attempt_once`'s own existing test above
     /// builds by hand.
     fn run_ctx_for_composition<'a>(

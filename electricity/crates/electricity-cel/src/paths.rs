@@ -296,9 +296,9 @@ pub fn rewrite(node: &mut IdedExpr) {
 /// instead — a previous version of this did, to decide both of the above
 /// in one check — was itself the P0 this ported from Python to fix
 /// (overwriting a placed non-dict leaf with `{}` the moment a longer,
-/// `has()`-guarded path tried to extend past it, issue #379 review
-/// finding 1) and *re-broke* the same way for a `NaN` leaf (review
-/// finding 7, `has(state.a.n.x) || state.a.n > 0.0`): `NaN != NaN`, so
+/// `has()`-guarded path tried to extend past it, issue #379)
+/// and *re-broke* the same way for a `NaN` leaf
+/// (`has(state.a.n.x) || state.a.n > 0.0`): `NaN != NaN`, so
 /// the equality check wrongly decided a *different* value was now being
 /// placed and overwrote the leaf with `{}` to keep descending.
 pub fn project(state: &Value, paths: &[StatePath]) -> Value {
@@ -446,7 +446,7 @@ mod tests {
         // pure dotted chain (it contains an index), so neither `state.m`
         // nor `state.k`, read along the way to decide it, is the chain
         // `has()` itself tests — but both must still inherit guardedness
-        // from the enclosing `has()` (finding 6), not be treated as
+        // from the enclosing `has()`, not be treated as
         // ordinary unguarded reads.
         let c = collect_state_paths(&compile("has(state.m[state.k].x)"));
         let paths: Vec<(&str, bool)> = c
@@ -499,7 +499,7 @@ mod tests {
         // version of this rewrite patched `state` with empty dicts to make
         // `cel`'s own `has()` gracious, and that patch leaked — the second
         // `has()` saw the first's fabricated `{}` and returned `true`
-        // where cel-python returns `false` (finding 1).
+        // where cel-python returns `false`.
         let state = Value::Dict(Dict::new());
         assert_eq!(
             eval("!has(state.a.b) || has(state.a.b.c)", &state),
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn has_on_a_list_index_is_false_not_an_error() {
-        // finding 3: `has()`'s argument contains an index, not just a
+        // `has()`'s argument contains an index, not just a
         // dotted chain — `cel`'s own, native `has()` only evaluates
         // gracefully for the *last* segment, so it raises here; the
         // safe-navigation rewrite handles every step.
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn has_over_a_filter_result_is_false_not_an_error() {
-        // re-review finding 2: `has()`'s argument contains a macro call
+        // `has()`'s argument contains a macro call
         // (`filter`), not just a dotted/indexed chain over an identifier
         // — a previous version of `to_optional` left this to `cel`'s own,
         // native `has()`, which raises indexing into the empty result.
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn has_over_a_negative_list_index_matches_plain_indexing() {
-        // re-review finding 3: `has()`'s own safe-navigation chain needs
+        // `has()`'s own safe-navigation chain needs
         // the same Python list-indexing semantics as a plain `[...]`.
         let state = dict_value(vec![(
             "l",
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn has_in_an_index_key_gets_its_own_safe_navigation_too() {
-        // re-review finding 6: a prior version left `has()`'s own index
+        // A prior version left `has()`'s own index
         // *key* expression to `cel`'s native evaluation, unrewritten --
         // `has(state.sub.deep)` inside the key is a two-level-missing
         // chain that `cel`'s own, native `has()` raises on (it's only
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn has_inside_all_respects_the_loop_variable_not_the_outer_root() {
-        // finding 4: a loop variable named like one of the usual roots
+        // A loop variable named like one of the usual roots
         // (`value`/`state`/`meta`) must shadow it inside the macro — the
         // old rewrite matched `has()`'s root by name alone and always
         // read the *outer* binding.
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn project_does_not_corrupt_a_scalar_a_longer_guarded_path_extends() {
-        // finding 1: `state.p.v == 'done' || has(state.p.v.price)` on
+        // `state.p.v == 'done' || has(state.p.v.price)` on
         // `{p: {v: 'done'}}`. `state.p.v` (unguarded) and
         // `state.p.v.price` (has()-guarded) are both collected; a
         // previous version of `project` inserted `{}` over the already-
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn project_does_not_corrupt_a_nan_leaf_a_longer_path_extends() {
-        // finding 7: `has(state.a.n.x) || state.a.n > 0.0` on
+        // `has(state.a.n.x) || state.a.n > 0.0` on
         // `{a: {n: NaN}}`. `state.a.n` (unguarded) and `state.a.n.x`
         // (has()-guarded) are both collected; a value-equality check
         // between the freshly read `NaN` and the already-placed `NaN`

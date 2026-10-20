@@ -559,7 +559,7 @@ class LibraryRegistry:
     def cached_tree_root(self, path: Path) -> Path | None:
         """The one commit-pinned subtree *path* was actually fetched into —
         narrower than :meth:`is_cache_path`'s "inside some cache directory
-        somewhere" (#396 second-review finding 6).
+        somewhere" (issue #396's second review).
 
         A `github` source's own ``entries_dir`` (``cache_dir/<sha>``) is
         exactly the confinement root ``core.library_ref``/``core.use.
@@ -666,7 +666,7 @@ def confinement_root_for_document(
 ) -> Path:
     """The `{file: ...}` confinement root for *document_path*, shared by
     every surface that compiles it: ``cli.runtime_shim.run()``/``validate()``
-    and ``cli.trust._trust_document`` (#396 second-review finding 6).
+    and ``cli.trust._trust_document`` (issue #396's second review).
 
     A document named by a path inside some `github` source's own cache
     (*is_cache_path*), or resolved from one by bare library name

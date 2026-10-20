@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Golden `--out`/stdout for every one of `electricity::run_orchestration`'s
 own pre-execution failure paths (issue #431's run-wiring steps 5-14; PR
-#441 review finding 9), built on `_run_corpus.py` the same way
+#441), built on `_run_corpus.py` the same way
 `generate_vm_run_corpus.py` is.
 
 Each case is a real `cof run --out --events --live-state --config ...`
@@ -105,7 +105,7 @@ effects:
     params: {mode: stringify, input: {}}
 """
 
-# PR #441 review finding 1b: a pre-execution failure at step 6/7/9 (here,
+# A pre-execution failure at step 6/7/9 (here,
 # step 7's own concurrency-config check) must never run step 10's
 # `check_interface_inputs` at all -- `state["input"]` must stay exactly
 # what step 4 seeded, not the defaulted/coerced value step 10 would have
@@ -121,7 +121,7 @@ runtime:
 effects: []
 """
 
-# PR #441 review finding 1c: a declared `type: string` input's own raw
+# A declared `type: string` input's own raw
 # `-e` text must be restored into `state["input"]` even when the run
 # fails *before* step 10 ever runs -- here, at the allowlist check
 # (`enabled_tools: []` refuses the one `json` tool effect below).
@@ -154,7 +154,7 @@ def build_case(
 
     result = run_cof(case_dir, config=config, inputs=inputs, home_dir=home_dir)
     normalized = normalize_result(result, str(case_dir.resolve()))
-    # PR #441 review finding 9: the case's own document (and config,
+    # The case's own document (and config,
     # when it ran with one) lives in the golden file itself, not
     # copy-pasted into `run_failures.rs` too -- the one place either
     # could ever drift from what `cof` actually ran.

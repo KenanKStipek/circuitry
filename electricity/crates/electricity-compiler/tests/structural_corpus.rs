@@ -5,7 +5,7 @@
 //! `interface.inputs`-type-error logic `electricity_schema::
 //! orchestration_errors` alone has no knowledge of, so
 //! `electricity-schema`'s own `golden_corpus.rs` skips these cases
-//! rather than trying to replay them (issue #528, review finding 3:
+//! rather than trying to replay them (issue #528's review:
 //! the generator's own acceptance criterion names `structural_errors`,
 //! not just `schema_errors`, for exactly this interleaving).
 //!

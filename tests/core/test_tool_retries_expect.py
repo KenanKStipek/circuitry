@@ -453,7 +453,7 @@ def test_tool_exhausting_retries_still_records_created_at_and_retries_used(
 def test_effect_complete_observer_sees_retries_used_on_exhausted_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#421 P2-6: retries_used is already on the node by the time
+    """#421: retries_used is already on the node by the time
     effect_complete fires, even on the exhausted-retries failure path —
     pins the ordering `fire_effect_complete` relies on."""
     plugin = MagicMock()
@@ -538,7 +538,7 @@ def test_tool_retries_used_is_reset_on_a_reused_node(
 ) -> None:
     """A node that needed a retry on an earlier execution and succeeds on
     the first attempt of a later one must not keep showing the earlier
-    pass's retries_used (#273 review, finding 10, the same stale-meta
+    pass's retries_used (issue #273, the same stale-meta
     problem #260 fixed elsewhere)."""
     ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
     plugin = MagicMock()
@@ -560,7 +560,7 @@ def test_http_family_connection_failure_is_retried(monkeypatch: pytest.MonkeyPat
     URLError`` (never a status code) — classify_exception reads the
     __cause__ chain the same way an adapter dispatch failure is classified,
     so this is retried like curl's own refused-connection exit code is
-    (#273 review, finding 3)."""
+    (issue #273's review)."""
     conn_err = RuntimeError("HTTP request to http://x failed: Connection refused")
     conn_err.__cause__ = urllib.error.URLError("Connection refused")
     ok_result = ToolResult(value={"ok": True}, raw={"status": 200}, stdout="", stderr="", exit_code=None)
@@ -748,7 +748,7 @@ def test_expect_model_mode_without_adapter_raises_configuration_error(
         ToolRuntime(defn).execute(store=store, ctx={})
 
     # The exception is caught inside the attempt loop, not left to escape
-    # past the start/complete pair unbalanced (#273 review, finding 4) —
+    # past the start/complete pair unbalanced (issue #273) —
     # fire_effect_complete still ran before the re-raise.
     assert store.state["x"]["meta"]["completed_at"] is not None
     assert "requires the run's adapter/model" in store.state["x"]["meta"]["error"]
@@ -759,7 +759,7 @@ def test_expect_model_mode_missing_adapter_error_is_retried(
 ) -> None:
     """With retries configured, the same configuration error still counts
     as a failed attempt (and is retried) rather than crashing the run
-    outright (#273 review, finding 4) — it keeps failing every attempt
+    outright (issue #273) — it keeps failing every attempt
     since no adapter ever becomes available, so the run still ends in the
     same error."""
     ok_result = ToolResult(value="x", raw={}, stdout="", stderr="", exit_code=0)

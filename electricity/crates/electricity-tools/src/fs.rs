@@ -631,7 +631,7 @@ pub(crate) fn py_is_file(path: &Path, display: &str) -> Result<bool, ToolError> 
 /// `Path.mkdir(parents=True, exist_ok=True)` (CPython's own
 /// `pathlib._local.Path.mkdir`), ported exactly so a failure names the
 /// *directory that actually failed* rather than always the original
-/// write's own leaf path (issue #460's own fix-pass finding 7): try
+/// write's own leaf path (issue #460's own fix pass): try
 /// creating *path* itself first; on `ENOENT` (a missing parent),
 /// recurse into the parent and retry; on any other `OSError`, swallow
 /// it only if *path* already is a directory (the race-safe `exist_ok`
@@ -723,7 +723,7 @@ impl ToolPlugin for FsPlugin {
                 // itself would reject, or one we do support, instead
                 // waits until after `mkdir`/`open` below, so a failure
                 // leaves the same filesystem state `cof run` does
-                // (issue #460's own fix-pass finding 6 -- CPython's
+                // (issue #460's own fix pass -- CPython's
                 // `open(path, "w", encoding=...)` already created or
                 // truncated the file before either exception could
                 // fire).
@@ -1227,7 +1227,7 @@ mod tests {
         // CPython's own encoder invokes the error handler once per
         // *run* of consecutive unencodable characters, not once per
         // character (`"\u65e5\u672c".encode("ascii")`'s own text) --
-        // issue #460's own fix-pass finding 3.
+        // issue #460's own fix pass.
         let err = encode_text(Codec::Ascii, "\u{65e5}\u{672c}").unwrap_err();
         assert_eq!(
             err.message,
@@ -1250,7 +1250,7 @@ mod tests {
         // <root>/file.txt/sub` can never succeed, and CPython's own
         // `Path.mkdir(parents=True, exist_ok=True)` names *that*
         // directory in its error, not the write's own leaf path --
-        // issue #460's own fix-pass finding 7.
+        // issue #460's own fix pass.
         let dir = TempDir::new();
         let blocker = dir.0.join("file.txt");
         std::fs::write(&blocker, b"").unwrap();
@@ -1281,8 +1281,8 @@ mod tests {
     async fn a_write_that_fails_to_encode_leaves_the_file_truncated_like_cpython() {
         // CPython's own `open(path, "w", encoding=...)` already
         // creates/truncates the file before `fh.write(content)` can
-        // raise `UnicodeEncodeError` -- issue #460's own fix-pass
-        // finding 6: a prior write's content must not survive a later
+        // raise `UnicodeEncodeError` -- issue #460's own fix pass:
+        // a prior write's content must not survive a later
         // failed one.
         let dir = TempDir::new();
         let path = dir.0.join("f.txt");
@@ -1397,8 +1397,8 @@ mod tests {
         // `tv_sec`/`tv_nsec` pair represents it as `tv_sec=-11,
         // tv_nsec=700_000_000` (never a negative `tv_nsec`); CPython's
         // `int(st_mtime)` truncates the *true* float value (-10.3)
-        // toward zero, i.e. -10, not -11 -- issue #460's own fix-pass
-        // finding 9. Checked against the pure function directly (not
+        // toward zero, i.e. -10, not -11 -- issue #460's own fix pass.
+        // Checked against the pure function directly (not
         // a real file's own mtime): a CI sandbox's filesystem isn't
         // guaranteed to keep the exact sub-second value a `set_times`
         // call requests.

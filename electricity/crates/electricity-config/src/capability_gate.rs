@@ -1,8 +1,8 @@
 //! `circuitry.capability_gate`, ported -- the run's own consented
 //! capability ceiling, and the check a `tool`/`use`/decomposition
-//! call makes against it before running (review P2-8 on PR #454's
-//! second review: vm-lanes.md named this seam with no stub of its own
-//! -- lane R installs the ceiling once preflight/consent lands;
+//! call makes against it before running (vm-lanes.md named this seam
+//! with no stub of its own -- lane R installs the ceiling once
+//! preflight/consent lands;
 //! [`require_within_ceiling`] is this crate's one stub, lane L2's own
 //! decomposition call site, `core/decompose.py::_check_capability_ceiling`).
 //!

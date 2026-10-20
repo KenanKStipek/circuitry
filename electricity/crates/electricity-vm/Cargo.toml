@@ -22,8 +22,8 @@ electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }
 electricity-redaction = { path = "../electricity-redaction" }
-# Review P2-2 on PR #454's second review, pre-added now so neither lane
-# has to touch this file: a path-`use` child is compiled at run time
+# Pre-added now so neither lane has to touch this file: a path-`use`
+# child is compiled at run time
 # (lane I, `exec::use_::execute_use`), which needs this crate's own
 # `prepare_document`/compile pipeline; a `prompt` effect's own `schema:`
 # (lane G) is validated the same way `electricity-compiler` already

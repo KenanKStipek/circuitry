@@ -570,7 +570,7 @@ Answer (yes/no):"""
         # whose own path already includes this conditional's name when it
         # has one (``Store.child``), so ``model_call`` is passed ``None``
         # rather than ``self.defn.name`` again, which would double it
-        # (``prime.gate.gate``) (#370 review F1).
+        # (``prime.gate.gate``) (#370).
         with model_call(store, None):
             res = self.adapter.generate(
                 model=self.model,

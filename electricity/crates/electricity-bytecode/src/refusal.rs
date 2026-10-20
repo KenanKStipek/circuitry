@@ -78,8 +78,8 @@ const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
 /// Lane L2's own native provider (#448) -- #448's decision 3: made a
 /// native tool (not refused behind the M2 plugin bridge like every
 /// other plugin) because decomposition's own bundled planner calls it.
-/// Its own flag, not folded into any of the four sets above (review
-/// finding 3 on PR #454): L2's effect type isn't process-, stdlib-,
+/// Its own flag, not folded into any of the four sets above (PR #454):
+/// L2's effect type isn't process-, stdlib-,
 /// regex- or HTTP-backed, so it would otherwise force L2 to add a
 /// field to this already-final struct rather than flip one lane A
 /// already named for it.
@@ -143,7 +143,7 @@ pub enum RefusalReason {
     /// *decomposition* (`electricity_config::DecompositionSettings::
     /// enabled`), and [`Supported::decomposition`] is `false` -- issue
     /// #516 (M1-K2)'s own narrowing of what used to be this variant's
-    /// job (review P2-10 on PR #454's second review): K2 wires scoring
+    /// job: K2 wires scoring
     /// and routing into `prompt` in that same lane, so a config that
     /// only turns those two on now runs instead of refusing; only
     /// decomposition (L2's own job) still refuses up front with the
@@ -282,7 +282,7 @@ impl<'a> Supported<'a> {
 
     /// This build's own actual capability set -- the one value
     /// `electricity` (lib)'s own run wiring passes to
-    /// [`first_unsupported`] (review finding/P2-b on PR #454: without
+    /// [`first_unsupported`] (PR #454: without
     /// a named function for "what this build can really run today",
     /// every M1 lane would otherwise flip its own flag in the same
     /// bare `Supported::m0(...)` call expression at that one call
@@ -360,7 +360,7 @@ impl<'a> Supported<'a> {
 /// under *supported*. *decomposition_enabled* is this run's own
 /// effective config's `DecompositionSettings::enabled` (issue #516
 /// §4(b)'s own narrowing of what used to be `ComplexitySettings::
-/// enabled()`, review P2-10 on PR #454's second review) -- not a
+/// enabled()`) -- not a
 /// property of *program* itself, so the caller resolves it first and
 /// passes it in, the same way it already resolves everything else
 /// `RunContext` carries before this walker ever runs.
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn current_matches_m0_until_the_first_m1_lane_lands() {
-        // Review P2-b on PR #454: `Supported::current` is the single
+        // `Supported::current` is the single
         // place every M1 lane flips its own flag, never `Supported::m0`
         // (pinned forever to the exact M0 value by the golden tests
         // below) -- now that lanes C (#459), D1 (#460) and H (#448,

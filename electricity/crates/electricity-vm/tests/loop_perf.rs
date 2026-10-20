@@ -404,7 +404,7 @@ async fn run_while_use_of(n: u32) -> std::time::Duration {
     t0.elapsed()
 }
 
-/// PR #482 review finding 2: `execute_use` still took a full `live_ctx`
+/// PR #482's review: `execute_use` still took a full `live_ctx`
 /// snapshot on every pass, unlike the tool leaf this lane's own fix
 /// covers -- so a `use` effect's own input render stayed O(the live
 /// state reachable from the loop) per pass, the same quadratic shape

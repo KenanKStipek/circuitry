@@ -84,7 +84,7 @@ def test_redact_host_url_leaves_a_plain_url_untouched() -> None:
 
 
 def test_redact_host_url_coerces_a_non_string_value_with_str() -> None:
-    """Review finding F8 (issue #515): a misconfigured non-string
+    """Issue #515: a misconfigured non-string
     `base_url`/`expo_url` (`runtime.adapters.ollama.base_url: 5`) must
     still produce a `host:` requirement, not crash the `check()` that is
     already reporting a problem -- `urlsplit` requires a string or bytes
@@ -560,7 +560,7 @@ def test_curl_supports_retry_after_header_false_when_probe_times_out(
 ) -> None:
     """A hung `curl --version` (SubprocessError, e.g. TimeoutExpired) must
     not escape the probe and break `run_curl` for every caller — and must
-    not block forever either (#357 review N3): a bare `TimeoutExpired`
+    not block forever either (#357): a bare `TimeoutExpired`
     propagating out of `communicate()` through `with proc:` would hit
     `Popen.__exit__`'s own unbounded `self.wait()`, since `__exit__` only
     special-cases `KeyboardInterrupt`, not `TimeoutExpired`. The fix kills

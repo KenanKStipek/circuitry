@@ -1121,7 +1121,7 @@ def test_has_prompt_effects_returns_false_for_tool_expect_cel_mode() -> None:
 
 def test_has_prompt_effects_sees_a_prompt_that_lives_only_in_finally() -> None:
     """A prompt that appears only in `finally:` still needs a real adapter
-    (#272/#273 review, finding 5) — `_has_prompt_effects` walks a dynamic's
+    (issues #272/#273) — `_has_prompt_effects` walks a dynamic's
     `finally_effects` the same way it walks its body `effects`."""
     from circuitry.cli.runtime_shim import _has_prompt_effects
 

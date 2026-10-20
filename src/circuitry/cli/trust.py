@@ -103,7 +103,7 @@ def _trust_document(path: Path, *, yes: bool, store: Path, config: Path | None) 
         library_registry = LibraryRegistry.default()
     resolved_path = path.resolve()
     # Same cache-path confinement rule `cli.runtime_shim.run()`/`validate()`
-    # apply (#396 second-review finding 6): `cof trust <cache path>` must
+    # apply (issue #396's second review): `cof trust <cache path>` must
     # hash against the fetched tree's own root, not whatever project config
     # happens to sit above the cache directory on this machine, or it could
     # disagree with the run-time check over what the document's own content

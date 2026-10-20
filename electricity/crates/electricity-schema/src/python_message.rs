@@ -1,5 +1,5 @@
 //! `validate_prompt_schema`'s own Python-`jsonschema`-exact message text
-//! (issue #498 ruling 6, tightened by PR #502's review finding 2,
+//! (issue #498 ruling 6, tightened by PR #502's review,
 //! ruling 2) -- `jsonschema.validate` raises `jsonschema.exceptions.best_match(
 //! validator.iter_errors(instance))`, so matching it exactly needs both the
 //! *selection* (`best_match`'s own relevance key) and the *text* (each
@@ -286,8 +286,8 @@ pub(crate) fn json_to_value(value: &JsonValue) -> Value {
                 Value::from(i)
             } else if n.is_u64() || n.is_i64() {
                 // A `u64` (or arbitrary-precision integer) past
-                // `i64::MAX` -- `u as i64` wraps around silently
-                // (finding N10); parse the exact decimal text instead,
+                // `i64::MAX` -- `u as i64` wraps around silently;
+                // parse the exact decimal text instead,
                 // the same big-int fast path `electricity_value::
                 // IntValue::parse_decimal` already gives every other
                 // caller that needs one.

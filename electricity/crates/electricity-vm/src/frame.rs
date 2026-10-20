@@ -1,6 +1,6 @@
 //! `core/effect_identity.py`'s `call_path`/`nested_container`, ported as
 //! a cheap-to-clone value rather than a `contextvars.ContextVar` (issue
-//! #449's gate lane items 4/6; review findings 2/8 on PR #454) --
+//! #449's gate lane items 4/6; PR #454) --
 //! threaded by [`crate::exec::execute_op`] and every container executor
 //! (including every still-stubbed one, down to the two `condition_model`
 //! stubs) so lane G/G2/H/I's own `prompt`/`loop`/`use` never has to
@@ -68,8 +68,7 @@ pub struct Frame {
     /// per level, extended by [`Frame::push_use`], for lane I's own
     /// cycle detection (M1 gate seam round 2, item S6). A path-`use`'s
     /// own identity is its resolved absolute path, verbatim; an inline
-    /// `use`'s own identity (review P2-7 on PR #454's second review,
-    /// documenting `core/use.py::_load_child_orch`'s own exact form)
+    /// `use`'s own identity (documenting `core/use.py::_load_child_orch`'s own exact form)
     /// is `format!("inline:{:016x}", ...)`-shaped but not literally
     /// that macro call -- `"inline:"` plus the first 16 **hex
     /// characters** (not bytes) of the SHA-256 hex digest of the
@@ -84,7 +83,7 @@ pub struct Frame {
     /// lookup). [`Frame::apply_rebase`] applies every entry, *last
     /// pushed first* -- a reflector nested inside another reflector's
     /// own `effects:` pushes a second entry onto the outer's own stack
-    /// rather than replacing it (review finding 3 on PR #510's first
+    /// rather than replacing it (PR #510's first
     /// review: a single `Option` here could only ever rewrite the
     /// innermost reflector's own prefix, losing every outer one's own
     /// rewrite entirely) -- applying the innermost rule first and
@@ -163,9 +162,8 @@ impl Frame {
     /// frame's own [`Frame::pass_indices`] has no entry for yet --
     /// every real caller resolves a loop's own body path through
     /// [`Frame::with_pass`] before ever asking this frame for one of
-    /// its paths, so that can only mean a caller bug (review P2-7 on
-    /// PR #454's second review: this used to fall back to *path*
-    /// silently, placeholder segment and all, which would have
+    /// its paths, so that can only mean a caller bug (this used to
+    /// fall back to *path* silently, placeholder segment and all, which would have
     /// shipped a malformed `--events` path instead of catching the
     /// bug that produced it). The `debug_assert!` below catches that
     /// in every debug build (every test in this workspace included);
@@ -388,7 +386,7 @@ mod tests {
     #[should_panic(expected = "no pass index resolved yet")]
     #[cfg(debug_assertions)]
     fn effect_path_with_no_pass_index_resolved_yet_panics_in_debug() {
-        // Review P2-7 on PR #454's second review: a caller asking for a
+        // A caller asking for a
         // loop body's own path before `Frame::with_pass` has resolved
         // that pass is a caller bug, not a legitimate path shape -- the
         // `debug_assert!` catches it here rather than silently handing
@@ -526,8 +524,8 @@ mod tests {
         // <refl>.inner" rule applies at every nesting depth), so IR's
         // own rebased call -- on the frame the outer reflector already
         // built -- must push its own entry onto that frame's own
-        // stack rather than replacing the outer's entry (review
-        // finding 3 on PR #510's first review: a single Option field
+        // stack rather than replacing the outer's entry (PR #510's
+        // first review: a single Option field
         // here used to lose the outer rewrite entirely, reporting
         // prime.outer.ir.inner.propose_steps instead of Python's own
         // prime.outer.inner.ir.inner.propose_steps).

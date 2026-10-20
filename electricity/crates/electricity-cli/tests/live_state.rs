@@ -307,7 +307,7 @@ fn mid_run_live_state_shows_a_finished_branch_before_its_tree_merges() {
         observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
     );
 
-    // PR #549's review, finding 2: electricity's own overlay shows a
+    // PR #549's review: electricity's own overlay shows a
     // branch's *in-progress* node too, as soon as it starts -- unlike
     // cof's own publisher, which republishes a branch only once that
     // branch itself has called `on_write` at least once (a `prompt`/
@@ -472,10 +472,10 @@ fn mid_run_live_state_shows_a_finished_tree_loop_pass_before_it_merges() {
 const USE_CHILD_TOP_LEVEL_TREE_DOC: &str = "\
 effects:\n  - type: use\n    name: step\n    inline: |\n      flow: tree\n      effects:\n        - name: fast\n          type: tool\n          provider: sleep\n          params: {seconds: 0.1}\n        - name: slow\n          type: tool\n          provider: sleep\n          params: {seconds: 1.5}\n";
 
-/// PR #549's review, finding 1: a `use` child whose own document has a
+/// PR #549's review: a `use` child whose own document has a
 /// top-level `flow: tree` collides its own tree overlay with its own
-/// `ChildObserver` graft at the exact same path. Before that finding's
-/// fix, a single `BTreeMap<String, GraftEntry>` meant whichever of the
+/// `ChildObserver` graft at the exact same path. Before this fix,
+/// a single `BTreeMap<String, GraftEntry>` meant whichever of the
 /// two registered *second* at that path silently destroyed the first
 /// -- once the child wrote anything after its own tree had already
 /// registered its branches, the tree overlay vanished for the rest of
