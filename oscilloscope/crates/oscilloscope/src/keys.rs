@@ -1736,12 +1736,12 @@ mod tests {
     }
 
     #[test]
-    fn one_does_nothing_but_three_switches_to_cost() {
+    fn one_switches_to_time_and_three_switches_to_cost() {
         let mut app = App::new(false);
         app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
         app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
-        assert_eq!(app.screen, Screen::Flow);
+        assert_eq!(app.screen, Screen::Time);
         app.handle_key(key(KeyCode::Char('3')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Cost);
     }

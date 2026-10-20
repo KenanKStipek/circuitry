@@ -20,9 +20,8 @@ use crate::observe::duration_seconds;
 use crate::plan::PlanTree;
 use crate::render::{Row, RowKind, TokenBar, TokenBlock, details_for, token_bar_in_flight_line};
 
-/// Which of the four screens is on display. `0`, `2` and `3` (issue
-/// #632) have a screen to show; `1` (time) doesn't yet, so its key
-/// does nothing and it gets no tab (issue #626).
+/// Which of the four screens is on display (issue #650: all four
+/// now have a screen to show).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -51,10 +50,11 @@ impl Screen {
         }
     }
 
-    /// `false` for `Time`: it arrives in a later issue. `Cost`
-    /// (issue #632) is available from here on.
     pub fn is_available(self) -> bool {
-        matches!(self, Screen::Overview | Screen::Flow | Screen::Cost)
+        matches!(
+            self,
+            Screen::Overview | Screen::Time | Screen::Flow | Screen::Cost
+        )
     }
 
     /// The screen a `0`-`3` key names, or `None` for any other key,
@@ -71,10 +71,9 @@ impl Screen {
         screen.is_available().then_some(screen)
     }
 
-    /// Every screen with a tab, in tab order (issue #626's header:
-    /// "until then they have no tab").
+    /// Every screen with a tab, in tab order (issue #626's header).
     pub fn available() -> &'static [Screen] {
-        &[Screen::Overview, Screen::Flow, Screen::Cost]
+        &[Screen::Overview, Screen::Time, Screen::Flow, Screen::Cost]
     }
 }
 
@@ -1425,9 +1424,9 @@ mod tests {
     #[test]
     fn screen_from_key_only_accepts_available_screens() {
         assert_eq!(Screen::from_key('0'), Some(Screen::Overview));
+        assert_eq!(Screen::from_key('1'), Some(Screen::Time));
         assert_eq!(Screen::from_key('2'), Some(Screen::Flow));
         assert_eq!(Screen::from_key('3'), Some(Screen::Cost));
-        assert_eq!(Screen::from_key('1'), None);
         assert_eq!(Screen::from_key('x'), None);
     }
 
@@ -1645,7 +1644,7 @@ mod tests {
         // it dropped too.
         assert_eq!(
             text,
-            "⠔⠒⠒⠤⠤⠔⠒⠒ …me.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸   [0]  2  3"
+            "⠔⠒⠒⠤⠤⠔⠒⠒ …yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸   [0]  1  2  3"
         );
     }
 
@@ -1667,7 +1666,7 @@ mod tests {
         // elapsed and the clock are all still there, untruncated.
         assert_eq!(
             text,
-            "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2  3"
+            "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  1  2  3"
         );
     }
 
@@ -1675,18 +1674,21 @@ mod tests {
     fn header_line_truncation_order_holds_at_every_required_width_without_a_report() {
         let header = base_header();
         let expected = [
-            (50u16, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55   [0]  2  3"),
+            (
+                50u16,
+                "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55   [0]  1  2  3",
+            ),
             (
                 80,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ …e-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ …417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0]  1  2  3",
             ),
             (
                 100,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0]  1  2  3",
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 overview]  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 overview]  1 time  2 flow  3 cost",
             ),
         ];
         for (width, want) in expected {
@@ -1714,19 +1716,19 @@ mod tests {
         let expected = [
             (
                 50u16,
-                "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55 · ▸   [0]  1  2  3",
             ),
             (
                 80,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ …17.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ …yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸   [0]  1  2  3",
             ),
             (
                 100,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸ fixing 1 …   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸ fixing…   [0]  1  2  3",
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸ fixing 1 blocker   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸ fixing 1 blocker   [0]  1  2  3",
             ),
         ];
         for (width, want) in expected {

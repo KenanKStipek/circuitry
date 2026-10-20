@@ -4513,6 +4513,40 @@ mod golden_tests {
     }
 
     #[test]
+    fn overview_running_with_history_at_100x30() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at_with_history(
+            100,
+            30,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("b"),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_running_with_history_at_80x24() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at_with_history(
+            80,
+            24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("b"),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
     fn overview_finished_with_history_at_120x40() {
         let plan = sample_plan();
         let mut model = RunModel::new();
@@ -4537,6 +4571,40 @@ mod golden_tests {
         let text = overview_snapshot_at_with_history(
             70,
             20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            None,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_finished_with_history_at_100x30() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let text = overview_snapshot_at_with_history(
+            100,
+            30,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            None,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_finished_with_history_at_80x24() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let text = overview_snapshot_at_with_history(
+            80,
+            24,
             &plan,
             &mut model,
             Some(&state),

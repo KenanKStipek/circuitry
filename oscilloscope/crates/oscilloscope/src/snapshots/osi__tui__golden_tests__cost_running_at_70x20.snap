@@ -1,8 +1,9 @@
 ---
 source: crates/oscilloscope/src/tui.rs
+assertion_line: 5152
 expression: text
 ---
-"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0  2  [3]        "
+"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0  1  2  [3]     "
 "┌ largest stores ────────────────────────────────────────────────────┐"
 "│a  ↑900 t ↓400 t  $1.20  74%                                        │"
 "│b  ↑300 t ↓150 t  26%                                               │"

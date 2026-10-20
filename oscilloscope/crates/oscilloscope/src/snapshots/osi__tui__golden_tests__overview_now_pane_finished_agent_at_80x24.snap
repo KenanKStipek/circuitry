@@ -1,8 +1,9 @@
 ---
 source: crates/oscilloscope/src/tui.rs
+assertion_line: 4596
 expression: text
 ---
-"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 6m12s · 11:52:55   [0]  2  3                  "
+"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 6m12s · 11:52:55   [0]  1  2  3               "
 "✓ fix                                                                           "
 "11:46:43 · 6m12s                                                                "
 "┌ now ──────────────────────────────────────────┐┌─────────────────────────────┐"
