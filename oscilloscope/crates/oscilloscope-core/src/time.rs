@@ -422,8 +422,8 @@ pub fn build_time_rows(
 /// pass's own start, run-relative to `run_start_ts` -- the one thing
 /// state alone can never answer, since each later pass overwrites the
 /// same path's node -- and how many passes have finished. `None` with
-/// no finished pass logged at this path at all yet (the row still
-/// reads from state alone, same as before this existed).
+/// no finished pass logged at this path at all yet, in which case the
+/// row reads from state alone instead.
 pub(crate) fn unnamed_loop_first_pass_start(
     path: &str,
     model: &RunModel,
@@ -1106,8 +1106,8 @@ pub struct ZoomAgentFooter {
 /// ([`running_tool_elapsed_ms`]) -- its own elapsed time is folded
 /// into that tool's total before picking the busiest one, since
 /// `tools.<name>.ms` only ever counts calls that have already
-/// finished, which left the footer reading a stale `0.0s` for
-/// seconds while the first call of a run was still going.
+/// finished, and so alone would read `0.0s` for as long as the
+/// first call of a run is still going.
 pub fn zoom_agent_footer(
     turns: Option<u64>,
     tool_calls: Option<u64>,
@@ -1138,7 +1138,7 @@ pub fn zoom_agent_footer(
 }
 
 /// The tool call currently in progress, for [`zoom_agent_footer`]'s
-/// own running-elapsed fix: the transcript's own unmatched `tool_
+/// own busiest-tool figure: the transcript's own unmatched `tool_
 /// start` when there is one, else `current_tool` and its own `started
 /// _at` when there's no transcript at all. `None` while nothing is
 /// actually running, or when the running call's own start can't be

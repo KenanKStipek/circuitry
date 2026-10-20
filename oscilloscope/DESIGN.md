@@ -1817,37 +1817,54 @@ own passes, which therefore all share that one leaf's path, come from
 `RunModel::step_intervals` by event id order (`#1`, `#2`, …) instead
 of from `iter_N` children -- without `--events` they can't be told
 apart, so the row stays one and `⏎` is a no-op (`TimeRow::
-loop_expandable` is `false`). With `--events` and more than one
-logged interval at the leaf's own path, its collapsed row reads the
-whole loop's own span too: its first pass's own start (the one thing
-state alone can never answer, since each later pass overwrites the
-same path's node) combined with state's own last-pass end (already
-extended to now while it's still running, same as any other row's
-own `duration_s`, never an event-sourced end of its own, which a step
-right after it could start running before by a little clock skew
-between the two logs), and a `⟲ N/M` progress count, both passes done
-and the total alike (every logged interval is a finished pass, so the
-loop has no "still to come" of its own to show separately). `⏎`
-toggles `App::time_expanded_loops` (by the row's own path); when a
-loop's path is in that set, `time::expand_loop` replaces the base
-tree's own (breadcrumbed) rows for that loop's passes with the Time
-screen's own: for a named loop, one row per `iter_N` index found
-under its own path, each pass's own span aggregated from every flat
-node in its own subtree (a chain each loop's own `iter_N` carries no
-`{value, meta}` of its own in either engine's real state -- only its
-children do; a tree loop's own pass container happens to have one,
-but aggregating either way gives the same answer when it's the only
-node in its own subtree) -- two tree passes running at once simply
-overlap, shown as such, never merged away; for an unnamed loop, one
-row per logged interval, in event id order. `time::loop_is_
-expandable`'s own unnamed branch requires the leaf's own path itself
-(not merely its parent's) to be one `PlanTree::is_unnamed_loop_body_
-path` says an unnamed loop's own body directly contributes -- a
-sibling at the same parent path that merely happens to sit next to
-the loop must never expand, or read its own progress count, either.
-Drawing always hides every row under any loop's own path from the
-base tree, collapsed or expanded, since the Time screen's own pass
-rows (or lack of them) are what stands in for them either way.
+loop_expandable` is `false`). `PlanTree::is_unnamed_loop_body_path`
+records an unnamed loop's own body paths wherever its `Loop` op is
+reached while compiling the plan -- a chain sibling, a tree
+`dynamic`'s own `Parallel` branch, or nested inside a named loop's
+own pass (where the lookup normalises the pass's concrete `iter_N`
+back to the `iter_*` placeholder the paths are recorded under) --
+not only the one context a transparent op is ordinarily reached
+through. With `--events` and more than one logged interval at the
+leaf's own path, its collapsed row reads the whole loop's own span
+too: its first pass's own start (the one thing state alone can never
+answer, since each later pass overwrites the same path's node)
+combined with state's own last-pass end (already extended to now
+while it's still running, same as any other row's own `duration_s`,
+never an event-sourced end of its own, which a step right after it
+could start running before by a little clock skew between the two
+logs), and a `⟲ N/M` progress count of every logged (finished) pass
+-- while the loop is still running, `M` reads `?` instead, since the
+total is never known until the last pass finishes, and the pass
+currently in progress is never counted among the `N` done; once the
+loop itself has ended, `M` is the real total. `⏎` toggles `App::
+time_expanded_loops` (by the row's own path); when a loop's path is
+in that set, `time::expand_loop` replaces the base tree's own
+(breadcrumbed) rows for that loop's passes with the Time screen's
+own: for a named loop, one row per `iter_N` index found under its own
+path, each pass's own span aggregated from every flat node in its own
+subtree (a chain each loop's own `iter_N` carries no `{value, meta}`
+of its own in either engine's real state -- only its children do; a
+tree loop's own pass container happens to have one, but aggregating
+either way gives the same answer when it's the only node in its own
+subtree) -- two tree passes running at once simply overlap, shown as
+such, never merged away; for an unnamed loop, one row per logged
+interval in event id order, plus one more, still running, for each
+pass currently open (`RunModel::open_starts_at`) if the loop itself
+hasn't finished yet. Past `RunModel::step_intervals`'s own 50,000-
+interval cap, an unnamed loop's own `⟲` count and its expansion both
+stop growing -- the same bound the interval log itself already keeps
+(§6.3c). `time::loop_is_expandable`'s own unnamed branch requires the
+leaf's own path itself (not merely its parent's) to be one `PlanTree::
+is_unnamed_loop_body_path` says an unnamed loop's own body directly
+contributes -- a sibling at the same parent path that merely happens
+to sit next to the loop must never expand, or read its own progress
+count, either. Drawing always hides every row under any loop's own
+path from the base tree, collapsed or expanded, since the Time
+screen's own pass rows (or lack of them) are what stands in for them
+either way. Follow selecting a leaf whose own row is hidden this way
+(a named loop's pass, collapsed or expanded) highlights and scrolls
+to the nearest ancestor loop row that is actually drawn instead of
+leaving the selection unmatched.
 
 **The strips** carry raw points, not pre-bucketed heights --
 `screens::TimeStrips` holds `events_points`/`decisions`/`in_flight_
@@ -1880,8 +1897,14 @@ is overlaid on every strip the same way it is on every bar row.
 - **in flight:** a sweep over every *leaf* row's own `[start_s,
   end_s]` that itself has no child rows (`time::in_flight_heights`;
   neither a container nor a `use` step with running children of its
-  own counts alongside the one leaf actually running inside it),
-  ending in the
+  own counts alongside the one leaf actually running inside it) --
+  an unnamed loop's own body leaf contributes one interval per logged
+  (finished) pass at its own path, plus one more for each pass
+  currently open, rather than a single interval merging the whole
+  loop into one, which otherwise undercounted a `flow: tree` unnamed
+  loop (named and unnamed loops run their own passes the same way in
+  either flow, §5) at a max of 1 regardless of how many passes were
+  genuinely running at once -- ending in the
   run's own peak concurrency and, when any running node currently
   carries `meta.waiting_for` (`time::queued_now`), how many are
   queued behind a slot right now. The height in each column is the
@@ -1933,7 +1956,14 @@ neither has anywhere else to be read from.
   marks, with the actual figures underneath; `waiting for the
   reply` for a still-running prompt, `running` for a still-running
   tool.
-- **An agent** (`FocusDetail::Agent`): `time::agent_zoom_bands` turns
+- **An agent** (`FocusDetail::Agent`): the think band's own end, the
+  footer's running-tool time, and this pane's own axis end all apply
+  only while the step is actually `Running` *and* `meta.live` is
+  present -- an interrupted run leaves `meta.live` behind with no
+  `completed_at` of its own (issue #637), so gating on `meta.live`
+  alone would keep all three growing by however long ago `now` is
+  from the interruption; the axis end instead falls back to the
+  row's own (frozen) span. `time::agent_zoom_bands` turns
   its own transcript's tool calls into bands by kind
   (`transcript::ToolKind`, the same classification `tool_glyph`
   already gives the overview's own activity strip -- moved into
@@ -1957,8 +1987,8 @@ neither has anywhere else to be read from.
   the transcript's own unmatched `tool_start` or else `current_tool`
   and its own `started_at`) folded into that tool's own total --
   `tools.<name>.ms` alone only ever counts calls that have already
-  finished, which otherwise left the footer reading a stale `bash
-  0.0s` for as long as the first call of a run was still going.
+  finished, and so alone would read `bash 0.0s` for as long as the
+  first call of a run is still going.
   Transcript tailing now also covers screen `1`, and a finished
   agent's own `meta.raw.transcript` (not just a running one's `meta.
   live.transcript`), since this is the first screen that ever shows a
@@ -1986,7 +2016,12 @@ after an edit, where the current hash's own count is `0` -- the title
 instead reads `vs usual · earlier versions`
 (`time::vs_usual_is_earlier_versions`) and the footer carries no
 finish time; with history off entirely, neither applies and the
-title carries no suffix at all.
+title carries no suffix at all. The footer's own `from N runs` reads
+the current hash's own count normally, but under `earlier versions`
+that count is, by definition, always below the threshold -- it reads
+the largest pooled count among the rows actually shown instead, so
+figures genuinely pooled from several earlier runs never read `from
+0 runs`.
 
 **Zoom** (`App::time_zoom`, `+`/`-`/`=`): a fraction of the whole
 axis, narrowed or widened by `tui.rs`'s own `time_visible_window`

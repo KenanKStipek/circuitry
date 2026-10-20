@@ -3524,9 +3524,9 @@ fn draw_flow_screen(
 /// columns (DESIGN.md: the strips are "on the same axis" as the
 /// bars): the gutter (label + start/duration column) width, the bar
 /// width itself, and the visible window `+`/`-`/`=` currently zoom
-/// to. Bucketing each strip separately at its own fixed resolution,
-/// independent of this, is what let an in-flight strip run past the
-/// now line.
+/// to. Every strip buckets against this same bar width and window,
+/// rather than its own fixed resolution, so none of them can ever
+/// run past the now line the bars themselves line up with.
 struct TimeLayout {
     label_width: usize,
     show_columns: bool,
@@ -5921,7 +5921,7 @@ mod golden_tests {
     }
 
     /// vs usual lists only the timeline's own currently visible rows
-    /// (DESIGN.md) -- collapsing `prime` with `\u2190` hides its own
+    /// (DESIGN.md) -- collapsing `prime` with `←` hides its own
     /// children `a` and `b` from the timeline, so neither belongs in
     /// vs usual either, even though both still have history stats of
     /// their own.
@@ -9364,11 +9364,10 @@ mod golden_tests {
         );
     }
 
-    /// Issue #650's events/min strip used to re-parse four RFC 3339
-    /// timestamps per logged interval (`run_start_ts` included,
-    /// twice over) on every redraw -- `RunModel::step_interval_
-    /// offsets`'s own cache is what this guards, at the interval
-    /// log's own 50,000-entry cap.
+    /// `RunModel::step_interval_offsets`'s own cache parses each
+    /// logged interval's timestamps once, not four RFC 3339 parses
+    /// per interval (`run_start_ts` included, twice over) on every
+    /// redraw -- this is that cache's own 50,000-entry cap.
     #[test]
     fn time_screen_performance_with_50_000_logged_intervals() {
         let plan = PlanTree::empty();
