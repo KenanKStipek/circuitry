@@ -1,0 +1,29 @@
+---
+source: crates/oscilloscope/src/tui.rs
+assertion_line: 4034
+expression: text
+---
+"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 6m12s · 11:52:55   0  [2]  3                  "
+"┌ flow (do-thing · 0) ◆ decision ⟲ loop ▶ runnin┐┌ selected ───────────────────┐"
+"│◐ prime   6m12s                                ││fix                          │"
+"│  ◐ fix   6m12s                                ││agent · agent                │"
+"│                                               ││asked:                       │"
+"│                                               ││pi                           │"
+"│                                               ││doing:                       │"
+"│                                               ││since 11:46:43 · 6m12s       │"
+"│                                               ││claude_code · sonnet · turn 1│"
+"│                                               ││↑2.1 Mt ↓— · $—              │"
+"│                                               ││context 142 kt / 200 kt      │"
+"│                                               ││██████████████               │"
+"│                                               ││files 3 · +12 −3 · tests …   │"
+"│                                               ││doing:                       │"
+"│                                               ││› edit src/adapters/ollama.rs│"
+"│                                               ││› bash pytest -k timeout ✓   │"
+"│                                               ││› bash pytest -q tests/adapte│"
+"│                                               ││produced:                    │"
+"│                                               ││(when done)                  │"
+"│                                               ││                             │"
+"│quick steps folded: 0 · 0.0s                   ││                             │"
+"│health: 0 failed · 0 retries · 0 warnings      ││                             │"
+"│                                               ││                             │"
+"└───────────────────────────────────────────────┘└─────────────────────────────┘"

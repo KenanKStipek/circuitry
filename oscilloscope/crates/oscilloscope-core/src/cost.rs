@@ -210,6 +210,20 @@ fn flatten_leaves_into(
         if node.children.is_empty() {
             if let Some(n) = flat.get(&node.path) {
                 let (tokens_sent, tokens_received) = node_tokens(&n.meta);
+                // Issue #637: a running agent's own row sizes from
+                // its live `tokens_sent` too, the same figure its
+                // treemap tile already does (`treemap::leaf_node_for_
+                // measure`) -- without this the table kept reading
+                // `0 t`/`tokens when done` for exactly the tile that
+                // no longer does.
+                let tokens_sent = if n.completed_at.is_none() {
+                    n.live
+                        .as_ref()
+                        .and_then(|live| live.tokens_sent)
+                        .map_or(tokens_sent, |live_sent| tokens_sent.max(live_sent))
+                } else {
+                    tokens_sent
+                };
                 let cost_usd = n.meta.get("cost_usd").and_then(Value::as_f64);
                 // A `while: mode: model` loop's own "check" leaf
                 // (`treemap::build_node_for_measure`) shares its path

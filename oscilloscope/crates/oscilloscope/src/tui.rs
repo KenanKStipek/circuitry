@@ -3571,6 +3571,225 @@ mod golden_tests {
         }})
     }
 
+    /// Issue #637: a single top-level `agent` tool step, still
+    /// running, with a realistic `meta.live` (every field the live-
+    /// progress table documents, including a figure Claude Code
+    /// never reports live -- `tokens_received`/`cost_usd` stay
+    /// `null`, never `0`, DESIGN.md).
+    fn agent_running_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": null},
+            "fix": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                "params_rendered": {"command": "pi"},
+                "live": {
+                    "engine": "claude_code", "model": "sonnet", "session_id": "s1",
+                    "transcript": "/tmp/fix-transcript.jsonl",
+                    "attempt": 1, "phase": "turn",
+                    "started_at": "2026-01-01T11:46:43Z", "updated_at": "2026-01-01T11:52:54Z",
+                    "turns": 14, "tool_calls": 31,
+                    "tools": {"bash": {"calls": 20, "ms": 120000}, "read": {"calls": 11, "ms": 5000}},
+                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"},
+                    "tokens_sent": 2100000, "tokens_received": null, "cost_usd": null,
+                    "tokens_cached_in": 1800000, "tokens_cache_write": 50000,
+                    "context_tokens": 142000, "context_window": 200000,
+                    "turn_tokens": [100000, 142000],
+                    "files_changed": 3, "lines_added": 12, "lines_removed": 3
+                }
+            }}
+        }})
+    }
+
+    /// [`agent_running_state`], finished: no `meta.live` left at all
+    /// (removed once the attempt ends), the same generic
+    /// `tokens_sent`/`tokens_received`/`cost_usd`/`value` fields
+    /// every other finished tool step carries.
+    fn agent_finished_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:52:55Z"},
+            "fix": {"value": "Done. All tests pass.", "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:52:55Z", "provider": "agent",
+                "params_rendered": {"command": "pi"},
+                "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
+                "raw": {"engine": "claude_code", "turns": 14, "tool_calls": 31, "transcript": "/tmp/fix-transcript.jsonl",
+                    "files_changed": 3, "lines_added": 12, "lines_removed": 3}
+            }}
+        }})
+    }
+
+    /// The transcript lines `agent_running_state`'s own `fix` step
+    /// would have written by the time it reached `meta.live.turns ==
+    /// 14` -- enough for the now pane / selected pane's own `doing:`
+    /// lines and `tests` word to have something real to read.
+    fn agent_running_transcript() -> oscilloscope_core::transcript::TranscriptView {
+        let lines = vec![
+            json!({"t": "2026-01-01T11:47:05Z", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
+            json!({"t": "2026-01-01T11:47:06Z", "type": "tool_end", "id": 1, "ok": true, "ms": 20}),
+            json!({"t": "2026-01-01T11:49:30Z", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k timeout"}),
+            json!({"t": "2026-01-01T11:49:41Z", "type": "tool_end", "id": 2, "ok": false, "ms": 11000}),
+            json!({"t": "2026-01-01T11:51:15Z", "type": "tool_start", "id": 3, "tool": "edit", "target": "src/adapters/ollama.rs"}),
+            json!({"t": "2026-01-01T11:51:16Z", "type": "tool_end", "id": 3, "ok": true, "ms": 10, "lines_added": 12, "lines_removed": 3}),
+            json!({"t": "2026-01-01T11:51:40Z", "type": "tool_start", "id": 4, "tool": "bash", "target": "pytest -k timeout"}),
+            json!({"t": "2026-01-01T11:52:21Z", "type": "tool_end", "id": 4, "ok": true, "ms": 41000}),
+            json!({"t": "2026-01-01T11:52:30Z", "type": "tool_start", "id": 5, "tool": "bash", "target": "pytest -q tests/adapters"}),
+        ];
+        oscilloscope_core::transcript::build_transcript_view(&lines)
+    }
+
+    /// [`overview_snapshot_at`], with a specific transcript view
+    /// attached the way `main.rs`'s own `tail_focused_transcript`
+    /// would feed `draw` -- issue #637's own now-pane goldens for a
+    /// running agent need its `doing:`/`tests` lines to come from
+    /// somewhere real.
+    fn overview_agent_snapshot_at(
+        width: u16,
+        height: u16,
+        state: &Value,
+        transcript: Option<&oscilloscope_core::transcript::TranscriptView>,
+        process: ProcessState,
+    ) -> String {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(state),
+            process,
+            372.0,
+            "2026-01-01T11:52:55Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(state),
+            &rendered.token_bar,
+            &[],
+            None,
+            "2026-01-01T11:52:55Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Overview;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T11:52:55Z",
+                    Some(&overview),
+                    None,
+                    None,
+                    transcript,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// [`snapshot_at`], with a specific transcript view attached --
+    /// issue #637's own Flow selected-pane goldens for a running
+    /// agent.
+    fn flow_agent_snapshot_at(
+        width: u16,
+        height: u16,
+        state: &Value,
+        transcript: Option<&oscilloscope_core::transcript::TranscriptView>,
+        process: ProcessState,
+    ) -> String {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(state),
+            process,
+            372.0,
+            "2026-01-01T11:52:55Z",
+            &[],
+        );
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(state),
+            &plan,
+            &model,
+            Some(state),
+            &[],
+            Some("prime.fix"),
+            &test_zone(),
+            "2026-01-01T11:52:55Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some("prime.fix".to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T11:52:55Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    transcript,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
     fn overview_finished_state() -> Value {
         json!({
             "runtime": {"last_run": {"completed_at": "2026-01-01T00:05:00Z", "totals": {"wall_time_s": 300.0, "effects_run": 2, "tokens_sent": 10, "tokens_received": 20, "cost_usd": 1.5}}},
@@ -3740,6 +3959,73 @@ mod golden_tests {
         let state = overview_finished_state();
         let process = ProcessState::exited(false);
         let text = overview_snapshot_at(60, 18, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_running_agent_at_120x40() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text =
+            overview_agent_snapshot_at(120, 40, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_running_agent_at_80x24() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text =
+            overview_agent_snapshot_at(80, 24, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_finished_agent_at_120x40() {
+        let state = agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = overview_agent_snapshot_at(120, 40, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_finished_agent_at_80x24() {
+        let state = agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = overview_agent_snapshot_at(80, 24, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_running_agent_at_120x40() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text =
+            flow_agent_snapshot_at(120, 40, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_running_agent_at_80x24() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text = flow_agent_snapshot_at(80, 24, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_finished_agent_at_120x40() {
+        let state = agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = flow_agent_snapshot_at(120, 40, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_finished_agent_at_80x24() {
+        let state = agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = flow_agent_snapshot_at(80, 24, &state, None, process);
         insta::assert_snapshot!(text);
     }
 
@@ -4005,6 +4291,75 @@ mod golden_tests {
             Some(&state),
             ProcessState::Running,
         );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #637: a running agent's own tile, sized and labelled
+    /// from `meta.live.tokens_sent` -- `tokens when done` never
+    /// appears for it, unlike every other running store.
+    fn cost_agent_running_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+            "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                "provider": "agent", "live": {"tokens_sent": 2100000}}}
+        }})
+    }
+
+    fn cost_agent_finished_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "t"},
+            "fix": {"value": "done", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "t",
+                "provider": "agent", "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10}}
+        }})
+    }
+
+    #[test]
+    fn cost_tile_running_agent_at_120x40() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_running_state();
+        let text = cost_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_tile_running_agent_at_80x24() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_running_state();
+        let text = cost_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_tile_finished_agent_at_120x40() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_tile_finished_agent_at_80x24() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = cost_snapshot_at(80, 24, &plan, &mut model, Some(&state), process);
         insta::assert_snapshot!(text);
     }
 
