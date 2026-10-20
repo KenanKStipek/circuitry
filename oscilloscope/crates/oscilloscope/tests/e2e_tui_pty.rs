@@ -798,30 +798,17 @@ fn pressing_1_during_a_live_run_opens_the_time_screen() {
         );
     }
 
-    // `ratatui` only ever writes bytes for cells that actually
-    // changed -- a keypress whose own effect, if any, never touches
-    // what's on screen (the whole buffer already contained
-    // "timeline" from the very first redraw) would otherwise pass
-    // this check for doing nothing at all. Checking each keypress's
-    // own incremental output is non-empty instead proves each one
-    // really did redraw something.
-    let before_plus = captured_buf.lock().unwrap().len();
+    // A live run's own spinner and clock redraw every ~300ms
+    // regardless of what `+`/`=` do, so a mere non-empty incremental
+    // diff here would prove nothing about the axis itself --
+    // `pressing_plus_then_equals_changes_the_timelines_own_tick_
+    // labels`, on an already-finished run where nothing else can
+    // cause a redraw, is what actually proves that. This just checks
+    // neither key breaks the screen entirely on a still-running one.
     send_bytes(&mut master, b"+");
     std::thread::sleep(Duration::from_millis(300));
-    let after_plus = captured_buf.lock().unwrap()[before_plus..].to_vec();
-    assert!(
-        !after_plus.is_empty(),
-        "+ should zoom the timeline in and redraw it; got no output at all"
-    );
-
-    let before_equals = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"=");
     std::thread::sleep(Duration::from_millis(300));
-    let after_equals = captured_buf.lock().unwrap()[before_equals..].to_vec();
-    assert!(
-        !after_equals.is_empty(),
-        "= should fit the timeline back to the whole run and redraw it; got no output at all"
-    );
     {
         let snapshot = captured_buf.lock().unwrap().clone();
         let rendered = String::from_utf8_lossy(&snapshot);
@@ -1911,6 +1898,139 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         rendered.contains("mfailed"),
         "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Every `HH:MM` substring found anywhere in `bytes` (raw pty output,
+/// escape codes and all) -- a cursor-positioning escape uses `;` to
+/// separate its own row/column, never `:`, so this never mistakes one
+/// for a clock-time tick label.
+fn clock_labels(bytes: &[u8]) -> std::collections::BTreeSet<String> {
+    let chars: Vec<char> = String::from_utf8_lossy(bytes).chars().collect();
+    let mut out = std::collections::BTreeSet::new();
+    let mut i = 0;
+    while i + 5 <= chars.len() {
+        let s = &chars[i..i + 5];
+        if s[0].is_ascii_digit()
+            && s[1].is_ascii_digit()
+            && s[2] == ':'
+            && s[3].is_ascii_digit()
+            && s[4].is_ascii_digit()
+        {
+            out.insert(s.iter().collect());
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Issue #650's own `+`/`=` keys zoom the Time screen's own axis in
+/// and fit it back -- on a run that has already finished, so nothing
+/// else (a ticking clock, a spinner) can cause the screen to redraw
+/// at all, proves each key really did change the axis's own tick
+/// labels, not merely produce *some* unrelated output.
+#[test]
+fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    write_engine_double(bin_dir.path(), "electricity");
+
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"a\"]}\n  - name: b\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"b\"]}\n  - name: c\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"c\"]}\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let events = concat!(
+        "{\"v\":1,\"seq\":0,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n",
+        "{\"v\":1,\"seq\":1,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.a\"}\n",
+        "{\"v\":1,\"seq\":2,\"ts\":\"2024-01-01T00:01:40Z\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.a\",\"ok\":true,\"ms\":100000}\n",
+        "{\"v\":1,\"seq\":3,\"ts\":\"2024-01-01T00:01:40Z\",\"ev\":\"start\",\"id\":2,\"path\":\"prime.b\"}\n",
+        "{\"v\":1,\"seq\":4,\"ts\":\"2024-01-01T00:03:20Z\",\"ev\":\"end\",\"id\":2,\"path\":\"prime.b\",\"ok\":true,\"ms\":100000}\n",
+        "{\"v\":1,\"seq\":5,\"ts\":\"2024-01-01T00:03:20Z\",\"ev\":\"start\",\"id\":3,\"path\":\"prime.c\"}\n",
+        "{\"v\":1,\"seq\":6,\"ts\":\"2024-01-01T00:05:00Z\",\"ev\":\"end\",\"id\":3,\"path\":\"prime.c\",\"ok\":true,\"ms\":100000}\n",
+        "{\"v\":1,\"seq\":7,\"ts\":\"2024-01-01T00:05:00Z\",\"ev\":\"run_end\",\"ok\":true}\n",
+    );
+    let state = concat!(
+        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2024-01-01T00:05:00Z\",",
+        "\"totals\":{\"wall_time_s\":300.0,\"effects_run\":4,\"tokens_sent\":0,\"tokens_received\":0,\"cost_usd\":0.0}}},",
+        "\"prime\":{\"value\":true,\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:05:00Z\",\"error\":null,\"flow\":\"chain\"},",
+        "\"a\":{\"value\":\"a\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:01:40Z\",\"exit_code\":0,\"provider\":\"shell\"}},",
+        "\"b\":{\"value\":\"b\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:01:40Z\",\"completed_at\":\"2024-01-01T00:03:20Z\",\"exit_code\":0,\"provider\":\"shell\"}},",
+        "\"c\":{\"value\":\"c\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:03:20Z\",\"completed_at\":\"2024-01-01T00:05:00Z\",\"exit_code\":0,\"provider\":\"shell\"}}}}",
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let path_env = path_with(bin_dir.path());
+    let child = spawn_osi_on_pty_with_env(
+        &home,
+        &slave_path,
+        &[
+            doc_arg,
+            config_arg,
+            OsStr::new("--engine"),
+            OsStr::new("electricity"),
+            OsStr::new("--out-dir"),
+            out_dir_arg,
+        ],
+        &[
+            ("PATH", path_env.as_os_str()),
+            ("OSI_DOUBLE_EVENTS", OsStr::new(events)),
+            ("OSI_DOUBLE_STATE", OsStr::new(state)),
+            ("OSI_DOUBLE_EXIT", OsStr::new("0")),
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    // The double sleeps briefly before writing its own complete,
+    // already-finished run in one burst (same timing
+    // `a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted`
+    // relies on) -- settled well before switching screens, so `1`'s
+    // own incremental redraw below is the Time screen's first paint,
+    // not still catching up on the run's own ending.
+    std::thread::sleep(Duration::from_millis(1500));
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
+    std::thread::sleep(Duration::from_millis(300));
+    let labels_before = clock_labels(&captured_buf.lock().unwrap());
+
+    send_bytes(&mut master, b"+");
+    std::thread::sleep(Duration::from_millis(300));
+    let labels_after_plus = clock_labels(&captured_buf.lock().unwrap());
+    let new_since_plus: Vec<&String> = labels_after_plus.difference(&labels_before).collect();
+    assert!(
+        !new_since_plus.is_empty(),
+        "+ must zoom in and show at least one tick label never shown before; \
+         before: {labels_before:?}, after: {labels_after_plus:?}"
+    );
+
+    let before_equals = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"=");
+    std::thread::sleep(Duration::from_millis(300));
+    let equals_delta = {
+        let buf = captured_buf.lock().unwrap();
+        buf[before_equals..].to_vec()
+    };
+    assert!(
+        !clock_labels(&equals_delta).is_empty(),
+        "= must redraw the timeline's own tick labels, fit back to the whole run; \
+         got:\n{:?}",
+        String::from_utf8_lossy(&equals_delta)
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
 
     assert_no_leftover_process(work.path());
 }

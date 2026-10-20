@@ -1257,6 +1257,25 @@ mod tests {
         assert!(end_dt > p90_dt);
     }
 
+    /// An ETA already behind `now` (a run overrunning its own
+    /// history) must not pull the axis back to end *before* `now` --
+    /// it falls back to the plain `now`-plus-margin end, the same as
+    /// with no ETA at all.
+    #[test]
+    fn axis_span_ignores_an_eta_already_in_the_past() {
+        let mut header = header_with(Some("2026-01-01T00:00:00Z"), None);
+        header.history_eta_high_ts = Some("2026-01-01T00:04:00Z".to_string());
+        let now = "2026-01-01T00:05:00Z";
+        let span = axis_span(&header, now);
+        assert!(span.show_now);
+        let now_dt = crate::diff::parse_instant(now).unwrap();
+        let end_dt = crate::diff::parse_instant(&span.end_ts).unwrap();
+        assert!(
+            end_dt > now_dt,
+            "the axis must still reach past now, not stop at the stale ETA: {span:?}"
+        );
+    }
+
     /// Below the p10/p90 run threshold (3 or 4 ok runs), there's no
     /// `history_eta_high_ts` at all -- the axis still reaches the
     /// plain ETA (`history_eta_ts`), not just past `now`, so every
@@ -1679,6 +1698,39 @@ mod tests {
         let intervals = vec![(0.0, 30.0), (0.0, 30.0), (0.0, 30.0), (30.0, 60.0)];
         let heights = in_flight_heights(0.0, 60.0, 6, &intervals);
         assert_eq!(heights.iter().copied().max(), Some(3));
+    }
+
+    /// Zoomed into a partial window in the middle of a run (`+`):
+    /// an interval that runs the whole way through it, well past
+    /// both edges, must still read as in flight across the entire
+    /// visible window -- clamped to it, not dropped for reaching
+    /// outside it -- while one that never reaches the window at all
+    /// contributes nothing.
+    #[test]
+    fn in_flight_heights_clamps_an_interval_to_a_partial_window() {
+        let spans_the_whole_window = vec![(0.0, 100.0)];
+        let heights = in_flight_heights(40.0, 60.0, 4, &spans_the_whole_window);
+        assert_eq!(heights, vec![1, 1, 1, 1]);
+
+        let never_reaches_the_window = vec![(0.0, 10.0)];
+        let heights = in_flight_heights(40.0, 60.0, 4, &never_reaches_the_window);
+        assert_eq!(heights, vec![0, 0, 0, 0]);
+    }
+
+    /// [`in_flight_heights_clamps_an_interval_to_a_partial_window`],
+    /// for the events/min and decisions strips' own shared bucketing
+    /// -- a point outside a zoomed-in partial window must be dropped
+    /// entirely, not folded into the nearest edge column.
+    #[test]
+    fn bucket_weighted_drops_points_outside_a_partial_window() {
+        let points = vec![(10.0, 1), (50.0, 1), (90.0, 1)];
+        let heights = bucket_weighted(40.0, 60.0, 4, &points);
+        assert_eq!(
+            heights.iter().sum::<u64>(),
+            1,
+            "only the 50.0 point is inside"
+        );
+        assert_eq!(heights[2], 1, "50.0 is 50% across 40..60, column 2 of 4");
     }
 
     #[test]

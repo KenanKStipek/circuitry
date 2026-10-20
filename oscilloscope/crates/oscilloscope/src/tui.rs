@@ -3942,6 +3942,20 @@ mod time_bar_tests {
         assert!(line.contains("1m00s"), "{line:?}");
     }
 
+    /// Both `…` and `›` are multi-byte in UTF-8 -- cutting by byte
+    /// index instead of char index would panic or split one in half.
+    /// A title long enough that it actually needs cutting (not merely
+    /// short enough to pass through unchanged) exercises that path.
+    #[test]
+    fn truncate_title_from_left_cuts_a_multi_byte_title() {
+        let title = "fan › pass 1 of 8 › leaf";
+        assert!(title.chars().count() > 12);
+        let cut = truncate_title_from_left(title, 12);
+        assert_eq!(cut.chars().count(), 12, "{cut:?}");
+        assert!(cut.starts_with('…'), "{cut:?}");
+        assert!(cut.ends_with("leaf"), "{cut:?}");
+    }
+
     /// A cancelled step with no real duration of its own must not
     /// keep growing with how long ago `now_s` is -- its own time line
     /// reads the same regardless of how far in the future `now_s` is.
@@ -10844,30 +10858,35 @@ mod golden_tests {
     #[test]
     fn a_400_pass_loop_collapses_to_one_row() {
         let plan = each_loop_plan_for_tui();
+        // Real, parseable RFC 3339 timestamps -- not `"t0"`..`"t400"`,
+        // which `oscilloscope_core::observe::duration_seconds` can't
+        // parse at all, so every row's own `start_s`/`duration_s`
+        // silently read `None` and no bar this test could have caught
+        // ever actually drew. 400 passes 700ms apart stay inside
+        // `time_snapshot_at`'s own fixed 5-minute `now`.
+        let ts = |i: i64| -> String {
+            (chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap()
+                + chrono::Duration::milliseconds(700 * i))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
         let mut prime = serde_json::Map::new();
         prime.insert("value".to_string(), Value::Null);
         let mut prime_meta = serde_json::Map::new();
-        prime_meta.insert("created_at".to_string(), Value::String("t0".to_string()));
+        prime_meta.insert("created_at".to_string(), Value::String(ts(0)));
         prime_meta.insert("completed_at".to_string(), Value::Null);
         prime.insert("meta".to_string(), Value::Object(prime_meta));
         let mut iters = serde_json::Map::new();
         for i in 0..400 {
             let mut nap_meta = serde_json::Map::new();
-            nap_meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
-            nap_meta.insert(
-                "completed_at".to_string(),
-                Value::String(format!("t{}", i + 1)),
-            );
+            nap_meta.insert("created_at".to_string(), Value::String(ts(i)));
+            nap_meta.insert("completed_at".to_string(), Value::String(ts(i + 1)));
             nap_meta.insert("provider".to_string(), Value::String("shell".to_string()));
             let mut nap = serde_json::Map::new();
             nap.insert("value".to_string(), Value::String("ok\n".to_string()));
             nap.insert("meta".to_string(), Value::Object(nap_meta));
             let mut iter_meta = serde_json::Map::new();
-            iter_meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
-            iter_meta.insert(
-                "completed_at".to_string(),
-                Value::String(format!("t{}", i + 1)),
-            );
+            iter_meta.insert("created_at".to_string(), Value::String(ts(i)));
+            iter_meta.insert("completed_at".to_string(), Value::String(ts(i + 1)));
             let mut iter = serde_json::Map::new();
             iter.insert("value".to_string(), Value::Null);
             iter.insert("meta".to_string(), Value::Object(iter_meta));
@@ -10875,11 +10894,8 @@ mod golden_tests {
             iters.insert(format!("iter_{i}"), Value::Object(iter));
         }
         let mut items_meta = serde_json::Map::new();
-        items_meta.insert("created_at".to_string(), Value::String("t0".to_string()));
-        items_meta.insert(
-            "completed_at".to_string(),
-            Value::String("t400".to_string()),
-        );
+        items_meta.insert("created_at".to_string(), Value::String(ts(0)));
+        items_meta.insert("completed_at".to_string(), Value::String(ts(400)));
         items_meta.insert(
             "progress".to_string(),
             serde_json::json!({"done": 400, "total": 400}),
@@ -10916,9 +10932,18 @@ mod golden_tests {
             text.contains("400/400"),
             "the collapsed row shows the real pass count:\n{text}"
         );
+        // Only the timeline pane itself (above the zoom pane, which
+        // always lists the selected container's own children
+        // regardless of whether its loop row is collapsed) must have
+        // no per-pass row of its own.
+        let timeline_text = text
+            .lines()
+            .take_while(|l| !l.contains("zoom"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            !text.contains("pass "),
-            "a collapsed loop shows no per-pass rows:\n{text}"
+            !timeline_text.contains("pass "),
+            "a collapsed loop's own timeline shows no per-pass rows:\n{timeline_text}"
         );
     }
 
