@@ -614,7 +614,7 @@ class LoopRuntime:
                         )
                         # Built empty, before the try, and filled by a
                         # plain loop rather than a dict comprehension
-                        # (#385 review P1): a ``KeyboardInterrupt``/
+                        # (#385): a ``KeyboardInterrupt``/
                         # ``RunCancelledBySignal`` landing mid-comprehension
                         # left this name unbound, so the ``except`` below
                         # calling ``future_to_idx.keys()`` raised
@@ -643,7 +643,7 @@ class LoopRuntime:
                             # outer ``store``: an unnamed loop's ``child_store``
                             # *is* ``store`` (see above), so this also covers
                             # the transparent case without formatting a
-                            # ``None`` name into the path (#370 review F2).
+                            # ``None`` name into the path (#370).
                             with nested_container(child_store, None):
                                 for idx, iter_ctx in iter_ctxs:
                                     # One `deferred_signal_region` around
@@ -1342,7 +1342,7 @@ Should the loop continue? Answer (yes/no):"""
         # path already includes this loop's name when it has one
         # (``Store.child``), so ``model_call`` is passed ``None`` rather than
         # ``self.defn.name`` again, which would double it (``prime.lp.lp``)
-        # (#370 review F1). Each re-check re-asks at the same path, consumed
+        # (#370). Each re-check re-asks at the same path, consumed
         # in order like any other retry/re-ask.
         with model_call(store, None):
             res = self.adapter.generate(
@@ -1499,7 +1499,7 @@ Should the loop continue? Answer (yes/no):"""
         # would freeze whatever the enclosing scope looked like one step ago.
         base_ctx = ctx
         for effect in self.defn.body:
-            # A cancelled run (#356 review F3) must not start the next
+            # A cancelled run (#356) must not start the next
             # body effect either — the check at this method's own entry
             # only guards the first one. A body effect whose own
             # ``on_error: continue``/``skip`` swallows a killed branch's
