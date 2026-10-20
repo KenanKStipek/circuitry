@@ -239,8 +239,7 @@ fn value_error(message: impl Into<String>) -> PyIntError {
 }
 
 /// `%.200R`'s own truncation (`Objects/longobject.c`'s own invalid-
-/// literal message, review P2-9 on PR #454's second review) --
-/// *value*'s own [`Value::py_repr`], truncated to its first 200
+/// literal message) -- *value*'s own [`Value::py_repr`], truncated to its first 200
 /// *characters* (not bytes: a multi-byte codepoint is never split),
 /// with no ellipsis added -- CPython's own `%R` precision truncation
 /// (`PyUnicode_Substring`) is a plain substring, never a "..." marker.
@@ -265,9 +264,8 @@ fn py_repr_truncated_200(value: &Value) -> String {
 /// arbitrary-precision and tolerates `_` digit grouping (`"1_0"` ==
 /// `10`); this returns `i64`, so a numeral outside that range, or one
 /// written with underscores, fails to parse here where CPython would
-/// succeed. The same gap applies to the `Value::Float` arm below
-/// (review P2-9 on PR #454's second review): `f.trunc() as i64` is
-/// Rust's own saturating float-to-int cast, silently clamping to
+/// succeed. The same gap applies to the `Value::Float` arm below:
+/// `f.trunc() as i64` is Rust's own saturating float-to-int cast, silently clamping to
 /// `i64::MAX`/`MIN` for a float whose truncated value doesn't fit --
 /// CPython raises `OverflowError` instead (`int(1e30)`), the same
 /// class [`py_int`] already raises for a non-finite float, just not
@@ -1130,8 +1128,8 @@ mod tests {
 
     #[test]
     fn py_int_truncates_a_long_bad_string_to_200_chars_like_percent_200_r() {
-        // Review P2-9 on PR #454's second review: CPython's own
-        // invalid-literal message formats the repr with `%.200R`, a
+        // CPython's own invalid-literal message formats the repr
+        // with `%.200R`, a
         // plain substring truncation to 200 characters, no ellipsis.
         let long = "x".repeat(250);
         let err = py_int(&Value::Str(long)).unwrap_err();
