@@ -98,7 +98,10 @@ pub fn build_transcript_view(lines: &[Value]) -> TranscriptView {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                let target = line.get("target").and_then(Value::as_str).map(str::to_string);
+                let target = line
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 calls.push(ToolCall {
                     start_t: t,
                     end_t: None,
@@ -158,7 +161,9 @@ mod tests {
 
     #[test]
     fn unmatched_tool_start_shows_as_running() {
-        let lines = vec![line(json!({"t": "2024-01-01T00:00:00Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}))];
+        let lines = vec![line(
+            json!({"t": "2024-01-01T00:00:00Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k x"}),
+        )];
         let view = build_transcript_view(&lines);
         assert_eq!(view.calls.len(), 1);
         assert!(view.calls[0].is_running());

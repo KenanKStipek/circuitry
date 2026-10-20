@@ -739,7 +739,10 @@ mod tests {
     fn tail_transcript_lines_is_empty_for_a_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.jsonl");
-        assert_eq!(tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES), Vec::<Value>::new());
+        assert_eq!(
+            tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES),
+            Vec::<Value>::new()
+        );
     }
 
     #[test]
@@ -773,7 +776,10 @@ mod tests {
         let lines = tail_transcript_lines(&path, 200);
         assert!(!lines.is_empty());
         for line in &lines {
-            assert_ne!(line["id"], 0, "the oldest line must have fallen outside the 200-byte window");
+            assert_ne!(
+                line["id"], 0,
+                "the oldest line must have fallen outside the 200-byte window"
+            );
         }
         let last = lines.last().unwrap();
         assert_eq!(last["id"], 49, "the newest line must always survive");
@@ -789,7 +795,11 @@ mod tests {
         // A fresh run reusing the same path, replaced by rename --
         // stateless means the next read just sees the new file, with
         // no leftover offset from the old one to go stale.
-        std::fs::write(&path, "{\"t\":\"z\",\"type\":\"reply\",\"text\":\"new run\"}\n").unwrap();
+        std::fs::write(
+            &path,
+            "{\"t\":\"z\",\"type\":\"reply\",\"text\":\"new run\"}\n",
+        )
+        .unwrap();
         let second = tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES);
         assert_eq!(second.len(), 1);
         assert_eq!(second[0]["text"], "new run");

@@ -96,13 +96,13 @@ impl AgentLive {
             .and_then(Value::as_array)
             .map(|arr| arr.iter().filter_map(Value::as_u64).collect())
             .unwrap_or_default();
-        let earlier_attempts =
-            obj.get("earlier_attempts")
-                .and_then(Value::as_object)
-                .map(|e| AgentLiveEarlierAttempts {
-                    tokens_sent: e.get("tokens_sent").and_then(Value::as_u64),
-                    tokens_received: e.get("tokens_received").and_then(Value::as_u64),
-                });
+        let earlier_attempts = obj
+            .get("earlier_attempts")
+            .and_then(Value::as_object)
+            .map(|e| AgentLiveEarlierAttempts {
+                tokens_sent: e.get("tokens_sent").and_then(Value::as_u64),
+                tokens_received: e.get("tokens_received").and_then(Value::as_u64),
+            });
         Some(AgentLive {
             engine: str_field("engine"),
             model: str_field("model"),

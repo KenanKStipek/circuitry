@@ -403,27 +403,31 @@ pub enum FocusDetail {
         command: Option<String>,
     },
     /// A `tool` step whose own `provider` is `"agent"` (DESIGN.md's
-    /// token-bar rule). `note` is always [`AGENT_LIVE_DATA_NOTE`] --
-    /// kept on the variant, not read from the constant by the front
-    /// end, so a test can assert what this step actually says
-    /// without reaching past the model for it.
+    /// token-bar rule). `live` carries `meta.live` (issue #637) for as
+    /// long as the agent tool is tracking the session -- running, or
+    /// an interrupted run's own stale leftover (`AgentLive::is_recent`
+    /// tells the two apart); it is `None` once the step has finished
+    /// normally, at which point the generic [`FocusedStep::tokens`],
+    /// [`FocusedStep::cost_usd`] and [`FocusedStep::value`] already
+    /// carry its totals the same way any other tool step's do, and
+    /// `note` is the one thing left to say (only ever shown in the
+    /// brief window before the very first `meta.live` write).
     Agent {
-        engine: Option<String>,
-        model: Option<String>,
         /// The same `params_rendered.command` an ordinary tool step's
         /// own [`FocusDetail::Tool::command`] reads -- an agent step
         /// is still a `tool` leaf underneath, so its own invocation
         /// is "asked" the same way.
         command: Option<String>,
+        live: Option<Box<crate::model::AgentLive>>,
         note: &'static str,
     },
     Plain,
 }
 
-/// [`FocusDetail::Agent`]'s own note (issue #626): live agent session
-/// data (a running transcript, its token usage) is a later issue
-/// (#612's "live agent data"), so this is the one honest thing the
-/// overview can say about an agent step today.
+/// [`FocusDetail::Agent`]'s own fallback note: shown only when the
+/// step has neither live data nor a finished result yet -- the brief
+/// window between the tool starting and the agent tool's first
+/// `meta.live` write.
 pub const AGENT_LIVE_DATA_NOTE: &str = "live session data isn't available yet";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -604,21 +608,14 @@ fn build_focused_step(
     let details = details_for(&row.path, plan, model, state);
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
-        let meta = node.map(|n| &n.meta);
+        let live = node.and_then(|n| n.live.clone()).map(Box::new);
         FocusDetail::Agent {
-            engine: meta
-                .and_then(|m| m.get("engine"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            model: meta
-                .and_then(|m| m.get("model"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
             command: details
                 .meta_summary
                 .iter()
                 .find(|(k, _)| k == "command")
                 .map(|(_, v)| v.clone()),
+            live,
             note: AGENT_LIVE_DATA_NOTE,
         }
     } else if row.kind == RowKind::Tool {

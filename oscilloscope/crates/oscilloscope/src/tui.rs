@@ -358,6 +358,7 @@ fn draw_overview(
     frame: &mut Frame,
     area: Rect,
     overview: &oscilloscope_core::screens::Overview,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) {
     if area.height == 0 {
@@ -378,7 +379,14 @@ fn draw_overview(
     draw_phase_strip(frame, sections[0], &overview.phase_strip, ctx, stacked);
 
     if stacked {
-        draw_now_pane(frame, sections[1], &overview.now_pane, ctx, true);
+        draw_now_pane(
+            frame,
+            sections[1],
+            &overview.now_pane,
+            transcript_view,
+            ctx,
+            true,
+        );
         draw_cards_summary_line(frame, sections[2], overview, ctx);
         return;
     }
@@ -394,7 +402,14 @@ fn draw_overview(
         ])
         .split(rest);
 
-    draw_now_pane(frame, rows[0], &overview.now_pane, ctx, false);
+    draw_now_pane(
+        frame,
+        rows[0],
+        &overview.now_pane,
+        transcript_view,
+        ctx,
+        false,
+    );
     draw_cards(frame, rows[1], overview, ctx);
 }
 
@@ -500,6 +515,7 @@ fn draw_now_pane(
     frame: &mut Frame,
     area: Rect,
     pane: &oscilloscope_core::screens::NowPane,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     stacked: bool,
 ) {
@@ -511,8 +527,8 @@ fn draw_now_pane(
         .iter()
         .map(|l| Line::from(l.clone()))
         .collect();
-    let focus =
-        Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
+    let focus = Paragraph::new(focus_lines(&pane.focus, transcript_view, ctx))
+        .block(Block::default().borders(Borders::ALL));
     let log =
         Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
 
@@ -543,7 +559,11 @@ fn draw_now_pane(
 /// The now pane's own right side (issue #626): the step follow
 /// selects, or, with nothing running, the last finished step, or,
 /// once the run has ended, its outcome and totals.
-fn focus_lines(focus: &oscilloscope_core::screens::NowFocus, ctx: &DrawCtx) -> Vec<Line<'static>> {
+fn focus_lines(
+    focus: &oscilloscope_core::screens::NowFocus,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::NowFocus;
     match focus {
         NowFocus::None => vec![Line::from("nothing has run yet")],
@@ -580,14 +600,128 @@ fn focus_lines(focus: &oscilloscope_core::screens::NowFocus, ctx: &DrawCtx) -> V
             }
             lines
         }
-        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), ctx),
-        NowFocus::LastFinished(step) => focus_step_lines(step, None, ctx),
+        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), transcript_view, ctx),
+        NowFocus::LastFinished(step) => focus_step_lines(step, None, transcript_view, ctx),
     }
+}
+
+/// A running agent's own live summary (`docs/plugins/agent.md`'s
+/// live-progress table, issue #637), the lines both the overview's
+/// now pane and Flow's selected pane show for it -- a figure the CLI
+/// doesn't report live (`tokens_received`/`cost_usd` on Claude Code)
+/// reads `—`, never `0`; a context window osi doesn't know yet omits
+/// the bar but still shows the token count on its own; the tool
+/// strip and the `tests` word both come from `transcript_view`, so
+/// they're absent (not merely empty) with no transcript tailed yet.
+fn agent_live_lines(
+    live: &oscilloscope_core::model::AgentLive,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::format::format_tokens;
+    let dim = Style::default().fg(ctx.theme.dim);
+    let mut lines = Vec::new();
+
+    let mut header = Vec::new();
+    if let Some(engine) = &live.engine {
+        header.push(engine.clone());
+    }
+    if let Some(model) = &live.model {
+        header.push(model.clone());
+    }
+    if let Some(turns) = live.turns {
+        header.push(format!("turn {turns}"));
+    }
+    if let Some(tool_calls) = live.tool_calls {
+        header.push(format!("{tool_calls} tools"));
+    }
+    if !header.is_empty() {
+        lines.push(Line::from(header.join(" · ")));
+    }
+
+    let received = live
+        .tokens_received
+        .map(format_tokens)
+        .unwrap_or_else(|| "—".to_string());
+    let cost = live
+        .cost_usd
+        .map(|c| format!("${c:.2}"))
+        .unwrap_or_else(|| "$—".to_string());
+    lines.push(Line::from(format!(
+        "↑{} ↓{received} · {cost}",
+        format_tokens(live.tokens_sent.unwrap_or(0)),
+    )));
+
+    if let Some(context_tokens) = live.context_tokens {
+        match live.context_window {
+            Some(window) => {
+                lines.push(Line::from(format!(
+                    "context {} / {}",
+                    format_tokens(context_tokens),
+                    format_tokens(window)
+                )));
+                lines.push(Line::styled(bar(context_tokens, window, 20), dim));
+            }
+            None => {
+                lines.push(Line::from(format!(
+                    "context {}",
+                    format_tokens(context_tokens)
+                )));
+            }
+        }
+    }
+
+    if live.files_changed.is_some() || live.lines_added.is_some() || live.lines_removed.is_some() {
+        let mut parts = Vec::new();
+        if let Some(files) = live.files_changed {
+            parts.push(format!("files {files}"));
+        }
+        if live.lines_added.is_some() || live.lines_removed.is_some() {
+            parts.push(format!(
+                "+{} −{}",
+                live.lines_added.unwrap_or(0),
+                live.lines_removed.unwrap_or(0)
+            ));
+        }
+        if let Some(tests) = transcript_view.and_then(|v| v.tests) {
+            use oscilloscope_core::transcript::TestOutcome;
+            parts.push(match tests {
+                TestOutcome::Running => "tests …".to_string(),
+                TestOutcome::Ok => "tests ✓".to_string(),
+                TestOutcome::Failed => "tests ✗".to_string(),
+            });
+        }
+        if !parts.is_empty() {
+            lines.push(Line::from(parts.join(" · ")));
+        }
+    }
+
+    if let Some(view) = transcript_view {
+        if !view.calls.is_empty() {
+            lines.push(Line::styled("doing:", dim));
+            for call in view.calls.iter().rev().take(3).rev() {
+                let mut text = format!("› {}", call.tool);
+                if let Some(target) = &call.target {
+                    text.push(' ');
+                    text.push_str(target);
+                }
+                if let Some(ok) = call.ok {
+                    text.push_str(if ok { " ✓" } else { " ✗" });
+                } else {
+                    text.push_str(" running");
+                }
+                lines.push(Line::from(text));
+            }
+        }
+    }
+
+    lines
 }
 
 fn focus_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     more_running: Option<usize>,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
@@ -634,27 +768,13 @@ fn focus_step_lines(
                     lines.push(Line::from(command.clone()));
                 }
             }
-            FocusDetail::Agent {
-                engine,
-                model,
-                note,
-                ..
-            } => {
-                let mut parts = Vec::new();
-                if let Some(engine) = engine {
-                    parts.push(engine.clone());
-                }
-                if let Some(model) = model {
-                    parts.push(model.clone());
-                }
-                if !parts.is_empty() {
-                    lines.push(Line::from(parts.join(" · ")));
-                }
-                lines.push(Line::from(Span::styled(
+            FocusDetail::Agent { live, note, .. } => match live.as_deref() {
+                Some(live) => lines.extend(agent_live_lines(live, transcript_view, ctx)),
+                None => lines.push(Line::from(Span::styled(
                     *note,
                     Style::default().fg(ctx.theme.dim),
-                )));
-            }
+                ))),
+            },
             FocusDetail::Plain => {}
         }
         if let Some(more) = more_running {
@@ -1978,6 +2098,7 @@ pub fn draw(
     overview: Option<&oscilloscope_core::screens::Overview>,
     cost_screen: Option<&oscilloscope_core::screens::CostScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     cost_layout: &mut CostLayoutCache,
 ) {
     let area = frame.area();
@@ -2021,7 +2142,7 @@ pub fn draw(
     match app.screen {
         oscilloscope_core::screens::Screen::Overview => {
             if let Some(overview) = overview {
-                draw_overview(frame, body, overview, ctx);
+                draw_overview(frame, body, overview, transcript_view, ctx);
             }
         }
         oscilloscope_core::screens::Screen::Cost => {
@@ -2040,6 +2161,7 @@ pub fn draw(
                     log_lines,
                     log_total,
                     app,
+                    transcript_view,
                     ctx,
                 );
             }
@@ -2608,12 +2730,14 @@ fn draw_flow_footer(
 /// reuses the overview's own `focus_step_lines`, a decision reads its
 /// own condition/branch/answer instead, and `s` swaps the whole pane
 /// for today's state tree (#610).
+#[allow(clippy::too_many_arguments)]
 fn draw_flow_selected_pane(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::FlowScreen,
     state_visible: &[&StateRow],
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) {
     if app.flow_selected_shows_state {
@@ -2623,7 +2747,7 @@ fn draw_flow_selected_pane(
     let lines = if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected {
-        flow_selected_step_lines(step, ctx)
+        flow_selected_step_lines(step, transcript_view, ctx)
     } else {
         vec![Line::from("nothing selected")]
     };
@@ -2657,6 +2781,7 @@ fn draw_flow_selected_pane(
 /// here unchanged.
 fn flow_selected_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
@@ -2714,22 +2839,7 @@ fn flow_selected_step_lines(
             };
             doing.push(Line::from(text));
         }
-        FocusDetail::Agent {
-            engine,
-            model,
-            note,
-            ..
-        } if running => {
-            let mut parts = Vec::new();
-            if let Some(engine) = engine {
-                parts.push(engine.clone());
-            }
-            if let Some(model) = model {
-                parts.push(model.clone());
-            }
-            if !parts.is_empty() {
-                doing.push(Line::from(parts.join(" · ")));
-            }
+        FocusDetail::Agent { live, note, .. } if running => {
             if let (Some(since), Some(elapsed)) = (
                 step.since_ts
                     .as_deref()
@@ -2741,7 +2851,10 @@ fn flow_selected_step_lines(
                     oscilloscope_core::format::format_duration(elapsed)
                 )));
             }
-            doing.push(Line::styled(*note, dim));
+            match live.as_deref() {
+                Some(live) => doing.extend(agent_live_lines(live, transcript_view, ctx)),
+                None => doing.push(Line::styled(*note, dim)),
+            }
         }
         _ => {}
     }
@@ -2911,6 +3024,7 @@ fn draw_flow_screen(
     log_lines: &[String],
     log_total: u64,
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) {
     let visible = visible_rows(&state.rows, app);
@@ -2949,7 +3063,15 @@ fn draw_flow_screen(
                 Constraint::Min(columns[1].height - selected_rows),
             ])
             .split(columns[1]);
-        draw_flow_selected_pane(frame, right[0], screen, &state_visible, app, ctx);
+        draw_flow_selected_pane(
+            frame,
+            right[0],
+            screen,
+            &state_visible,
+            app,
+            transcript_view,
+            ctx,
+        );
         draw_flow_story_pane(frame, right[1], screen, log_lines, log_total, app, ctx);
     } else if two_pane {
         app.story_viewport = 0;
@@ -2975,7 +3097,15 @@ fn draw_flow_screen(
         if app.flow_story_shows_log {
             draw_log(frame, columns[1], log_lines, log_total, ctx);
         } else {
-            draw_flow_selected_pane(frame, columns[1], screen, &state_visible, app, ctx);
+            draw_flow_selected_pane(
+                frame,
+                columns[1],
+                screen,
+                &state_visible,
+                app,
+                transcript_view,
+                ctx,
+            );
         }
     } else {
         app.story_viewport = 0;
@@ -2987,7 +3117,15 @@ fn draw_flow_screen(
                 Constraint::Min(body.height - selected_rows),
             ])
             .split(body);
-        draw_flow_selected_pane(frame, parts[0], screen, &state_visible, app, ctx);
+        draw_flow_selected_pane(
+            frame,
+            parts[0],
+            screen,
+            &state_visible,
+            app,
+            transcript_view,
+            ctx,
+        );
         draw_flow_pane(
             frame,
             parts[1],
@@ -3324,6 +3462,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -3415,6 +3554,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:05:00Z",
                     Some(&overview),
+                    None,
                     None,
                     None,
                     &mut CostLayoutCache::default(),
@@ -3810,6 +3950,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -4082,6 +4223,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -4237,6 +4379,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4305,6 +4448,7 @@ mod golden_tests {
                     None,
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4367,6 +4511,7 @@ mod golden_tests {
                     &test_ctx,
                     0,
                     "2026-01-01T00:00:00Z",
+                    None,
                     None,
                     None,
                     None,
@@ -4450,6 +4595,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4734,6 +4880,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5255,6 +5402,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5416,6 +5564,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5600,6 +5749,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5646,6 +5796,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:00:00Z",
                     Some(&overview),
+                    None,
                     None,
                     None,
                     &mut CostLayoutCache::default(),
@@ -5705,6 +5856,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -5736,6 +5888,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     None,
                     &mut cost_layout,
                 )
@@ -5834,6 +5987,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:00:00Z",
                     Some(&overview),
+                    None,
                     None,
                     None,
                     &mut CostLayoutCache::default(),
@@ -6330,6 +6484,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -6631,6 +6786,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -6867,6 +7023,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7156,6 +7313,7 @@ mod highlight_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7196,6 +7354,7 @@ mod highlight_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7244,6 +7403,7 @@ mod highlight_tests {
                         &ctx,
                         0,
                         "2026-01-01T00:00:00Z",
+                        None,
                         None,
                         None,
                         None,
@@ -7302,6 +7462,7 @@ mod highlight_tests {
                     None,
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7352,6 +7513,7 @@ mod highlight_tests {
                     None,
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7392,6 +7554,7 @@ mod highlight_tests {
                     &ctx,
                     0,
                     "2026-01-01T00:00:00Z",
+                    None,
                     None,
                     None,
                     None,

@@ -35,7 +35,8 @@ use oscilloscope_core::engine::{
 };
 use oscilloscope_core::model::{ProcessState, RunModel, RunStatus, run_status};
 use oscilloscope_core::observe::{
-    EventsTailer, LiveStatePoller, POLL_INTERVAL, now_rfc3339, parse_event,
+    EventsTailer, LiveStatePoller, POLL_INTERVAL, TRANSCRIPT_TAIL_BYTES, now_rfc3339, parse_event,
+    tail_transcript_lines,
 };
 use oscilloscope_core::plan::PlanTree;
 use ratatui::Terminal;
@@ -1708,6 +1709,51 @@ fn build_flow_screen_if_active(
     ))
 }
 
+/// Issue #637: the transcript path for whichever step is actually on
+/// screen right now -- the overview's own focused step (running or
+/// last-finished) on screen 0, Flow's selected step on screen 2 --
+/// `None` on every other screen, and `None` for a step that isn't an
+/// agent currently being live-tracked at all (finished, or never an
+/// agent in the first place). Transcript tailing only ever happens
+/// for this one path.
+fn focused_agent_transcript_path(
+    app: &App,
+    overview: Option<&oscilloscope_core::screens::Overview>,
+    flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+) -> Option<String> {
+    use oscilloscope_core::screens::{FocusDetail, NowFocus, Screen};
+    let step = match app.screen {
+        Screen::Overview => overview.and_then(|o| match &o.now_pane.focus {
+            NowFocus::Running(step, _) | NowFocus::LastFinished(step) => Some(step),
+            _ => None,
+        }),
+        Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),
+        _ => None,
+    }?;
+    match &step.detail {
+        FocusDetail::Agent {
+            live: Some(live), ..
+        } => live.transcript.clone(),
+        _ => None,
+    }
+}
+
+/// Tails the one step's transcript this frame actually needs
+/// (`focused_agent_transcript_path`), bounded to the last 64 KiB
+/// (DESIGN.md, issue #637) -- stateless, so switching focus to a
+/// different step (or off a screen that shows one at all) costs
+/// nothing more than this call simply returning `None` next time; no
+/// file is ever opened for a step that isn't the one on screen.
+fn tail_focused_transcript(
+    app: &App,
+    overview: Option<&oscilloscope_core::screens::Overview>,
+    flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+) -> Option<oscilloscope_core::transcript::TranscriptView> {
+    let path = focused_agent_transcript_path(app, overview, flow_screen)?;
+    let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
+    Some(oscilloscope_core::transcript::build_transcript_view(&lines))
+}
+
 fn details_selection_path(app: &App) -> Option<String> {
     if app.details_source == keys::Pane::State {
         if let Some(p) = &app.state_selected_path {
@@ -1933,6 +1979,8 @@ fn run_tui(
         &story,
         &now_str,
     );
+    let mut transcript_view =
+        tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
     // `current_state: None`, before the loop has polled anything),
@@ -2126,6 +2174,8 @@ fn run_tui(
                 &story,
                 &now_str,
             );
+            transcript_view =
+                tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
@@ -2293,6 +2343,8 @@ fn run_tui(
                             &story,
                             &now_str,
                         );
+                        transcript_view =
+                            tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -2364,6 +2416,7 @@ fn run_tui(
                     overview.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
+                    transcript_view.as_ref(),
                     &mut cost_layout,
                 );
             });
@@ -3098,6 +3151,8 @@ fn run_tui_watch(
         &story,
         &now_str,
     );
+    let mut transcript_view =
+        tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
@@ -3321,6 +3376,8 @@ fn run_tui_watch(
                 &story,
                 &now_str,
             );
+            transcript_view =
+                tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
         }
         // Issue #635: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
@@ -3447,6 +3504,8 @@ fn run_tui_watch(
                             &story,
                             &now_str,
                         );
+                        transcript_view =
+                            tail_focused_transcript(&app, overview.as_ref(), flow_screen.as_ref());
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -3507,6 +3566,7 @@ fn run_tui_watch(
                     overview.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
+                    transcript_view.as_ref(),
                     &mut cost_layout,
                 );
             });
