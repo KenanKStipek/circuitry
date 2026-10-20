@@ -62,7 +62,7 @@ async fn chain_stops_at_the_first_failure_and_never_runs_the_rest() {
     .unwrap_err();
 
     // A typed tool failure keeps its own `VmError::Raised` shape through
-    // the chain wrap (review finding 1 on PR #454) -- only `message`
+    // the chain wrap (PR #454) -- only `message`
     // grows the `"prime.b: "` label prefix.
     let VmError::Raised { message, .. } = err else {
         panic!("expected a wrapped Raised error, got {err:?}");
@@ -329,7 +329,7 @@ async fn tree_registers_every_branch_before_dispatch_and_clears_at_merge() {
 
 #[tokio::test]
 async fn a_tree_cancelled_before_any_branch_starts_still_clears_its_overlay() {
-    // PR #549's review, finding 3: a cancelled tree never merges
+    // PR #549's review: a cancelled tree never merges
     // (cof's own no-state-write cancellation contract), but
     // `clear_tree_branches` must still fire -- left registered, a
     // still-coalescing `--live-state` mirror would keep overlaying
@@ -641,7 +641,7 @@ async fn finally_also_runs_after_a_successful_body() {
 
 #[tokio::test]
 async fn a_signal_during_an_otherwise_successful_finally_is_reported_as_interrupted() {
-    // issue #431 review finding on PR #440 (P2, ruling:
+    // PR #440's review of issue #431 (P2, ruling:
     // take the suggested fix): `finally:` runs on a fresh, never-
     // cancelled token, so a signal that lands *during* it (after a
     // successful body) would otherwise go unnoticed by this dynamic's
@@ -990,8 +990,8 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
     // `launch` closure that notices it (`z` is queued, never started),
     // not `x`'s. `x`'s own `on_error: continue` must not matter either
     // way -- a `Cancelled` is never an ordinary failure `on_error`
-    // degrades, so the run must still stop (issue #431 review finding
-    // on PR #440: an earlier version of this test cancelled on `x`'s
+    // degrades, so the run must still stop (PR #440's review of issue
+    // #431: an earlier version of this test cancelled on `x`'s
     // own start instead, so `x`'s own chain pre-check caught it before
     // `y` ever ran, and the comment describing `y`'s own tree noticing
     // it was wrong).
@@ -1124,7 +1124,7 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
 
 #[tokio::test]
 async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finally_still_runs() {
-    // Finding O1 on PR #462: a refused branch used to be
+    // PR #462: a refused branch used to be
     // foldable into `combine_tree_errors`'s own `VmError::Message`
     // summary once a *second* branch also failed, and `on_error:
     // continue` then absorbed that `Message` -- a capability refusal
@@ -1196,7 +1196,7 @@ async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finall
 
 #[tokio::test]
 async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after_the_merge() {
-    // Finding 4 (P2) on PR #440's second review: nothing exercised
+    // PR #440's second review (P2): nothing exercised
     // `RunObserver::write()` at all -- `core/dynamic.py`'s own
     // `store.on_write` call sites are a chain's own per-step `finally:`
     // (`_execute_chain`), a tree branch's own per-branch `finally:`

@@ -79,7 +79,7 @@ pub enum ProcError {
     /// [`ProcError::NotFound`] already covers -- e.g. `cwd` naming a
     /// file, not a directory (`NotADirectoryError`), or a permission
     /// error on it. *py_class*/*message* are CPython's own exception
-    /// class and `str(exc)` text (review finding 3 on PR #467: this
+    /// class and `str(exc)` text (PR #467: this
     /// used to collapse into the same `"cancelled"` text as
     /// [`ProcError::Cancelled`] at every call site, which is wrong --
     /// a bad `cwd` is not a cancellation).
@@ -130,7 +130,7 @@ struct KillGroupOnDrop {
     isolated: bool,
     /// Set once [`run_tracked`]'s own wait loop has observed the child
     /// exit -- lets this guard skip killing anything at all once the
-    /// pid is no longer this child's (review finding 2 on PR #467: a
+    /// pid is no longer this child's (PR #467: a
     /// `getpgid(pid)`-based kill issued *after* the pid has already
     /// been reaped can, in the rare case the OS has since reused that
     /// pid for an unrelated process, SIGKILL that unrelated process
@@ -166,7 +166,7 @@ impl Drop for KillGroupOnDrop {
             // any member of the group -- e.g. a grandchild the leader
             // itself forked -- is still alive, so this never needs
             // `self.reaped`'s own guard the way the plain-pid kill below
-            // does (review finding 2 on PR #467: that guard exists
+            // does (PR #467: that guard exists
             // specifically to protect a *pid*-based kill from ever
             // landing on a reused pid, which a `killpg` on a
             // structurally-still-valid pgid never risks).
@@ -241,7 +241,7 @@ pub async fn run_tracked(
         // `posix_spawn` shortcut for this).
         //
         // `setsid()`, not merely `process_group(0)`, while isolated
-        // (review finding 1 on PR #467) -- Python's own
+        // (PR #467) -- Python's own
         // `start_new_session=True` calls `setsid()`, detaching the
         // child from any controlling terminal entirely.
         // `process_group(0)` alone only calls `setpgid`: the child
@@ -280,7 +280,7 @@ pub async fn run_tracked(
     // after spawn, exactly like `core/cancellation.py::_isolated_pgid`:
     // a pgid can never be reused while any member of the group is still
     // alive, so this stays valid for every repeat kill below even after
-    // this *pid* itself has been reaped (review finding 2 on PR #467 --
+    // this *pid* itself has been reaped (PR #467 --
     // a `getpgid(pid)` lookup done *after* the reap always fails ESRCH,
     // even while a grandchild forked into the same, still-live pgid
     // keeps the group itself alive).
@@ -335,8 +335,8 @@ pub async fn run_tracked(
         .map(|timeout| tokio::time::Instant::now() + timeout);
 
     // The whole call's own wall-clock deadline covers waiting for the
-    // child to exit **and** for both pipes to reach EOF (review finding
-    // 2 on PR #467) -- a grandchild that keeps a pipe open after the
+    // child to exit **and** for both pipes to reach EOF (PR #467) --
+    // a grandchild that keeps a pipe open after the
     // tracked child itself has exited (`awk 'BEGIN{system("sleep 600
     // &")}'`) must not make this call hang with no limit once
     // `child.wait()` alone has returned. `child_status`/`stdout_bytes`/
@@ -1154,7 +1154,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_timeout_kills_a_grandchild_that_keeps_the_pipe_open_after_the_tracked_child_exits() {
-        // Review finding 2 on PR #467: `sh`'s own `sleep 8470 &` forks a
+        // PR #467: `sh`'s own `sleep 8470 &` forks a
         // grandchild that inherits the same stdout pipe and keeps it
         // open well past `echo hi; exit 0` -- a pipe-drain phase with no
         // deadline of its own would hang here, ignoring `timeout_ms`
@@ -1219,7 +1219,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_the_future_after_the_child_exits_still_kills_a_surviving_grandchild() {
-        // Review finding 2 on PR #467: by the time this future is
+        // PR #467: by the time this future is
         // dropped, `sh` itself has already exited and been reaped --
         // the drop guard's own pid-based `kill_process_group` would be
         // a no-op against a reaped pid, so it must fall back to the

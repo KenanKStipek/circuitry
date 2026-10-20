@@ -160,7 +160,7 @@ pub trait Adapter {
     ) -> Result<GenerateResult, AdapterError>;
 
     /// `preflight.py`'s own per-adapter readiness probe -- `async`
-    /// (review finding 9 on PR #454: `ollama.py`'s own `check()`
+    /// (PR #454: `ollama.py`'s own `check()`
     /// probes the daemon over the network, `adapters/ollama.py:220-`,
     /// so a synchronous signature here would have forced lane F2 to
     /// widen this trait's own "final and complete" method once it
@@ -176,7 +176,7 @@ pub trait Adapter {
 
     /// Whether this adapter accepts image inputs at all -- lane R's own
     /// `image_asset_warnings` (`runtime_shim.py:1610-1640`, review
-    /// finding 9 on PR #454) warns once per run when a prompt attaches
+    /// PR #454) warns once per run when a prompt attaches
     /// an image to an adapter that can't use it. `false` for every
     /// adapter that doesn't override this -- the common case; only a
     /// handful of Python adapters accept images at all.
@@ -295,7 +295,7 @@ impl AdapterRegistry {
     /// what this crate (not Circuitry's own full registry,
     /// [`crate::adapter_names::ADAPTER_NAMES`]) can build right now.
     /// Not used by [`AdapterRegistry::build`]'s own unknown-adapter
-    /// message (review finding 4 on PR #454); kept for a caller that
+    /// message (PR #454); kept for a caller that
     /// wants to know what's actually buildable, e.g. a `--list-adapters`
     /// CLI command.
     pub fn supported_names(&self) -> Vec<String> {
@@ -312,7 +312,7 @@ impl AdapterRegistry {
     /// The unknown-adapter message's own "Supported adapters" list is
     /// *not* this registry's own key set -- it is
     /// [`crate::adapter_names::ADAPTER_NAMES`], Circuitry's **full**
-    /// registry (review finding 4 on PR #454: `supported_names` alone
+    /// registry (PR #454: `supported_names` alone
     /// only ever lists what this one Rust crate has built so far,
     /// empty through M1-A -- not what `build_adapter`'s own message
     /// would say for the same *adapter_name*).
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn an_unregistered_adapter_name_lists_pythons_full_registry() {
-        // Review finding 4 on PR #454: the message names Circuitry's
+        // PR #454: the message names Circuitry's
         // full registry (`adapter_names::ADAPTER_NAMES`), not this
         // registry's own (possibly empty, as it is through M1-A) set
         // of registered builders.
@@ -501,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_is_async_and_accepts_images_defaults_to_false() {
-        // Review finding 9 on PR #454: `check` is `async` (an adapter
+        // PR #454: `check` is `async` (an adapter
         // like `ollama`'s own probes the daemon over the network), and
         // every adapter that doesn't override `accepts_images` reports
         // `false`.
