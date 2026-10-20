@@ -124,27 +124,34 @@ pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
 /// The Time screen's own clock axis: the round tick interval, in
 /// seconds, that keeps labels about `target_columns` columns apart
 /// over `span_s` spread across `width` columns -- the smallest of a
-/// single candidate list (5, 10, 15 or 30 seconds; 1, 2, 5, 10, 15 or
-/// 30 minutes; 1 hour) that keeps ticks at least that far apart;
-/// beyond an hour, the smallest whole number of hours that still
-/// does. Spacing alone picks the candidate -- a short span still
-/// chosen sub-minute even when a round minute also exists inside it.
+/// single candidate list (1, 2, 5, 10, 15 or 30 seconds; 1, 2, 5, 10,
+/// 15 or 30 minutes; 1, 2, 3, 4, 6, 12 or 24 hours) that keeps ticks
+/// at least that far apart; beyond a day, the smallest whole number
+/// of days that still does. Spacing alone picks the candidate -- a
+/// short span still chosen sub-minute even when a round minute also
+/// exists inside it. Only a whole number of hours that divides a day
+/// evenly is ever offered: a 5h, 7h or 9h tick would land on a
+/// different local clock time every day, and drift further across a
+/// daylight-saving change -- `time::next_round_local_time` is what
+/// then keeps each one on its own local midnight, including across
+/// such a change and into a further whole day.
 pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f64 {
-    const CANDIDATES_S: [f64; 11] = [
-        5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0,
+    const CANDIDATES_S: [f64; 12] = [
+        1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0,
     ];
+    const HOUR_DIVISORS_S: [f64; 7] = [3600.0, 7200.0, 10800.0, 14400.0, 21600.0, 43200.0, 86400.0];
     let width = width.max(1) as f64;
     let seconds_per_column = (span_s.max(0.0) / width).max(f64::MIN_POSITIVE);
     let target_columns = target_columns.max(1) as f64;
-    for candidate in CANDIDATES_S {
+    for candidate in CANDIDATES_S.into_iter().chain(HOUR_DIVISORS_S) {
         if candidate / seconds_per_column >= target_columns {
             return candidate;
         }
     }
-    let hours = (target_columns * seconds_per_column / 3600.0)
+    let days = (target_columns * seconds_per_column / 86400.0)
         .ceil()
         .max(1.0);
-    hours * 3600.0
+    days * 86400.0
 }
 
 /// The midpoint between `start_ts` and `end_ts`, formatted the same

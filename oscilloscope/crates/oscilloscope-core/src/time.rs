@@ -654,13 +654,14 @@ pub fn quiet_agent(running_leaf_is_agent: &[bool], recent_rate: u64) -> bool {
 
 /// The next round local clock time at or after `from_utc`, a whole
 /// multiple of `tick_s` seconds since local midnight in `zone` --
-/// every candidate [`crate::format::clock_tick_seconds`] returns
-/// divides a day evenly, so stepping forward by `tick_s` from one
-/// round time (done by this function's own caller, in absolute time)
-/// always lands on another, without recomputing from local midnight
-/// each time. Measuring from *local* midnight, not UTC's, is what
-/// puts an hour tick on a local whole hour even in a zone offset by
-/// a half hour from UTC.
+/// this function's own caller (`axis_tick_columns`'s `ticks_at`)
+/// calls it again for every tick, from just past the last one,
+/// rather than stepping forward by a fixed `tick_s`-sized duration in
+/// absolute time: measuring from *local* midnight every time, not a
+/// stored UTC instant, is what keeps an hour tick on the same local
+/// whole hour even across a daylight-saving change, and what puts one
+/// on a local whole hour at all in a zone offset by a half hour from
+/// UTC.
 fn next_round_local_time(
     from_utc: chrono::DateTime<chrono::Utc>,
     tick_s: f64,
@@ -714,17 +715,34 @@ pub fn axis_tick_columns(
         let axis_end_utc = (run_start
             + chrono::Duration::milliseconds((axis_end_s * 1000.0).round() as i64))
         .with_timezone(&chrono::Utc);
+        // Crosses a local day when the axis's own start and end fall
+        // on different local calendar dates -- a multi-day span's own
+        // local-midnight ticks then read the date instead of `00:00`,
+        // which would otherwise repeat with nothing to tell the days
+        // apart.
+        let crosses_a_day =
+            zone.local(axis_start_utc).date_naive() != zone.local(axis_end_utc).date_naive();
         let mut out = Vec::new();
         let mut tick = next_round_local_time(axis_start_utc, tick_s, zone);
-        let step = chrono::Duration::milliseconds((tick_s * 1000.0).round() as i64);
         while tick <= axis_end_utc + chrono::Duration::milliseconds(1) {
             let offset_s =
                 (tick - run_start.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
             if let Some(col) = now_column(axis_start_s, axis_end_s, width, offset_s) {
-                let label = zone.local(tick).format(fmt).to_string();
+                let local = zone.local(tick);
+                let label = if crosses_a_day && local.format("%H:%M:%S").to_string() == "00:00:00" {
+                    local.format("%m-%d").to_string()
+                } else {
+                    local.format(fmt).to_string()
+                };
                 out.push((col, offset_s, label));
             }
-            tick += step;
+            // Recomputed from this tick's own local midnight every
+            // time, not stepped forward by a fixed absolute duration:
+            // a daylight-saving change (or, for a day-or-longer tick,
+            // any calendar day at all) can make the real duration to
+            // the next round local time something other than
+            // `tick_s` itself.
+            tick = next_round_local_time(tick + chrono::Duration::milliseconds(1), tick_s, zone);
         }
         out
     };
@@ -1495,6 +1513,84 @@ mod tests {
         for (_, offset_s, _) in &ticks {
             assert_eq!(offset_s % 3600.0, 0.0);
         }
+    }
+
+    /// A `ClockZone` modelling the one hour US "spring forward"
+    /// change at 2026-03-08 07:00 UTC (02:00 EST jumps straight to
+    /// 03:00 EDT) -- enough to exercise a real daylight-saving
+    /// transition without a timezone database dependency.
+    struct SpringForwardZone;
+
+    impl crate::format::ClockZone for SpringForwardZone {
+        fn local(
+            &self,
+            utc: chrono::DateTime<chrono::Utc>,
+        ) -> chrono::DateTime<chrono::FixedOffset> {
+            let transition = chrono::DateTime::parse_from_rfc3339("2026-03-08T07:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let offset = if utc < transition {
+                chrono::FixedOffset::west_opt(5 * 3600).unwrap()
+            } else {
+                chrono::FixedOffset::west_opt(4 * 3600).unwrap()
+            };
+            utc.with_timezone(&offset)
+        }
+    }
+
+    /// Hour ticks must stay on the same local clock time across a
+    /// daylight-saving change -- recomputed from each tick's own
+    /// local midnight, not stepped forward by a fixed absolute
+    /// duration, which would otherwise drift by the one skipped hour
+    /// from the transition on.
+    #[test]
+    fn axis_tick_columns_a_us_spring_forward_span_skips_the_missing_hour() {
+        let zone = SpringForwardZone;
+        // Run starts at 2026-03-08T00:00 EST (05:00 UTC) and spans 6
+        // real hours, to 2026-03-08T11:00 UTC (06:00 EDT local, since
+        // one hour vanished at 02:00 EST).
+        let ticks = axis_tick_columns("2026-03-08T05:00:00Z", 0.0, 6.0 * 3600.0, 80, &zone);
+        let labels: Vec<&str> = ticks.iter().map(|(_, _, l)| l.as_str()).collect();
+        assert!(labels.contains(&"01:00"), "{labels:?}");
+        assert!(
+            !labels.contains(&"02:00"),
+            "02:00 never exists this day: {labels:?}"
+        );
+        assert!(labels.contains(&"03:00"), "{labels:?}");
+        let at = |label: &str| ticks.iter().find(|(_, _, l)| l == label).unwrap().1;
+        assert_eq!(
+            at("03:00") - at("01:00"),
+            3600.0,
+            "only one real hour passes between them, not two: {ticks:?}"
+        );
+    }
+
+    /// A span crossing a local day labels the tick at local midnight
+    /// with the date, since `00:00` alone would repeat with nothing
+    /// to tell the days apart.
+    #[test]
+    fn axis_tick_columns_over_a_30_hour_span_dates_the_midnight_tick() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T12:00:00Z", 0.0, 30.0 * 3600.0, 100, &utc);
+        let labels: Vec<&str> = ticks.iter().map(|(_, _, l)| l.as_str()).collect();
+        assert!(
+            labels.contains(&"01-02"),
+            "the midnight tick must read the date: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"00:00"),
+            "never a bare, ambiguous 00:00 once the span crosses a day: {labels:?}"
+        );
+    }
+
+    /// An 8-second run gets exactly one round tick, not zero and not
+    /// several crowded together.
+    #[test]
+    fn axis_tick_columns_an_8_second_span_gets_a_single_label() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let ticks = axis_tick_columns("2026-01-01T00:00:06Z", 0.0, 8.0, 20, &utc);
+        assert_eq!(ticks.len(), 1, "{ticks:?}");
+        assert_eq!(ticks[0].2, "00:00:10");
     }
 
     #[test]
