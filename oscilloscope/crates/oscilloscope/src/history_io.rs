@@ -308,7 +308,13 @@ pub fn apply_history_eta(
     header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
     header.history_vs_usual_s = eta.vs_usual_s;
     header.history_usual_total_s = eta.usual_total_s;
-    header.history_same_hash_count = eta.whole_run_count;
+    // Issue #649's "history: N of 3 runs": `stats.same_hash_ok_count`
+    // is the real count at any count, including the very first ok
+    // run (`0`) -- `eta` itself only carries a whole-run ETA once
+    // that count reaches the threshold, so reading the count from it
+    // instead would stay zero below that threshold regardless of how
+    // many ok runs there actually are.
+    header.history_same_hash_count = Some(stats.same_hash_ok_count);
     header.history_step_usual = stats.per_step;
 }
 
@@ -340,6 +346,72 @@ fn eta_ts_for(seconds: Option<f64>, now: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #649's "history: N of 3 runs": a real `HistoryHandle`
+    /// over a temp directory holding one ok record of the current
+    /// document hash, and a state shaped like a live run's (not a
+    /// hand-set header, unlike `tui.rs`'s own overview goldens, which
+    /// never go through `apply_history_eta` at all and so never
+    /// caught this). One ok run is below `history::P50_MIN_RUNS`, so
+    /// there's no whole-run ETA yet, but the count itself must still
+    /// come through as `1`, not `0`.
+    #[test]
+    fn apply_history_eta_reports_the_real_count_below_the_eta_threshold() {
+        let history_dir = tempfile::tempdir().unwrap();
+        let document = "/tmp/does-not-need-to-exist.yml".to_string();
+        let record = HistoryRecord {
+            v: history::FORMAT_VERSION,
+            run_id: "run-1".to_string(),
+            document: document.clone(),
+            document_hash: Some("h1".to_string()),
+            engine: Some("cof".to_string()),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: "2026-01-01T00:01:00Z".to_string(),
+            outcome: history::Outcome::Ok,
+            wall_s: 60.0,
+            effects_run: 1,
+            tokens_sent: 0,
+            tokens_received: 0,
+            cost_usd: None,
+            steps: Default::default(),
+        };
+        history::append_record(history_dir.path(), &document, &record).unwrap();
+
+        let handle = HistoryHandle::for_run(Some(history_dir.path().to_path_buf()), document);
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({
+            "prime": {"meta": {"created_at": "2026-01-01T01:00:00Z"}},
+            "runtime": {
+                "last_run": {
+                    "started_at": "2026-01-01T01:00:00Z",
+                    "document_hash": "h1",
+                },
+            },
+        });
+        let mut rendered = oscilloscope_core::render::build(
+            "/tmp/does-not-need-to-exist.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            30.0,
+            "2026-01-01T01:00:30Z",
+            &[],
+        );
+        assert_eq!(rendered.header.history_same_hash_count, None);
+
+        apply_history_eta(
+            &handle,
+            &mut rendered.header,
+            Some(&state),
+            &plan,
+            "2026-01-01T01:00:30Z",
+        );
+
+        assert_eq!(rendered.header.history_same_hash_count, Some(1));
+    }
 
     #[test]
     fn resolve_watch_document_path_waits_for_the_first_state_before_falling_back_to_plan() {

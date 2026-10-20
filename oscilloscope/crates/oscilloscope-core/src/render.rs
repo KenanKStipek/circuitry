@@ -280,8 +280,13 @@ pub struct Header {
     pub history_usual_total_s: Option<f64>,
     /// How many ok runs of the current document hash history has,
     /// whatever their count — the overview's own `history: N of 3
-    /// runs` while below the threshold a whole-run ETA itself needs.
-    pub history_same_hash_count: usize,
+    /// runs` while below the threshold a whole-run ETA itself needs,
+    /// including `0` on a document's very first ok run. `None`
+    /// exactly when history itself hasn't resolved a document and a
+    /// directory to read yet (history off, or a watch still waiting
+    /// on its first live-state write) -- the only case this is
+    /// never shown at all, as opposed to `Some(0)`.
+    pub history_same_hash_count: Option<usize>,
     /// Per-step usual busy time from history (issue #649's now-pane
     /// bar), keyed the same way [`crate::history::HistoryRecord::
     /// steps`] is -- pooled across every ok run of this document
@@ -1618,7 +1623,7 @@ fn build_header(
         history_eta_high_ts: None,
         history_vs_usual_s: None,
         history_usual_total_s: None,
-        history_same_hash_count: 0,
+        history_same_hash_count: None,
         history_step_usual: Default::default(),
         latest_report,
         engine_alive,

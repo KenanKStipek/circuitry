@@ -929,8 +929,11 @@ fn build_time_card(header: &crate::render::Header, phase_strip: &[PhaseStep]) ->
     } else {
         (header.innermost_loop_eta_ts.clone(), false)
     };
-    let history_count = (!eta_from_history && header.history_same_hash_count > 0)
-        .then_some(header.history_same_hash_count);
+    let history_count = if eta_from_history {
+        None
+    } else {
+        header.history_same_hash_count
+    };
     TimeCard {
         start_ts: header.run_start_ts.clone(),
         end_ts: header.run_end_ts.clone(),
@@ -1412,7 +1415,7 @@ mod tests {
             history_eta_high_ts: None,
             history_vs_usual_s: None,
             history_usual_total_s: None,
-            history_same_hash_count: 0,
+            history_same_hash_count: None,
             history_step_usual: Default::default(),
             latest_report: None,
             engine_alive: true,
@@ -1496,7 +1499,7 @@ mod tests {
         header.history_usual_total_s = Some(2700.0);
         header.history_eta_low_ts = Some("2026-10-08T11:58:00Z".to_string());
         header.history_eta_high_ts = Some("2026-10-08T12:09:00Z".to_string());
-        header.history_same_hash_count = 7;
+        header.history_same_hash_count = Some(7);
         let card = build_time_card(&header, &[]);
         assert!(card.eta_from_history);
         assert!(!card.eta_past_usual);
@@ -1515,7 +1518,7 @@ mod tests {
     #[test]
     fn time_card_shows_a_run_count_instead_of_an_eta_below_the_threshold() {
         let mut header = base_header();
-        header.history_same_hash_count = 1;
+        header.history_same_hash_count = Some(1);
         let card = build_time_card(&header, &[]);
         assert!(!card.eta_from_history);
         assert_eq!(card.eta_ts, header.innermost_loop_eta_ts);
@@ -1524,10 +1527,32 @@ mod tests {
     }
 
     #[test]
+    fn time_card_shows_a_zero_run_count_on_a_documents_very_first_ok_run() {
+        let mut header = base_header();
+        header.history_same_hash_count = Some(0);
+        let card = build_time_card(&header, &[]);
+        assert!(!card.eta_from_history);
+        assert_eq!(
+            card.history_count,
+            Some(0),
+            "history is on and collecting, even with no runs of this hash yet"
+        );
+    }
+
+    #[test]
+    fn time_card_shows_no_run_count_when_history_hasnt_resolved_a_document_yet() {
+        let mut header = base_header();
+        header.history_same_hash_count = None;
+        let card = build_time_card(&header, &[]);
+        assert!(!card.eta_from_history);
+        assert_eq!(card.history_count, None);
+    }
+
+    #[test]
     fn time_card_shows_no_eta_at_all_once_past_the_usual_end() {
         let mut header = base_header();
         header.history_eta_past_usual = true;
-        header.history_same_hash_count = 7;
+        header.history_same_hash_count = Some(7);
         let card = build_time_card(&header, &[]);
         assert!(card.eta_from_history);
         assert!(card.eta_past_usual);

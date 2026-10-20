@@ -3964,7 +3964,7 @@ mod golden_tests {
         rendered.header.history_eta_high_ts = Some("2026-01-01T00:14:00Z".to_string());
         rendered.header.history_vs_usual_s = Some(30.0);
         rendered.header.history_usual_total_s = Some(660.0);
-        rendered.header.history_same_hash_count = 7;
+        rendered.header.history_same_hash_count = Some(7);
         if let Some(key) = running_step_key {
             rendered.header.history_step_usual.insert(
                 key.to_string(),
@@ -8269,7 +8269,7 @@ mod highlight_tests {
                 history_eta_high_ts: None,
                 history_vs_usual_s: None,
                 history_usual_total_s: None,
-                history_same_hash_count: 0,
+                history_same_hash_count: None,
                 history_step_usual: Default::default(),
                 latest_report: None,
                 engine_alive: true,

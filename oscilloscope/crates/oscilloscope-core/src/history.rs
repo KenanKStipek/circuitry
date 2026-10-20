@@ -1005,7 +1005,6 @@ pub struct EtaOutput {
     pub past_usual: bool,
     pub low_s: Option<f64>,
     pub high_s: Option<f64>,
-    pub whole_run_count: usize,
     /// The usual (p50) time the whole run takes, over the same pool
     /// `remaining_s` itself comes from -- the overview's own "`(p50
     /// 45m)`".
@@ -1081,7 +1080,6 @@ pub fn compute_eta(stats: &DocumentStats, input: &EtaInput) -> EtaOutput {
         high_s: whole_run
             .p90_s
             .map(|p90| (p90 - input.now_offset_s).max(0.0)),
-        whole_run_count: whole_run.count,
         usual_total_s: Some(whole_run.p50_s),
         vs_usual_s,
     }
