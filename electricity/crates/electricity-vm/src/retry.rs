@@ -25,8 +25,8 @@ fn is_http_family_provider(provider: &str) -> bool {
     matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
 }
 
-/// `core/tool.py::ToolRuntime._is_retryable_failure` (review finding 1
-/// on PR #454) -- *provider* already normalized (`.strip().lower()`);
+/// `core/tool.py::ToolRuntime._is_retryable_failure` (PR #454) --
+/// *provider* already normalized (`.strip().lower()`);
 /// *status_code* is a status an *unraised*, `ok: false` result itself
 /// carried (lane E's own HTTP tool -- no M0/M1-A provider ever
 /// produces one); *cause* is the raised [`electricity_tools::ToolError`]'s

@@ -1,6 +1,6 @@
 //! `core/effect_identity.py`'s `call_path`/`nested_container`, ported as
 //! a cheap-to-clone value rather than a `contextvars.ContextVar` (issue
-//! #449's gate lane items 4/6; review findings 2/8 on PR #454) --
+//! #449's gate lane items 4/6; PR #454) --
 //! threaded by [`crate::exec::execute_op`] and every container executor
 //! (including every still-stubbed one, down to the two `condition_model`
 //! stubs) so lane G/G2/H/I's own `prompt`/`loop`/`use` never has to

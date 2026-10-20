@@ -174,7 +174,7 @@ fn set_band(meta: &mut Value, name: &str, model: &str) {
 }
 
 /// The exact text `core/prompt.py::_score_and_route`'s unknown-pin
-/// `ValueError` raises (§3 finding 7): `{valid}` is every named band,
+/// `ValueError` raises (issue #516 §3): `{valid}` is every named band,
 /// sorted, or the "no named bands configured" text when none are.
 fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySettings) -> VmError {
     let mut names: Vec<&str> = settings
@@ -206,7 +206,7 @@ fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySett
 /// meta, routed model)`. Both halves are independent (K1's own crate
 /// docs, "K2's calling contract"); see issue #516 §3/§7 for the full
 /// rule set this follows. The `?` this can fail with is only ever the
-/// unknown-pinned-band `ValueError` (§3 finding 7) -- reachable now
+/// unknown-pinned-band `ValueError` (§3) -- reachable now
 /// that J2 (issue #518) populates [`PromptOp::routing_override`] from
 /// a profile's per-effect `routing:` override; `validate_profile_
 /// routing_pins` already rejects an unknown band before the run, so

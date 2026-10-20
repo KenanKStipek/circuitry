@@ -3,8 +3,8 @@
 //! `params_json` overlay (`core/tool.py::_render_params`/
 //! `_render_params_json`/`_deep_merge_params`, ported exactly). Every
 //! Mustache leaf renders through [`crate::compose::render_with_composition`]
-//! rather than calling `render_template` directly (review finding 1 on
-//! PR #454): a document containing a `{{> name}}` partial is refused
+//! rather than calling `render_template` directly (PR #454): a
+//! document containing a `{{> name}}` partial is refused
 //! before a run starts, so that function's own pass-through path is
 //! this file's whole behaviour today, and lane P's own landing never
 //! has to add *declared_prompts*/*effect_names* to this file's own

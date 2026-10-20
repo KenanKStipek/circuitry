@@ -240,8 +240,8 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// resolves both lazily, a dotted segment at a time, off the live
 /// store itself. This function stays the real cost for every caller
 /// that still needs it: a `use` effect's own input render/`expect:`
-/// (`exec::use_`'s own call sites aren't narrowed either -- PR #482
-/// review finding 2, left as a follow-up: a `use` effect's own retry
+/// (`exec::use_`'s own call sites aren't narrowed either -- PR #482's
+/// review, left as a follow-up: a `use` effect's own retry
 /// loop does resolve its `{from:}`/template inputs lazily now through
 /// the same [`crate::exec::live_scope::LiveRoot`], but its `expect:`'s
 /// own `state` argument still collapses through this function, exactly
@@ -295,7 +295,7 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 /// Wraps *err* with *label*'s own `"<label>: <message>"` prefix
 /// (`core/dynamic.py`'s chain-flow wrap, `RuntimeError(f"{effect_path}:
 /// {e}")`, where `effect_path` is [`effect_label`]'s own result, not a
-/// full state path -- issue #431 review finding on PR #440: a nested
+/// full state path -- PR #440's review of issue #431: a nested
 /// `dynamic`'s own wrap must read `"<its own name>.<child>"`, never
 /// `"<child's full path>"`) -- except a cancellation, which Python's own
 /// `except Exception` (never `BaseException`) never catches, so it

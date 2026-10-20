@@ -1159,7 +1159,7 @@ async fn attempt_once<R: ParamsCtx>(
 
 /// `core/use.py::UseRuntime.execute` -- see this module's own doc
 /// comment for the overall design. No longer a `live_ctx` snapshot
-/// taken eagerly here (issue #463, PR #482 review finding 2): a `use`
+/// taken eagerly here (issue #463, PR #482's review): a `use`
 /// effect's own input render/`expect:` call sites resolve
 /// `live_scope::LiveRoot` lazily, the same way `exec::tool` already
 /// does, so a `use` effect inside a loop is O(N) total, not O(N^2).
@@ -1185,8 +1185,8 @@ pub(crate) async fn execute_use(
 /// [`execute_use`]'s own real body, generic over *ctx*'s own
 /// [`ParamsCtx`] rather than requiring an already-resolved [`Value`]
 /// (`R = Value` is still exactly that, so every existing caller --
-/// `tests/use_corpus.rs`'s golden-corpus replay, review finding 5 on
-/// PR #472, which cannot name a [`CtxChain`]/[`CtxSource`] of its own:
+/// `tests/use_corpus.rs`'s golden-corpus replay, from PR #472's review,
+/// which cannot name a [`CtxChain`]/[`CtxSource`] of its own:
 /// both are `pub(crate)` to `exec/mod.rs` -- keeps compiling and
 /// behaving unchanged). `core/use.py`'s own `UseRuntime.execute(store,
 /// ctx)` takes *ctx* the exact same reference way; this function is

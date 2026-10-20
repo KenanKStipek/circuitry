@@ -45,7 +45,7 @@
 //! an ordinary failure -- but the bare, unwrapped `Refused` value is
 //! what this effect actually returns, never folded into the usual
 //! `RuntimeError(rec.error)` wrap, so no enclosing `on_error: continue`
-//! can ever absorb it (review finding 1 on PR #510's first review: the
+//! can ever absorb it (PR #510's first review: the
 //! inner-planner case used to skip every one of those writes, taking
 //! the same no-record branch as `VmError::Cancelled`).
 

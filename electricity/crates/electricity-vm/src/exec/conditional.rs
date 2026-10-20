@@ -609,7 +609,7 @@ fn local_writes(
 /// [`crate::store::Node::flat_entries`] -- not a plain `.iter()`/Deref
 /// read of the node's own direct entries, which would silently drop
 /// every key reachable only through a [`crate::store::Node::fallback`]
-/// (issue #501 review finding 1: a loop body's `ctx_chain` can now be
+/// (issue #501's review: a loop body's `ctx_chain` can now be
 /// one of `exec::loop_`'s own overlay nodes, carrying only that pass's/
 /// step's own local keys directly, with everything else -- `item`,
 /// `input`, `prime`'s own sibling entries -- one or more fallback hops
