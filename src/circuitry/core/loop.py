@@ -876,7 +876,7 @@ class LoopRuntime:
                                     # otherwise a run with any earlier
                                     # on_error: continue failure would
                                     # undercount `done` for every pass after
-                                    # it (#331 finding 6).
+                                    # it (issue #331).
                                     progress = _loop_progress(_loop_t0, idx + 1, total)
                                     meta["progress"] = progress
                                     if _status is not None:
@@ -901,8 +901,8 @@ class LoopRuntime:
                                 # (see the `finally` above); leaving `done`
                                 # frozen here would freeze the line and
                                 # overestimate the ETA across a run with any
-                                # on_error: continue/break failures (#331
-                                # finding 6).
+                                # on_error: continue/break failures (issue
+                                # #331).
                                 if meta is not None:
                                     progress = _loop_progress(_loop_t0, idx + 1, total)
                                     meta["progress"] = progress
@@ -1090,7 +1090,7 @@ class LoopRuntime:
                             # leaving `done` frozen here would freeze the
                             # line and overestimate the ETA across a run
                             # with any on_error: continue/break failures
-                            # (#331 finding 6).
+                            # (issue #331).
                             if meta is not None:
                                 progress = _loop_progress(
                                     _loop_t0, iteration_count + 1, self.defn.max_iterations
@@ -1841,7 +1841,7 @@ class _LoopIterTracker:
         self._color = color
         self._ancestors = ancestors or []
         #: The loop's own name, for the `name k/N, ~ETA left` header row
-        #: (#331 finding 3) — None for an unnamed loop, which has no
+        #: (issue #331) — None for an unnamed loop, which has no
         #: `meta.progress` to show (same gating as the chain/while status
         #: line).
         self._loop_name = loop_name
@@ -1892,7 +1892,7 @@ class _LoopIterTracker:
         # Render ancestor context lines above the iteration items
         lines = _render_ancestors(self._ancestors, self._SPINNER)
 
-        # The loop's own `k/N, ~ETA left` header (#331 finding 3) — a tree
+        # The loop's own `k/N, ~ETA left` header (issue #331) — a tree
         # loop's progress is otherwise invisible: the ancestor line above
         # shows only that the loop is running, not how far through it is.
         if self._loop_name and progress is not None:
