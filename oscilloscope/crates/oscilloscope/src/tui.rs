@@ -3929,6 +3929,108 @@ mod golden_tests {
         terminal.backend().to_string()
     }
 
+    /// [`overview_snapshot_at`], with representative history figures
+    /// set directly on the header (issue #649's own overview goldens:
+    /// "with and without history") -- the same shape
+    /// `history_io::apply_history_eta` itself writes, set here by
+    /// hand rather than through a real `HistoryHandle`, which this
+    /// module has no reason to depend on.
+    #[allow(clippy::too_many_arguments)]
+    fn overview_snapshot_at_with_history(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        running_step_key: Option<&str>,
+    ) -> String {
+        let mut rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            plan,
+            model,
+            state,
+            process.clone(),
+            300.0,
+            "2026-01-01T00:05:00Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        rendered.header.history_eta_ts = Some("2026-01-01T00:12:00Z".to_string());
+        rendered.header.history_eta_remaining_s = Some(420.0);
+        rendered.header.history_eta_low_ts = Some("2026-01-01T00:11:00Z".to_string());
+        rendered.header.history_eta_high_ts = Some("2026-01-01T00:14:00Z".to_string());
+        rendered.header.history_vs_usual_s = Some(30.0);
+        rendered.header.history_usual_total_s = Some(660.0);
+        rendered.header.history_same_hash_count = 7;
+        if let Some(key) = running_step_key {
+            rendered.header.history_step_usual.insert(
+                key.to_string(),
+                oscilloscope_core::history::StepStats {
+                    count: 7,
+                    busy_p50_s: Some(300.0),
+                    busy_p10_s: None,
+                    busy_p90_s: Some(420.0),
+                    remaining_after_p50_s: None,
+                },
+            );
+        }
+        let empty = Value::Null;
+        let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            plan,
+            model,
+            state,
+            &rendered.token_bar,
+            &[],
+            None,
+            "2026-01-01T00:05:00Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Overview;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    state,
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:05:00Z",
+                    Some(&overview),
+                    None,
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
     fn overview_running_state() -> Value {
         json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
             "a": {"value": "ok\n", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "provider": "shell", "exit_code": 0}},
@@ -4373,6 +4475,74 @@ mod golden_tests {
         let state = overview_finished_state();
         let process = ProcessState::exited(false);
         let text = overview_snapshot_at(60, 18, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_running_with_history_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at_with_history(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("b"),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_running_with_history_at_70x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at_with_history(
+            70,
+            20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("b"),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_finished_with_history_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let text = overview_snapshot_at_with_history(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            None,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_finished_with_history_at_70x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let text = overview_snapshot_at_with_history(
+            70,
+            20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            None,
+        );
         insta::assert_snapshot!(text);
     }
 
