@@ -1708,7 +1708,9 @@ it; the repair turn continues the same one. The compact transcript
 (`meta.raw.transcript`) is JSONL, written as the session goes rather than
 only after each turn, and `meta.raw` gains `context_tokens`,
 `context_window`, `tool_counts`, `turn_tokens`, `files_changed`,
-`lines_added` and `lines_removed` once the attempt ends. See
+`lines_added` and `lines_removed` once the attempt ends. `model`, in both
+`meta.live` and `meta.raw`, is the effect's own `model` param or, when it
+sets none, the model the CLI reports. See
 [`docs/plugins/agent.md`](./plugins/agent.md#live-progress-while-the-session-runs).
 
 ---

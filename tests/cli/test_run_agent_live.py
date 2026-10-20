@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_cli_test_support import REPLAY_BODY, read_fixture_stream, write_fake_cli
+from agent_cli_test_support import (
+    REPLAY_BODY,
+    read_fixture_stream,
+    write_fake_cli,
+    write_replay_stream,
+)
 
 pytest.importorskip("typer")
 from typer.testing import CliRunner
@@ -34,6 +39,19 @@ effects:
       cwd: {cwd}
       engine: {engine}
 """
+
+#: Like ``DOCUMENT``, with an optional ``model`` param line (#646).
+DOCUMENT_MODEL = """\
+effects:
+  - type: tool
+    name: implement
+    provider: agent
+    timeout_ms: 30000
+    params:
+      prompt: "do the task"
+      cwd: {cwd}
+      engine: {engine}
+{model_line}"""
 
 
 def _write(path: Path, content: str) -> Path:
@@ -67,6 +85,16 @@ def _wait_for_live_meta(live: Path, *, tool_calls: int, timeout: float = 15.0) -
     def _check() -> dict[str, Any] | None:
         meta = _live_meta(live)
         return meta if meta is not None and meta["tool_calls"] == tool_calls else None
+
+    return _wait_for(_check, timeout=timeout)
+
+
+def _wait_for_live_meta_matching(
+    live: Path, predicate: Any, *, timeout: float = 15.0
+) -> dict[str, Any]:
+    def _check() -> dict[str, Any] | None:
+        meta = _live_meta(live)
+        return meta if meta is not None and predicate(meta) else None
 
     return _wait_for(_check, timeout=timeout)
 
@@ -208,3 +236,205 @@ def test_live_state_tracks_the_running_summary_while_gated(
     lines = [json.loads(line) for line in transcript_path.read_text(encoding="utf-8").splitlines()]
     assert any(line["type"] == "tool_start" for line in lines)
     assert any(line["type"] == "tool_end" for line in lines)
+
+
+def _run_agent_document(
+    tmp_path: Path,
+    work: Path,
+    *,
+    engine: str,
+    binary_name: str,
+    config_engine_key: str,
+    stream: Path,
+    model: str | None,
+    live: Path,
+    out: Path,
+) -> Any:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = write_fake_cli(bin_dir, binary_name, body=REPLAY_BODY)
+    model_line = f"      model: {model}\n" if model else ""
+    orch = _write(
+        tmp_path / "doc.yml",
+        DOCUMENT_MODEL.format(cwd=json.dumps(str(work)), engine=engine, model_line=model_line),
+    )
+    config = _write(
+        tmp_path / "config.json",
+        json.dumps({"runtime": {"plugins": {"agent": {config_engine_key: {"binary": str(fake)}}}}}),
+    )
+    events = tmp_path / "events.jsonl"
+    return lambda: runner.invoke(
+        app,
+        [
+            "run",
+            str(orch),
+            "--config",
+            str(config),
+            "--out",
+            str(out),
+            "--live-state",
+            str(live),
+            "--events",
+            str(events),
+        ],
+        env={"FAKE_STREAM": str(stream)},
+    )
+
+
+#: pi's own recorded fixture (``tests/fixtures/agent_live/pi-stream.jsonl``)
+#: carries no ``model`` field on its ``message_end`` lines; these two
+#: streams add one themselves, as the issue's own contract describes pi
+#: reporting it there, and change it between the two turns to exercise
+#: "keep the latest" (#646).
+def _pi_model_stream(tmp_path: Path, name: str, *, gated: bool) -> Path:
+    events: list[Any] = [
+        {"type": "session", "id": "fx-pi-model", "cwd": "."},
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "model": "anthropic/claude-sonnet",
+                "usage": {"input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0,
+                          "cost": {"total": 0.01}},
+                "content": [{"type": "text", "text": "turn one"}],
+                "stopReason": "stop",
+            },
+        },
+    ]
+    if gated:
+        events.append({"wait_for": "gate1"})
+    events += [
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "model": "anthropic/claude-opus",
+                "usage": {"input": 12, "output": 6, "cacheRead": 0, "cacheWrite": 0,
+                          "cost": {"total": 0.02}},
+                "content": [{"type": "text", "text": "turn two"}],
+                "stopReason": "stop",
+            },
+        },
+        {"type": "agent_end"},
+    ]
+    return write_replay_stream(tmp_path / name, events)
+
+
+def test_pi_live_model_comes_from_the_stream_and_tracks_a_later_change(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    stream = _pi_model_stream(tmp_path, "pi-model-stream.jsonl", gated=True)
+    live = tmp_path / "live.json"
+    out = tmp_path / "out.json"
+    invoke = _run_agent_document(
+        tmp_path, work, engine="pi", binary_name="pi", config_engine_key="pi",
+        stream=stream, model=None, live=live, out=out,
+    )
+
+    results: list[Any] = []
+    thread = threading.Thread(target=lambda: results.append(invoke()))
+    thread.start()
+    try:
+        mid = _wait_for_live_meta_matching(live, lambda meta: meta.get("turns") == 1)
+        assert mid["model"] == "anthropic/claude-sonnet"
+        (work / "gate1").touch()
+        thread.join(timeout=20)
+    finally:
+        if thread.is_alive():
+            (work / "gate1").touch()
+            thread.join(timeout=20)
+
+    assert results and results[0].exit_code == 0, results[0].stdout if results else "no result"
+    final_state = json.loads(out.read_text(encoding="utf-8"))
+    assert final_state["prime"]["implement"]["meta"]["raw"]["model"] == "anthropic/claude-opus"
+
+
+def test_pi_model_param_wins_over_whatever_the_stream_reports(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    stream = _pi_model_stream(tmp_path, "pi-model-param-stream.jsonl", gated=False)
+    live = tmp_path / "live.json"
+    out = tmp_path / "out.json"
+    invoke = _run_agent_document(
+        tmp_path, work, engine="pi", binary_name="pi", config_engine_key="pi",
+        stream=stream, model="pinned/model", live=live, out=out,
+    )
+    result = invoke()
+    assert result.exit_code == 0, result.stdout
+    final_state = json.loads(out.read_text(encoding="utf-8"))
+    assert final_state["prime"]["implement"]["meta"]["raw"]["model"] == "pinned/model"
+
+
+#: Claude Code's own recorded fixture
+#: (``tests/fixtures/agent_live/claude-stream.jsonl``) already carries
+#: ``model`` on its ``system``/``init`` line, matching the real format
+#: (#646); these streams reuse that shape.
+def _claude_model_stream(tmp_path: Path, name: str, *, gated: bool) -> Path:
+    events: list[Any] = [
+        {"type": "system", "subtype": "init", "session_id": "fx-claude-model", "model": "claude-x"},
+    ]
+    if gated:
+        events.append({"wait_for": "gate1"})
+    events += [
+        {
+            "type": "assistant",
+            "message": {
+                "id": "msg_1",
+                "usage": {"input_tokens": 10, "output_tokens": 0,
+                          "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                "content": [{"type": "text", "text": "done."}],
+            },
+        },
+        {
+            "type": "result", "subtype": "success", "is_error": False, "result": "done.",
+            "session_id": "fx-claude-model", "num_turns": 1, "total_cost_usd": 0.01,
+            "usage": {"input_tokens": 10, "output_tokens": 3,
+                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+        },
+    ]
+    return write_replay_stream(tmp_path / name, events)
+
+
+def test_claude_live_model_comes_from_system_init(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    stream = _claude_model_stream(tmp_path, "claude-model-stream.jsonl", gated=True)
+    live = tmp_path / "live.json"
+    out = tmp_path / "out.json"
+    invoke = _run_agent_document(
+        tmp_path, work, engine="claude_code", binary_name="claude", config_engine_key="claude_code",
+        stream=stream, model=None, live=live, out=out,
+    )
+
+    results: list[Any] = []
+    thread = threading.Thread(target=lambda: results.append(invoke()))
+    thread.start()
+    try:
+        mid = _wait_for_live_meta_matching(live, lambda meta: meta.get("session_id") == "fx-claude-model")
+        assert mid["model"] == "claude-x"
+        (work / "gate1").touch()
+        thread.join(timeout=20)
+    finally:
+        if thread.is_alive():
+            (work / "gate1").touch()
+            thread.join(timeout=20)
+
+    assert results and results[0].exit_code == 0, results[0].stdout if results else "no result"
+    final_state = json.loads(out.read_text(encoding="utf-8"))
+    assert final_state["prime"]["implement"]["meta"]["raw"]["model"] == "claude-x"
+
+
+def test_claude_model_param_wins_over_whatever_the_stream_reports(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    stream = _claude_model_stream(tmp_path, "claude-model-param-stream.jsonl", gated=False)
+    live = tmp_path / "live.json"
+    out = tmp_path / "out.json"
+    invoke = _run_agent_document(
+        tmp_path, work, engine="claude_code", binary_name="claude", config_engine_key="claude_code",
+        stream=stream, model="pinned/claude", live=live, out=out,
+    )
+    result = invoke()
+    assert result.exit_code == 0, result.stdout
+    final_state = json.loads(out.read_text(encoding="utf-8"))
+    assert final_state["prime"]["implement"]["meta"]["raw"]["model"] == "pinned/claude"
