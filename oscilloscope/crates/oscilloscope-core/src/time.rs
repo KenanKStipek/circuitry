@@ -639,13 +639,17 @@ pub fn event_points(
     points
 }
 
-/// "events / min ... quiet = agent" (DESIGN.md) -- shown when the
-/// only step running right now is an agent, and the strip's own rate
-/// has actually dropped (`recent_rate`, the caller's own count of
-/// start/end events in some short trailing window), not merely
-/// because an agent happens to be running.
-pub fn quiet_agent(running_leaf_kinds: &[RowKind], recent_rate: u64) -> bool {
-    running_leaf_kinds == [RowKind::Prompt] && recent_rate == 0
+/// "events / min ... quiet = agent" (DESIGN.md) -- shown when
+/// exactly one leaf is running right now and it's an agent (a
+/// `RowKind::Tool` with provider `agent`, `screens::is_agent_row` --
+/// never only a `RowKind::Prompt`, which is an ordinary prompt, not
+/// necessarily an agent at all), and the strip's own rate has
+/// actually dropped (`recent_rate`, the caller's own count of
+/// start/end events in the last 60s, not counting the agent's own
+/// start event, DESIGN.md), not merely because an agent happens to
+/// be running.
+pub fn quiet_agent(running_leaf_is_agent: &[bool], recent_rate: u64) -> bool {
+    running_leaf_is_agent == [true] && recent_rate == 0
 }
 
 /// The next round local clock time at or after `from_utc`, a whole
@@ -1367,14 +1371,11 @@ mod tests {
     }
 
     #[test]
-    fn quiet_agent_is_true_only_for_a_lone_quiet_running_prompt() {
-        assert!(quiet_agent(&[RowKind::Prompt], 0));
-        assert!(
-            !quiet_agent(&[RowKind::Prompt], 2),
-            "the rate must be low too"
-        );
-        assert!(!quiet_agent(&[RowKind::Tool], 0), "a tool isn't an agent");
-        assert!(!quiet_agent(&[RowKind::Prompt, RowKind::Tool], 0));
+    fn quiet_agent_is_true_only_for_a_lone_quiet_running_agent() {
+        assert!(quiet_agent(&[true], 0));
+        assert!(!quiet_agent(&[true], 2), "the rate must be low too");
+        assert!(!quiet_agent(&[false], 0), "a non-agent leaf isn't an agent");
+        assert!(!quiet_agent(&[true, false], 0));
         assert!(!quiet_agent(&[], 0));
     }
 

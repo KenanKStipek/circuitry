@@ -1848,15 +1848,21 @@ is overlaid on every strip the same way it is on every bar row.
   minute's own midpoint. Without `--events` at all
   (`RunModel::has_events`), the strip reads `(state)` and the
   same `created_at`/`completed_at` transitions `observe` already
-  tracks stand in for events. While the only running step is an
-  agent and the strip's own rate over the last minute has actually
-  dropped (`time::quiet_agent`), it ends in `quiet = agent`.
+  tracks stand in for events. While exactly one leaf is running and
+  it's an agent (a `RowKind::Tool` with provider `agent`,
+  `screens::is_agent_row` -- never only a `RowKind::Prompt`, which is
+  an ordinary prompt and not necessarily an agent at all) and the
+  strip's own rate over the last 60s has actually dropped
+  (`time::quiet_agent`), not counting that leaf's own start event, it
+  ends in `quiet = agent`.
 - **decisions:** a `◆` at each named `if`'s own first `Decision`
   story line (`diff::LogKind::Decision`), one per path -- an unnamed
   `if`'s own inferred decision isn't marked, for now.
 - **in flight:** a sweep over every *leaf* row's own `[start_s,
-  end_s]` (`time::in_flight_heights`; a container never counts
-  alongside the one leaf actually running inside it), ending in the
+  end_s]` that itself has no child rows (`time::in_flight_heights`;
+  neither a container nor a `use` step with running children of its
+  own counts alongside the one leaf actually running inside it),
+  ending in the
   run's own peak concurrency and, when any running node currently
   carries `meta.waiting_for` (`time::queued_now`), how many are
   queued behind a slot right now. The height in each column is the

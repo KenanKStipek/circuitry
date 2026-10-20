@@ -1641,13 +1641,14 @@ pub fn build_time_screen(
             quiet_agent: false,
         },
         |run_start_ts| {
-            // Leaf rows only (`RowKind::is_leaf`) -- a container
-            // counting alongside the one leaf actually running
-            // inside it would read "in flight" as 2 or 3 for a
-            // single running step.
-            let leaf_intervals: Vec<(f64, f64, RowKind, StatusKind)> = rows
+            // Leaf rows only, and only ones without child rows of
+            // their own (`RowKind::is_leaf` alone still includes a
+            // `use`, which can have children) -- a container counting
+            // alongside the one leaf actually running inside it would
+            // read "in flight" as 2 or 3 for a single running step.
+            let leaf_intervals: Vec<(f64, f64, bool, StatusKind)> = rows
                 .iter()
-                .filter(|r| r.kind.is_leaf())
+                .filter(|r| r.kind.is_leaf() && !r.has_children)
                 .filter_map(|r| {
                     let start = row_run_relative_start(r, flat, model, run_start_ts)?;
                     let end = if r.status.kind == StatusKind::Running {
@@ -1655,7 +1656,7 @@ pub fn build_time_screen(
                     } else {
                         start + r.duration_s.unwrap_or(0.0)
                     };
-                    Some((start, end, r.kind, r.status.kind))
+                    Some((start, end, is_agent_row(r, flat, plan), r.status.kind))
                 })
                 .collect();
             let in_flight_intervals: Vec<(f64, f64)> =
@@ -1667,19 +1668,22 @@ pub fn build_time_screen(
                 .collect();
             let events_points = crate::time::event_points(model, run_start_ts, &running_starts);
             let decisions = crate::time::decision_points(story_lines, run_start_ts);
-            let running_leaf_kinds: Vec<RowKind> = leaf_intervals
+            let running_leaf_is_agent: Vec<bool> = leaf_intervals
                 .iter()
                 .filter(|&&(_, _, _, status)| status == StatusKind::Running)
-                .map(|&(_, _, kind, _)| kind)
+                .map(|&(_, _, is_agent, _)| is_agent)
                 .collect();
             // The strip's own rate over the last minute, read from
             // the same points it draws from -- "quiet = agent" is
             // about the rate having actually dropped, not merely
             // about an agent happening to be the only thing running.
+            // The running leaf's own start event is excluded: without
+            // that, an agent that had just started would read
+            // "quiet" as false from its own start alone.
             let recent_rate = now_s.map_or(0u64, |now_offset| {
                 events_points
                     .iter()
-                    .filter(|&&(t, _)| t >= now_offset - 60.0)
+                    .filter(|&&(t, _)| t >= now_offset - 60.0 && !running_starts.contains(&t))
                     .map(|&(_, w)| w)
                     .sum()
             });
@@ -1689,7 +1693,7 @@ pub fn build_time_screen(
                 decisions,
                 in_flight_intervals,
                 queued: crate::time::queued_now(flat),
-                quiet_agent: crate::time::quiet_agent(&running_leaf_kinds, recent_rate),
+                quiet_agent: crate::time::quiet_agent(&running_leaf_is_agent, recent_rate),
             }
         },
     );
@@ -3658,6 +3662,238 @@ mod tests {
             "a sibling outside the loop's body must never expand, even if asked to: {:?}",
             screen.rows
         );
+    }
+
+    /// A `use` step with running children counts as a leaf
+    /// (`RowKind::is_leaf`), but it can have child rows of its own --
+    /// without excluding those, "in flight" would count the `use`
+    /// alongside the one child actually running inside it.
+    #[test]
+    fn build_time_screen_in_flight_excludes_a_use_with_a_running_child() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "review": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+                },
+                "nap": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:01Z", "completed_at": null
+                }}
+            }
+        }});
+        let flat = flat_from(state.clone());
+        let rows = vec![
+            Row {
+                path: "prime".to_string(),
+                depth: 0,
+                label: "prime".to_string(),
+                kind: RowKind::Root,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.review".to_string(),
+                depth: 1,
+                label: "review".to_string(),
+                kind: RowKind::Use,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.review.nap".to_string(),
+                depth: 2,
+                label: "nap".to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let header = crate::render::Header {
+            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
+            ..base_header()
+        };
+        let screen = build_time_screen(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:02Z",
+        );
+        assert_eq!(
+            screen.strips.in_flight_intervals.len(),
+            1,
+            "only the running child counts, not the use step around it: {:?}",
+            screen.strips.in_flight_intervals
+        );
+    }
+
+    /// An agent is a `RowKind::Tool` with provider `agent`, never a
+    /// `RowKind::Prompt` -- `quiet_agent` must read true for a lone
+    /// running agent tool once its own recent rate has dropped, not
+    /// only for an ordinary prompt.
+    #[test]
+    fn build_time_screen_quiet_agent_is_true_for_a_lone_running_agent_tool() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "agent_step": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                "provider": "agent"
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let rows = vec![
+            Row {
+                path: "prime".to_string(),
+                depth: 0,
+                label: "prime".to_string(),
+                kind: RowKind::Root,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.agent_step".to_string(),
+                depth: 1,
+                label: "agent_step".to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let header = crate::render::Header {
+            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
+            ..base_header()
+        };
+        // Past the agent's own start by more than the 60s window, so
+        // only its own start event (excluded) would otherwise have
+        // kept the rate above zero.
+        let screen = build_time_screen(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:02:00Z",
+        );
+        assert!(screen.strips.quiet_agent);
+    }
+
+    /// The agent's own start event must not itself count toward
+    /// "recent" -- an agent that only just started would otherwise
+    /// never read as quiet.
+    #[test]
+    fn build_time_screen_quiet_agent_excludes_the_agents_own_start_event() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "agent_step": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                "provider": "agent"
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let rows = vec![
+            Row {
+                path: "prime".to_string(),
+                depth: 0,
+                label: "prime".to_string(),
+                kind: RowKind::Root,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.agent_step".to_string(),
+                depth: 1,
+                label: "agent_step".to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let header = crate::render::Header {
+            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
+            ..base_header()
+        };
+        // 30s after the agent's own start -- well inside the 60s
+        // window, so this only reads quiet if that one event is
+        // excluded.
+        let screen = build_time_screen(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:30Z",
+        );
+        assert!(screen.strips.quiet_agent);
     }
 
     fn time_row(
