@@ -16,6 +16,25 @@ pub struct AgentLiveToolUsage {
     pub ms: u64,
 }
 
+impl AgentLiveToolUsage {
+    /// Parses a `{tool_name: {calls, ms}}` map, the shape both
+    /// `meta.live.tools` and a finished agent's own `meta.raw.
+    /// tool_counts` share (`docs/plugins/agent.md`) -- a missing or
+    /// wrong-typed field in one entry just leaves it `0`, same
+    /// permissive rule [`AgentLive::from_value`] follows throughout.
+    pub fn map_from_value(v: &Value) -> BTreeMap<String, AgentLiveToolUsage> {
+        let mut tools = BTreeMap::new();
+        if let Some(map) = v.as_object() {
+            for (name, entry) in map {
+                let calls = entry.get("calls").and_then(Value::as_u64).unwrap_or(0);
+                let ms = entry.get("ms").and_then(Value::as_u64).unwrap_or(0);
+                tools.insert(name.clone(), AgentLiveToolUsage { calls, ms });
+            }
+        }
+        tools
+    }
+}
+
 /// `meta.live.current_tool` while a tool runs, else `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentLiveCurrentTool {
@@ -75,14 +94,10 @@ impl AgentLive {
         let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
         let u64_field = |k: &str| obj.get(k).and_then(Value::as_u64);
         let f64_field = |k: &str| obj.get(k).and_then(Value::as_f64);
-        let mut tools = BTreeMap::new();
-        if let Some(map) = obj.get("tools").and_then(Value::as_object) {
-            for (name, entry) in map {
-                let calls = entry.get("calls").and_then(Value::as_u64).unwrap_or(0);
-                let ms = entry.get("ms").and_then(Value::as_u64).unwrap_or(0);
-                tools.insert(name.clone(), AgentLiveToolUsage { calls, ms });
-            }
-        }
+        let tools = obj
+            .get("tools")
+            .map(AgentLiveToolUsage::map_from_value)
+            .unwrap_or_default();
         let current_tool = obj
             .get("current_tool")
             .filter(|v| !v.is_null())

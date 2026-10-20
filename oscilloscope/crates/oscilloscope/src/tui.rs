@@ -626,35 +626,6 @@ fn focus_lines(
     }
 }
 
-/// Categorises a tool name for [`agent_live_lines`]'s own compact
-/// activity strip (issue #637's `░read ▒edit █bash`) -- a substring
-/// match on the lower-cased name, so it reads both engines' own
-/// casing (pi's lowercase, Claude Code's `Read`/`Edit`/`Bash`) the
-/// same way, and still assigns *some* glyph to an MCP tool or any
-/// other name neither engine's own built-ins use.
-fn tool_glyph(tool: &str) -> char {
-    let lower = tool.to_ascii_lowercase();
-    if lower.contains("edit") || lower.contains("write") {
-        '▒'
-    } else if lower.contains("bash")
-        || lower.contains("run")
-        || lower.contains("shell")
-        || lower.contains("exec")
-    {
-        '█'
-    } else if lower.contains("read")
-        || lower.contains("grep")
-        || lower.contains("find")
-        || lower.contains("glob")
-        || lower.contains("ls")
-        || lower.contains("search")
-    {
-        '░'
-    } else {
-        '·'
-    }
-}
-
 /// A running agent's own live summary (`docs/plugins/agent.md`'s
 /// live-progress table, issue #637), the lines both the overview's
 /// now pane and Flow's selected pane show for it -- a figure the CLI
@@ -725,7 +696,7 @@ fn agent_live_lines(
                 .rev()
                 .take(32)
                 .rev()
-                .map(|c| tool_glyph(&c.tool))
+                .map(|c| oscilloscope_core::transcript::tool_glyph(&c.tool))
                 .collect();
             lines.push(Line::styled(strip, dim));
             if show_doing_header {

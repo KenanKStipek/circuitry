@@ -453,6 +453,14 @@ pub enum FocusDetail {
         raw_files_changed: Option<u64>,
         /// `meta.raw.turns`.
         raw_turns: Option<u64>,
+        /// `meta.raw.tool_calls` -- the Time screen's zoom pane footer
+        /// (issue #650) needs this once the session has finished,
+        /// the same way it reads `meta.live.tool_calls` while running.
+        raw_tool_calls: Option<u64>,
+        /// `meta.raw.tool_counts`, the same `{calls, ms}`-per-name
+        /// shape as `meta.live.tools` -- empty once finished with no
+        /// tool calls at all, same as a running session with none.
+        raw_tool_counts: BTreeMap<String, crate::model::AgentLiveToolUsage>,
     },
     Plain,
 }
@@ -476,14 +484,29 @@ fn agent_asked_text(meta: &Value) -> Option<String> {
 /// [`FocusDetail::Agent`]'s own `raw_transcript`/`raw_files_changed`/
 /// `raw_turns`, all read from `meta.raw` -- present only once the
 /// session has actually finished and reported one.
-fn agent_raw_summary(meta: &Value) -> (Option<String>, Option<u64>, Option<u64>) {
-    let transcript = meta
-        .pointer("/raw/transcript")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let files_changed = meta.pointer("/raw/files_changed").and_then(Value::as_u64);
-    let turns = meta.pointer("/raw/turns").and_then(Value::as_u64);
-    (transcript, files_changed, turns)
+#[derive(Default)]
+struct AgentRawSummary {
+    transcript: Option<String>,
+    files_changed: Option<u64>,
+    turns: Option<u64>,
+    tool_calls: Option<u64>,
+    tool_counts: BTreeMap<String, crate::model::AgentLiveToolUsage>,
+}
+
+fn agent_raw_summary(meta: &Value) -> AgentRawSummary {
+    AgentRawSummary {
+        transcript: meta
+            .pointer("/raw/transcript")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        files_changed: meta.pointer("/raw/files_changed").and_then(Value::as_u64),
+        turns: meta.pointer("/raw/turns").and_then(Value::as_u64),
+        tool_calls: meta.pointer("/raw/tool_calls").and_then(Value::as_u64),
+        tool_counts: meta
+            .pointer("/raw/tool_counts")
+            .map(crate::model::AgentLiveToolUsage::map_from_value)
+            .unwrap_or_default(),
+    }
 }
 
 /// [`FocusDetail::Agent`]'s own fallback note: shown only when the
@@ -729,17 +752,17 @@ fn build_focused_step(
     let detail = if agent {
         let live = node.and_then(|n| n.live.clone()).map(Box::new);
         let stale = live.as_deref().is_some_and(|l| !l.is_recent(now));
-        let (raw_transcript, raw_files_changed, raw_turns) = node
-            .map(|n| agent_raw_summary(&n.meta))
-            .unwrap_or((None, None, None));
+        let raw = node.map(|n| agent_raw_summary(&n.meta)).unwrap_or_default();
         FocusDetail::Agent {
             asked: node.and_then(|n| agent_asked_text(&n.meta)),
             live,
             stale,
             note: AGENT_LIVE_DATA_NOTE,
-            raw_transcript,
-            raw_files_changed,
-            raw_turns,
+            raw_transcript: raw.transcript,
+            raw_files_changed: raw.files_changed,
+            raw_turns: raw.turns,
+            raw_tool_calls: raw.tool_calls,
+            raw_tool_counts: raw.tool_counts,
         }
     } else if row.kind == RowKind::Tool {
         FocusDetail::Tool {
@@ -2648,7 +2671,11 @@ mod tests {
                     "completed_at": "2026-10-08T11:52:55Z",
                     "provider": "agent",
                     "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
-                    "raw": {"transcript": "/tmp/t.jsonl", "files_changed": 3, "turns": 14}
+                    "raw": {
+                        "transcript": "/tmp/t.jsonl", "files_changed": 3, "turns": 14,
+                        "tool_calls": 5,
+                        "tool_counts": {"bash": {"calls": 3, "ms": 2500}, "edit": {"calls": 2, "ms": 900}}
+                    }
                 }}
             }}),
         );
@@ -2666,9 +2693,16 @@ mod tests {
                 raw_transcript,
                 raw_files_changed,
                 raw_turns,
+                raw_tool_calls,
+                raw_tool_counts,
                 ..
             } => {
                 assert_eq!(note, AGENT_LIVE_DATA_NOTE);
+                assert_eq!(raw_tool_calls, Some(5));
+                assert_eq!(
+                    raw_tool_counts.get("bash"),
+                    Some(&crate::model::AgentLiveToolUsage { calls: 3, ms: 2500 })
+                );
                 assert_eq!(raw_transcript, Some("/tmp/t.jsonl".to_string()));
                 assert_eq!(raw_files_changed, Some(3));
                 assert_eq!(raw_turns, Some(14));

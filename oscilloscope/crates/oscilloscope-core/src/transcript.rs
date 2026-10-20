@@ -80,6 +80,60 @@ fn is_test_command(target: &str) -> bool {
     TEST_RUNNERS.iter().any(|needle| target.contains(needle))
 }
 
+/// A tool name's own activity glyph (issue #637's `░read ▒edit
+/// █bash`, issue #650's zoom-pane bands) -- a substring match on the
+/// lower-cased name, so it reads both engines' own casing (pi's
+/// lowercase, Claude Code's `Read`/`Edit`/`Bash`) the same way, and
+/// still assigns *some* glyph to an MCP tool or any other name
+/// neither engine's own built-ins use. The overview's tool strip and
+/// the Time screen's zoom pane both read this one classification, so
+/// they never disagree about which band a call falls into.
+pub fn tool_glyph(tool: &str) -> char {
+    let lower = tool.to_ascii_lowercase();
+    if lower.contains("edit") || lower.contains("write") {
+        '▒'
+    } else if lower.contains("bash")
+        || lower.contains("run")
+        || lower.contains("shell")
+        || lower.contains("exec")
+    {
+        '█'
+    } else if lower.contains("read")
+        || lower.contains("grep")
+        || lower.contains("find")
+        || lower.contains("glob")
+        || lower.contains("ls")
+        || lower.contains("search")
+    {
+        '░'
+    } else {
+        '·'
+    }
+}
+
+/// [`tool_glyph`]'s own classification, as a band kind rather than a
+/// glyph -- the Time screen's zoom pane (issue #650) groups a
+/// running agent's tool calls into one band per kind, the same four
+/// buckets the glyph strip already uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Read,
+    Edit,
+    Bash,
+    Other,
+}
+
+impl ToolKind {
+    pub fn classify(tool: &str) -> ToolKind {
+        match tool_glyph(tool) {
+            '▒' => ToolKind::Edit,
+            '█' => ToolKind::Bash,
+            '░' => ToolKind::Read,
+            _ => ToolKind::Other,
+        }
+    }
+}
+
 /// Builds a [`TranscriptView`] from already-tailed JSONL lines, in the
 /// order they appear in the tail (oldest first). An unparseable or
 /// unrecognised line, a `tool_end` whose `id` never had a matching
@@ -282,5 +336,24 @@ mod tests {
         ];
         let view = build_transcript_view(&lines);
         assert_eq!(view.last_reply, Some("second".to_string()));
+    }
+
+    #[test]
+    fn tool_glyph_reads_both_engines_own_casing() {
+        assert_eq!(tool_glyph("Edit"), '▒');
+        assert_eq!(tool_glyph("write"), '▒');
+        assert_eq!(tool_glyph("Bash"), '█');
+        assert_eq!(tool_glyph("shell_exec"), '█');
+        assert_eq!(tool_glyph("Read"), '░');
+        assert_eq!(tool_glyph("Grep"), '░');
+        assert_eq!(tool_glyph("mcp__custom__frobnicate"), '·');
+    }
+
+    #[test]
+    fn tool_kind_classify_matches_tool_glyph() {
+        assert_eq!(ToolKind::classify("Edit"), ToolKind::Edit);
+        assert_eq!(ToolKind::classify("Bash"), ToolKind::Bash);
+        assert_eq!(ToolKind::classify("Read"), ToolKind::Read);
+        assert_eq!(ToolKind::classify("frobnicate"), ToolKind::Other);
     }
 }
