@@ -1198,6 +1198,8 @@ fn finish_run(
                     run_dir,
                     model,
                 ),
+                kind: oscilloscope_core::diff::LogKind::RunEnd,
+                path: None,
             })
         });
     if let Some(line) = summary {
@@ -1256,6 +1258,75 @@ fn push_log_line(log_lines: &mut Vec<String>, next_seq: &mut u64, line: String) 
     if log_lines.len() > MAX_LOG_LINES {
         log_lines.drain(0..log_lines.len() - MAX_LOG_LINES);
     }
+}
+
+/// The Flow screen's own story buffer (issue #635: "it keeps at most
+/// 2,000 lines") -- a separate, bounded buffer from the TUI's own
+/// `log_lines` (`MAX_LOG_LINES`), since the story is a small, curated
+/// subset (run start/end, decision, report, failure) a much longer
+/// run could otherwise scroll a 10,000-line log buffer past.
+const MAX_STORY_LINES: usize = 2_000;
+
+/// Pushes one line onto the story buffer when its own `kind` is one
+/// of the story's (issue #635), then trims it back to
+/// `MAX_STORY_LINES` -- every other line (`Start`/`End`/`Progress`/
+/// `Retry`) is silently dropped here, never entering the story at
+/// all, though it still went into `--log`/`log_lines` same as always.
+fn push_story_line(
+    story: &mut Vec<oscilloscope_core::diff::LogLine>,
+    line: oscilloscope_core::diff::LogLine,
+) {
+    use oscilloscope_core::diff::LogKind;
+    if !matches!(
+        line.kind,
+        LogKind::RunStart
+            | LogKind::RunEnd
+            | LogKind::Decision
+            | LogKind::Report
+            | LogKind::Failure
+    ) {
+        return;
+    }
+    story.push(line);
+    if story.len() > MAX_STORY_LINES {
+        story.drain(0..story.len() - MAX_STORY_LINES);
+    }
+}
+
+/// The run-end line, as soon as the TUI itself can show it (issue
+/// #635: the Flow screen's story has "run end with its totals") --
+/// `finish` is called on a *clone* of `differ`, never the real one,
+/// so this never trips its one-shot `run_line_emitted` latch ahead of
+/// `--log`'s own authoritative call in `finish_run`/`finish_watch`,
+/// after the TUI has already closed. Cheap to call on every poll
+/// that just saw the engine exit: `finish` itself is a no-op once
+/// the state doesn't yet read as ended.
+#[allow(clippy::too_many_arguments)]
+fn push_run_end_story_line(
+    differ: &Differ,
+    state: Option<&serde_json::Value>,
+    run_dir: &Path,
+    model: &RunModel,
+    clock: &mut Clock,
+    log_lines: &mut Vec<String>,
+    next_log_seq: &mut u64,
+    story: &mut Vec<oscilloscope_core::diff::LogLine>,
+) {
+    let Some(state) = state else {
+        return;
+    };
+    let Some(line) = differ
+        .clone()
+        .finish(state, failure_reason_fallback(run_dir, model).as_deref())
+    else {
+        return;
+    };
+    push_log_line(
+        log_lines,
+        next_log_seq,
+        format_log_line(clock, line.ts.as_deref(), &line.text),
+    );
+    push_story_line(story, line);
 }
 
 /// Update highlights (DESIGN.md §6.3, issue #535): computes what
@@ -1604,6 +1675,39 @@ fn build_cost_screen_if_active(
     ))
 }
 
+/// Screen 2's own model (issue #635), built only while it's actually
+/// on display -- the same performance rule `build_overview_if_active`/
+/// `build_cost_screen_if_active` already follow.
+#[allow(clippy::too_many_arguments)]
+fn build_flow_screen_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    plan: &oscilloscope_core::plan::PlanTree,
+    model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
+    story: &[oscilloscope_core::diff::LogLine],
+    now: &str,
+) -> Option<oscilloscope_core::screens::FlowScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Flow {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    let selected_path = details_selection_path(app);
+    Some(oscilloscope_core::screens::build_flow_screen(
+        &render_state.rows,
+        &render_state.unfolded_rows,
+        &flat,
+        plan,
+        model,
+        state,
+        story,
+        selected_path.as_deref(),
+        &LocalZone,
+        now,
+    ))
+}
+
 fn details_selection_path(app: &App) -> Option<String> {
     if app.details_source == keys::Pane::State {
         if let Some(p) = &app.state_selected_path {
@@ -1678,6 +1782,11 @@ fn run_tui(
     // line's own highlight key is this sequence number, never its
     // position in `log_lines` itself.
     let mut next_log_seq: u64 = 0;
+    // The Flow screen's own story (issue #635), bounded by
+    // `MAX_STORY_LINES` -- a separate buffer from `log_lines`, kept
+    // in `diff::LogLine`'s own raw-timestamp shape so the story can
+    // merge in an inferred decision at the right clock time.
+    let mut story: Vec<oscilloscope_core::diff::LogLine> = Vec::new();
     let mut current_state: Option<serde_json::Value> = None;
     let start = Instant::now();
 
@@ -1815,6 +1924,15 @@ fn run_tui(
     );
     let mut cost_screen =
         build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+    let mut flow_screen = build_flow_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        current_state.as_ref(),
+        &story,
+        &now_str,
+    );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
     // stays `None` through this placeholder build (always built with
     // `current_state: None`, before the loop has polled anything),
@@ -1898,6 +2016,7 @@ fn run_tui(
                     &mut next_log_seq,
                     format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                 );
+                push_story_line(&mut story, line.clone());
             }
             if let Some(state) = state {
                 current_state = Some(state);
@@ -1908,8 +2027,12 @@ fn run_tui(
 
         // K4: a full rebuild is forced at least once a second even
         // with nothing else dirty, so the header's own elapsed time
-        // still visibly ticks while the run is otherwise quiet.
-        if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
+        // still visibly ticks while the run is otherwise quiet --
+        // once the engine process has exited, that elapsed time is
+        // frozen at its own final value, so forcing a rebuild with
+        // nothing changed would only cost cycles (the Flow screen's
+        // own model among them) for no visible difference at all.
+        if exit_status.is_none() && last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
             needs_rebuild = true;
             needs_draw = true;
         }
@@ -1994,12 +2117,32 @@ fn run_tui(
             );
             cost_screen =
                 build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+            flow_screen = build_flow_screen_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                current_state.as_ref(),
+                &story,
+                &now_str,
+            );
         }
         // K4: computed every tick regardless (collapse/filter/errors-
         // only and the selection itself can change on a key alone),
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
-        let visible = keys::visible_rows(&render_state.rows, &app);
+        // Issue #635: on the Flow screen, movement must land only
+        // on a row the Flow pane actually draws, never on a step
+        // hidden under an untaken branch or merged into its own
+        // single-pass loop row -- `visible_rows_for_flow` narrows the
+        // same real-`Row` list every other screen moves over to
+        // exactly those.
+        let visible = match &flow_screen {
+            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            _ => keys::visible_rows(&render_state.rows, &app),
+        };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
         // Third finding: never call into
@@ -2141,6 +2284,15 @@ fn run_tui(
                             current_state.as_ref(),
                             &now_str,
                         );
+                        flow_screen = build_flow_screen_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            current_state.as_ref(),
+                            &story,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -2211,6 +2363,7 @@ fn run_tui(
                     &now_str,
                     overview.as_ref(),
                     cost_screen.as_ref(),
+                    flow_screen.as_ref(),
                     &mut cost_layout,
                 );
             });
@@ -2257,10 +2410,21 @@ fn run_tui(
                         &mut next_log_seq,
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
+                    push_story_line(&mut story, line.clone());
                 }
                 if let Some(state) = out_state.or(last_live) {
                     current_state = Some(state);
                 }
+                push_run_end_story_line(
+                    &differ,
+                    current_state.as_ref(),
+                    &run_dir,
+                    &model,
+                    &mut clock,
+                    &mut log_lines,
+                    &mut next_log_seq,
+                    &mut story,
+                );
                 needs_rebuild = true;
                 needs_draw = true;
                 if leave_once_exited {
@@ -2799,6 +2963,8 @@ fn run_tui_watch(
     let mut log_lines: Vec<String> = Vec::new();
     // Finding 4: see `run_tui`'s own `next_log_seq`.
     let mut next_log_seq: u64 = 0;
+    // See `run_tui`'s own `story` (issue #635).
+    let mut story: Vec<oscilloscope_core::diff::LogLine> = Vec::new();
     let mut last_state: Option<serde_json::Value> = None;
     let mut warned_no_events = false;
     let events_path = run_dir.join("events.jsonl");
@@ -2923,6 +3089,15 @@ fn run_tui_watch(
     );
     let mut cost_screen =
         build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+    let mut flow_screen = build_flow_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &story,
+        &now_str,
+    );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
@@ -2959,6 +3134,7 @@ fn run_tui_watch(
                     &mut next_log_seq,
                     format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                 );
+                push_story_line(&mut story, line.clone());
             }
             if let Some(state) = state {
                 last_state = Some(state);
@@ -3026,17 +3202,32 @@ fn run_tui_watch(
                         &mut next_log_seq,
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
+                    push_story_line(&mut story, line.clone());
                 }
                 if let Some(state) = out_state.or(last_live) {
                     last_state = Some(state);
                 }
+                push_run_end_story_line(
+                    &differ,
+                    last_state.as_ref(),
+                    &run_dir,
+                    &model,
+                    &mut clock,
+                    &mut log_lines,
+                    &mut next_log_seq,
+                    &mut story,
+                );
                 needs_rebuild = true;
                 needs_draw = true;
             }
         }
 
-        // K4, same as `run_tui`.
-        if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
+        // K4, same as `run_tui`: forced only while the run itself
+        // is still going, since a finished run's own elapsed time is
+        // frozen and a forced rebuild past that point would only
+        // cost cycles (the Flow screen's own model among them) for no
+        // visible difference at all.
+        if !ended && last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
             needs_rebuild = true;
             needs_draw = true;
         }
@@ -3121,8 +3312,24 @@ fn run_tui_watch(
             );
             cost_screen =
                 build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+            flow_screen = build_flow_screen_if_active(
+                &app,
+                &render_state,
+                &plan,
+                &model,
+                last_state.as_ref(),
+                &story,
+                &now_str,
+            );
         }
-        let visible = keys::visible_rows(&render_state.rows, &app);
+        // Issue #635: same narrowing as `osi <doc>`'s own main
+        // loop -- see the comment there.
+        let visible = match &flow_screen {
+            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            _ => keys::visible_rows(&render_state.rows, &app),
+        };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
         // Third finding: never call into
@@ -3231,6 +3438,15 @@ fn run_tui_watch(
                             last_state.as_ref(),
                             &now_str,
                         );
+                        flow_screen = build_flow_screen_if_active(
+                            &app,
+                            &render_state,
+                            &plan,
+                            &model,
+                            last_state.as_ref(),
+                            &story,
+                            &now_str,
+                        );
                     }
                     CEvent::Resize(_, _) => {
                         needs_rebuild = true;
@@ -3290,6 +3506,7 @@ fn run_tui_watch(
                     &now_str,
                     overview.as_ref(),
                     cost_screen.as_ref(),
+                    flow_screen.as_ref(),
                     &mut cost_layout,
                 );
             });
@@ -3421,6 +3638,8 @@ fn finish_watch(
                     run_dir,
                     model,
                 ),
+                kind: oscilloscope_core::diff::LogKind::RunEnd,
+                path: None,
             })
         });
     if let Some(line) = summary {
@@ -3510,6 +3729,94 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #635: "it keeps at most 2,000 lines" -- pushing well
+    /// past that cap must leave the buffer at exactly
+    /// `MAX_STORY_LINES`, having dropped the *oldest* lines first,
+    /// never the newest.
+    #[test]
+    fn push_story_line_caps_the_buffer_at_2000_lines_dropping_the_oldest() {
+        let mut story = Vec::new();
+        for i in 0..MAX_STORY_LINES + 10 {
+            push_story_line(
+                &mut story,
+                oscilloscope_core::diff::LogLine {
+                    ts: None,
+                    text: format!("▸ report {i}"),
+                    kind: oscilloscope_core::diff::LogKind::Report,
+                    path: None,
+                },
+            );
+        }
+        assert_eq!(story.len(), MAX_STORY_LINES);
+        assert_eq!(story.first().unwrap().text, "▸ report 10");
+        assert_eq!(
+            story.last().unwrap().text,
+            format!("▸ report {}", MAX_STORY_LINES + 9)
+        );
+    }
+
+    /// A line whose own `kind` isn't one of the story's
+    /// (`Start`/`End`/`Progress`/`Retry`, DESIGN.md) never enters the
+    /// buffer at all.
+    #[test]
+    fn push_story_line_drops_a_non_story_kind() {
+        let mut story = Vec::new();
+        push_story_line(
+            &mut story,
+            oscilloscope_core::diff::LogLine {
+                ts: None,
+                text: "start".to_string(),
+                kind: oscilloscope_core::diff::LogKind::Start,
+                path: None,
+            },
+        );
+        assert!(story.is_empty());
+    }
+
+    /// Issue #635: the live story gets the run-end line as soon as
+    /// state reads as ended, through a *clone* of `differ` -- the
+    /// real one's own one-shot `run_line_emitted` latch must stay
+    /// untripped, so `--log`'s own authoritative call (`finish_run`/
+    /// `finish_watch`, after the TUI has closed) still prints it
+    /// exactly once of its own.
+    #[test]
+    fn push_run_end_story_line_leaves_the_real_differ_to_still_print_once_after() {
+        let mut differ = oscilloscope_core::diff::Differ::new();
+        let model = RunModel::new();
+        let state = serde_json::json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "error": null}}
+        });
+        let mut clock = Clock::new();
+        let mut log_lines = Vec::new();
+        let mut next_log_seq = 0u64;
+        let mut story = Vec::new();
+        let run_dir = Path::new("/does/not/exist");
+        push_run_end_story_line(
+            &differ,
+            Some(&state),
+            run_dir,
+            &model,
+            &mut clock,
+            &mut log_lines,
+            &mut next_log_seq,
+            &mut story,
+        );
+        assert!(
+            !story.is_empty(),
+            "the live story must get the run-end line while still running"
+        );
+        assert!(
+            !differ.run_line_emitted(),
+            "the real differ's own latch must stay untripped"
+        );
+        let final_line = differ.finish(&state, None);
+        assert!(
+            final_line.is_some(),
+            "--log's own authoritative call must still print exactly once"
+        );
+    }
 
     fn args(words: &[&str]) -> Vec<String> {
         std::iter::once("osi".to_string())

@@ -1,0 +1,19 @@
+effects:
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: then_branch
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\"then-branch\""
+    else:
+      - name: else_branch
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\"else-branch\""

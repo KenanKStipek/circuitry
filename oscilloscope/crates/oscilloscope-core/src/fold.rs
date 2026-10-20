@@ -138,6 +138,13 @@ pub(crate) fn kind_breadcrumb_eligible(kind: RowKind, status: StatusKind) -> boo
     kind != RowKind::Root
         && kind != RowKind::QuickSteps
         && kind != RowKind::Loop
+        // Issue #635: a named `if`'s own row carries the Flow screen's
+        // `◆` decision glyph and condition text -- folding it into a
+        // breadcrumb (`gate › chosen`) would hide the decision
+        // entirely, not just abbreviate it. Shared with the Cost
+        // treemap's own chain folding (`treemap.rs`), so its
+        // `gate › chosen` tile splits into `gate` and `chosen` too.
+        && kind != RowKind::If
         && status != StatusKind::Pending
 }
 
@@ -151,6 +158,35 @@ pub fn is_quick_step(row: &Row) -> bool {
         && row.kind == RowKind::Tool
         && row.status.kind == StatusKind::Done
         && row.duration_s.is_some_and(|secs| secs < 1.0)
+        // A pass is never a quick step (DESIGN.md's Flow section: a
+        // loop's single pass merges into one row of its own, never a
+        // quick-steps one), even though this row's own `kind` can
+        // read as an ordinary tool step's: a pass whose body is a
+        // single leaf shares that leaf's own path (`render::row_kind_
+        // for` reads the plan ahead of the `RowKind::Pass` fallback),
+        // and a pass breadcrumb-folded with its own single child (a
+        // pass *is* breadcrumb-eligible, `breadcrumb_eligible`'s own
+        // doc comment) keeps the child's path and kind, not the
+        // pass's. Neither keeps the pass's own path, so this checks
+        // the one thing both still carry: `pass_row_label`'s own
+        // leading `"pass "`.
+        && !is_pass_label(&row.label)
+        && !row
+            .path
+            .rsplit('.')
+            .next()
+            .is_some_and(|seg| seg.starts_with("iter_"))
+}
+
+/// A loop pass's own label (`render::pass_row_label`: `"pass N of M"`,
+/// or just `"pass N"` while the loop's own total isn't known yet),
+/// read back after folding may have combined -- never a false
+/// positive from an ordinary step merely named "pass", since that
+/// would read as just `"pass"` with no trailing space and digit.
+pub(crate) fn is_pass_label(label: &str) -> bool {
+    label
+        .strip_prefix("pass ")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// Merges a run of two or more consecutive [`is_quick_step`] siblings

@@ -8,7 +8,7 @@
 use std::time::Instant;
 
 use oscilloscope_core::model::{RunStatus, StatusKind};
-use oscilloscope_core::render::{Details, Row, RowKind, StateRow};
+use oscilloscope_core::render::{Details, Row, StateRow};
 use oscilloscope_core::treemap::{Measure, TreemapNode};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -86,16 +86,12 @@ fn with_highlight(style: Style, highlight: Option<Style>) -> Style {
 /// the header's own single row), which would silently shift every
 /// height threshold down by one.
 mod thresholds {
-    /// Below this, the state pane is dropped — screen 2's right
-    /// column becomes the log pane alone (issue #632 moved the
-    /// `tokens by key` treemap and the token bar to the Cost screen,
-    /// so screen 2 itself no longer has a treemap threshold of its
-    /// own).
-    pub const STATE_PANE_MIN_WIDTH: u16 = 90;
-    pub const STATE_PANE_MIN_HEIGHT: u16 = 24;
-    /// Below this, the two-column layout itself collapses to one:
-    /// orchestration, details and log stacked, with the state pane
-    /// gone regardless of width/height.
+    /// Below this, the two-column layout itself collapses to one.
+    /// Issue #635: no screen still uses this pair on its own (the
+    /// Flow screen's own `FLOW_TWO_PANE_MIN_WIDTH`/`_MIN_HEIGHT`
+    /// below happen to share the same numbers); kept for the Cost
+    /// screen's own thresholds just below, which are defined relative
+    /// to it.
     pub const TWO_COLUMN_MIN_WIDTH: u16 = 80;
     pub const TWO_COLUMN_MIN_HEIGHT: u16 = 20;
 
@@ -115,24 +111,34 @@ mod thresholds {
     /// own two-column layout collapses at.
     pub const COST_TREEMAP_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
     pub const COST_TREEMAP_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
-}
 
-/// Keeps `scroll` (the top-of-viewport index into a list of `total`
-/// items) showing `selected` without moving it any more than it has
-/// to (issue #527: "the selected row is always kept in view") —
-/// jumping straight to the top or bottom only when the selection is
-/// already outside the current viewport, never re-centring it.
-fn clamp_scroll(scroll: usize, selected: Option<usize>, total: usize, viewport: usize) -> usize {
-    let viewport = viewport.max(1);
-    let mut top = scroll.min(total);
-    if let Some(idx) = selected {
-        if idx < top {
-            top = idx;
-        } else if idx + 1 > top + viewport {
-            top = idx + 1 - viewport;
-        }
-    }
-    top.min(total.saturating_sub(viewport))
+    /// The Flow screen's own thresholds (issue #635): at this size
+    /// and up, flow | (selected over story), 62/38 both ways. Below
+    /// it (but still at [`FLOW_TWO_PANE_MIN_WIDTH`]/`_MIN_HEIGHT`),
+    /// the story pane is dropped -- flow | selected, with `l`
+    /// swapping the log into the selected pane's own place. Below
+    /// that, one column: selected over flow, no story, the flow
+    /// pane's own columns dropped to duration alone.
+    pub const FLOW_THREE_PANE_MIN_WIDTH: u16 = 100;
+    pub const FLOW_THREE_PANE_MIN_HEIGHT: u16 = 30;
+    pub const FLOW_TWO_PANE_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
+    pub const FLOW_TWO_PANE_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
+    /// Below this flow-pane width, the cost column is dropped first
+    /// (issue #635: "narrow panes drop columns in this order: cost,
+    /// start, tokens").
+    pub const FLOW_COST_COLUMN_MIN_WIDTH: u16 = 95;
+    // The flow pane's own width is a golden-section share of the
+    // body, never the whole terminal's -- at the widest required
+    // size (120 columns), the pane itself is about 74 columns wide,
+    // so a threshold above that can never show the start column at
+    // any supported terminal size at all.
+    pub const FLOW_START_COLUMN_MIN_WIDTH: u16 = 70;
+    pub const FLOW_TOKENS_COLUMN_MIN_WIDTH: u16 = 65;
+    /// The condition dim second line (issue #635's Decisions: "a dim
+    /// second line at 100 columns and wider; otherwise it appears
+    /// only in the selected pane") -- checked against the whole
+    /// terminal, the same way every other threshold here is.
+    pub const FLOW_CONDITION_LINE_MIN_WIDTH: u16 = FLOW_THREE_PANE_MIN_WIDTH;
 }
 
 /// A scroll position suffix for a pane's own border title (issue
@@ -146,32 +152,11 @@ fn scroll_indicator(selected: Option<usize>, total: usize, viewport: usize) -> O
     Some(format!(" {position}/{total} "))
 }
 
-/// Finding F6: unit tests for [`clamp_scroll`]/[`scroll_indicator`]
-/// on their own, beyond the rendered goldens that already exercise
-/// them indirectly.
+/// Unit tests for [`scroll_indicator`] on their own,
+/// beyond the rendered goldens that already exercise it indirectly.
 #[cfg(test)]
 mod scroll_tests {
     use super::*;
-
-    #[test]
-    fn clamp_scroll_pulls_the_viewport_down_to_a_selection_below_it() {
-        assert_eq!(clamp_scroll(0, Some(7), 10, 4), 4);
-    }
-
-    #[test]
-    fn clamp_scroll_pulls_the_viewport_up_to_a_selection_above_it() {
-        assert_eq!(clamp_scroll(5, Some(2), 10, 4), 2);
-    }
-
-    #[test]
-    fn clamp_scroll_does_not_move_when_the_selection_is_already_visible() {
-        assert_eq!(clamp_scroll(3, Some(4), 10, 4), 3);
-    }
-
-    #[test]
-    fn clamp_scroll_never_leaves_the_viewport_underfull_with_no_selection() {
-        assert_eq!(clamp_scroll(9, None, 10, 4), 6);
-    }
 
     #[test]
     fn scroll_indicator_is_none_when_everything_already_fits() {
@@ -266,47 +251,6 @@ fn status_style(kind: StatusKind, theme: &Theme) -> Style {
     } else {
         style
     }
-}
-
-fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
-    let indent = "  ".repeat(row.depth.saturating_sub(1));
-    let glyph = status_glyph(row.status.kind);
-    let mut spans = vec![
-        Span::styled(
-            format!("{indent}{glyph} "),
-            status_style(row.status.kind, ctx.theme),
-        ),
-        Span::raw(row.label.clone()),
-    ];
-    if let Some(progress) = &row.loop_progress {
-        let total = progress
-            .total
-            .map(|t| t.to_string())
-            .unwrap_or_else(|| "?".to_string());
-        spans.push(Span::styled(
-            format!("  {}/{total}", progress.done),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    if let Some(duration) = row.duration_s {
-        spans.push(Span::styled(
-            format!("  {}", oscilloscope_core::format::format_duration(duration)),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    if let Some(dim) = &row.dim {
-        spans.push(Span::styled(
-            format!("  {dim}"),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    let mut style = if selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
-    style = with_highlight(style, ctx.highlight(&format!("row:{}", row.path)));
-    Line::from(spans).style(style)
 }
 
 /// Draws [`oscilloscope_core::screens::header_line`]'s own segments
@@ -694,6 +638,7 @@ fn focus_step_lines(
                 engine,
                 model,
                 note,
+                ..
             } => {
                 let mut parts = Vec::new();
                 if let Some(engine) = engine {
@@ -1010,242 +955,6 @@ fn draw_cost_card(
     frame.render_widget(paragraph, area);
 }
 
-/// The orchestration pane (issue #527, formerly "plan"): scrolls to
-/// keep the selected row in view, with the current position shown in
-/// the border once any row is hidden above or below.
-fn draw_tree(
-    frame: &mut Frame,
-    area: Rect,
-    rows: &[&Row],
-    app: &mut App,
-    header: &oscilloscope_core::render::Header,
-    ctx: &DrawCtx,
-) {
-    let document = &header.document;
-    let viewport = area.height.saturating_sub(2) as usize;
-    app.tree_viewport = viewport;
-    let selected_idx = app
-        .selected_path
-        .as_deref()
-        .and_then(|p| rows.iter().position(|r| r.path == p));
-    app.tree_scroll = clamp_scroll(app.tree_scroll, selected_idx, rows.len(), viewport);
-    let visible_slice =
-        &rows[app.tree_scroll.min(rows.len())..(app.tree_scroll + viewport).min(rows.len())];
-
-    let items: Vec<ListItem> = visible_slice
-        .iter()
-        .map(|row| {
-            let selected = app.selected_path.as_deref() == Some(row.path.as_str());
-            ListItem::new(row_line(row, selected, ctx))
-        })
-        .collect();
-    let border_style = if app.pane == Pane::Tree {
-        Style::default().fg(ctx.theme.border_focused)
-    } else {
-        Style::default().fg(ctx.theme.border)
-    };
-    let effects = match header.effects_planned {
-        Some(planned) if header.effects_planned_is_lower_bound => {
-            format!("{}/{planned}+", header.effects_done)
-        }
-        Some(planned) => format!("{}/{planned}", header.effects_done),
-        None => header.effects_done.to_string(),
-    };
-    // Issue #626: the effects count moved here from the header line,
-    // which no longer shows it at all.
-    let mut title = format!(
-        " orchestration {} ({effects})",
-        orchestration_name(document)
-    );
-    if app.follow {
-        title.push_str(" (following)");
-    }
-    match scroll_indicator(selected_idx, rows.len(), viewport) {
-        Some(indicator) => title.push_str(&indicator),
-        None => title.push(' '),
-    }
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style),
-    );
-    frame.render_widget(list, area);
-}
-
-/// The `sent`/`received` snippet's own cap (finding M1): three
-/// *wrapped* lines at the pane's current inner width, not the
-/// issue's original flat 200-character cut — at the golden-section
-/// split's own narrower details pane, a long snippet at 200 characters
-/// still ran past both blocks fitting on screen at once. `v` still
-/// opens the untruncated text either way.
-const SNIPPET_MAX_LINES: usize = 3;
-
-/// `row_kind` is the drawn orchestration row's own kind for this same
-/// path, when there is one: only the drawn rows know a folded row's
-/// kind (`quick steps`), which `details_for` can't derive from the path
-/// alone. Without one (a state-pane-only node, such as a named report),
-/// the path-derived `details.kind` is used.
-fn details_lines(
-    details: &Details,
-    row_kind: Option<RowKind>,
-    ctx: &DrawCtx,
-    inner_width: u16,
-) -> Vec<Line<'static>> {
-    let kind = row_kind.unwrap_or(details.kind);
-    let mut lines = vec![
-        Line::from(format!("path   {}", details.path)),
-        Line::from(format!("type   {}", kind.label())),
-    ];
-    // Issue #535/finding 6: these two blocks come right after path/
-    // type, before plan/meta/error -- at the pane's own golden-
-    // section height, a prompt's meta list could otherwise push both
-    // snippets below the fold.
-    if let Some(sent) = &details.sent {
-        lines.push(Line::from(""));
-        let style = with_highlight(Style::default(), ctx.highlight("details:sent"));
-        lines.push(token_block_header("sent", '↑', sent).style(style));
-        if let Some(snippet) = &sent.snippet {
-            for line in snippet_lines(snippet, inner_width, SNIPPET_MAX_LINES) {
-                lines.push(Line::from(line));
-            }
-        }
-    }
-    if let Some(received) = &details.received {
-        lines.push(Line::from(""));
-        let style = with_highlight(Style::default(), ctx.highlight("details:received"));
-        lines.push(token_block_header("received", '↓', received).style(style));
-        if received.waiting {
-            lines.push(Line::styled(
-                "waiting for the reply",
-                Style::default().fg(ctx.theme.dim),
-            ));
-        } else if let Some(snippet) = &received.snippet {
-            for line in snippet_lines(snippet, inner_width, SNIPPET_MAX_LINES) {
-                lines.push(Line::from(line));
-            }
-        }
-    }
-    if !details.plan_summary.is_empty() {
-        lines.push(Line::from(format!("plan   {}", details.plan_summary)));
-    }
-    for (key, value) in &details.meta_summary {
-        // Finding 11: a label of 7+ characters ("provider",
-        // "adapter_noop") left no gap from `{key:<7}` alone.
-        // A report's `time` is a raw timestamp; shown as a local clock
-        // time like every other time on screen (#613).
-        let shown = if key == "time" {
-            oscilloscope_core::format::format_clock_time(value, ctx.zone)
-                .unwrap_or_else(|| value.clone())
-        } else {
-            value.clone()
-        };
-        lines.push(Line::from(format!("{key:<8} {shown}")));
-    }
-    if let Some(error) = &details.error {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(
-            format!("error  {error}"),
-            Style::default().fg(ctx.theme.error),
-        ));
-    }
-    if details.sent.is_none() {
-        if let Some(prompt_sent) = &details.prompt_sent {
-            lines.push(Line::from(""));
-            lines.push(Line::from("prompt_sent (v for full):"));
-            lines.push(Line::from(prompt_sent.clone()));
-        }
-        if let Some(value) = &details.value {
-            if !value.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from("value (v for full):"));
-                lines.push(Line::from(value.clone()));
-            }
-        }
-    }
-    lines
-}
-
-/// Greedy word-wrap at `width` columns, one hard split per
-/// overlength word rather than overflowing it (finding M1).
-fn wrap_lines(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = Vec::new();
-    let mut current: Vec<char> = Vec::new();
-    for word in text.split(' ') {
-        let word_chars: Vec<char> = word.chars().collect();
-        if !current.is_empty() && current.len() + 1 + word_chars.len() > width {
-            lines.push(current.iter().collect());
-            current.clear();
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.extend(word_chars.iter());
-        while current.len() > width {
-            let (head, tail) = current.split_at(width);
-            lines.push(head.iter().collect());
-            current = tail.to_vec();
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current.iter().collect());
-    }
-    lines
-}
-
-/// [`wrap_lines`], capped to `max_lines` -- any remaining text
-/// collapses into the last line's own trailing `…` (finding M1).
-fn snippet_lines(text: &str, width: u16, max_lines: usize) -> Vec<String> {
-    let width = width as usize;
-    let wrapped = wrap_lines(text, width);
-    if wrapped.len() <= max_lines {
-        return wrapped;
-    }
-    let mut capped: Vec<String> = wrapped.into_iter().take(max_lines).collect();
-    if let Some(last) = capped.last_mut() {
-        let keep = width.saturating_sub(1);
-        let mut chars: Vec<char> = last.chars().take(keep).collect();
-        chars.push('…');
-        *last = chars.into_iter().collect();
-    }
-    capped
-}
-
-#[cfg(test)]
-mod snippet_wrap_tests {
-    use super::*;
-
-    #[test]
-    fn wrap_lines_breaks_on_whole_words_within_width() {
-        let lines = wrap_lines("the quick brown fox jumps", 10);
-        assert_eq!(lines, vec!["the quick", "brown fox", "jumps"]);
-    }
-
-    #[test]
-    fn wrap_lines_hard_splits_a_single_overlong_word() {
-        let lines = wrap_lines("abcdefghij", 4);
-        assert_eq!(lines, vec!["abcd", "efgh", "ij"]);
-    }
-
-    #[test]
-    fn snippet_lines_fits_within_the_cap_untouched() {
-        let lines = snippet_lines("one two three", 20, 3);
-        assert_eq!(lines, vec!["one two three"]);
-    }
-
-    #[test]
-    fn snippet_lines_caps_at_three_and_ends_with_an_ellipsis() {
-        let text = "one two three four five six seven eight nine ten";
-        let lines = snippet_lines(text, 10, 3);
-        assert_eq!(lines.len(), 3);
-        assert!(lines.last().unwrap().ends_with('…'), "{lines:?}");
-        for line in &lines {
-            assert!(line.chars().count() <= 10, "{line:?} exceeds width");
-        }
-    }
-}
-
 #[cfg(test)]
 mod truncate_tests {
     use super::*;
@@ -1285,79 +994,6 @@ mod truncate_tests {
         assert_eq!(truncated.spans[1].style.fg, Some(Color::Blue));
         assert_eq!(truncated.spans[2].content.as_ref(), "…");
     }
-}
-
-/// One `sent`/`received` block's own header line (issue #535):
-/// `sent  ↑ 1.2 kt` or `received  ↓ ≈567 t` (an estimate), formatted
-/// the same way every other token count in `osi` is.
-fn token_block_header(
-    label: &str,
-    arrow: char,
-    block: &oscilloscope_core::render::TokenBlock,
-) -> Line<'static> {
-    let text = match block.tokens {
-        Some(tokens) if block.estimated => {
-            format!(
-                "{label}  {arrow} ≈{}",
-                oscilloscope_core::format::format_tokens(tokens)
-            )
-        }
-        Some(tokens) => format!(
-            "{label}  {arrow} {}",
-            oscilloscope_core::format::format_tokens(tokens)
-        ),
-        None => format!("{label}  {arrow}"),
-    };
-    Line::from(text)
-}
-
-/// The details pane (issue #527): scrolls when it has focus
-/// (`↑↓`, `PgUp`/`PgDn`), and returns to the top whenever the
-/// selected row changes (`App::select_tree_path`'s own job, not
-/// this function's).
-fn draw_details(
-    frame: &mut Frame,
-    area: Rect,
-    details: Option<&Details>,
-    row_kind: Option<RowKind>,
-    app: &mut App,
-    ctx: &DrawCtx,
-) {
-    let border_style = if app.pane == Pane::Details {
-        Style::default().fg(ctx.theme.border_focused)
-    } else {
-        Style::default().fg(ctx.theme.border)
-    };
-    let inner_width = area.width.saturating_sub(2);
-    let text = details
-        .map(|d| details_lines(d, row_kind, ctx, inner_width))
-        .unwrap_or_else(|| vec![Line::from("(nothing selected)")]);
-    let viewport = area.height.saturating_sub(2) as usize;
-    app.details_viewport = viewport;
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
-    // Finding F8: `text.len()` counts *logical* lines; a long
-    // `prompt_sent`/value wraps to more rendered lines than that on a
-    // narrow layout, and `Paragraph::scroll` counts the wrapped ones
-    // -- clamping to the logical count left `End` unable to reach a
-    // wrapped line's own tail.
-    let max_scroll = paragraph.line_count(inner_width).saturating_sub(1);
-    if app.details_scroll > max_scroll {
-        app.details_scroll = max_scroll;
-    }
-    // A loop pass's own `pass N of M
-    // (iter_N)` belongs in this title, not the `plan` line
-    // `details_lines` draws inside the pane.
-    let title = match details.and_then(|d| d.title.as_deref()) {
-        Some(title) => format!(" {title} "),
-        None => " details ".to_string(),
-    };
-    let paragraph = paragraph.scroll((app.details_scroll as u16, 0)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style),
-    );
-    frame.render_widget(paragraph, area);
 }
 
 /// `log_total` is the plain running count of every line ever pushed
@@ -2285,7 +1921,7 @@ fn draw_overlay(
 // off the bottom there).
 const HELP_TEXT: &[&str] = &[
     "0            overview",
-    "2            flow (today's layout)",
+    "2            flow: control flow, selected step, story",
     "3            cost",
     "↑↓ / j k     move (the focused pane, or cost: select a store)",
     "PgUp PgDn    move a page",
@@ -2295,14 +1931,14 @@ const HELP_TEXT: &[&str] = &[
     "⏎            overview: open flow; flow: expand; cost: zoom in",
     "esc i o $    cost: zoom out · switch measure (same key: total)",
     "z            fold on/off (breadcrumbs, quick steps)",
-    "tab          orchestration → details → state",
+    "tab          flow → selected → story → flow (else: tree → details)",
+    "s / l        swap selected for state / story for the log",
     "f            follow the running row (on by default)",
     "e            errors only",
     "/            filter",
     "v            show the full value",
     "t            cycle the colour theme",
-    "c            cancel (confirm)",
-    "q            quit (confirms while a run is going)",
+    "c / q        cancel / quit (both confirm while a run is going)",
     "?            this help",
     "no output token count until a prompt finishes",
     "press any key to close",
@@ -2315,20 +1951,18 @@ const HELP_OVERLAY_WIDTH: u16 = 68;
 
 /// One redraw's whole layout (issue #626): a one-line header, shared
 /// by every screen (replacing the old three-row one), then the
-/// screen currently on display (`app.screen`) — screen 2 (`Flow`) is
-/// DESIGN.md §6.3's own layout, a left column of the details pane
-/// over the orchestration pane, split at the golden section both
-/// ways, and a right column of the state pane over the log pane
-/// (issue #632 moved the `tokens by key` treemap and the token bar
-/// off this screen, onto screen 3). `overview`/`cost_screen` are
-/// screens 0 and 3's own models, `Some` only while that screen is
-/// actually on display (issue #626's own performance rule: "models
-/// for screens not on display aren't built"); `cost_layout` is the
-/// Cost screen's own squarify-layout cache, re-laid out only when its
-/// own tree or area actually changes. `raw_state` is the engine's
-/// own last snapshot, untruncated — `details`' own `prompt_sent`/
-/// `value` are already cut to `DETAILS_PREVIEW_CHARS` for the
-/// details pane, which `v`'s own full-value overlay must not be.
+/// screen currently on display (`app.screen`) — screen 2 (`Flow`,
+/// issue #635) is the tree as control flow, the selected step and the
+/// run's story; screen 1 (`Time`) isn't built yet and draws nothing.
+/// `overview`/`cost_screen`/`flow_screen` are screens 0, 3 and 2's own
+/// models, `Some` only while that screen is actually on display
+/// (issue #626's own performance rule: "models for screens not on
+/// display aren't built"); `cost_layout` is the Cost screen's own
+/// squarify-layout cache, re-laid out only when its own tree or area
+/// actually changes. `raw_state` is the engine's own last snapshot,
+/// untruncated — `details`' own `prompt_sent`/`value` are already cut
+/// to `DETAILS_PREVIEW_CHARS` for the details pane, which `v`'s own
+/// full-value overlay must not be.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -2343,6 +1977,7 @@ pub fn draw(
     now: &str,
     overview: Option<&oscilloscope_core::screens::Overview>,
     cost_screen: Option<&oscilloscope_core::screens::CostScreen>,
+    flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
     cost_layout: &mut CostLayoutCache,
 ) {
     let area = frame.area();
@@ -2394,9 +2029,23 @@ pub fn draw(
                 draw_cost_screen(frame, area, body, cost_screen, app, cost_layout, ctx);
             }
         }
-        _ => draw_screen2(
-            frame, area, body, state, details, log_lines, log_total, app, ctx,
-        ),
+        oscilloscope_core::screens::Screen::Flow => {
+            if let Some(flow_screen) = flow_screen {
+                draw_flow_screen(
+                    frame,
+                    area,
+                    body,
+                    state,
+                    flow_screen,
+                    log_lines,
+                    log_total,
+                    app,
+                    ctx,
+                );
+            }
+        }
+        // Lane C (issue #612): not built yet.
+        oscilloscope_core::screens::Screen::Time => {}
     }
 
     draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
@@ -2466,62 +2115,813 @@ fn draw_dialog_overlay(
     }
 }
 
-/// Screen 2 (`Flow`, DESIGN.md §6.3): today's layout, moved out of
-/// [`draw`] when screens landed (issue #626), fed a `body` rect one
-/// row shorter (the header's own three rows are now one). Issue
-/// #632 moved the `tokens by key` treemap and the token bar to the
-/// Cost screen -- `body` is no longer split off a bottom strip for
-/// the token bar at all, and the right column is the state pane over
-/// the log pane directly, with no treemap row above them.
+/// One Flow-pane row's own line(s) (issue #635): the status glyph
+/// and label, the loop-progress/duration/dim-provider fragments every
+/// ordinary row already has, plus the Flow screen's own additions --
+/// a decision's `→ then`/`→ else`, the untaken-branch summary's own
+/// dim styling, and the start/tokens/cost columns, appended after the
+/// label and dropped narrowest-first. `show_condition` is `FLOW_
+/// CONDITION_LINE_MIN_WIDTH` already checked by the caller once for
+/// the whole pane.
+fn flow_row_lines(
+    row: &oscilloscope_core::flow::FlowRow,
+    columns: FlowColumns,
+    show_condition: bool,
+    selected: bool,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::flow::FlowRowKind;
+    let indent = "  ".repeat(row.depth);
+    let mut main_style = Style::default();
+    let mut spans = Vec::new();
+    match &row.kind {
+        FlowRowKind::Row(_) => {
+            let glyph = if row.merged_pass {
+                '⟲'
+            } else {
+                status_glyph(row.status.kind)
+            };
+            spans.push(Span::styled(
+                format!("{indent}{glyph} "),
+                status_style(row.status.kind, ctx.theme),
+            ));
+            spans.push(Span::raw(row.label.clone()));
+            if let Some(progress) = &row.loop_progress {
+                let total = progress
+                    .total
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                spans.push(Span::styled(
+                    format!("  {}/{total}", progress.done),
+                    Style::default().fg(ctx.theme.dim),
+                ));
+            }
+        }
+        FlowRowKind::Decision {
+            branch,
+            inferred,
+            nothing_ran,
+            ..
+        } => {
+            spans.push(Span::raw(format!("{indent}◆ {}", row.label)));
+            // The label itself already carries the arrow for the
+            // same-names case (`if → ?`, `unnamed_if_label`'s own
+            // output never otherwise ends this way) -- a second,
+            // separate `…` right after it would just repeat the
+            // same "not yet decided" meaning twice.
+            if !row.label.ends_with("→ ?") {
+                let mut arrow = match branch {
+                    Some(b) => format!("  → {b}"),
+                    None => "  …".to_string(),
+                };
+                if *nothing_ran {
+                    arrow.push_str(" (nothing ran)");
+                }
+                spans.push(Span::styled(arrow, Style::default().fg(ctx.theme.dim)));
+            }
+            if *inferred {
+                spans.push(Span::styled(
+                    "  (inferred)",
+                    Style::default().fg(ctx.theme.dim),
+                ));
+            }
+        }
+        FlowRowKind::UntakenBranch { .. } => {
+            spans.push(Span::styled(
+                format!("{indent}· {}", row.label),
+                Style::default().fg(ctx.theme.dim),
+            ));
+            main_style = main_style.add_modifier(Modifier::DIM);
+        }
+    }
+    let mut right = Vec::new();
+    if columns.start {
+        if let Some(start) = row
+            .start_ts
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+        {
+            right.push(start);
+        }
+    }
+    if let Some(duration) = row.duration_s {
+        right.push(oscilloscope_core::format::format_duration(duration));
+    }
+    if columns.tokens {
+        if let Some(tokens) = row.tokens {
+            right.push(oscilloscope_core::format::format_tokens(tokens));
+        }
+    }
+    if columns.cost {
+        if let Some(cost) = row.cost_usd {
+            right.push(format!("${cost:.2}"));
+        }
+    }
+    if !right.is_empty() {
+        spans.push(Span::styled(
+            format!("   {}", right.join("  ")),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    if selected {
+        main_style = main_style.add_modifier(Modifier::REVERSED);
+    }
+    main_style = with_highlight(main_style, ctx.highlight(&format!("row:{}", row.path)));
+    let mut lines = vec![Line::from(spans).style(main_style)];
+    if show_condition {
+        if let Some(condition) = &row.condition {
+            lines.push(Line::styled(
+                format!("{indent}  {}", condition.text),
+                Style::default()
+                    .fg(ctx.theme.dim)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
+    }
+    lines
+}
+
+/// [`flow_row_lines`]'s own column visibility (issue #635: "narrow
+/// panes drop columns in this order: cost, start, tokens. Duration
+/// always stays"), decided once per redraw from the flow pane's own
+/// interior width.
+#[derive(Debug, Clone, Copy)]
+struct FlowColumns {
+    cost: bool,
+    start: bool,
+    tokens: bool,
+}
+
+fn flow_columns_for_width(width: u16) -> FlowColumns {
+    FlowColumns {
+        cost: width >= thresholds::FLOW_COST_COLUMN_MIN_WIDTH,
+        start: width >= thresholds::FLOW_START_COLUMN_MIN_WIDTH,
+        tokens: width >= thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH,
+    }
+}
+
+#[cfg(test)]
+mod flow_columns_tests {
+    use super::*;
+
+    /// DESIGN.md: "narrow panes drop columns in this order: cost,
+    /// start, tokens. Duration always stays" -- duration itself has
+    /// no threshold of its own at all (`flow_row_lines` always draws
+    /// it), so this only ever needs to check the three that do.
+    #[test]
+    fn narrower_than_every_threshold_drops_cost_start_and_tokens() {
+        let columns = flow_columns_for_width(thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH - 1);
+        assert!(!columns.cost);
+        assert!(!columns.start);
+        assert!(!columns.tokens);
+    }
+
+    #[test]
+    fn wide_enough_for_tokens_alone_keeps_only_tokens() {
+        let columns = flow_columns_for_width(thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH);
+        assert!(!columns.cost);
+        assert!(!columns.start);
+        assert!(columns.tokens);
+    }
+
+    #[test]
+    fn wide_enough_for_start_keeps_tokens_and_start_but_not_cost() {
+        let columns = flow_columns_for_width(thresholds::FLOW_START_COLUMN_MIN_WIDTH);
+        assert!(!columns.cost);
+        assert!(columns.start);
+        assert!(columns.tokens);
+    }
+
+    #[test]
+    fn wide_enough_for_cost_keeps_every_column() {
+        let columns = flow_columns_for_width(thresholds::FLOW_COST_COLUMN_MIN_WIDTH);
+        assert!(columns.cost);
+        assert!(columns.start);
+        assert!(columns.tokens);
+    }
+}
+
+/// Resolves `app.selected_path` (set by an ordinary move, or by
+/// follow/`⏎`-on-overview picking a real tree path directly) to
+/// the Flow pane's own drawn row (issue #635): a path under a
+/// single-pass loop's own merged pass maps to that loop's row, and a
+/// path hidden entirely under a decision's untaken branch maps to
+/// that branch's own dim summary line -- `rows` is checked for an
+/// exact match first, so an ordinary selection (already a real,
+/// drawn row's own path) never takes either fallback.
+fn flow_selected_row_path(
+    rows: &[&oscilloscope_core::flow::FlowRow],
+    selected: &str,
+) -> Option<String> {
+    if let Some(row) = rows.iter().find(|r| r.path == selected) {
+        return Some(row.path.clone());
+    }
+    if let Some(row) = rows
+        .iter()
+        .find(|r| r.merged_pass && selected.starts_with(&format!("{}.iter_", r.path)))
+    {
+        return Some(row.path.clone());
+    }
+    rows.iter().find_map(|r| match &r.kind {
+        oscilloscope_core::flow::FlowRowKind::UntakenBranch { paths } => {
+            is_under_any_untaken_path(selected, paths).then(|| r.path.clone())
+        }
+        _ => None,
+    })
+}
+
+fn is_under_any_untaken_path(path: &str, roots: &[String]) -> bool {
+    roots
+        .iter()
+        .any(|root| path == root || path.starts_with(&format!("{root}.")))
+}
+
+#[cfg(test)]
+mod flow_selected_row_path_tests {
+    use super::*;
+    use oscilloscope_core::flow::{FlowRow, FlowRowKind};
+    use oscilloscope_core::model::{RowStatus, StatusKind};
+    use oscilloscope_core::render::RowKind;
+
+    fn flow_row(path: &str, kind: FlowRowKind, merged_pass: bool) -> FlowRow {
+        FlowRow {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress: None,
+            has_children: false,
+            merged_pass,
+        }
+    }
+
+    #[test]
+    fn an_exact_match_is_returned_as_is() {
+        let rows = [flow_row("prime", FlowRowKind::Row(RowKind::Tool), false)];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(
+            flow_selected_row_path(&refs, "prime"),
+            Some("prime".to_string())
+        );
+    }
+
+    #[test]
+    fn a_merged_passs_own_pass_maps_to_its_loop_row() {
+        let rows = [flow_row("prime.fan", FlowRowKind::Row(RowKind::Loop), true)];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(
+            flow_selected_row_path(&refs, "prime.fan.iter_0"),
+            Some("prime.fan".to_string())
+        );
+    }
+
+    #[test]
+    fn a_step_under_an_untaken_branch_maps_to_its_summary_line() {
+        let rows = [flow_row(
+            "prime.gate.__untaken",
+            FlowRowKind::UntakenBranch {
+                paths: vec!["prime.gate.other".to_string()],
+            },
+            false,
+        )];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(
+            flow_selected_row_path(&refs, "prime.gate.other"),
+            Some("prime.gate.__untaken".to_string())
+        );
+    }
+
+    #[test]
+    fn a_path_covered_by_nothing_drawn_resolves_to_none() {
+        let rows = [flow_row("prime", FlowRowKind::Row(RowKind::Tool), false)];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(flow_selected_row_path(&refs, "prime.other"), None);
+    }
+}
+
+/// The flow pane (issue #635's left pane): today's orchestration-pane
+/// keys (`↑↓`/`jk`, `PgUp`/`PgDn`, collapse, follow, `z`, `e`, `/`,
+/// `⏎` on a quick-steps row) still act on the real `Row`s
+/// (`App::selected_path`'s own model) -- the Flow screen's own
+/// synthetic decision/untaken-branch rows are display-only here, read
+/// straight from `screen.rows` for exactly the positions the real
+/// rows don't already cover.
 #[allow(clippy::too_many_arguments)]
-fn draw_screen2(
+fn draw_flow_pane(
     frame: &mut Frame,
-    frame_area: Rect,
-    body: Rect,
-    state: &oscilloscope_core::render::RenderState,
-    details: Option<&Details>,
+    area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
+    visible: &[&Row],
+    app: &mut App,
+    header: &oscilloscope_core::render::Header,
+    frame_width: u16,
+    // DESIGN.md: "Below 80×20: one column ... the flow pane shows
+    // duration only" -- the one-column layout's own flow pane often
+    // ends up no narrower than the two-column one's left column (it
+    // gets the whole body width instead of a golden-section share of
+    // it), so this can't be the width thresholds' own call to make.
+    one_column: bool,
+    ctx: &DrawCtx,
+) {
+    let footer_lines = 3u16;
+    let viewport = area.height.saturating_sub(2 + footer_lines) as usize;
+    app.tree_viewport = viewport;
+
+    let columns = if one_column {
+        FlowColumns {
+            cost: false,
+            start: false,
+            tokens: false,
+        }
+    } else {
+        flow_columns_for_width(area.width)
+    };
+    let show_condition = frame_width >= thresholds::FLOW_CONDITION_LINE_MIN_WIDTH;
+    let visible_paths: std::collections::BTreeSet<&str> =
+        visible.iter().map(|r| r.path.as_str()).collect();
+    // Issue #635: the one list of drawn lines, in the exact
+    // order they're drawn -- a real row collapse/filter/errors-only
+    // would hide, by the same rule `visible_paths` already applies
+    // elsewhere; the synthetic rows this module invents (an unnamed
+    // decision, `inferred: true`; an untaken branch's summary line)
+    // carry no real path for that state to hide at all, so they're
+    // always drawn. Scrolling and selection both move over exactly
+    // this list, never the orchestration pane's own `visible` -- that
+    // list still has the untaken branch's own hidden real rows (never
+    // drawn here at all) and the pass a single-pass loop merged away
+    // (drawn as the loop row instead), so clamping or indexing
+    // against it directly could point `j`/`k`/the scrollbar at a
+    // position nothing here actually shows.
+    let drawable: Vec<&oscilloscope_core::flow::FlowRow> = screen
+        .rows
+        .iter()
+        .filter(|row| {
+            !oscilloscope_core::flow::is_real_flow_row(&row.kind)
+                || visible_paths.contains(row.path.as_str())
+        })
+        .collect();
+    let selected_key = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| flow_selected_row_path(&drawable, p));
+    let selected_idx = selected_key
+        .as_deref()
+        .and_then(|key| drawable.iter().position(|r| r.path == key));
+    // A decision row with a condition takes two screen lines, not
+    // one (`flow_row_lines`), so scrolling and the viewport both
+    // have to work over line counts rather than row counts, the
+    // same way `draw_state` already does for a token line.
+    let line_counts: Vec<usize> = drawable
+        .iter()
+        .map(|row| 1 + (show_condition && row.condition.is_some()) as usize)
+        .collect();
+    app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut end_idx = app.tree_scroll;
+    for row in drawable.iter().skip(app.tree_scroll) {
+        let selected = selected_key.as_deref() == Some(row.path.as_str());
+        let row_lines = flow_row_lines(row, columns, show_condition, selected, ctx);
+        if lines.len() + row_lines.len() > viewport {
+            break;
+        }
+        lines.extend(row_lines);
+        end_idx += 1;
+    }
+
+    let selectable: Vec<&oscilloscope_core::flow::FlowRow> = drawable
+        .iter()
+        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+        .copied()
+        .collect();
+    let selectable_idx = selected_key
+        .as_deref()
+        .and_then(|key| selectable.iter().position(|r| r.path == key));
+    let more_planned = drawable
+        .iter()
+        .skip(end_idx)
+        .filter(|r| r.status.kind == oscilloscope_core::model::StatusKind::Pending)
+        .count() as u64;
+
+    let border_style = if app.pane == Pane::Tree {
+        Style::default().fg(ctx.theme.border_focused)
+    } else {
+        Style::default().fg(ctx.theme.border)
+    };
+    // Issue #626: the effects count sits in this pane's own title
+    // (moved off the header line entirely), `N/M` or `N/M+` once a
+    // loop's own total is still a lower bound (`effects_planned_is_
+    // lower_bound`), or just `N` with no plan at all.
+    let effects = match header.effects_planned {
+        Some(planned) if header.effects_planned_is_lower_bound => {
+            format!("{}/{planned}+", header.effects_done)
+        }
+        Some(planned) => format!("{}/{planned}", header.effects_done),
+        None => header.effects_done.to_string(),
+    };
+    let mut title = format!(
+        " flow ({} · {effects}) ",
+        orchestration_name(&header.document)
+    );
+    if app.follow {
+        title.push_str("(following) ");
+    }
+    title.push_str("◆ decision ⟲ loop ▶ running");
+    match scroll_indicator(selectable_idx, selectable.len(), viewport) {
+        Some(indicator) => title.push_str(&indicator),
+        None => title.push(' '),
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    // The list is drawn only into the rows above the 3-line footer
+    // (`viewport` is already `inner`'s height minus those 3 lines),
+    // so a row the loop above couldn't fit never lands on the
+    // footer's own lines underneath it.
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: viewport as u16,
+    };
+    let list = List::new(lines.into_iter().map(ListItem::new).collect::<Vec<_>>());
+    frame.render_widget(list, list_area);
+
+    draw_flow_footer(frame, area, &screen.footer, more_planned, ctx);
+}
+
+/// The flow pane's own footer, drawn as the bottom two rows inside
+/// its own border (issue #635: "quick steps folded: …", "health: N
+/// failed · N retries · N warnings", "○ N more planned").
+fn draw_flow_footer(
+    frame: &mut Frame,
+    area: Rect,
+    footer: &oscilloscope_core::flow::FlowFooter,
+    more_planned: u64,
+    ctx: &DrawCtx,
+) {
+    if area.height < 5 {
+        return;
+    }
+    let quick = format!(
+        "quick steps folded: {} · {}",
+        footer.quick_steps_folded,
+        oscilloscope_core::format::format_duration(footer.quick_steps_duration_s)
+    );
+    let health = format!(
+        "health: {} failed · {} retries · {} warnings",
+        footer.failed, footer.retries, footer.warnings
+    );
+    let footer_area = Rect {
+        x: area.x + 1,
+        y: area.y + area.height.saturating_sub(4),
+        width: area.width.saturating_sub(2),
+        height: 3,
+    };
+    let mut lines = vec![
+        Line::styled(quick, Style::default().fg(ctx.theme.dim)),
+        Line::styled(health, Style::default().fg(ctx.theme.dim)),
+    ];
+    if more_planned > 0 {
+        lines.push(Line::styled(
+            format!("○ {more_planned} more planned"),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
+}
+
+/// The selected pane (issue #635's right/top pane): an ordinary step
+/// reuses the overview's own `focus_step_lines`, a decision reads its
+/// own condition/branch/answer instead, and `s` swaps the whole pane
+/// for today's state tree (#610).
+fn draw_flow_selected_pane(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
+    state_visible: &[&StateRow],
+    app: &mut App,
+    ctx: &DrawCtx,
+) {
+    if app.flow_selected_shows_state {
+        draw_state(frame, area, state_visible, app, ctx);
+        return;
+    }
+    let lines = if let Some(decision) = &screen.selected_decision {
+        decision_detail_lines(decision, ctx)
+    } else if let Some(step) = &screen.selected {
+        flow_selected_step_lines(step, ctx)
+    } else {
+        vec![Line::from("nothing selected")]
+    };
+    let border_style = if app.pane == Pane::Details {
+        Style::default().fg(ctx.theme.border_focused)
+    } else {
+        Style::default().fg(ctx.theme.border)
+    };
+    let viewport = area.height.saturating_sub(2) as usize;
+    app.details_viewport = viewport;
+    let total = lines.len();
+    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    let start = app.details_scroll.min(total);
+    let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
+    let paragraph = ratatui::widgets::Paragraph::new(visible_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" selected ")
+            .border_style(border_style),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+/// The selected pane's own asked/doing/produced sections (issue
+/// #635) -- built from the same [`FocusedStep`]/[`FocusDetail`]
+/// model the overview's now pane uses (so issue #612's live agent
+/// data, once it lands, fills both panes at once), with the
+/// prompt text, the in-flight estimate and the reply read only
+/// through `Details::sent`/`received` (never `meta.prompt_sent` or
+/// `meta.answer` directly), so a later fix to either flows through
+/// here unchanged.
+fn flow_selected_step_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::model::StatusKind;
+    use oscilloscope_core::screens::FocusDetail;
+    let dim = Style::default().fg(ctx.theme.dim);
+    let mut lines = vec![Line::from(step.breadcrumb.clone())];
+    let mut meta = vec![step.kind_label.to_string()];
+    if let Some(provider_or_model) = &step.provider_or_model {
+        meta.push(provider_or_model.clone());
+    }
+    lines.push(Line::styled(meta.join(" · "), dim));
+
+    let running = matches!(
+        step.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
+    let finished = matches!(
+        step.status.kind,
+        StatusKind::Done | StatusKind::Failed | StatusKind::FailedHandled
+    );
+
+    let asked = match &step.detail {
+        FocusDetail::Prompt { snippet, .. } => snippet.clone(),
+        FocusDetail::Tool { command } => command.clone(),
+        FocusDetail::Agent { command, .. } => command.clone(),
+        FocusDetail::Plain => None,
+    };
+    if let Some(asked) = asked {
+        lines.push(Line::styled("asked:", dim));
+        lines.push(Line::from(asked));
+    }
+
+    let mut doing = Vec::new();
+    match &step.detail {
+        FocusDetail::Prompt {
+            tokens, estimated, ..
+        } if running => {
+            let mut text = "waiting for the reply".to_string();
+            if let Some(tokens) = tokens {
+                let prefix = if *estimated { "≈" } else { "" };
+                text.push_str(&format!(
+                    " · {prefix}{} tokens sent",
+                    oscilloscope_core::format::format_tokens(*tokens)
+                ));
+            }
+            doing.push(Line::from(text));
+        }
+        FocusDetail::Tool { .. } if running => {
+            let text = match step.elapsed_s {
+                Some(elapsed) => format!(
+                    "running {}",
+                    oscilloscope_core::format::format_duration(elapsed)
+                ),
+                None => "running".to_string(),
+            };
+            doing.push(Line::from(text));
+        }
+        FocusDetail::Agent {
+            engine,
+            model,
+            note,
+            ..
+        } if running => {
+            let mut parts = Vec::new();
+            if let Some(engine) = engine {
+                parts.push(engine.clone());
+            }
+            if let Some(model) = model {
+                parts.push(model.clone());
+            }
+            if !parts.is_empty() {
+                doing.push(Line::from(parts.join(" · ")));
+            }
+            if let (Some(since), Some(elapsed)) = (
+                step.since_ts
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+                step.elapsed_s,
+            ) {
+                doing.push(Line::from(format!(
+                    "since {since} · {}",
+                    oscilloscope_core::format::format_duration(elapsed)
+                )));
+            }
+            doing.push(Line::styled(*note, dim));
+        }
+        _ => {}
+    }
+    if !doing.is_empty() {
+        lines.push(Line::styled("doing:", dim));
+        lines.extend(doing);
+    }
+
+    let mut produced = Vec::new();
+    if finished {
+        match &step.detail {
+            FocusDetail::Prompt { .. } => {
+                if let Some(received) = &step.received {
+                    if let Some(snippet) = &received.snippet {
+                        produced.push(Line::from(snippet.clone()));
+                    }
+                }
+            }
+            FocusDetail::Agent { .. } | FocusDetail::Tool { .. } | FocusDetail::Plain => {
+                if let Some(value) = &step.value {
+                    if !value.is_empty() {
+                        produced.push(Line::from(value.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(tokens) = step.tokens {
+            produced.push(Line::from(format!(
+                "tokens {}",
+                oscilloscope_core::format::format_tokens(tokens)
+            )));
+        }
+        if let Some(cost) = step.cost_usd {
+            produced.push(Line::from(format!("${cost:.2}")));
+        }
+        if let Some(error) = &step.error {
+            produced.push(Line::styled(
+                error.clone(),
+                Style::default().fg(ctx.theme.error),
+            ));
+        }
+    } else if running {
+        produced.push(Line::styled("(when done)", dim));
+    }
+    if !produced.is_empty() {
+        lines.push(Line::styled("produced:", dim));
+        lines.extend(produced);
+    }
+
+    lines
+}
+
+/// A decision row's own detail (issue #635: "a decision row shows its
+/// condition, its mode, the branch it took, and the model's answer
+/// for a model-mode condition").
+fn decision_detail_lines(
+    decision: &oscilloscope_core::screens::SelectedDecision,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(decision.label.clone())];
+    if let Some(condition) = &decision.condition {
+        let mode = match condition.mode {
+            oscilloscope_core::plan::ConditionMode::Cel => "cel",
+            oscilloscope_core::plan::ConditionMode::Model => "model",
+        };
+        lines.push(Line::styled(
+            format!("{mode}  {}", condition.text),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    match &decision.branch {
+        Some(branch) => {
+            let mut text = format!("→ {branch}");
+            if decision.nothing_ran {
+                text.push_str(" (nothing ran)");
+            }
+            if decision.inferred {
+                text.push_str("  (inferred)");
+            }
+            lines.push(Line::from(text));
+        }
+        None => lines.push(Line::styled(
+            "not yet evaluated",
+            Style::default().fg(ctx.theme.dim),
+        )),
+    }
+    if let Some(answer) = &decision.answer {
+        lines.push(Line::from(format!("answer  {answer}")));
+    }
+    lines
+}
+
+/// The story pane (issue #635's right/bottom pane): the run's own
+/// notable events, oldest first, following the latest line while
+/// scrolled to the bottom -- `l` swaps it for the full log instead.
+fn draw_flow_story_pane(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
     log_lines: &[String],
     log_total: u64,
     app: &mut App,
     ctx: &DrawCtx,
 ) {
-    let area = frame_area;
+    if app.flow_story_shows_log {
+        draw_log(frame, area, log_lines, log_total, ctx);
+        return;
+    }
+    let height = area.height.saturating_sub(2) as usize;
+    let total = screen.story.len();
+    // Follows the latest line while scrolled to the bottom (DESIGN.md:
+    // "the latest line is followed when the story is scrolled to the
+    // bottom") -- the same bottom-biased default the log pane already
+    // has, just without a selection to keep in view.
+    if app.story_scroll == usize::MAX || app.story_scroll.saturating_add(height) >= total {
+        app.story_scroll = total.saturating_sub(height);
+    }
+    app.story_viewport = height;
+    let start = app.story_scroll.min(total);
+    let end = (start + height).min(total);
+    let items: Vec<ListItem> = screen.story[start..end]
+        .iter()
+        .map(|entry| {
+            let style = if is_warning_report_log_line(&entry.text) {
+                Style::default().fg(ctx.theme.warning)
+            } else if entry.inferred {
+                Style::default().fg(ctx.theme.dim)
+            } else {
+                Style::default()
+            };
+            let shown = if is_report_log_line(&entry.text) {
+                truncate_label(&entry.text, area.width.saturating_sub(2) as usize)
+            } else {
+                entry.text.clone()
+            };
+            ListItem::new(Line::from(shown)).style(style)
+        })
+        .collect();
+    let border_style = if app.pane == Pane::Story {
+        Style::default().fg(ctx.theme.border_focused)
+    } else {
+        Style::default().fg(ctx.theme.border)
+    };
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" story ")
+            .border_style(border_style),
+    );
+    frame.render_widget(list, area);
+}
 
+/// Screen 2 (`Flow`, issue #635): the tree as control flow (left),
+/// the selected step and the run's story (right). `100×30` and
+/// larger splits flow | (selected over story), both 62/38; `80×20`
+/// up to that drops the story (flow | selected, `l` showing the log
+/// in the selected pane's own place); below `80×20`, one column
+/// (selected over flow, today's order), with no story and the flow
+/// pane's own columns dropped to duration alone.
+#[allow(clippy::too_many_arguments)]
+fn draw_flow_screen(
+    frame: &mut Frame,
+    frame_area: Rect,
+    body: Rect,
+    state: &oscilloscope_core::render::RenderState,
+    screen: &oscilloscope_core::screens::FlowScreen,
+    log_lines: &[String],
+    log_total: u64,
+    app: &mut App,
+    ctx: &DrawCtx,
+) {
     let visible = visible_rows(&state.rows, app);
     let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
-    // Only while the details follow the orchestration pane's selection:
-    // a state-pane selection of a step folded into a `quick steps` row
-    // still reads as that step's own kind.
-    let details_row_kind = details
-        .filter(|_| app.details_source == Pane::Tree)
-        .and_then(|d| state.rows.iter().find(|r| r.path == d.path))
-        .map(|r| r.kind);
-    let two_column = area.width >= thresholds::TWO_COLUMN_MIN_WIDTH
-        && area.height >= thresholds::TWO_COLUMN_MIN_HEIGHT;
 
-    if !two_column {
-        app.state_viewport = 0;
-        // Issue #613: golden-ratio nested the same way the two-column
-        // layout's own left column is -- the details-plus-tree block
-        // gets the golden section's larger share of the height first
-        // (log, which only ever grows by appending, takes the rest),
-        // then that block splits again into details (minor) over the
-        // tree (major, the pane that grows with the run).
-        let log_rows = oscilloscope_core::layout::golden_section(body.height);
-        let top_rows = body.height - log_rows;
-        let details_rows = oscilloscope_core::layout::golden_section(top_rows);
-        let parts = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(details_rows),
-                Constraint::Length(top_rows - details_rows),
-                Constraint::Min(log_rows),
-            ])
-            .split(body);
-        draw_details(frame, parts[0], details, details_row_kind, app, ctx);
-        draw_tree(frame, parts[1], &visible, app, &state.header, ctx);
-        draw_log(frame, parts[2], log_lines, log_total, ctx);
-    } else {
+    let three_pane = frame_area.width >= thresholds::FLOW_THREE_PANE_MIN_WIDTH
+        && frame_area.height >= thresholds::FLOW_THREE_PANE_MIN_HEIGHT;
+    let two_pane = frame_area.width >= thresholds::FLOW_TWO_PANE_MIN_WIDTH
+        && frame_area.height >= thresholds::FLOW_TWO_PANE_MIN_HEIGHT;
+
+    if three_pane {
         let left_width = oscilloscope_core::layout::left_column_width(body.width);
         let columns = Layout::default()
             .direction(Direction::Horizontal)
@@ -2530,38 +2930,75 @@ fn draw_screen2(
                 Constraint::Length(body.width - left_width),
             ])
             .split(body);
-
-        let details_rows = oscilloscope_core::layout::golden_section(columns[0].height);
-        let left = Layout::default()
+        draw_flow_pane(
+            frame,
+            columns[0],
+            screen,
+            &visible,
+            app,
+            &state.header,
+            frame_area.width,
+            false,
+            ctx,
+        );
+        let selected_rows = oscilloscope_core::layout::golden_section(columns[1].height);
+        let right = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(details_rows),
-                Constraint::Length(columns[0].height - details_rows),
+                Constraint::Length(selected_rows),
+                Constraint::Min(columns[1].height - selected_rows),
             ])
-            .split(columns[0]);
-        draw_details(frame, left[0], details, details_row_kind, app, ctx);
-        draw_tree(frame, left[1], &visible, app, &state.header, ctx);
-
-        let show_state = area.width >= thresholds::STATE_PANE_MIN_WIDTH
-            && area.height >= thresholds::STATE_PANE_MIN_HEIGHT;
-
-        if show_state {
-            // The state pane (grows with the run) keeps the golden
-            // section's larger share; the log pane the rest.
-            let log_rows = oscilloscope_core::layout::golden_section(columns[1].height);
-            let right = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(columns[1].height - log_rows),
-                    Constraint::Min(log_rows),
-                ])
-                .split(columns[1]);
-            draw_state(frame, right[0], &state_visible, app, ctx);
-            draw_log(frame, right[1], log_lines, log_total, ctx);
-        } else {
-            app.state_viewport = 0;
+            .split(columns[1]);
+        draw_flow_selected_pane(frame, right[0], screen, &state_visible, app, ctx);
+        draw_flow_story_pane(frame, right[1], screen, log_lines, log_total, app, ctx);
+    } else if two_pane {
+        app.story_viewport = 0;
+        let left_width = oscilloscope_core::layout::left_column_width(body.width);
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(left_width),
+                Constraint::Length(body.width - left_width),
+            ])
+            .split(body);
+        draw_flow_pane(
+            frame,
+            columns[0],
+            screen,
+            &visible,
+            app,
+            &state.header,
+            frame_area.width,
+            false,
+            ctx,
+        );
+        if app.flow_story_shows_log {
             draw_log(frame, columns[1], log_lines, log_total, ctx);
+        } else {
+            draw_flow_selected_pane(frame, columns[1], screen, &state_visible, app, ctx);
         }
+    } else {
+        app.story_viewport = 0;
+        let selected_rows = oscilloscope_core::layout::golden_section(body.height);
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(selected_rows),
+                Constraint::Min(body.height - selected_rows),
+            ])
+            .split(body);
+        draw_flow_selected_pane(frame, parts[0], screen, &state_visible, app, ctx);
+        draw_flow_pane(
+            frame,
+            parts[1],
+            screen,
+            &visible,
+            app,
+            &state.header,
+            frame_area.width,
+            true,
+            ctx,
+        );
     }
 }
 
@@ -2569,13 +3006,15 @@ fn draw_screen2(
 mod golden_tests {
     use super::*;
     use electricity_bytecode::{
-        EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
-        Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
+        Condition, EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op,
+        ParamNode, Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
     };
+    use oscilloscope_core::diff::{LogKind, LogLine};
     use oscilloscope_core::model::{ProcessState, RunModel};
     use oscilloscope_core::observe::Event;
     use oscilloscope_core::plan::PlanTree;
     use oscilloscope_core::render;
+    use oscilloscope_core::render::RowKind;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use serde_json::{Value, json};
@@ -2831,6 +3270,18 @@ mod golden_tests {
             &[],
         );
         let details = render::details_for(selected, plan, model, state);
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(state.unwrap_or(&Value::Null)),
+            plan,
+            model,
+            state,
+            &[],
+            Some(selected),
+            &test_zone(),
+            "2026-01-01T00:00:00Z",
+        );
         let mut app = App::new(engine == "watch");
         app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some(selected.to_string());
@@ -2872,6 +3323,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -2963,6 +3415,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:05:00Z",
                     Some(&overview),
+                    None,
                     None,
                     &mut CostLayoutCache::default(),
                 )
@@ -3356,6 +3809,7 @@ mod golden_tests {
                     "2026-01-01T00:05:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -3627,6 +4081,7 @@ mod golden_tests {
                     "2026-01-01T00:05:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -3752,6 +4207,18 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            app.selected_path.as_deref(),
+            &test_zone(),
+            "2026-01-01T00:00:00Z",
+        );
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3769,6 +4236,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -3836,6 +4304,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -3900,42 +4369,13 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(text.contains("press any key to close"), "{text}");
-    }
-
-    #[test]
-    fn a_reports_details_show_its_time_as_a_clock_time() {
-        let details = Details {
-            path: "prime.status".to_string(),
-            kind: RowKind::Report,
-            meta_summary: vec![
-                ("level".to_string(), "info".to_string()),
-                ("message".to_string(), "hello".to_string()),
-                ("time".to_string(), "2026-01-01T11:46:49.300Z".to_string()),
-            ],
-            ..Details::default()
-        };
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let text: Vec<String> = details_lines(&details, None, &test_ctx, 80)
-            .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-            .collect();
-        assert!(text.iter().any(|l| l == "time     11:46:49"), "{text:?}");
     }
 
     #[test]
@@ -3966,7 +4406,18 @@ mod golden_tests {
                 .any(|r| r.path == "prime.q1" && r.kind == RowKind::QuickSteps),
             "the two quick steps fold into one row keyed on the first step"
         );
-        let details = render::details_for("prime.q1", &plan, &RunModel::new(), Some(&state));
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &RunModel::new(),
+            Some(&state),
+            &[],
+            Some("prime.q1"),
+            &test_zone(),
+            "2026-01-01T11:46:50.000Z",
+        );
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
@@ -3978,45 +4429,37 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        let screen = |source: crate::keys::Pane| {
-            let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Flow;
-            app.selected_path = Some("prime.q1".to_string());
-            app.details_source = source;
-            app.follow = false;
-            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-            terminal
-                .draw(|f| {
-                    draw(
-                        f,
-                        &rendered,
-                        Some(&details),
-                        &[],
-                        0,
-                        &mut app,
-                        Some(&state),
-                        &test_ctx,
-                        0,
-                        "2026-01-01T00:00:00Z",
-                        None,
-                        None,
-                        &mut CostLayoutCache::default(),
-                    )
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer().clone();
-            (0..buffer.area.height)
-                .map(|y| {
-                    (0..buffer.area.width)
-                        .map(|x| buffer[(x, y)].symbol().to_string())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        assert!(screen(crate::keys::Pane::Tree).contains("type   quick steps"));
-        // Selected from the state pane, the same node is still its own step.
-        assert!(!screen(crate::keys::Pane::State).contains("type   quick steps"));
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some("prime.q1".to_string());
+        app.follow = false;
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        // Issue #635: the selected pane reuses the overview's own
+        // `FocusedStep::kind_label`, not the old details pane's
+        // `type   X` line -- selecting the folded quick-steps row
+        // still shows its own kind there.
+        assert!(text.contains("quick steps"), "{text}");
     }
     #[test]
     fn running_tree_loop_with_max_concurrency() {
@@ -4255,7 +4698,25 @@ mod golden_tests {
         app.selected_path = Some("prime.a".to_string());
         app.follow = false;
         let log_lines = vec!["11:04:58 ▸ warning: behind".to_string()];
-        let backend = TestBackend::new(100, 24);
+        let story_lines = vec![oscilloscope_core::diff::LogLine {
+            ts: Some("2026-01-01T11:04:58Z".to_string()),
+            text: "▸ warning: behind".to_string(),
+            kind: oscilloscope_core::diff::LogKind::Report,
+            path: Some("prime".to_string()),
+        }];
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &story_lines,
+            Some("prime.a"),
+            &test_zone(),
+            "2026-01-01T00:00:00Z",
+        );
+        let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -4272,6 +4733,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4363,9 +4825,9 @@ mod golden_tests {
         // (the state/log columns' own trailing blank padding) has a
         // `status` of its own to false-positive on.
         let orchestration_pane = text
-            .split_once("orchestration do-thing")
+            .split_once("flow (do-thing")
             .map(|(_, after)| after)
-            .expect("orchestration pane should be in the snapshot");
+            .expect("the flow pane should be in the snapshot");
         assert!(
             !orchestration_pane.contains("status"),
             "a named report must never show as a row in the orchestration tree: {orchestration_pane}"
@@ -4555,7 +5017,42 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Finding F6/M1: a selected, finished prompt at 120×40 -- the
+    /// [`sample_plan`]'s own `a` is a tool, not a prompt -- selecting
+    /// it here would read as `RowKind::Tool` regardless of any
+    /// `prompt_sent`/`tokens_*` meta the state carries, since the
+    /// plan always wins over a meta-shape guess, leaving this golden
+    /// with no `sent`/`received` blocks to actually show at all. A
+    /// plan whose `a` really is a prompt is the one thing this test
+    /// needs beyond `sample_plan`'s own shape.
+    fn prompt_a_tool_b_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let b_path = root_path.clone().push_name("b");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![prompt(a_path, "a"), tool(b_path, "b", OnError::Continue)],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    /// A selected, finished prompt at 120×40 -- the
     /// `sent`/`received` blocks must land right after `path`/`type`,
     /// before `plan`/the meta list, and each snippet must cap at
     /// [`SNIPPET_MAX_LINES`] wrapped lines so both blocks stay on
@@ -4563,7 +5060,7 @@ mod golden_tests {
     /// details pane's own golden-section height.
     #[test]
     fn full_layout_with_a_selected_finished_prompts_sent_received_blocks() {
-        let plan = sample_plan();
+        let plan = prompt_a_tool_b_plan();
         let mut model = RunModel::new();
         let long_prompt = "summarize the quarterly report and call out every risk factor you can find in the appendix tables, in plain prose, no bullet points";
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
@@ -4579,6 +5076,34 @@ mod golden_tests {
             "prime.a",
             &[],
         );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #635: a selected prompt that hasn't replied yet shows
+    /// `asked:` with its own sent snippet, then `doing:` with
+    /// "waiting for the reply" and its own in-flight token count --
+    /// `produced:` reads "(when done)" rather than any real value,
+    /// since nothing has come back yet.
+    #[test]
+    fn full_layout_with_a_selected_running_prompt_shows_asked_and_waiting_for_the_reply() {
+        let plan = prompt_a_tool_b_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted",
+                "prompt_sent": "summarize the quarterly report", "tokens_sent_total": 42}}
+        }});
+        let text = snapshot_full_layout(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &[],
+        );
+        assert!(text.contains("asked:"), "{text}");
+        assert!(text.contains("waiting for the reply"), "{text}");
+        assert!(text.contains("(when done)"), "{text}");
         insta::assert_snapshot!(text);
     }
 
@@ -4700,6 +5225,18 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            app.selected_path.as_deref(),
+            &test_zone(),
+            "2026-01-01T00:00:00Z",
+        );
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -4717,14 +5254,19 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(
-            text.contains("path   prime.fan.iter_0"),
-            "the details pane must show the row follow actually picked:\n{text}"
+            flow_screen
+                .selected
+                .as_ref()
+                .is_some_and(|s| s.path == "prime.fan.iter_0"),
+            "the selected pane must show the row follow actually picked: {:?}",
+            flow_screen.selected
         );
         insta::assert_snapshot!(text);
     }
@@ -4844,6 +5386,18 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            app.selected_path.as_deref(),
+            &test_zone(),
+            "2026-01-01T00:00:00Z",
+        );
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -4861,6 +5415,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4918,7 +5473,69 @@ mod golden_tests {
         root.insert("prime".to_string(), Value::Object(prime));
         let state = Value::Object(root);
 
-        let plan = PlanTree::empty();
+        // Issue #635: a real plan with an unnamed `if` of its own
+        // (never `PlanTree::empty()`, which skips `build_flow_rows`'
+        // own decision-inference work entirely, timing nothing of it
+        // at all) -- its own `then`/`else` paths don't need to match
+        // any of the 2,000 `n{i}` nodes below for the timing to be
+        // real, only for `unnamed_if_decisions` to have something in
+        // it for `resolve_unnamed_decisions`/`push_unnamed_decision`
+        // to actually walk.
+        let plan = {
+            let root_path = EffectPath::root();
+            let if_path = root_path.clone();
+            let foo_path = if_path.clone().push_name("foo");
+            let root = Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: if_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "true".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool(foo_path, "foo", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            else_: None,
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            };
+            PlanTree::from_program(&Program {
+                root,
+                prompts: Default::default(),
+                effect_names: Default::default(),
+                document: None,
+                runtime_block: None,
+                interface: None,
+                adapter: None,
+                model: None,
+            })
+        };
+        // Issue #635: a real 2,000-line story -- `build_story`'s own
+        // sort (`build_flow_rows` is timed together with it below) is
+        // the other thing an empty story timed nothing of at all.
+        let story_2000: Vec<oscilloscope_core::diff::LogLine> = (0..2000)
+            .map(|i| oscilloscope_core::diff::LogLine {
+                ts: Some(format!("2026-01-01T00:00:{:02}Z", i % 60)),
+                text: format!("▸ report {i}"),
+                kind: oscilloscope_core::diff::LogKind::Report,
+                path: None,
+            })
+            .collect();
         let mut model = RunModel::new();
         let rendered = render::build(
             "do-thing.yml",
@@ -4949,7 +5566,24 @@ mod golden_tests {
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
+        // Issue #635: the Flow screen's own model (decisions, loops,
+        // quick steps, the story) is built only while it's actually
+        // on display, same performance rule as the overview's and the
+        // Cost screen's below -- timed together with the draw itself,
+        // on the same 2,000-node state.
         let start = std::time::Instant::now();
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &story_2000,
+            Some("n0"),
+            &test_zone(),
+            "t2001",
+        );
         terminal
             .draw(|f| {
                 draw(
@@ -4965,6 +5599,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4972,7 +5607,7 @@ mod golden_tests {
         let elapsed = start.elapsed();
         assert!(
             elapsed < std::time::Duration::from_millis(500),
-            "one TestBackend draw of a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+            "building and drawing the Flow screen for a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
 
         // The overview's own model is built (and drawn) only while
@@ -5011,6 +5646,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:00:00Z",
                     Some(&overview),
+                    None,
                     None,
                     &mut CostLayoutCache::default(),
                 )
@@ -5068,6 +5704,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -5099,6 +5736,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -5196,6 +5834,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:00:00Z",
                     Some(&overview),
+                    None,
                     None,
                     &mut CostLayoutCache::default(),
                 )
@@ -5690,6 +6329,7 @@ mod golden_tests {
                     "2026-01-01T00:05:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -5713,6 +6353,656 @@ mod golden_tests {
             !text.contains("fan ›"),
             "zoomed into fan, no table row may still carry fan's own name as a prefix: {text}"
         );
+    }
+    /// One plan exercising every acceptance-list glyph at once
+    /// (issue #635): two quick tool steps (`a`/`b`) that fold into
+    /// one row, a named `if` (`gate`, taken `then` into `chosen`), an
+    /// unnamed `if` (inferred from its own `u_then`/`u_else`
+    /// branches), and a named loop (`fan`) whose single observed
+    /// pass merges into one row.
+    fn flow_matrix_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let b_path = root_path.clone().push_name("b");
+        let gate_path = root_path.clone().push_name("gate");
+        let chosen_path = gate_path.clone().push_name("chosen");
+        let other_path = gate_path.clone().push_name("other");
+        let u_then_path = root_path.clone().push_name("u_then");
+        let u_else_path = root_path.clone().push_name("u_else");
+        let fan_path = root_path.clone().push_name("fan");
+        let pass_path = fan_path.clone().push_pass(LoopId(0));
+        let nap_path = pass_path.push_name("nap");
+        // A transparent (unnamed) `if`'s own `PlanEntry` is recorded
+        // at its *enclosing* scope's own path, never a fresh one of
+        // its own (`PlanTree::unnamed_if_decisions`' own doc comment)
+        // -- here, that's the top-level chain's own path, `prime`
+        // itself, same as `flow.rs`'s own `unnamed_if_plan` test
+        // fixture.
+        let unnamed_if_path = root_path.clone();
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool(a_path, "a", OnError::Fail),
+                    tool(b_path, "b", OnError::Fail),
+                    Op {
+                        path: gate_path,
+                        name: Some("gate".to_string()),
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "x > 1".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool(chosen_path, "chosen", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            else_: Some(Box::new(Region::Block {
+                                ops: vec![tool(other_path, "other", OnError::Fail)],
+                                overlay: true,
+                            })),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    Op {
+                        path: unnamed_if_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: Condition::Cel {
+                                expr: "y > 1".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool(u_then_path, "u_then", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            else_: Some(Box::new(Region::Block {
+                                ops: vec![tool(u_else_path, "u_else", OnError::Fail)],
+                                overlay: true,
+                            })),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    Op {
+                        path: fan_path,
+                        name: Some("fan".to_string()),
+                        kind: NodeKind::Control(Region::Loop {
+                            name: Some("fan".to_string()),
+                            spec: LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![tool(nap_path, "nap", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            flow: LoopFlow::Tree,
+                            max_concurrency: Some(2),
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    /// [`flow_matrix_plan`]'s own state, running (`finished: false`)
+    /// or finished (`finished: true`): `gate` has taken `then`, the
+    /// unnamed `if`'s own `u_then` branch has started (inferred), and
+    /// `fan`'s single pass is either still running or done.
+    fn flow_matrix_state(finished: bool) -> Value {
+        let nap = if finished {
+            json!({"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": "2026-01-01T00:00:01.400Z",
+                "provider": "shell"
+            }})
+        } else {
+            json!({"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "shell"
+            }})
+        };
+        let fan_completed = if finished {
+            json!("2026-01-01T00:00:01.400Z")
+        } else {
+            Value::Null
+        };
+        let prime_completed = if finished {
+            json!("2026-01-01T00:00:02Z")
+        } else {
+            Value::Null
+        };
+        let prime_error = if finished { json!(null) } else { Value::Null };
+        let runtime = if finished {
+            json!({"last_run": {"completed_at": "2026-01-01T00:00:02Z"}})
+        } else {
+            Value::Null
+        };
+        json!({"runtime": runtime, "prime": {
+            "value": null,
+            "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": prime_completed,
+                "error": prime_error
+            },
+            "a": {"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.200Z",
+                "provider": "shell"
+            }},
+            "b": {"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:00.200Z", "completed_at": "2026-01-01T00:00:00.400Z",
+                "provider": "shell"
+            }},
+            "gate": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00.400Z", "completed_at": "2026-01-01T00:00:00.400Z",
+                "branch": "then"
+            },
+                "chosen": {"value": "ok\n", "meta": {
+                    "created_at": "2026-01-01T00:00:00.400Z", "completed_at": "2026-01-01T00:00:00.700Z",
+                    "provider": "shell"
+                }}
+            },
+            "u_then": {"value": "ok\n", "meta": {
+                "created_at": "2026-01-01T00:00:00.700Z", "completed_at": "2026-01-01T00:00:00.900Z",
+                "provider": "shell"
+            }},
+            "fan": {"value": null, "meta": {
+                "completed_at": fan_completed,
+                "progress": {"done": if finished { 1 } else { 0 }, "total": 1}
+            },
+                "iter_0": nap
+            }
+        }})
+    }
+
+    fn flow_matrix_story() -> Vec<LogLine> {
+        vec![
+            LogLine {
+                ts: Some("2026-01-01T00:00:00Z".to_string()),
+                text: "■ run started  abc".to_string(),
+                kind: LogKind::RunStart,
+                path: None,
+            },
+            LogLine {
+                ts: Some("2026-01-01T00:00:00.400Z".to_string()),
+                text: "◆ prime.gate → then".to_string(),
+                kind: LogKind::Decision,
+                path: Some("prime.gate".to_string()),
+            },
+        ]
+    }
+
+    /// [`snapshot_at`], with a non-empty story (DESIGN.md's own
+    /// right/bottom pane) -- every other golden here passes `&[]`
+    /// for it, since none needed one until this matrix did.
+    #[allow(clippy::too_many_arguments)]
+    fn flow_matrix_snapshot_at(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: &Value,
+        process: ProcessState,
+        selected: &str,
+        story: &[LogLine],
+    ) -> String {
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            plan,
+            model,
+            Some(state),
+            process,
+            2.0,
+            "2026-01-01T00:00:02Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let details = render::details_for(selected, plan, model, Some(state));
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(state),
+            plan,
+            model,
+            Some(state),
+            story,
+            Some(selected),
+            &test_zone(),
+            "2026-01-01T00:00:02Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some(selected.to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:02Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn flow_matrix_running_at_120x40() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_120x40() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_running_at_100x30() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_100x30() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_running_at_80x24() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_80x24() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_running_at_70x20() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            70,
+            20,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.fan.iter_0",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_matrix_finished_at_70x20() {
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(true);
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            70,
+            20,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::exited(false),
+            "prime.gate.chosen",
+            &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// `End`/`G` sets `story_scroll` to `usize::MAX` (`keys::jump`),
+    /// and used to add `height` to it before checking for that
+    /// sentinel at all, which panics on overflow in a debug build.
+    #[test]
+    fn end_in_the_story_pane_draws_without_overflowing() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2.0,
+            "2026-01-01T00:00:02Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let details = render::details_for("prime.fan.iter_0", &plan, &model, Some(&state));
+        let story = flow_matrix_story();
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &story,
+            Some("prime.fan.iter_0"),
+            &test_zone(),
+            "2026-01-01T00:00:02Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some("prime.fan.iter_0".to_string());
+        app.follow = false;
+        app.pane = Pane::Story;
+        app.handle_key(
+            KeyEvent {
+                code: KeyCode::End,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+            &[],
+            &[],
+            true,
+            false,
+            &[],
+        );
+        assert_eq!(app.story_scroll, usize::MAX);
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:02Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+    }
+
+    /// Eight named `if`s in a row, each with a condition (shown at
+    /// 100 columns and wider, so each takes two screen lines), then
+    /// one more step -- enough two-line rows ahead of the selected
+    /// one to overflow a 100x30 viewport if scrolling still counted
+    /// rows instead of screen lines.
+    fn flow_overflow_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let mut ops = Vec::new();
+        for i in 1..=8 {
+            let gate_path = root_path.clone().push_name(format!("g{i}"));
+            let then_path = gate_path.clone().push_name("then_step");
+            let else_path = gate_path.clone().push_name("else_step");
+            ops.push(Op {
+                path: gate_path,
+                name: Some(format!("g{i}")),
+                kind: NodeKind::Control(Region::If {
+                    cond: Condition::Cel {
+                        expr: format!("x{i} > 1"),
+                        strict: false,
+                    },
+                    then_: Box::new(Region::Block {
+                        ops: vec![tool(then_path, "then_step", OnError::Fail)],
+                        overlay: true,
+                    }),
+                    else_: Some(Box::new(Region::Block {
+                        ops: vec![tool(else_path, "else_step", OnError::Fail)],
+                        overlay: true,
+                    })),
+                    threshold: 0.5,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            });
+        }
+        ops.push(tool(
+            root_path.clone().push_name("tail"),
+            "tail",
+            OnError::Fail,
+        ));
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    /// [`flow_overflow_plan`]'s own state: every gate has taken
+    /// `then`, and `tail` (the selected row, below all eight) is
+    /// still running.
+    fn flow_overflow_state() -> Value {
+        let mut prime = serde_json::Map::new();
+        prime.insert("value".to_string(), Value::Null);
+        prime.insert(
+            "meta".to_string(),
+            json!({"created_at": "2026-01-01T00:00:00Z", "completed_at": null}),
+        );
+        for i in 1..=8 {
+            prime.insert(
+                format!("g{i}"),
+                json!({"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.100Z",
+                    "branch": "then"
+                },
+                    "then_step": {"value": "ok\n", "meta": {
+                        "created_at": "2026-01-01T00:00:00.100Z", "completed_at": "2026-01-01T00:00:00.200Z",
+                        "provider": "shell"
+                    }}
+                }),
+            );
+        }
+        prime.insert(
+            "tail".to_string(),
+            json!({"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "shell"
+            }}),
+        );
+        json!({"runtime": Value::Null, "prime": Value::Object(prime)})
+    }
+
+    /// At 100x30, eight named `if`s each take two lines (their own
+    /// condition shown underneath), overflowing the viewport, so
+    /// `tail` -- selected, below all eight -- must still be drawn
+    /// above the footer, not cut off by it or drawn into it, which a
+    /// by-row (rather than by-line) scroll clamp used to do.
+    #[test]
+    fn flow_matrix_overflow_at_100x30_keeps_the_selected_row_above_the_footer() {
+        let plan = flow_overflow_plan();
+        let state = flow_overflow_state();
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.tail",
+            &[],
+        );
+        let tail_idx = text
+            .lines()
+            .position(|l| l.contains("◐ tail"))
+            .unwrap_or_else(|| panic!("the selected flow-pane row must be drawn at all: {text}"));
+        let footer_idx = text
+            .lines()
+            .position(|l| l.contains("quick steps folded"))
+            .unwrap_or_else(|| panic!("the footer must be drawn: {text}"));
+        assert!(
+            tail_idx < footer_idx,
+            "the selected row must be drawn above the footer, not under or inside it: {text}"
+        );
+        insta::assert_snapshot!(text);
     }
 }
 
@@ -5823,6 +7113,21 @@ mod highlight_tests {
         let now = std::time::Instant::now();
         tracker.mark("row:prime.a", now);
 
+        let empty_plan = oscilloscope_core::plan::PlanTree::empty();
+        let empty_model = oscilloscope_core::model::RunModel::new();
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.rows,
+            &std::collections::BTreeMap::new(),
+            &empty_plan,
+            &empty_model,
+            None,
+            &[],
+            app.selected_path.as_deref(),
+            &test_zone(),
+            "2026-01-01T00:00:00Z",
+        );
+
         let ctx_t0 = DrawCtx {
             theme: &theme,
             highlights: &tracker,
@@ -5850,6 +7155,7 @@ mod highlight_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5889,6 +7195,7 @@ mod highlight_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    Some(&flow_screen),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5937,6 +7244,7 @@ mod highlight_tests {
                         &ctx,
                         0,
                         "2026-01-01T00:00:00Z",
+                        None,
                         None,
                         None,
                         &mut CostLayoutCache::default(),
@@ -5993,6 +7301,7 @@ mod highlight_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -6042,6 +7351,7 @@ mod highlight_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -6082,6 +7392,7 @@ mod highlight_tests {
                     &ctx,
                     0,
                     "2026-01-01T00:00:00Z",
+                    None,
                     None,
                     None,
                     &mut CostLayoutCache::default(),

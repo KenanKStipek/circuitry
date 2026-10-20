@@ -18,6 +18,10 @@ pub enum Pane {
     Tree,
     Details,
     State,
+    /// The Flow screen's own story pane (issue #635) -- scrollable,
+    /// reached from `Details` by `tab` only while `screen == Flow`;
+    /// every other screen's own cycle never visits it at all.
+    Story,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +153,18 @@ pub struct App {
     /// `state_selected_path`, same reasoning as those two staying
     /// independent of each other.
     pub cost_selected: Option<String>,
+    /// The Flow screen's own story pane scroll position and interior
+    /// height (issue #635), the same pairing `tree_scroll`/
+    /// `tree_viewport` already are for the orchestration pane.
+    pub story_scroll: usize,
+    pub story_viewport: usize,
+    /// `s` (issue #635): the Flow screen's selected pane shows today's
+    /// state tree instead of the focused step's own detail, so a
+    /// named report stays selectable (#610). `s` again swaps back.
+    pub flow_selected_shows_state: bool,
+    /// `l` (issue #635): the Flow screen's story pane shows the full
+    /// log instead. `l` again swaps back.
+    pub flow_story_shows_log: bool,
 }
 
 impl App {
@@ -179,6 +195,10 @@ impl App {
             cost_measure: oscilloscope_core::treemap::Measure::Total,
             cost_zoom: Vec::new(),
             cost_selected: None,
+            story_scroll: 0,
+            story_viewport: 0,
+            flow_selected_shows_state: false,
+            flow_story_shows_log: false,
         }
     }
 
@@ -429,14 +449,38 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                // Finding 12: on a small terminal the state pane isn't
-                // drawn at all (`tui::draw` zeroes `state_viewport` the
-                // same frame) — `tab` must not focus a pane with nothing
-                // to show or scroll.
-                self.pane = match self.pane {
-                    Pane::Tree => Pane::Details,
-                    Pane::Details if self.state_viewport > 0 => Pane::State,
-                    Pane::Details | Pane::State => Pane::Tree,
+                // Issue #635: the Flow screen's own cycle is flow →
+                // selected → story → flow. `s` swaps the selected
+                // pane's own *content* between the focused step and
+                // today's state tree, but the selected slot in this
+                // cycle must follow that swap too (#610) -- otherwise
+                // a state-tree report `s` just swapped in can never
+                // actually get focus, or its own `←`/`→`/`v`.
+                self.pane = if self.screen == Screen::Flow {
+                    match self.pane {
+                        Pane::Tree => {
+                            if self.flow_selected_shows_state {
+                                Pane::State
+                            } else {
+                                Pane::Details
+                            }
+                        }
+                        // The story pane isn't drawn at all below
+                        // the three-pane layout, so `tab` must not
+                        // land on it with nothing to show or scroll.
+                        Pane::Details | Pane::State if self.story_viewport > 0 => Pane::Story,
+                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                    }
+                } else {
+                    // On a small terminal the state pane isn't drawn
+                    // at all (`tui::draw` zeroes `state_viewport` the
+                    // same frame) — `tab` must not focus a pane with
+                    // nothing to show or scroll.
+                    match self.pane {
+                        Pane::Tree => Pane::Details,
+                        Pane::Details if self.state_viewport > 0 => Pane::State,
+                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                    }
                 };
             }
             // Issue #626: `0`/`2` switch screens; `1`/`3` do
@@ -450,6 +494,29 @@ impl App {
                 }
             }
             KeyCode::Char('t') => return Action::CycleTheme,
+            // Issue #635: the Flow screen's own content swaps -- `s`
+            // for the selected pane (the focused step's own detail vs
+            // today's state tree, so a named report stays
+            // selectable), `l` for the story pane (the story vs the
+            // full log). Both no-ops on any other screen.
+            KeyCode::Char('s') if self.screen == Screen::Flow => {
+                self.flow_selected_shows_state = !self.flow_selected_shows_state;
+                // Toggling back to the step view must not leave the
+                // selected pane still showing (or focused on) the
+                // state tree `s` had swapped in: `details_source`
+                // stays whatever the state pane's own navigation last
+                // set it to, and `pane` itself can still be `State`,
+                // which is no longer drawn at all once this flips.
+                if !self.flow_selected_shows_state {
+                    self.details_source = Pane::Tree;
+                    if self.pane == Pane::State {
+                        self.pane = Pane::Details;
+                    }
+                }
+            }
+            KeyCode::Char('l') if self.screen == Screen::Flow => {
+                self.flow_story_shows_log = !self.flow_story_shows_log;
+            }
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #613: `z` turns folding off to show the full,
             // unfolded tree, and back on again.
@@ -492,6 +559,7 @@ impl App {
             Pane::Tree => self.tree_viewport.max(1),
             Pane::State => self.state_viewport.max(1),
             Pane::Details => self.details_viewport.max(1),
+            Pane::Story => self.story_viewport.max(1),
         }
     }
 
@@ -603,6 +671,20 @@ impl App {
             }
             Pane::State => self.move_state_selection(state_rows, delta),
             Pane::Details => self.scroll_details(delta),
+            Pane::Story => self.scroll_story(delta),
+        }
+    }
+
+    /// The story pane's own scroll (issue #635: "the selected pane
+    /// and the story scroll with ↑↓ when they have focus") -- clamped
+    /// by `tui::draw`'s own render the same way `scroll_details`'s
+    /// `details_scroll` already is, since only it knows the story's
+    /// real line count this frame.
+    fn scroll_story(&mut self, delta: i32) {
+        if delta < 0 {
+            self.story_scroll = self.story_scroll.saturating_sub((-delta) as usize);
+        } else {
+            self.story_scroll = self.story_scroll.saturating_add(delta as usize);
         }
     }
 
@@ -631,6 +713,9 @@ impl App {
             }
             Pane::Details => {
                 self.details_scroll = if to_first { 0 } else { usize::MAX };
+            }
+            Pane::Story => {
+                self.story_scroll = if to_first { 0 } else { usize::MAX };
             }
         }
     }
@@ -809,6 +894,43 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
         out.push(row);
     }
     out
+}
+
+/// `visible_rows`, further narrowed to exactly what the Flow screen's
+/// own pane draws (issue #635): a path the Flow screen hides
+/// entirely (the untaken branch's own real steps) or merges away (a
+/// single-pass loop's own pass) never appears in `flow_rows` under
+/// its own path at all, so filtering by "does a real row in
+/// `flow_rows` still have this path" drops exactly those, leaving
+/// `j`/`k`/PgUp/PgDn/Home/End to move over the same rows the pane
+/// itself draws, in the same order -- without needing a second,
+/// `FlowRow`-shaped movement implementation alongside the real-`Row`
+/// one every other screen already shares.
+pub fn visible_rows_for_flow<'a>(
+    rows: &'a [Row],
+    flow_rows: &[oscilloscope_core::flow::FlowRow],
+    app: &App,
+) -> Vec<&'a Row> {
+    let selectable: std::collections::BTreeSet<&str> = flow_rows
+        .iter()
+        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+        .map(|r| r.path.as_str())
+        .collect();
+    visible_rows(rows, app)
+        .into_iter()
+        // A merged pass's own path (`prime.fan.iter_0`) or a hidden
+        // step under an untaken branch can still be `selected_path`
+        // (the Flow pane maps it to the loop row or the `· else:`
+        // line instead of hiding the selection outright) -- dropping
+        // it here too would leave `move_tree_selection` with no
+        // `current` at all, so `j`/`k` jump to the first or last row
+        // instead of moving one step from where the pane shows the
+        // selection to be.
+        .filter(|r| {
+            selectable.contains(r.path.as_str())
+                || app.selected_path.as_deref() == Some(r.path.as_str())
+        })
+        .collect()
 }
 
 fn matches_or_has_match(rows: &[Row], row: &Row, pred: &dyn Fn(&Row) -> bool) -> bool {
@@ -1377,6 +1499,90 @@ mod tests {
     }
 
     #[test]
+    fn the_flow_screens_tab_cycle_visits_the_story_pane_not_the_state_pane() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.state_viewport = 8;
+        app.story_viewport = 8;
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Details);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Story);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn after_s_tab_reaches_the_state_pane_and_arrow_keys_move_its_selection() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let state_rows = [state_row("a"), state_row("b")];
+        let state_visible: Vec<&StateRow> = state_rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.state_viewport = 8;
+        app.story_viewport = 8;
+        app.handle_key(
+            key(KeyCode::Char('s')),
+            &visible,
+            &state_visible,
+            false,
+            false,
+            &[],
+        );
+        assert!(app.flow_selected_shows_state);
+        app.handle_key(
+            key(KeyCode::Tab),
+            &visible,
+            &state_visible,
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(app.pane, Pane::State);
+        app.handle_key(
+            key(KeyCode::Down),
+            &visible,
+            &state_visible,
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(app.state_selected_path.as_deref(), Some("a"));
+        assert_eq!(app.details_source, Pane::State);
+    }
+
+    #[test]
+    fn s_and_l_toggle_the_flow_screens_own_content_swaps_only_on_the_flow_screen() {
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
+        assert!(!app.flow_selected_shows_state, "not the Flow screen yet");
+        app.screen = Screen::Flow;
+        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
+        assert!(app.flow_selected_shows_state);
+        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
+        assert!(!app.flow_selected_shows_state);
+        app.handle_key(key(KeyCode::Char('l')), &[], &[], false, false, &[]);
+        assert!(app.flow_story_shows_log);
+        app.handle_key(key(KeyCode::Char('l')), &[], &[], false, false, &[]);
+        assert!(!app.flow_story_shows_log);
+    }
+
+    #[test]
+    fn up_down_scroll_the_story_pane_when_it_has_focus() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.pane = Pane::Story;
+        app.handle_key(key(KeyCode::Down), &[], &[], false, false, &[]);
+        assert_eq!(app.story_scroll, 1);
+        app.handle_key(key(KeyCode::Up), &[], &[], false, false, &[]);
+        assert_eq!(app.story_scroll, 0);
+    }
+
+    #[test]
     fn tab_cycles_tree_details_state_and_back() {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
@@ -1391,9 +1597,9 @@ mod tests {
         assert_eq!(app.pane, Pane::Tree);
     }
 
-    /// Finding 12: a small terminal drops the state pane entirely
-    /// (`tui::draw` zeroes `state_viewport` that same frame) — `tab`
-    /// must skip straight from details back to the orchestration pane.
+    /// A small terminal drops the state pane entirely (`tui::draw`
+    /// zeroes `state_viewport` that same frame) — `tab` must skip
+    /// straight from details back to the orchestration pane.
     #[test]
     fn tab_skips_the_state_pane_when_it_is_not_drawn() {
         let rows = [row("prime.a", 1, StatusKind::Done)];
@@ -1692,5 +1898,97 @@ mod tests {
         assert_eq!(app.cost_measure, Measure::Total);
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
         assert_eq!(app.cost_selected, None);
+    }
+
+    fn flow_row(path: &str, merged_pass: bool) -> oscilloscope_core::flow::FlowRow {
+        oscilloscope_core::flow::FlowRow {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind: oscilloscope_core::flow::FlowRowKind::Row(RowKind::Tool),
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress: None,
+            has_children: false,
+            merged_pass,
+        }
+    }
+
+    /// A single-pass loop's own pass (`prime.fan.iter_0`) is merged
+    /// into its loop row in the Flow screen's own `flow_rows`, so it
+    /// has no path of its own there at all -- but it can still be
+    /// `App::selected_path` (the loop row is drawn in its place).
+    /// `visible_rows_for_flow` must keep it anyway, or `j`/`k` have
+    /// no current position to move from at all.
+    #[test]
+    fn visible_rows_for_flow_keeps_a_selected_path_the_flow_screen_merged_away() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0", 2, StatusKind::Running),
+        ];
+        let flow_rows = [flow_row("prime", false), flow_row("prime.fan", true)];
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.fan.iter_0".to_string());
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan", "prime.fan.iter_0"],
+            "the merged-away pass must stay in the list while it's selected"
+        );
+    }
+
+    #[test]
+    fn visible_rows_for_flow_drops_an_unselected_merged_pass() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0", 2, StatusKind::Running),
+        ];
+        let flow_rows = [flow_row("prime", false), flow_row("prime.fan", true)];
+        let app = App::new(false);
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan"],
+            "a merged pass that isn't selected is still hidden, same as before"
+        );
+    }
+
+    /// The regression itself: watching a single-pass loop (selection
+    /// on its merged pass) and pressing `j` must move to the next row
+    /// the Flow pane actually draws, not jump to the first row
+    /// because `move_tree_selection` can't find a current position.
+    #[test]
+    fn j_from_a_merged_pass_moves_to_the_row_after_its_loop_not_to_the_top() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let flow_rows = [
+            flow_row("prime", false),
+            flow_row("prime.fan", true),
+            flow_row("prime.next", false),
+        ];
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.selected_path = Some("prime.fan.iter_0".to_string());
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        app.handle_key(key(KeyCode::Char('j')), &visible, &[], false, false, &[]);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.next"),
+            "must move one row past the loop, not jump to prime"
+        );
     }
 }

@@ -395,6 +395,59 @@ effects:
           input: "\\"else-branch\\""
 """,
     ),
+    # Issue #635's own Flow screen: an untaken branch (so the · else
+    # summary line has something real to read from) and an unnamed
+    # `if` (so its own decision is inferred, never written by either
+    # engine as a node at all).
+    Case(
+        name="parity_if_untaken",
+        doc="""\
+effects:
+  - name: gate
+    type: if
+    if:
+      mode: cel
+      expr: "false"
+    then:
+      - name: chosen
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"then-branch\\""
+    else:
+      - name: chosen
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"else-branch\\""
+""",
+    ),
+    Case(
+        name="parity_if_unnamed",
+        doc="""\
+effects:
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: then_branch
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"then-branch\\""
+    else:
+      - name: else_branch
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\\"else-branch\\""
+""",
+    ),
     Case(
         name="parity_finally",
         doc="""\

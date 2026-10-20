@@ -18,7 +18,7 @@ use crate::format::{ClockZone, format_clock_time};
 use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind, run_totals};
 use crate::observe::duration_seconds;
 use crate::plan::PlanTree;
-use crate::render::{Row, RowKind, TokenBar, details_for, token_bar_in_flight_line};
+use crate::render::{Row, RowKind, TokenBar, TokenBlock, details_for, token_bar_in_flight_line};
 
 /// Which of the four screens is on display. `0`, `2` and `3` (issue
 /// #632) have a screen to show; `1` (time) doesn't yet, so its key
@@ -410,6 +410,11 @@ pub enum FocusDetail {
     Agent {
         engine: Option<String>,
         model: Option<String>,
+        /// The same `params_rendered.command` an ordinary tool step's
+        /// own [`FocusDetail::Tool::command`] reads -- an agent step
+        /// is still a `tool` leaf underneath, so its own invocation
+        /// is "asked" the same way.
+        command: Option<String>,
         note: &'static str,
     },
     Plain,
@@ -430,6 +435,27 @@ pub struct FocusedStep {
     pub since_ts: Option<String>,
     pub elapsed_s: Option<f64>,
     pub detail: FocusDetail,
+    /// The step's own status (issue #635's selected pane: "produced"
+    /// only shows once the step has actually finished, and a
+    /// running one reads "(when done)" instead) -- the overview's
+    /// own `NowFocus::Running`/`LastFinished` wrapper already carries
+    /// this distinction for its one caller, but the Flow screen's
+    /// selected pane shows whatever row is selected, running or not.
+    pub status: RowStatus,
+    /// Set once the step has failed (`render::Details::error`,
+    /// never read from `meta` directly, so #587's fix for an
+    /// unrecorded prompt flows through here unchanged).
+    pub error: Option<String>,
+    /// A tool step's own output value, truncated the same way
+    /// `Details::value` already is.
+    pub value: Option<String>,
+    /// A prompt's own reply block (`Details::received`) -- `None`
+    /// for a non-prompt step, or a prompt that hasn't replied yet.
+    pub received: Option<TokenBlock>,
+    /// `node_tokens`'s own sent-plus-received total, the same rule
+    /// [`crate::flow::FlowRow::tokens`] uses.
+    pub tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -532,12 +558,26 @@ fn node_for<'a>(row: &Row, flat: &'a BTreeMap<String, NodeMeta>) -> Option<&'a N
     flat.get(&row.path)
 }
 
-fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> bool {
-    row.kind == RowKind::Tool
-        && node_for(row, flat)
-            .and_then(|n| n.meta.get("provider"))
-            .and_then(Value::as_str)
-            .is_some_and(|p| p.eq_ignore_ascii_case("agent"))
+/// Issue #635: carries `render::build_token_bar`'s own plan-
+/// `provider` fallback over to the selected pane -- a tree-loop
+/// pass's or `use` child's `agent` tool step has no state node (and
+/// so no `meta.provider`) for as long as it runs, so without the
+/// fallback it would never read as an agent here even though the
+/// token bar already counts it as one.
+fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> bool {
+    if row.kind != RowKind::Tool {
+        return false;
+    }
+    let provider = node_for(row, flat)
+        .and_then(|n| n.meta.get("provider"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            plan.match_path(&row.path)
+                .and_then(|m| m.entries.first())
+                .and_then(|e| e.provider.clone())
+        });
+    provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"))
 }
 
 fn build_focused_step(
@@ -562,7 +602,7 @@ fn build_focused_step(
         .as_deref()
         .and_then(|start| duration_seconds(start, now));
     let details = details_for(&row.path, plan, model, state);
-    let agent = is_agent_row(row, flat);
+    let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
         let meta = node.map(|n| &n.meta);
         FocusDetail::Agent {
@@ -574,6 +614,11 @@ fn build_focused_step(
                 .and_then(|m| m.get("model"))
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            command: details
+                .meta_summary
+                .iter()
+                .find(|(k, _)| k == "command")
+                .map(|(_, v)| v.clone()),
             note: AGENT_LIVE_DATA_NOTE,
         }
     } else if row.kind == RowKind::Tool {
@@ -603,6 +648,15 @@ fn build_focused_step(
         .dim
         .clone()
         .or_else(|| plan.prompt_model_or_provider(&row.path));
+    let tokens = node
+        .map(|n| crate::model::node_tokens(&n.meta))
+        .and_then(|(sent, received)| {
+            let total = sent + received;
+            (total > 0).then_some(total)
+        });
+    let cost_usd = node
+        .and_then(|n| n.meta.get("cost_usd"))
+        .and_then(Value::as_f64);
     FocusedStep {
         path: row.path.clone(),
         breadcrumb: row.label.clone(),
@@ -611,6 +665,12 @@ fn build_focused_step(
         since_ts,
         elapsed_s,
         detail,
+        status: row.status.clone(),
+        error: details.error.clone(),
+        value: details.value.clone(),
+        received: details.received.clone(),
+        tokens,
+        cost_usd,
     }
 }
 
@@ -1042,6 +1102,94 @@ pub fn build_overview(
     }
 }
 
+/// A decision row's own detail, for the selected pane when the
+/// flow pane's own selection is a `◆`/untaken-branch row rather than
+/// an ordinary step (issue #635: "a decision row shows its condition,
+/// its mode, the branch it took, and the model's answer for a
+/// model-mode condition").
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedDecision {
+    pub label: String,
+    pub condition: Option<crate::plan::ConditionInfo>,
+    pub branch: Option<String>,
+    pub inferred: bool,
+    pub nothing_ran: bool,
+    pub answer: Option<String>,
+}
+
+/// Screen 2's own model (issue #635, part of #612) -- built only
+/// while the Flow screen is actually on display, the same
+/// performance rule `build_cost_screen` already follows for screen
+/// 3. `rows`/`footer`/`story` are `crate::flow::build_flow_rows`'s
+/// and `build_story`'s own outputs; `selected`/`selected_decision`
+/// pick whichever of the two the current selection actually is --
+/// never both, since a flow-pane selection is always exactly one
+/// kind of row at a time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowScreen {
+    pub rows: Vec<crate::flow::FlowRow>,
+    pub footer: crate::flow::FlowFooter,
+    pub story: Vec<crate::flow::StoryEntry>,
+    pub selected: Option<FocusedStep>,
+    pub selected_decision: Option<SelectedDecision>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_flow_screen(
+    rows: &[Row],
+    unfolded_rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    state: Option<&Value>,
+    story_lines: &[crate::diff::LogLine],
+    selected_path: Option<&str>,
+    zone: &dyn ClockZone,
+    now: &str,
+) -> FlowScreen {
+    let (flow_rows, footer) =
+        crate::flow::build_flow_rows(rows, unfolded_rows, flat, plan, story_lines);
+    let story = crate::flow::build_story(story_lines, &flow_rows, zone);
+    let mut selected = None;
+    let mut selected_decision = None;
+    if let Some(path) = selected_path {
+        // A named `if`'s own decision row shares its real `Row`'s own
+        // path, so `flow_rows` is checked first -- `rows` is only the
+        // fallback for an ordinary step, which never has a `Decision`
+        // entry of its own in `flow_rows` at all.
+        let flow_row = flow_rows.iter().find(|r| r.path == path);
+        match flow_row.map(|r| &r.kind) {
+            Some(crate::flow::FlowRowKind::Decision {
+                branch,
+                inferred,
+                nothing_ran,
+                answer,
+            }) => {
+                selected_decision = Some(SelectedDecision {
+                    label: flow_row.unwrap().label.clone(),
+                    condition: flow_row.unwrap().condition.clone(),
+                    branch: branch.clone(),
+                    inferred: *inferred,
+                    nothing_ran: *nothing_ran,
+                    answer: answer.clone(),
+                });
+            }
+            _ => {
+                if let Some(row) = rows.iter().find(|r| r.path == path) {
+                    selected = Some(build_focused_step(row, flat, plan, model, state, now));
+                }
+            }
+        }
+    }
+    FlowScreen {
+        rows: flow_rows,
+        footer,
+        story,
+        selected,
+        selected_decision,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1318,7 +1466,12 @@ mod tests {
     }
 
     fn program_with_ifs() -> electricity_bytecode::Program {
-        let tmp = std::env::temp_dir().join(format!("osi-screens-test-{}", std::process::id()));
+        // A directory per call, not per process: tests run on parallel
+        // threads, and each call removes its own directory when it's done.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp =
+            std::env::temp_dir().join(format!("osi-screens-test-{}-{call}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("doc.yml");
         std::fs::write(
@@ -1507,6 +1660,66 @@ mod tests {
         }
     }
 
+    /// Issue #635: selecting a decision row on the Flow screen gives
+    /// the selected pane the condition/branch detail instead of an
+    /// ordinary `FocusedStep` -- `check` is a named `if` here, so it
+    /// still has a real row of its own to select by path.
+    #[test]
+    fn build_flow_screen_selected_decision_reads_the_condition_and_branch() {
+        let plan = PlanTree::from_program(&program_with_ifs());
+        let state = json!({
+            "prime": {
+                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
+                "plan": {"value": "x", "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:05Z"}},
+                "check": {
+                    "value": {"branch": "then"}, "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:06Z", "branch": "then"},
+                    "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:06Z", "completed_at": "2026-10-08T11:00:06Z"}}
+                }
+            }
+        });
+        let flat = flat_from(state.clone());
+        let mut model = RunModel::new();
+        let statuses = model.observe(&state, &plan, ProcessState::Running);
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
+        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
+        let screen = build_flow_screen(
+            &folded,
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            Some("prime.check"),
+            &utc(),
+            "2026-10-08T11:00:10Z",
+        );
+        assert!(screen.selected.is_none());
+        let decision = screen.selected_decision.expect("a decision selection");
+        assert_eq!(decision.branch.as_deref(), Some("then"));
+        assert!(!decision.inferred);
+        assert_eq!(
+            decision.condition,
+            Some(crate::plan::ConditionInfo {
+                mode: crate::plan::ConditionMode::Cel,
+                text: "true".to_string()
+            })
+        );
+    }
+
     #[test]
     fn phase_strip_folds_single_child_wrappers_and_counts_depth_one() {
         let plan = PlanTree::from_program(&program_with_ifs());
@@ -1535,11 +1748,14 @@ mod tests {
         );
         let folded = crate::fold::fold_rows(rows, true, &Default::default());
         let strip = build_phase_strip(&folded);
-        // `check › taken` folds into one top-level row (single-child
-        // wrapper), so the strip has two top-level rows: `plan` and
-        // `check › taken`, not three.
+        // Issue #635: a named `if` is no longer breadcrumb-eligible, so
+        // `check` no longer folds with its own single child `taken`
+        // (which drops to depth 2, out of the phase strip entirely) --
+        // the strip has two top-level rows, `plan` and `check` on its
+        // own, neither carrying a › breadcrumb.
         assert_eq!(strip.len(), 2);
-        assert!(strip.iter().any(|s| s.label.contains("\u{203a}")));
+        assert!(strip.iter().any(|s| s.label == "check"));
+        assert!(!strip.iter().any(|s| s.label.contains('\u{203a}')));
     }
 
     #[test]

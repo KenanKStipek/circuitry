@@ -1732,7 +1732,22 @@ fn child_segments(
         let created_a = earliest_created_at(path_a, paths, flat);
         let created_b = earliest_created_at(path_b, paths, flat);
         match (created_a, created_b) {
-            (Some(a), Some(b)) => return a.cmp(&b),
+            // Compared as real instants when both parse, never a raw
+            // string compare: an engine's own millisecond timestamp
+            // and a bare-seconds one aren't lexicographically
+            // comparable at all (the same class of bug `diff::
+            // sort_log_lines` guards against) -- `2026-01-01T00:00:
+            // 00Z` is earlier than `...00.200Z`, but sorts *after* it
+            // as a string, since `.` (0x2E) sorts below `Z` (0x5A).
+            (Some(a), Some(b)) => {
+                return match (
+                    chrono::DateTime::parse_from_rfc3339(&a),
+                    chrono::DateTime::parse_from_rfc3339(&b),
+                ) {
+                    (Ok(ia), Ok(ib)) => ia.cmp(&ib),
+                    _ => a.cmp(&b),
+                };
+            }
             (Some(_), None) => return std::cmp::Ordering::Less,
             (None, Some(_)) => return std::cmp::Ordering::Greater,
             (None, None) => {}
@@ -2134,6 +2149,33 @@ mod tests {
     use super::*;
     use crate::observe::Event;
     use serde_json::json;
+
+    /// Siblings created in the same second but at different
+    /// timestamp precisions (`2026-01-01T00:00:00Z` is earlier than
+    /// `...00.200Z`, but sorts *after* it as a raw string, since `.`
+    /// (0x2E) sorts below `Z` (0x5A)) must still order by the real
+    /// instant, same as `diff::sort_log_lines` already does for the
+    /// story/log.
+    #[test]
+    fn child_segments_sorts_by_real_instant_not_by_string() {
+        let state = json!({"prime": {"value": null, "meta": {},
+            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z"}},
+            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00.200Z"}}
+        }});
+        let flat = flatten_state(&state);
+        let mut paths = BTreeMap::new();
+        paths.insert("prime.a".to_string(), ());
+        paths.insert("prime.b".to_string(), ());
+        let plan_order = BTreeMap::new();
+        let kids = child_segments("prime", &paths, &flat, &plan_order);
+        assert_eq!(
+            kids,
+            vec![
+                ("a".to_string(), "prime.a".to_string()),
+                ("b".to_string(), "prime.b".to_string())
+            ]
+        );
+    }
 
     #[test]
     fn a_pending_plan_with_no_state_yet_renders_every_leaf_pending() {

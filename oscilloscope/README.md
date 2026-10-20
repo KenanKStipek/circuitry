@@ -98,9 +98,9 @@ On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
 osi has four screens, switched with `0`-`3`: the overview (`0`, the
-default for both `osi <doc>` and `osi watch`), flow (`2`, today's
-layout, below) and cost (`3`, below); time (`1`) arrives in its own
-issue, so its key does nothing yet and it has no tab. Selection,
+default for both `osi <doc>` and `osi watch`), flow (`2`, the tree as
+control flow, below) and cost (`3`, below); time (`1`) arrives in its
+own issue, so its key does nothing yet and it has no tab. Selection,
 follow, folding, filters and collapsed rows are shared across every
 screen.
 
@@ -133,7 +133,7 @@ next pending step, quick steps) and cost (tokens in/out, cost once any
 effect reports one, the store with the most tokens -- the same store
 the Cost screen's own table ranks first, what's in flight). The
 effects count that used to be in the header lives in the flow card
-now; screen 2's own orchestration pane title keeps it too.
+now; the Flow screen's own flow pane title keeps it too.
 
 ### `--glance`
 
@@ -146,50 +146,82 @@ once and exits 0, for a tmux status line that runs its own command on
 a timer instead of leaving one process attached. When stdout isn't a
 terminal, only that one final line is ever printed.
 
-### Screen 2 (`flow`): today's layout
+### Screen 2 (`flow`): the tree as control flow
 
-On a terminal big enough (120×40 shows every pane usefully): a left
-column of the details pane (the selected row's own meta, and, for a
-prompt, a `sent`/`received` block with a snippet and token count each)
-over the orchestration pane (the plan tree, a status glyph, duration, loop
-`n/total` and the provider/model in a dim colour), the column split and
-the left column's own row split both at the golden section — the larger
-share always going to whichever side grows with the run (the left column
-over the right, the orchestration pane over the details pane); a right
-column of the state pane as a tree (every effect node nested by depth,
-latest-or-current first, with its status, a dim model/provider/
-duration/retries/loop-progress summary and its own or its subtree's
-tokens — no value or error text, read those in the details pane) over the
-log pane (the same lines `--log` prints, plus the engine's stderr). The
-`tokens by key` treemap and the token bar that used to live here moved to
-the Cost screen (`3`, below). On a smaller terminal, panes drop in this
-order until the rest fits — the header never disappears:
+The flow pane (left) is today's orchestration pane, plus each `if`'s own
+decision: a named `if` gets a row of its own, `◆ <name> → then`/`→ else`
+(`◆ <name> …` before the condition has been evaluated), with the untaken
+branch as one dim line underneath (`· else: <its first step>`, `(+N more)`,
+or `· else: nothing` when it's empty) — never a row per untaken step. An
+unnamed `if` writes no node and fires no event, so its own row
+(`◆ if <condition, cut short> → then`) is inferred instead: once any step
+of either branch has appeared, that branch is read as taken; with no
+`else`, it reads `◆ if … → else (nothing ran)` once the enclosing step
+has finished, or once a later step in the same chain has started, with
+nothing from either branch having started; until either happens, it
+reads `◆ if …`. When both branches would read as the same step names, it
+reads `◆ if → ?` instead of guessing. At 100 columns and wider, a
+decision's own condition (the CEL expression, or a model-mode template's
+first line, cut with `…`) is a dim second line under it; narrower, it's
+in the selected pane only. A named loop with a known total of exactly
+one pass, or an unsettled (`dynamic`) total once the loop itself has
+finished with only one pass observed, merges into one row, `⟲ <name>
+pass N of M`; more than one pass keeps one row each, as before. Two or more consecutive, finished, sub-second tool steps still
+fold into one `N quick steps` row (`⏎` expands it in place), and the
+pane's own footer totals every quick step in the run
+(`quick steps folded: 9 · 2.1s`) and gives a health line
+(`health: 0 failed · 0 retries · 0 warnings`). Columns (start, duration,
+tokens, cost) sit to the right of each row; a narrow pane
+drops them in this order — cost, start, tokens — duration always stays.
 
-1. below 90×24: the state pane (the right column becomes the log pane alone);
-2. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked).
+The selected pane (top right) shows the flow pane's own selection: a
+prompt's text (or a tool's rendered command) under
+"asked", what it's doing right now (a running prompt's token estimate, a
+running tool's elapsed time, or a running agent's engine/model with a note
+that live session data isn't available yet), and, once it finishes, its
+value or reply, tokens, cost and any error under "produced" (a running step
+reads `(when done)`). A decision row shows its own condition, mode, the
+branch it took and, for a model-mode condition, the model's own answer. `s`
+swaps this pane for today's state tree instead, so a named report
+(#605/#610) stays selectable; `s` again swaps back. `v` opens the full
+value or prompt, as ever.
 
-A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in three places.
+The story pane (bottom right) is the run's own notable events, oldest
+first, with clock times: run start, each decision, each report, each
+failure, and run end with its totals. It keeps at most 2,000 lines, and
+follows the latest line while scrolled to the bottom. `l` swaps it for the
+full log (the same lines `--log` prints, plus the engine's stderr) instead;
+`l` again swaps back.
+
+Sizes:
+
+1. 100×30 and larger: flow pane on the left; the selected pane over the
+   story pane on the right, both splits at the golden section (62/38);
+2. 80×20 up to that: flow pane | selected pane, with the story pane
+   hidden — `l` shows the log in the selected pane's own place instead;
+3. below 80×20: one column, the selected pane over the flow pane, with no
+   story pane and the flow pane's own columns dropped to duration alone.
+
+A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in several places.
 Once the run's first report arrives, the header shows its message
 (a warning styled in the theme's own warning colour) after the clock
 time and before the screen tabs, per the truncation order above. The
 run id lives in the root row's own details, and in a `■ run started`
-line in `--log`. Every report, named or not, gets its
+line in `--log` and the story. Every report, named or not, gets its
 own log line (`▸ <message>`, `▸ warning: <message>`), with a compact
-`data` preview after it when it has one. A *named* report still writes a
-shadow-state node (so it has a row in the state pane, with its own
-`level`/message/clock time and `data` as pretty JSON in the details pane
-once selected there) but, named or not, a report never becomes a row in
-the orchestration pane, and never changes how a loop pass folds.
+`data` preview after it when it has one, and joins the story the same way.
+A *named* report still writes a shadow-state node (so it has a row in the
+state pane, with its own `level`/message/clock time and `data` as pretty
+JSON once selected there) but, named or not, a report never becomes a row
+in the flow pane, and never changes how a loop pass folds.
 
-Follow is on when the TUI starts: the orchestration pane's own selection
-tracks the running effect, and the details pane shows it with no key press.
-Any manual move (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`) turns
-follow off; `f` turns it back on. The orchestration pane scrolls, keeping
-the selected row in view, with a `12/48`-style position in its own border
-whenever a row is hidden above or below; the details and state panes scroll
-the same way once they have focus (`tab` cycles orchestration → details →
-state), and the state pane's own selection (and its own collapsed set) is
-independent of the orchestration pane's.
+Follow is on when the TUI starts: the flow pane's own selection tracks the
+running effect, and the selected pane shows it with no key press. Any
+manual move (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`) turns follow
+off; `f` turns it back on. The flow pane scrolls, keeping the selected row
+in view, with a `12/48`-style position in its own border whenever a row is
+hidden above or below; the selected and story panes scroll the same way
+once they have focus (`tab` cycles flow → selected → story → flow).
 
 Whatever just changed gets a soft background tint that fades out over about
 a second, so the eye goes to it: a row's status, a state row, a new log
@@ -206,15 +238,17 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | Key | Action |
 |---|---|
 | `0` | the overview |
-| `2` | flow (today's layout) |
+| `2` | flow (this screen) |
 | `3` | cost (below); `1` (time) does nothing yet |
-| `↑↓` / `j`/`k` | move (the focused pane's own selection, or the details pane's scroll) |
+| `↑↓` / `j`/`k` | move (the focused pane's own selection, or the selected/story pane's scroll) |
 | `PgUp`/`PgDn` | move a page |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
-| `←` / `→` | collapse / expand (orchestration or state pane) |
+| `←` / `→` | collapse / expand (flow or state pane) |
 | `⏎` | expand a quick-steps row in place |
 | `z` | fold on/off (breadcrumbs, quick steps); on by default |
-| `tab` | orchestration → details → state |
+| `tab` | flow → selected → story → flow |
+| `s` | swap the selected pane for today's state tree, and back |
+| `l` | swap the story pane for the full log, and back |
 | `f` | follow the running row (on by default) |
 | `e` | errors only |
 | `/` | filter |
@@ -226,80 +260,76 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | `?` | help |
 
 The token rule is the same everywhere a count shows up (the header, the
-state pane, details and the Cost screen's treemap and table): a node's own
-`tokens_sent_total`/`tokens_received_total` when present, falling back to
-`tokens_sent`/`tokens_received` otherwise — the same pair both `cof`'s and
-electricity's own `runtime.last_run.totals` are built from, so a retried
-prompt can never make one surface disagree with another. There is no live
-*output* count: both engines report a prompt's tokens only once it
-finishes. Every token count is formatted the same one way too (`369 t`,
-`18.0 kt`, `142 kt`, `2.1 Mt`), and so is every duration, everywhere one
-shows up (`0.4s`, `6m12s`, `2h05m`, `3d04h`) — `oscilloscope_core::format`'s
-one formatter each. Clock times (`HH:MM:SS` in the log, the header's own
-`since 11:04:58` while a run is going and `11:04:58–11:31:10` once it has
-ended, and the innermost loop's ETA as `ETA ~11:42`) go through the
-binary's own real local zone, resolved per timestamp.
+state pane, the selected pane and the Cost screen's treemap and table): a
+node's own `tokens_sent_total`/`tokens_received_total` when present,
+falling back to `tokens_sent`/`tokens_received` otherwise — the same pair
+both `cof`'s and electricity's own `runtime.last_run.totals` are built
+from, so a retried prompt can never make one surface disagree with
+another. There is no live *output* count: both engines report a prompt's
+tokens only once it finishes. Every token count is formatted the same one
+way too (`369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`), and so is every duration,
+everywhere one shows up (`0.4s`, `6m12s`, `2h05m`, `3d04h`) —
+`oscilloscope_core::format`'s one formatter each. Clock times (`HH:MM:SS`
+in the log, the story, the header's own `since 11:04:58` while a run is
+going and `11:04:58–11:31:10` once it has ended, and the innermost loop's
+ETA as `ETA ~11:42`) go through the binary's own real local zone, resolved
+per timestamp.
 
-The orchestration pane folds a single-child container into one breadcrumb
-row (`review › fix › agent`) and two or more consecutive, finished,
-sub-second tool steps into one `N quick steps` row — `z` turns folding off
-to see the full tree, and `⏎` expands a quick-steps row in place. A loop
-pass is labelled `pass N of M` there (the state pane keeps the real
-`iter_N` key). A running `agent` tool step counts in the overview's cost
-card's own in-flight line next to running prompts (`2 prompts · 1 agent
-in flight`), with no token estimate of its own.
+The flow pane folds a single-child container into one breadcrumb row
+(`review › fix › agent`) and two or more consecutive, finished, sub-second
+tool steps into one `N quick steps` row — `z` turns folding off to see the
+full tree, and `⏎` expands a quick-steps row in place. A named `if`'s own
+row never folds into a breadcrumb, so its `◆` stays visible even with a
+single child. A loop pass with more than one step is labelled
+`pass N of M` there (the state pane keeps the real `iter_N` key). A
+running `agent` tool step counts in the overview's cost card's own
+in-flight line next to running prompts (`2 prompts · 1 agent in flight`),
+with no token estimate of its own.
 
 The engine exiting does not, on its own, end the TUI: the header, every
-row's final status and the details pane stay live on whatever the run
+row's final status and the selected pane stay live on whatever the run
 ended with until the user leaves with a confirmed `q`, a Ctrl-C cancel, or
 an external `INT`/`TERM`/`HUP` to osi itself (a `SIGHUP` never waits for a
 key — the terminal is gone by definition). Short of one of those three, a
 run that finishes on its own stays up for `q`/Ctrl-C to leave.
 
 A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
-golden tests) at 120×40, every pane populated:
+golden tests) at 100×30, a run just finished with a named decision taken,
+its untaken branch's own dim summary line, an unnamed decision inferred,
+a loop's single pass merged into one row, a quick-steps row folded with
+its own footer total, and the story:
 
 ```
-⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:00   0 overview  [2 flow]  3 cost                                        
-┌ details ───────────────────────────────────────────────────────────────┐┌ state ─────────────────────────────────────┐
-│path   prime.a                                                          ││◐ fan  1/4                                  │
-│type   tool                                                             ││  ↑50 t ↓70 t                               │
-│plan   tool "a"                                                         ││  ◐ iter_0                                  │
-│                                                                        ││    ↑50 t ↓70 t                             │
-│value (v for full):                                                     ││✓ a                                         │
-│the summary text                                                        ││  ↑120 t ↓340 t                             │
-│                                                                        ││✓ b  shell                                  │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-└────────────────────────────────────────────────────────────────────────┘│                                            │
-┌ orchestration do-thing (2/8) ──────────────────────────────────────────┐│                                            │
-│◐ prime                                                                 ││                                            │
-│✓ a                                                                     ││                                            │
-│✓ b  shell                                                              ││                                            │
-│◐ fan  1/4                                                              ││                                            │
-│  ◐ pass 1 of 4                                                         ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        │└────────────────────────────────────────────┘
-│                                                                        │┌ log ───────────────────────────────────────┐
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-│                                                                        ││                                            │
-└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
+⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0 overview  [2 flow]  3 cost                           
+┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running ─────────┐┌ selected ──────────────────────────┐
+│✓ prime   2.0s                                              ││chosen                              │
+│  ✓ 2 quick steps   0.4s                                    ││tool · shell                        │
+│  ◆ gate  → then   0.0s                                     ││produced:                           │
+│    x > 1                                                   ││ok                                  │
+│    · else: other                                           ││                                    │
+│    ✓ chosen   0.3s                                         ││                                    │
+│  ◆ if y > 1  → then  (inferred)                            ││                                    │
+│    y > 1                                                   ││                                    │
+│    · else: u_else                                          ││                                    │
+│  ✓ u_then   0.2s                                           │└────────────────────────────────────┘
+│  ⟲ fan  pass 1 of 1   0.4s                                 │┌ story ─────────────────────────────┐
+│                                                            ││00:00:00 ■ run started  abc         │
+│                                                            ││00:00:00 ◆ gate → then              │
+│                                                            ││00:00:00 ◆ if y > 1 → then          │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│                                                            ││                                    │
+│quick steps folded: 4 · 0.9s                                ││                                    │
+│health: 0 failed · 0 retries · 0 warnings                   ││                                    │
+│                                                            ││                                    │
+└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘
 ```
 
 ### Screen 3 (`cost`): where the tokens and money went

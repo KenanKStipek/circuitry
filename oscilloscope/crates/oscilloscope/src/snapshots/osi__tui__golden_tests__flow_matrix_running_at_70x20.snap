@@ -1,0 +1,24 @@
+---
+source: crates/oscilloscope/src/tui.rs
+expression: text
+---
+"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 2.0s · 00:00:02   0  [2]  3         "
+"┌ selected ──────────────────────────────────────────────────────────┐"
+"│pass 1 of 1                                                         │"
+"│tool · shell                                                        │"
+"│doing:                                                              │"
+"│running 1.0s                                                        │"
+"│produced:                                                           │"
+"└────────────────────────────────────────────────────────────────────┘"
+"┌ flow (do-thing · 5/10) ◆ decision ⟲ loop ▶ running ────────────────┐"
+"│  ◆ gate  → then   0.0s                                             │"
+"│    · else: other                                                   │"
+"│    ✓ chosen   0.3s                                                 │"
+"│  ◆ if y > 1  → then  (inferred)                                    │"
+"│    · else: u_else                                                  │"
+"│  ✓ u_then   0.2s                                                   │"
+"│  ⟲ fan  pass 1 of 1   1.0s                                         │"
+"│quick steps folded: 4 · 0.9s                                        │"
+"│health: 0 failed · 0 retries · 0 warnings                           │"
+"│                                                                    │"
+"└────────────────────────────────────────────────────────────────────┘"
