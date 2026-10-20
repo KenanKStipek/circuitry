@@ -584,8 +584,20 @@ by run state as the old 3-row bezel icon was — a static `◉` with
 (the one osi started, or, for `osi watch`, the pid `--events`' own
 `run_start` carried), run state, elapsed time, the current clock time
 (the same `now` every other time in the frame uses, §6.3's own "one
-clock"), and the innermost running loop's ETA. There is no run-level
-ETA: plans have data-dependent loops. `oscilloscope_core::screens::
+clock"), and the ETA. Issue #649: once there are 3 or more ok runs of
+the document's own content hash in its run history, the ETA is the
+whole-run figure history gives (`ETA ~`); below that threshold it
+falls back to the innermost running loop's own ETA instead (labelled
+`loop ETA ~`, since plans have data-dependent loops and that figure is
+never a whole-run one). Once the run is past its own usual (p90) end,
+the header reads `ETA ?` rather than a time that keeps sliding.
+`oscilloscope_core::history::compute_eta` works this out;
+`oscilloscope_core::render::Header`'s `history_eta_ts`/`history_eta_
+past_usual` fields carry the result into `header_line` -- set by
+`oscilloscope`'s own history wiring (`history_io.rs`) directly on the
+`Header` `render::build`/`build_folded` already returned, since
+neither of those, nor `oscilloscope-core` generally, reads history
+files itself. `oscilloscope_core::screens::
 header_line` builds this from a `Header` and a `now`, with no terminal
 code — the one source for both the TUI header and `--glance`'s own
 line, so the two can never disagree about what it says. The run ID
@@ -1300,8 +1312,24 @@ interval, and nothing here is built at all for a screen not shown.
   flight_line`'s own text (shared with the Cost screen's own data,
   so the two can't disagree about what's running either).
 
-Run-history figures (`vs usual`, an ETA for the whole run) need run
-history, a later issue (§“What osi needs” above). Below
+Issue #649: the time card's own `eta_ts` is the same whole-run ETA
+history gives the header, in place of the header's own fallback to
+the innermost loop's ETA once there's enough history -- `eta_from_
+history` carries the same three-way choice (history / past usual /
+loop) the header line makes, so the two never disagree. Once it's
+from history, the card also shows `eta_remaining_s` (`(12m)`),
+`vs_usual_s` and `usual_total_s` (`vs usual +3m (p50 45m)`, the gap
+between this run's own elapsed time at its anchor step and the usual
+elapsed time to reach the same point) and the p10/p90 range as clock
+times (`usual 11:58–12:09`); below the run-count threshold it shows
+`history_count` instead (`history: 1 of 3 runs`). The now pane's own
+p50/p90 bar (a running step's elapsed busy time against
+`Header::history_step_usual`, pooled across every hash the same way
+per-step figures always are) is `FocusedStep::usual_busy_p50_s`/
+`usual_busy_p90_s`, filled in by `build_now_pane`'s own `NowFocus::
+Running` branch only -- a ghost-bar history of passes, which needs
+the bounded interval log below, is the Time screen's own addition
+(issue #650). Below
 [`tui::thresholds::TWO_COLUMN_MIN_WIDTH`]/`_MIN_HEIGHT` (80×20, the
 same line screen 2's own two-column layout collapses at) the overview
 restacks instead of just shrinking: the phase strip drops to one
@@ -1495,7 +1523,8 @@ only its own colour (DESIGN.md's own "never colour alone" rule), and
 the bottom two rows (whenever there's room for them) are a clock axis
 (start, middle and end, `format::midpoint_clock_time` for the middle)
 and a glyph-and-label legend, rather than more bars. No projection to
-the run's own ETA: a whole-run ETA needs run history, a later issue.
+the run's own ETA yet, though issue #649 now gives one -- a later
+issue (#641).
 
 **The largest-stores table** (`oscilloscope-core::cost::
 largest_stores`, drawn by `tui.rs`'s `draw_cost_table`). Always ranks
@@ -1582,6 +1611,125 @@ failed to report a cost, it simply hasn't finished yet.
    `frame_area` parameter), never against `body` (the terminal minus
    the header's own single row) -- the same rule screen 2's own
    thresholds already follow.
+
+### 6.3c Run history (issue #649)
+
+`oscilloscope-core::history` is the one place that knows the record
+format, the statistics and the ETA -- no file IO policy difference
+from `observe.rs`, which already does its own; `oscilloscope`'s own
+`history_io.rs` (the binary crate) is the only thing that ever reads
+`OSI_HISTORY`/`OSI_HISTORY_DIR`/`$XDG_STATE_HOME`/`$HOME`, resolves
+which document a run or watch is keyed by, and decides *when* to call
+into it, the same split `config_discovery`/`main.rs`'s own config
+resolution already makes.
+
+**The record** (`history::HistoryRecord`): `v`, `run_id`, the
+document's own absolute path (resolved by `history_io.rs`, never read
+back out of `runtime.last_run.orchestration_path` as given -- neither
+engine guarantees that one is absolute), `document_hash`, `engine`
+(from `run_start`'s own `engine` field when `--events` carried one,
+else `null`), `started_at`/`ended_at`, `outcome`, `wall_s`,
+`effects_run`, tokens, cost, and `steps`: a map from each plan-known
+path's own display key (loop passes written `iter_*`, a path the plan
+doesn't know by name folded into one `(other)` entry) to its own
+`start_s`/`end_s`/`busy_s`/`passes`/tokens/cost/`ok`. Only
+`runtime.last_run`/`.totals` and each node's own
+`created_at`/`completed_at`/token/cost fields are ever read -- no
+value, prompt, param, command, tool target, error text, report, or
+transcript content reaches a record (a test built from a state whose
+every one of those fields holds a marker string asserts the marker
+never appears in the serialized line).
+
+**Where `busy_s`/`passes` come from** (`RunModel::step_intervals`, a
+bounded log, issue #649's own "keyed by event id"): an id-paired
+`start`/`end` event pair, when `--events` carried one for a path,
+else the state-only "just finished" transition `observe` already
+detects for a retried/looped path (`last_created_at` moving) --
+never both, so the two sources can't double-count the same pass.
+Grouping every interval by display key and merging overlapping
+`[start_s, end_s]` ranges before summing is what makes a tree loop's
+concurrent passes count their overlap once, for free, whether the
+loop is named (each pass its own concrete path) or not (one path,
+several passes in sequence). Capped at 50,000 entries; past that,
+further passes only bump a per-path count with no timing -- a bound
+the Time screen (issue #650) is the first thing expected to approach,
+not this one.
+
+**The file format:** one JSONL file per document, in
+`$XDG_STATE_HOME/circuitry/osi/history/<sha256 of the absolute
+path>.jsonl` (`~/.local/state/...` by default, macOS included --
+one documented place on every platform). New directories `0700`, new
+files `0600`, kept `0600` through compaction (a temp file in the same
+directory, then a rename); an existing, already group-/world-
+accessible directory is left alone, with one warning on stderr, same
+rule as `--out-dir`'s own `create_run_dir`. Appends and compaction
+take a blocking advisory `flock` on `<file>.lock`; readers never lock,
+and tolerate a corrupt line, an unknown `v`, a torn last line, and a
+line over 64 KiB, each skipped without losing the lines around it. A
+repeated `run_id` (an `osi watch` filling in an already-recorded run)
+counts once, the first copy read winning. Limits: 500 steps and 64
+KiB per line, 50 runs per document (compacted to the newest 50 once a
+file reaches 100 lines), 500 documents and 64 MiB in total (oldest-
+written evicted first).
+
+**Statistics and the ETA** (`history::compute_stats`/`compute_eta`):
+nearest-rank percentiles over the newest 20 ok runs -- p50 needs 3,
+p10/p90 need 5. Whole-run figures (`DocumentStats::whole_run`) use
+only runs sharing the *current* `document_hash`; per-step figures
+shown generically for a step (`DocumentStats::per_step`) pool every ok
+run of the document's own path, any hash, so an edit that changes the
+hash still has per-step history to show (just no whole-run one, until
+3 runs of the new version exist). The ETA's own "what usually follows
+this step" is a *different* map, `DocumentStats::anchor_remaining_
+after_p50_s`, restricted to the same same-hash pool `whole_run` itself
+comes from -- pooling every hash here, the way `per_step` does for
+display, would let an edit that adds work after an anchor step make
+the ETA too early. The anchor is the most recently finished step with
+an entry in that map (`EtaInput::finished_steps`, built by
+`history::eta_input_from_state` from whichever state the caller
+already has) -- before any has finished, the run's own start plus the
+whole run's p50; a currently running step is a floor under that (its
+own usual time left, plus the p50 of what usually follows it), never
+earlier than now; past the usual (p90) end, `None`, read by the header
+as `ETA ?`. `EtaOutput::vs_usual_s` is the gap, at the anchor, between
+this run's own elapsed time and the usual elapsed time to reach the
+same point -- `None` before any anchor exists.
+
+**When it's read and written:** `history_io::HistoryHandle` resolves
+the document lazily for `osi watch` (the first live-state write that
+names one, absolute `orchestration_path` else `--plan` else history
+off for that watch, one stderr line) and eagerly for `osi <doc>` (the
+CLI argument itself, canonicalized); reads a document's own file at
+most once and recomputes statistics only when `document_hash`
+changes. `apply_history_eta` is the one place `Header::history_eta_ts`/
+`history_eta_past_usual` (and the time card's own extra figures) are
+ever set to anything but their own "no history" defaults -- directly
+on the `Header` `render::build`/`build_folded` already returned,
+right after every real call to either, in `run_tui`/`run_tui_watch`/
+`write_glance_line`. Once the run has truly ended (`model::run_ended`),
+the ETA's own elapsed-time anchor freezes at `runtime.last_run.
+completed_at` rather than the live clock -- a run held open in the
+TUI after it finishes would otherwise watch its own ETA keep sliding
+forward, eventually past its own usual end.
+
+`HistoryHandle::write` is the one write path, called from all four
+endings (`finish_run`/`finish_watch`, and both `--glance` loops, which
+don't go through either finish function): a no-op unless `state`
+satisfies `model::run_ended` (so an abort with no final write, and
+`osi watch` detaching from a run still going, write nothing), and
+`build_record` itself returns `None` for a dry run, a validate-only
+run, or one with no `document_hash`. `append_record` itself skips the
+write, under the same lock the append takes, when the record's own
+`run_id` is already in the file -- not just folded away by
+`read_records`' own dedupe, which would otherwise let a repeatedly
+re-watched run directory grow the file forever. `osi watch --glance
+--once` never calls `write` at all -- it only reads. A notice `history_
+io::HistoryHandle::ensure_document` has (no absolute path and no
+`--plan`) is queued, not printed straight away: it can run on every
+redraw inside the TUI's own raw-mode, alternate-screen loop, where a
+bare `eprintln!` would land as a stray line over the drawn frame;
+`flush_history_notices` prints anything queued once that loop (or
+`--glance`'s own rewritten-in-place line) is done.
 
 ### 6.4 Tests
 

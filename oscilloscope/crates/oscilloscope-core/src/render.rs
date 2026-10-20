@@ -206,8 +206,17 @@ pub struct Row {
     pub has_children: bool,
 }
 
-/// The header line (§6.3). There is no run-level ETA (plans have
-/// data-dependent loops) — only the innermost *running* loop's own.
+/// The header line (§6.3). The whole-run ETA (issue #649) comes
+/// from history, once there are 3 or more ok runs of this document's
+/// own hash (`history_eta_ts`/`history_eta_past_usual`, left at
+/// their own "no history" defaults by `build`/`build_header`
+/// themselves — only `oscilloscope`'s own history wiring, which
+/// alone knows where a document's history lives, ever sets them to
+/// anything else, as a direct, after-the-fact write onto the
+/// `Header` this module already built). Without one, the header
+/// falls back to the innermost *running* loop's own ETA instead
+/// (plans have data-dependent loops, so that one is never a whole-
+/// run figure).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
     pub document: String,
@@ -242,6 +251,48 @@ pub struct Header {
     /// innermost loop's ETA is shown as a clock time"). `None`
     /// exactly when `innermost_loop_eta_s` is.
     pub innermost_loop_eta_ts: Option<String>,
+    /// The whole-run ETA from history (issue #649), as an absolute
+    /// clock time — `None` either because there isn't enough
+    /// history yet (the header then falls back to
+    /// `innermost_loop_eta_ts`) or because [`Header::history_eta_
+    /// past_usual`] is set instead.
+    pub history_eta_ts: Option<String>,
+    /// Set once the run is past its own usual (p90) end, with enough
+    /// history to know one — the header then reads `ETA ?` rather
+    /// than falling back to the loop ETA.
+    pub history_eta_past_usual: bool,
+    /// `history_eta_ts`'s own seconds-from-now, before it was turned
+    /// into a clock time — the overview's own `(12m)`. `None`
+    /// exactly when `history_eta_ts` is.
+    pub history_eta_remaining_s: Option<f64>,
+    /// The p10/p90 range behind `history_eta_ts`, as clock times —
+    /// the overview's own `usual 11:58–12:09`. Either may be `None`
+    /// below the p10/p90 run-count threshold even with
+    /// `history_eta_ts` set.
+    pub history_eta_low_ts: Option<String>,
+    pub history_eta_high_ts: Option<String>,
+    /// How far ahead of (negative) or behind (positive) usual pace
+    /// the run is at its own anchor step — the overview's own `vs
+    /// usual +3m`. `None` before any recorded step has finished.
+    pub history_vs_usual_s: Option<f64>,
+    /// The usual (p50) whole-run time behind `history_vs_usual_s` —
+    /// the overview's own `(p50 45m)`.
+    pub history_usual_total_s: Option<f64>,
+    /// How many ok runs of the current document hash history has,
+    /// whatever their count — the overview's own `history: N of 3
+    /// runs` while below the threshold a whole-run ETA itself needs,
+    /// including `0` on a document's very first ok run. `None`
+    /// exactly when history itself hasn't resolved a document and a
+    /// directory to read yet (history off, or a watch still waiting
+    /// on its first live-state write) -- the only case this is
+    /// never shown at all, as opposed to `Some(0)`.
+    pub history_same_hash_count: Option<usize>,
+    /// Per-step usual busy time from history (issue #649's now-pane
+    /// bar), keyed the same way [`crate::history::HistoryRecord::
+    /// steps`] is -- pooled across every ok run of this document
+    /// path, any hash ("earlier versions" pooling). Empty when
+    /// history is off or there's no document yet.
+    pub history_step_usual: std::collections::BTreeMap<String, crate::history::StepStats>,
     /// The latest report seen, once at least one has arrived (#610)
     /// -- a front end shows this in the header's own status-line
     /// slot, in place of `run_id`, for the rest of the run. `None`
@@ -1560,6 +1611,20 @@ fn build_header(
         tokens_received,
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
+        // Issue #649: `build`/`build_header` have no history of
+        // their own to read (only `oscilloscope`'s own history
+        // wiring knows where a document's history lives) -- these
+        // always start at "no history" and are set afterward, by the
+        // caller, directly on the `Header` this returns.
+        history_eta_ts: None,
+        history_eta_past_usual: false,
+        history_eta_remaining_s: None,
+        history_eta_low_ts: None,
+        history_eta_high_ts: None,
+        history_vs_usual_s: None,
+        history_usual_total_s: None,
+        history_same_hash_count: None,
+        history_step_usual: Default::default(),
         latest_report,
         engine_alive,
     }
@@ -2768,6 +2833,7 @@ mod tests {
             ts: "2026-01-01T11:04:58Z".to_string(),
             run_id: "r1".to_string(),
             pid: Some(1234),
+            engine: None,
         });
         model.observe_event(&Event::RunEnd {
             ts: "2026-01-01T11:31:10Z".to_string(),
@@ -2820,6 +2886,7 @@ mod tests {
             ts: "2026-01-01T11:04:58Z".to_string(),
             run_id: "r1".to_string(),
             pid: Some(1234),
+            engine: None,
         });
         let state_json = json!({
             "prime": {"value": null, "meta": {"created_at": "2026-01-01T11:04:58Z", "completed_at": null},
@@ -4125,6 +4192,7 @@ mod tests {
             ts: "t0".to_string(),
             run_id: "run-xyz".to_string(),
             pid: Some(1),
+            engine: None,
         });
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
         let details = details_for("prime", &plan, &model, Some(&state_json));

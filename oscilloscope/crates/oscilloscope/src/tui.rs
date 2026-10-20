@@ -910,6 +910,23 @@ fn focus_step_lines(
             },
             FocusDetail::Plain => {}
         }
+        if more_running.is_some() {
+            if let (Some(p50), Some(elapsed)) = (step.usual_busy_p50_s, step.elapsed_s) {
+                let usual = p50.max(step.usual_busy_p90_s.unwrap_or(p50));
+                let bar = usual_progress_bar(elapsed, usual, 6);
+                let mut text = format!(
+                    "{bar} p50 {}",
+                    oscilloscope_core::format::format_duration(p50)
+                );
+                if let Some(p90) = step.usual_busy_p90_s {
+                    text.push_str(&format!(
+                        " · p90 {}",
+                        oscilloscope_core::format::format_duration(p90)
+                    ));
+                }
+                lines.push(Line::from(text));
+            }
+        }
         if let Some(more) = more_running {
             if more > 0 {
                 lines.push(Line::from(format!("+{more} more running")));
@@ -1051,12 +1068,55 @@ fn draw_time_card(
     lines.push(Line::from(oscilloscope_core::format::format_duration(
         card.elapsed_s,
     )));
-    if let Some(eta) = card
+    if card.eta_past_usual {
+        lines.push(Line::from("ETA ?"));
+    } else if let Some(eta) = card
         .eta_ts
         .as_deref()
         .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
     {
-        lines.push(Line::from(format!("ETA ~{}", &eta[..5.min(eta.len())])));
+        let label = if card.eta_from_history {
+            "ETA"
+        } else {
+            "loop ETA"
+        };
+        let remaining = card
+            .eta_remaining_s
+            .filter(|_| card.eta_from_history)
+            .map(|s| format!(" ({})", format_minutes(s)))
+            .unwrap_or_default();
+        lines.push(Line::from(format!(
+            "{label} ~{}{remaining}",
+            &eta[..5.min(eta.len())]
+        )));
+    }
+    if card.eta_from_history {
+        if let (Some(vs_usual), Some(usual_total)) = (card.vs_usual_s, card.usual_total_s) {
+            lines.push(Line::from(format!(
+                "vs usual {} (p50 {})",
+                format_minutes_signed(vs_usual),
+                format_minutes(usual_total)
+            )));
+        }
+        if let (Some(low), Some(high)) = (
+            card.usual_low_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+            card.usual_high_ts
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
+        ) {
+            lines.push(Line::from(format!(
+                "usual {}\u{2013}{}",
+                &low[..5.min(low.len())],
+                &high[..5.min(high.len())]
+            )));
+        }
+    } else if let Some(count) = card.history_count {
+        lines.push(Line::from(format!(
+            "history: {count} of {} runs",
+            oscilloscope_core::history::P50_MIN_RUNS
+        )));
     }
     if !card.bar.is_empty() {
         let max_ms = card
@@ -1574,6 +1634,47 @@ fn bar(value: u64, max: u64, width: usize) -> String {
     }
     let filled = ((value as f64 / max as f64) * width as f64).round() as usize;
     "█".repeat(filled.min(width))
+}
+
+/// `secs`, rounded to the nearest whole minute (issue #649's overview
+/// figures: `(12m)`, `(p50 45m)`) -- a coarser rounding than
+/// [`oscilloscope_core::format::format_duration`]'s own `6m12s`,
+/// deliberately: these are "about how long", not a clock.
+fn format_minutes(secs: f64) -> String {
+    let minutes = (secs / 60.0).round().max(0.0) as u64;
+    format!("{minutes}m")
+}
+
+/// [`format_minutes`], signed (issue #649's `vs usual +3m`/`-2m`).
+fn format_minutes_signed(secs: f64) -> String {
+    let minutes = (secs / 60.0).round() as i64;
+    if minutes < 0 {
+        format!("{minutes}m")
+    } else {
+        format!("+{minutes}m")
+    }
+}
+
+/// A running step's own elapsed busy time against its usual one
+/// (issue #649's now-pane bar): full blocks, one trailing half-block
+/// for a fractional unit, `░` filling the rest -- `value_s` past
+/// `usual_s` still fills the bar completely rather than overflowing
+/// it.
+fn usual_progress_bar(value_s: f64, usual_s: f64, width: usize) -> String {
+    if usual_s <= 0.0 || width == 0 {
+        return String::new();
+    }
+    let frac = (value_s / usual_s).clamp(0.0, 1.0);
+    let eighths = (frac * width as f64 * 2.0).round() as usize;
+    let full = (eighths / 2).min(width);
+    let half = eighths % 2 == 1 && full < width;
+    let empty = width - full - usize::from(half);
+    format!(
+        "{}{}{}",
+        "█".repeat(full),
+        if half { "▌" } else { "" },
+        "░".repeat(empty)
+    )
 }
 
 /// The Cost screen's own squarified-layout cache (issue #632,
@@ -3828,6 +3929,108 @@ mod golden_tests {
         terminal.backend().to_string()
     }
 
+    /// [`overview_snapshot_at`], with representative history figures
+    /// set directly on the header (issue #649's own overview goldens:
+    /// "with and without history") -- the same shape
+    /// `history_io::apply_history_eta` itself writes, set here by
+    /// hand rather than through a real `HistoryHandle`, which this
+    /// module has no reason to depend on.
+    #[allow(clippy::too_many_arguments)]
+    fn overview_snapshot_at_with_history(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        running_step_key: Option<&str>,
+    ) -> String {
+        let mut rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            plan,
+            model,
+            state,
+            process.clone(),
+            300.0,
+            "2026-01-01T00:05:00Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        rendered.header.history_eta_ts = Some("2026-01-01T00:12:00Z".to_string());
+        rendered.header.history_eta_remaining_s = Some(420.0);
+        rendered.header.history_eta_low_ts = Some("2026-01-01T00:11:00Z".to_string());
+        rendered.header.history_eta_high_ts = Some("2026-01-01T00:14:00Z".to_string());
+        rendered.header.history_vs_usual_s = Some(30.0);
+        rendered.header.history_usual_total_s = Some(660.0);
+        rendered.header.history_same_hash_count = Some(7);
+        if let Some(key) = running_step_key {
+            rendered.header.history_step_usual.insert(
+                key.to_string(),
+                oscilloscope_core::history::StepStats {
+                    count: 7,
+                    busy_p50_s: Some(300.0),
+                    busy_p10_s: None,
+                    busy_p90_s: Some(420.0),
+                    remaining_after_p50_s: None,
+                },
+            );
+        }
+        let empty = Value::Null;
+        let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            plan,
+            model,
+            state,
+            &rendered.token_bar,
+            &[],
+            None,
+            "2026-01-01T00:05:00Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Overview;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    state,
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:05:00Z",
+                    Some(&overview),
+                    None,
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
     fn overview_running_state() -> Value {
         json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
             "a": {"value": "ok\n", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "provider": "shell", "exit_code": 0}},
@@ -4272,6 +4475,74 @@ mod golden_tests {
         let state = overview_finished_state();
         let process = ProcessState::exited(false);
         let text = overview_snapshot_at(60, 18, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_running_with_history_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at_with_history(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("b"),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_running_with_history_at_70x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let text = overview_snapshot_at_with_history(
+            70,
+            20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("b"),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_finished_with_history_at_120x40() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let text = overview_snapshot_at_with_history(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            None,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_finished_with_history_at_70x20() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_finished_state();
+        let text = overview_snapshot_at_with_history(
+            70,
+            20,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            None,
+        );
         insta::assert_snapshot!(text);
     }
 
@@ -5478,6 +5749,7 @@ mod golden_tests {
             ts: "2026-01-01T11:04:00Z".to_string(),
             run_id: "run-abc123".to_string(),
             pid: Some(1),
+            engine: None,
         });
         model.observe_event(&Event::Report {
             ts: "2026-01-01T11:04:58Z".to_string(),
@@ -7990,6 +8262,15 @@ mod highlight_tests {
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
+                history_eta_ts: None,
+                history_eta_past_usual: false,
+                history_eta_remaining_s: None,
+                history_eta_low_ts: None,
+                history_eta_high_ts: None,
+                history_vs_usual_s: None,
+                history_usual_total_s: None,
+                history_same_hash_count: None,
+                history_step_usual: Default::default(),
                 latest_report: None,
                 engine_alive: true,
             },

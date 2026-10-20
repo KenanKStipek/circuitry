@@ -8,12 +8,24 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// Issue #649: every spawn of `osi` in this file points history at
+/// its own throwaway directory, never the real one -- a bare `HOME`
+/// override alone isn't enough, since an inherited `XDG_STATE_HOME`
+/// or `OSI_HISTORY_DIR` from the ambient environment would still
+/// win over it. Called right after `.env("HOME", ...)` at every
+/// spawn site below.
+fn isolate_history(cmd: &mut Command, home: &std::path::Path) {
+    cmd.env("OSI_HISTORY_DIR", home.join("history"));
+    cmd.env_remove("XDG_STATE_HOME");
+    cmd.env_remove("OSI_HISTORY");
+}
+
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_osi"))
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn osi")
+    let home = tempfile::tempdir().expect("temp home");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    cmd.args(args).env("HOME", home.path());
+    isolate_history(&mut cmd, home.path());
+    cmd.stdin(Stdio::null()).output().expect("spawn osi")
 }
 
 #[test]
@@ -89,7 +101,8 @@ fn a_dash_e_input_reaches_the_plan_compile() {
     std::fs::write(&config, "{}").unwrap();
     let out_dir = work.path().join("out");
 
-    let without_input = Command::new(env!("CARGO_BIN_EXE_osi"))
+    let mut without_input_cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    without_input_cmd
         .arg(&doc)
         .arg(&config)
         .arg("--engine")
@@ -97,7 +110,9 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         .arg("--out-dir")
         .arg(&out_dir)
         .env("PATH", &empty_path)
-        .env("HOME", &home)
+        .env("HOME", &home);
+    isolate_history(&mut without_input_cmd, &home);
+    let without_input = without_input_cmd
         .stdin(Stdio::null())
         .output()
         .expect("spawn osi");
@@ -107,7 +122,8 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         "stderr:\n{stderr}"
     );
 
-    let with_input = Command::new(env!("CARGO_BIN_EXE_osi"))
+    let mut with_input_cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    with_input_cmd
         .arg(&doc)
         .arg(&config)
         .arg("-e")
@@ -117,7 +133,9 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         .arg("--out-dir")
         .arg(&out_dir)
         .env("PATH", &empty_path)
-        .env("HOME", &home)
+        .env("HOME", &home);
+    isolate_history(&mut with_input_cmd, &home);
+    let with_input = with_input_cmd
         .stdin(Stdio::null())
         .output()
         .expect("spawn osi");
@@ -154,18 +172,17 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
     std::fs::create_dir(&out_dir).unwrap();
     std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_osi"))
-        .arg(&doc)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    cmd.arg(&doc)
         .arg(&config)
         .arg("--engine")
         .arg("electricity")
         .arg("--out-dir")
         .arg(&out_dir)
         .env("PATH", &empty_path)
-        .env("HOME", &home)
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn osi");
+        .env("HOME", &home);
+    isolate_history(&mut cmd, &home);
+    let out = cmd.stdin(Stdio::null()).output().expect("spawn osi");
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -186,9 +203,11 @@ fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
     // hasn't started writing yet, or never will) looks identical to a
     // silent hang without this.
     let dir = tempfile::tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_osi"))
-        .arg("watch")
-        .arg(dir.path())
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    cmd.arg("watch").arg(dir.path()).env("HOME", home.path());
+    isolate_history(&mut cmd, home.path());
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -258,9 +277,11 @@ fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     )
     .unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_osi"))
-        .arg("watch")
-        .arg(dir.path())
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    cmd.arg("watch").arg(dir.path()).env("HOME", home.path());
+    isolate_history(&mut cmd, home.path());
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -315,17 +336,19 @@ fn osi_theme_is_read_and_the_old_osp_theme_is_ignored() {
     std::fs::write(&doc, "effects: []\n").expect("write doc");
     let empty_bin = dir.path().join("bin");
     std::fs::create_dir(&empty_bin).expect("bin dir");
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).expect("home dir");
     let run_with = |var: &str| {
-        Command::new(env!("CARGO_BIN_EXE_osi"))
-            .arg(&doc)
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+        cmd.arg(&doc)
             .args(["--engine", "electricity"])
             .env_remove("OSI_THEME")
             .env_remove("OSP_THEME")
             .env(var, "bogus")
             .env("PATH", &empty_bin)
-            .stdin(Stdio::null())
-            .output()
-            .expect("spawn osi")
+            .env("HOME", &home);
+        isolate_history(&mut cmd, &home);
+        cmd.stdin(Stdio::null()).output().expect("spawn osi")
     };
 
     let new_name = run_with("OSI_THEME");

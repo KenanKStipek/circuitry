@@ -16,6 +16,7 @@ pub mod engine;
 pub mod flow;
 pub mod fold;
 pub mod format;
+pub mod history;
 pub mod icon;
 pub mod layout;
 pub mod model;

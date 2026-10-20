@@ -272,11 +272,17 @@ fn spawn_osi_on_pty_with_env(
     cmd.args(args);
     cmd.env("HOME", home.path());
     cmd.env("TERM", "xterm-256color");
+    // Issue #649: a bare `HOME` override isn't enough on its own --
+    // an inherited `XDG_STATE_HOME` or `OSI_HISTORY_DIR` would still
+    // point history at the real directory.
+    cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
     for key in [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "CYBERDINER_TOKEN",
         "CYBERDINER_EXPO_URL",
+        "XDG_STATE_HOME",
+        "OSI_HISTORY",
         // `effective_log_mode` (DESIGN.md §6.2) forces the plain
         // stream whenever `CI` is set, which GitHub Actions sets for
         // every job regardless of what osi's own stdout actually is
