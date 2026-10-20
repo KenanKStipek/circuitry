@@ -95,6 +95,19 @@ pub fn format_tokens(n: u64) -> String {
     format!("{n} t")
 }
 
+/// A store's own share of a total, as a percentage (issue #641):
+/// `{share:.0}%` alone reads a share under 0.5% back as a plain
+/// `0%`, indistinguishable from one that is actually zero -- any
+/// share that rounds to zero but is not itself zero reads `<1%`
+/// instead.
+pub fn format_share_pct(share_pct: f64) -> String {
+    if share_pct > 0.0 && share_pct < 1.0 {
+        "<1%".to_string()
+    } else {
+        format!("{share_pct:.0}%")
+    }
+}
+
 /// Resolves a UTC instant to a local calendar time (DESIGN.md's
 /// "clock times" section, issue #613). A per-timestamp method, not a
 /// single fixed offset held once, so an implementation backed by the
@@ -179,6 +192,17 @@ mod tests {
     #[test]
     fn duration_under_an_hour() {
         assert_eq!(format_duration(372.0), "6m12s");
+    }
+
+    /// Issue #641: a share that rounds to zero but isn't reads
+    /// `<1%`, never a plain `0%` indistinguishable from an actual
+    /// zero.
+    #[test]
+    fn share_pct_marks_a_small_nonzero_share_distinct_from_zero() {
+        assert_eq!(format_share_pct(0.4), "<1%");
+        assert_eq!(format_share_pct(0.0), "0%");
+        assert_eq!(format_share_pct(54.0), "54%");
+        assert_eq!(format_share_pct(99.6), "100%");
     }
 
     #[test]

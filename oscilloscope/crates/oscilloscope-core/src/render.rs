@@ -525,6 +525,12 @@ pub fn build(
     let state_ref = state.unwrap_or(&empty);
     let flat = flatten_state(state_ref);
     let statuses = model.observe(state_ref, plan, process.clone());
+    // Issue #641: a new sample of every live agent session's own
+    // running tokens, right alongside `observe` -- the "tokens over
+    // time" chart needs these to attribute a long session's own
+    // tokens to when they actually arrived, not just to its own
+    // `completed_at`.
+    model.record_live_token_observations(&flat, now);
     // Every path either side of a run has ever heard of (hoisted here,
     // issue/finding on `use` accounting): the header's own
     // planned/done counts need the identical view `build_rows`/

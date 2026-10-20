@@ -1337,10 +1337,11 @@ interval, and nothing here is built at all for a screen not shown.
   only once the run has ended); a sparkline
   (`screens::build_tokens_over_time`) bucketing each effect's own
   sent-plus-received tokens by its own `completed_at` into twelve
-  equal spans across the run so far; the highest-token leaf
-  (`cost::top_store`, the same leaf-scan rule §6.3b's own
-  largest-stores table ranks first, so the two can't disagree about
-  which store is the run's biggest); once the run has ended, the
+  equal spans across the run so far; the highest-token store, folded and made
+  relative the same way §6.3b's own largest-stores table shows it
+  (`cost::largest_stores`' own first row, issue #641 -- never the
+  full dotted path, and the two can't disagree about which store is
+  the run's biggest, since both read the same by-store tree); once the run has ended, the
   run's own stopped agent's last-known tokens (issue #637), as
   `stopped <label>` with its sent/received figures -- `runtime.
   last_run.totals` (the figures above) never includes a session that
@@ -1539,12 +1540,28 @@ breadcrumb-folded the same way the overview's phase strip is), on a
 clock axis from the run's start to its own end (`header.run_end_ts`
 once the run has one, `now` while it's still going -- a finished run's
 chart, under `osi watch`, stops growing new buckets as real clock time
-keeps advancing underneath it): each effect's own tokens (sent +
-received) are counted into one of `cost::TOKENS_OVER_TIME_BUCKETS`
+keeps advancing underneath it): an ordinary effect's own tokens (sent
++ received) are counted into one of `cost::TOKENS_OVER_TIME_BUCKETS`
 (24) equal time spans by its own `completed_at`, the same rule the
 overview's own single-series sparkline (`screens::build_tokens_over_
 time`) uses, just bucketed per phase instead of summed across the
-whole run. `CostScreen` carries the exact start/end timestamps this
+whole run. An agent session (`meta.provider == "agent"`, issue #641)
+is different, since one can run for most of a document's whole span:
+while osi actually watches it, `RunModel::record_live_token_
+observations` (called alongside `observe` on every rebuild) keeps
+every distinct `meta.live.tokens_sent`/`tokens_received` reading it
+sees, each at the instant osi observed it -- `tokens_over_time_by_
+phase` counts each sample's own increase over the one before it into
+the bucket for its own observation instant, not the session's own
+`completed_at`, and once the session finishes, reconciles the
+difference between what was actually observed and its own final,
+authoritative total (`model::node_tokens`) into the bucket at its own
+`completed_at` -- the chart's own total for the step always ends up
+exactly right either way. A session never observed running at all (no
+recorded samples: a finished run opened fresh, or a watch that only
+started after it ended) instead spreads its own tokens evenly over its
+own span, `created_at` to `completed_at`, proportional to how much of
+each bucket's own clock-time window that span overlaps. `CostScreen` carries the exact start/end timestamps this
 bucketing used (`chart_start_ts`/`chart_end_ts`), so the chart's own
 clock-axis labels can never name a different span than the bars
 themselves cover. The chart rebins those buckets across exactly as
@@ -1559,8 +1576,14 @@ Each band also draws in its own fill glyph (`tui::phase_glyph`), not
 only its own colour (DESIGN.md's own "never colour alone" rule), and
 the bottom two rows (whenever there's room for them) are a clock axis
 (start, middle and end, `format::midpoint_clock_time` for the middle)
-and a glyph-and-label legend, rather than more bars. No projection to
-the run's own ETA yet, though issue #649 now gives one -- a later
+and a glyph-and-label legend, rather than more bars. With more
+top-level phases than `tui::PHASE_GLYPHS` has distinct glyphs for
+(issue #641), `cost::cap_phase_bands` keeps the `PHASE_GLYPHS.len() -
+1` phases with the largest total (summed across every bucket), in
+their original relative order, and folds every other phase into one
+further `other` band (bucket-wise summed), appended last -- a glyph
+is never reused for two different phases in the legend. No projection
+to the run's own ETA yet, though issue #649 now gives one -- a later
 issue (#641).
 
 **The largest-stores table** (`oscilloscope-core::cost::
@@ -1580,11 +1603,16 @@ rather than stripping a prefix back out of the root-relative label),
 shortened from the left with a leading `…` when it doesn't fit the
 pane's own width (`cost::shorten_breadcrumb_from_left` -- the leaf
 segment, never the leading ones, is what actually has to stay
-readable), tokens in/out, cost when reported, and its own share of the
-table's total; a row with nothing reported yet reads "tokens when
-done" (running) or "no tokens reported" (aborted/cancelled without
-finishing) instead of `↑0 t ↓0 t 0%`, the identical rule the treemap's
-own tiles use. `tui::draw_cost_table` filters those rows to whichever
+readable; the nearest `iter_N` to the leaf, shown as `pass N`, is kept
+too even once the plain segment itself drops away, issue #641 -- two
+loop passes whose own breadcrumb agrees on everything below their own
+`iter_N` would otherwise shorten to the exact same text), tokens
+in/out, cost when reported, and its own share of the table's total
+(`format::format_share_pct`: `<1%`, never a plain `0%` indistinguishable
+from an actual zero, issue #641); a row with nothing reported yet reads
+"tokens when done" (running) or "no tokens reported" (aborted/cancelled
+without finishing) instead of `↑0 t ↓0 t 0%`, the identical rule the
+treemap's own tiles use. `tui::draw_cost_table` filters those rows to whichever
 level `App::cost_level` says is currently zoomed into (the same
 self-healing walk the treemap itself uses) and reverses every row
 whose own path equals `App::cost_selected` *or* descends from it (a

@@ -1199,8 +1199,10 @@ fn build_tokens_over_time(
     buckets
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_cost_card(
     rows: &[Row],
+    unfolded_rows: &[Row],
     header: &crate::render::Header,
     state: Option<&Value>,
     flat: &BTreeMap<String, NodeMeta>,
@@ -1220,19 +1222,35 @@ fn build_cost_card(
             let live = node_for(row, flat)?.live.as_ref()?;
             Some((row.label.clone(), live.tokens_sent, live.tokens_received))
         });
+    // Issue #641: the overview's own "top" line must read the same
+    // folded, relative label the Cost screen's own table shows for
+    // that same store (`plan › agent`, never the full dotted path) --
+    // `largest_stores` already builds exactly that label through the
+    // by-store tree, so this reads its own first (largest) row
+    // rather than keeping a second, unfolded scan of `flat` that
+    // could only ever report the raw path. `kinds`/`statuses`, from
+    // `unfolded_rows` (every real path, never collapsed into a
+    // breadcrumb), are what that tree needs to fold chains the same
+    // way the Cost screen's own does.
+    let unfolded_kinds: BTreeMap<String, RowKind> = unfolded_rows
+        .iter()
+        .map(|r| (r.path.clone(), r.kind))
+        .collect();
+    let unfolded_statuses: BTreeMap<String, RowStatus> = unfolded_rows
+        .iter()
+        .map(|r| (r.path.clone(), r.status.clone()))
+        .collect();
+    let top_store =
+        crate::cost::largest_stores("prime", flat, &unfolded_statuses, &unfolded_kinds, state)
+            .rows
+            .first()
+            .map(|row| (row.label.clone(), row.tokens_sent + row.tokens_received));
     CostCard {
         tokens_sent: header.tokens_sent,
         tokens_received: header.tokens_received,
         cost_usd: effective_cost_usd(state, flat),
         tokens_over_time: build_tokens_over_time(header, flat, now),
-        // Issue #632: the overview's own "largest store" must agree
-        // with the Cost screen's own ranking -- `crate::cost::
-        // top_store` is the same leaf-scan rule that screen's own
-        // table uses, read directly from `flat` rather than through
-        // the Cost screen's own by-store tree, which (DESIGN.md's
-        // performance rule) is built only while that screen is
-        // actually on display.
-        top_store: crate::cost::top_store(flat, "prime"),
+        top_store,
         in_flight: token_bar_in_flight_line(token_bar),
         stopped_agent,
     }
@@ -1284,7 +1302,13 @@ pub fn build_cost_screen(
     kinds: &BTreeMap<String, RowKind>,
     state: Option<&Value>,
     measure: crate::treemap::Measure,
+    model: &RunModel,
     now: &str,
+    // Issue #641: the front end's own number of distinct glyphs for
+    // the "tokens over time" chart's bands -- `crate::cost::cap_
+    // phase_bands`' own `max_bands`, kept here rather than hardcoded
+    // so core never has to know a glyph count of its own.
+    max_phase_bands: usize,
 ) -> CostScreen {
     let (tree, stores_without_measure) =
         crate::treemap::build_tree_for_measure("prime", flat, statuses, kinds, measure);
@@ -1299,8 +1323,16 @@ pub fn build_cost_screen(
     // document that is done) stops growing new buckets as real clock
     // time keeps advancing underneath it.
     let end = header.run_end_ts.as_deref().unwrap_or(now);
-    let tokens_over_time =
-        crate::cost::tokens_over_time_by_phase(header.run_start_ts.as_deref(), end, flat, &phases);
+    let tokens_over_time = crate::cost::cap_phase_bands(
+        crate::cost::tokens_over_time_by_phase(
+            header.run_start_ts.as_deref(),
+            end,
+            flat,
+            &phases,
+            model,
+        ),
+        max_phase_bands,
+    );
     CostScreen {
         measure,
         tree,
@@ -1350,7 +1382,16 @@ pub fn build_overview(
     );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(rows, header, state, flat, plan, token_bar, now);
+    let cost_card = build_cost_card(
+        rows,
+        unfolded_rows,
+        header,
+        state,
+        flat,
+        plan,
+        token_bar,
+        now,
+    );
     Overview {
         phase_strip,
         now_pane,
@@ -3212,12 +3253,77 @@ mod tests {
         assert!((total_s - 0.9).abs() < 1e-9);
     }
 
+    /// Issue #641: the overview's own "top" line reads the same
+    /// folded, relative label the Cost screen's own table would show
+    /// for that store (`plan › agent`, a single-child chain folded
+    /// into one breadcrumb) -- never the full dotted path
+    /// (`prime.plan.agent`) `crate::cost::largest_stores` itself
+    /// would never show either.
+    #[test]
+    fn top_store_uses_the_same_folded_relative_label_as_the_cost_table() {
+        let header = base_header();
+        let token_bar = TokenBar::default();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "plan": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"},
+                "agent": {"value": "y", "meta": {
+                    "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
+                    "tokens_sent_total": 100, "tokens_received_total": 50
+                }}
+            }
+        }});
+        let flat = flat_from(state.clone());
+        let unfolded_rows = [
+            Row {
+                path: "prime.plan".to_string(),
+                depth: 0,
+                label: "plan".to_string(),
+                kind: RowKind::Use,
+                status: RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.plan.agent".to_string(),
+                depth: 1,
+                label: "agent".to_string(),
+                kind: RowKind::Prompt,
+                status: RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let card = build_cost_card(
+            &[],
+            &unfolded_rows,
+            &header,
+            Some(&state),
+            &flat,
+            &PlanTree::empty(),
+            &token_bar,
+            "2026-10-08T11:52:55Z",
+        );
+        assert_eq!(card.top_store, Some(("plan › agent".to_string(), 150)));
+    }
+
     #[test]
     fn cost_is_hidden_until_any_effect_reports_it() {
         let header = base_header();
         let token_bar = TokenBar::default();
         let flat = BTreeMap::new();
         let no_cost = build_cost_card(
+            &[],
             &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
@@ -3228,6 +3334,7 @@ mod tests {
         );
         assert_eq!(no_cost.cost_usd, None);
         let with_cost = build_cost_card(
+            &[],
             &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
@@ -3276,6 +3383,7 @@ mod tests {
         );
         let card = build_cost_card(
             &[],
+            &[],
             &header,
             None,
             &flat,
@@ -3284,6 +3392,75 @@ mod tests {
             "2026-10-08T11:52:55Z",
         );
         assert_eq!(card.cost_usd, Some(2.25));
+    }
+
+    /// Issue #641: with more top-level phases than the front end has
+    /// distinct glyphs for (`max_phase_bands`), the chart's own
+    /// series cap to that many, the smallest ones folded into one
+    /// `other` band -- never silently reusing a glyph for two
+    /// different phases.
+    #[test]
+    fn the_chart_caps_its_own_bands_to_max_phase_bands() {
+        let header = base_header();
+        let mut flat = BTreeMap::new();
+        let mut statuses = BTreeMap::new();
+        let mut kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        let mut rows = Vec::new();
+        for i in 0..8 {
+            let path = format!("prime.p{i}");
+            flat.insert(
+                path.clone(),
+                NodeMeta {
+                    created_at: Some("2026-10-08T11:04:58Z".to_string()),
+                    completed_at: Some("2026-10-08T11:05:58Z".to_string()),
+                    error: None,
+                    branch: None,
+                    progress_done: None,
+                    progress_total: None,
+                    progress_eta_s: None,
+                    live: None,
+                    value: Value::Null,
+                    meta: json!({
+                        "adapter": "scripted",
+                        "tokens_sent_total": (i + 1) * 10,
+                        "tokens_received_total": 0
+                    }),
+                },
+            );
+            let status = RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            };
+            statuses.insert(path.clone(), status.clone());
+            kinds_map.insert(path.clone(), RowKind::Prompt);
+            rows.push(Row {
+                path: path.clone(),
+                depth: 1,
+                label: format!("p{i}"),
+                kind: RowKind::Prompt,
+                status,
+                duration_s: Some(60.0),
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            });
+        }
+        let model = RunModel::new();
+        let screen = build_cost_screen(
+            &rows,
+            &header,
+            &flat,
+            &statuses,
+            &kinds_map,
+            None,
+            crate::treemap::Measure::Total,
+            &model,
+            "2026-10-08T11:52:55Z",
+            6,
+        );
+        assert_eq!(screen.tokens_over_time.len(), 6);
+        assert_eq!(screen.tokens_over_time.last().unwrap().0, "other");
     }
 
     #[test]

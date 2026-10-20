@@ -1707,6 +1707,7 @@ fn build_cost_screen_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
     state: Option<&serde_json::Value>,
+    model: &oscilloscope_core::model::RunModel,
     now: &str,
 ) -> Option<oscilloscope_core::screens::CostScreen> {
     if app.screen != oscilloscope_core::screens::Screen::Cost {
@@ -1734,7 +1735,9 @@ fn build_cost_screen_if_active(
         &kinds,
         state,
         app.cost_measure,
+        model,
         now,
+        tui::PHASE_GLYPHS.len(),
     ))
 }
 
@@ -2118,8 +2121,13 @@ fn run_tui(
         &log_lines,
         &now_str,
     );
-    let mut cost_screen =
-        build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+    let mut cost_screen = build_cost_screen_if_active(
+        &app,
+        &render_state,
+        current_state.as_ref(),
+        &model,
+        &now_str,
+    );
     let mut flow_screen = build_flow_screen_if_active(
         &app,
         &render_state,
@@ -2337,8 +2345,13 @@ fn run_tui(
                 &log_lines,
                 &now_str,
             );
-            cost_screen =
-                build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+            cost_screen = build_cost_screen_if_active(
+                &app,
+                &render_state,
+                current_state.as_ref(),
+                &model,
+                &now_str,
+            );
             flow_screen = build_flow_screen_if_active(
                 &app,
                 &render_state,
@@ -2538,6 +2551,7 @@ fn run_tui(
                             &app,
                             &render_state,
                             current_state.as_ref(),
+                            &model,
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -3381,7 +3395,7 @@ fn run_tui_watch(
         &now_str,
     );
     let mut cost_screen =
-        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &model, &now_str);
     let mut flow_screen = build_flow_screen_if_active(
         &app,
         &render_state,
@@ -3629,8 +3643,13 @@ fn run_tui_watch(
                 &log_lines,
                 &now_str,
             );
-            cost_screen =
-                build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+            cost_screen = build_cost_screen_if_active(
+                &app,
+                &render_state,
+                last_state.as_ref(),
+                &model,
+                &now_str,
+            );
             flow_screen = build_flow_screen_if_active(
                 &app,
                 &render_state,
@@ -3784,6 +3803,7 @@ fn run_tui_watch(
                             &app,
                             &render_state,
                             last_state.as_ref(),
+                            &model,
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(

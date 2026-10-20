@@ -763,6 +763,19 @@ pub struct RunModel {
     /// this cache alone, no observable state of the model itself ever
     /// changes because of it.
     interval_offset_cache: std::cell::RefCell<IntervalOffsetCache>,
+    /// Every distinct `meta.live.tokens_sent`/`tokens_received`
+    /// reading seen for a path while osi actually watched it live
+    /// (issue #641), oldest first: `(ts, tokens_sent, tokens_
+    /// received)`, `ts` the moment this model observed it, not the
+    /// live summary's own `updated_at` -- `meta.live` carries no
+    /// per-sample timestamp of its own, only a `started_at`/
+    /// `updated_at` pair for the whole session. Lets the "tokens
+    /// over time" chart attribute a long session's own tokens to
+    /// when they actually arrived instead of dumping the whole
+    /// total into one bucket at its own `completed_at`. Empty for a
+    /// session never observed running at all (a finished run opened
+    /// fresh, or a watch that started after it ended).
+    agent_token_observations: BTreeMap<String, Vec<(String, u64, u64)>>,
 }
 
 /// [`RunModel`]'s own `interval_offset_cache` field: the run start
@@ -833,7 +846,47 @@ impl RunModel {
             overflowed_minute_counts: BTreeMap::new(),
             overflowed_total_passes: 0,
             interval_offset_cache: std::cell::RefCell::new((None, Vec::new())),
+            agent_token_observations: BTreeMap::new(),
         }
+    }
+
+    /// Records a new sample of every live agent session's own
+    /// running token totals, at `now` (issue #641) -- called once
+    /// per redraw, right alongside [`Self::observe`] (which this
+    /// does not replace: `meta.live` isn't an event, so there is no
+    /// `observe_event` counterpart for it). Only a session whose
+    /// `tokens_sent`/`tokens_received` actually moved since the last
+    /// sample gets a new entry -- `meta.live` is published at most
+    /// once a second, but a redraw can easily happen more often than
+    /// that, and a repeated identical reading would otherwise read
+    /// as a burst of new tokens arriving at every one of those
+    /// redraws instead of one real update.
+    pub fn record_live_token_observations(&mut self, flat: &BTreeMap<String, NodeMeta>, now: &str) {
+        for (path, node) in flat {
+            let Some(live) = &node.live else { continue };
+            let sent = live.tokens_sent.unwrap_or(0);
+            let received = live.tokens_received.unwrap_or(0);
+            let samples = self
+                .agent_token_observations
+                .entry(path.clone())
+                .or_default();
+            let unchanged = samples
+                .last()
+                .is_some_and(|(_, s, r)| *s == sent && *r == received);
+            if !unchanged {
+                samples.push((now.to_string(), sent, received));
+            }
+        }
+    }
+
+    /// A path's own recorded live token samples (issue #641), oldest
+    /// first -- empty when that path was never observed running with
+    /// `meta.live` at all.
+    pub fn agent_token_observations(&self, path: &str) -> &[(String, u64, u64)] {
+        self.agent_token_observations
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Feeds one parsed `--events` line in (DESIGN.md §2.1's "With

@@ -1947,14 +1947,26 @@ fn draw_cost_treemap(
     }
 }
 
+/// The tokens-over-time chart's own fixed cycle of glyphs (DESIGN.md:
+/// "one band per top-level step"), paired one-for-one with
+/// [`phase_color`]'s own cycle -- DESIGN.md's "still reads from
+/// glyphs and modifiers, never colour alone" rule applies here same
+/// as everywhere else: two adjacent bands must still read apart with
+/// colour turned off. Its own length is `crate::screens::build_cost_
+/// screen`'s own `max_phase_bands` (issue #641): with more real
+/// phases than this, `cost::cap_phase_bands` folds the smallest ones
+/// into one further `other` band rather than ever reusing a glyph
+/// in the legend.
+pub(crate) const PHASE_GLYPHS: [char; 6] = ['█', '▓', '▒', '░', '▐', '▌'];
+
 /// One of a small, fixed cycle of theme colours for the tokens-over-
-/// time chart's own bands (DESIGN.md: "one band per top-level step")
-/// -- there is no per-phase colour role in `Theme` itself (phases are
-/// document-specific, unlike a fixed status), so this cycles through
-/// roles that are already visually distinct from one another.
+/// time chart's own bands -- there is no per-phase colour role in
+/// `Theme` itself (phases are document-specific, unlike a fixed
+/// status), so this cycles through roles that are already visually
+/// distinct from one another, the same cycle length as
+/// [`PHASE_GLYPHS`].
 fn phase_color(index: usize, theme: &Theme) -> Color {
-    const PALETTE_SIZE: usize = 6;
-    match index % PALETTE_SIZE {
+    match index % PHASE_GLYPHS.len() {
         0 => theme.token_in,
         1 => theme.token_out,
         2 => theme.status_running,
@@ -1965,13 +1977,9 @@ fn phase_color(index: usize, theme: &Theme) -> Color {
 }
 
 /// A fill glyph for one of the chart's own bands, paired with
-/// [`phase_color`] (same index, same cycle length) -- DESIGN.md's
-/// "still reads from glyphs and modifiers, never colour alone" rule
-/// applies here same as everywhere else: two adjacent bands must
-/// still read apart with colour turned off.
+/// [`phase_color`] (same index, same cycle length).
 fn phase_glyph(index: usize) -> char {
-    const GLYPHS: [char; 6] = ['█', '▓', '▒', '░', '▐', '▌'];
-    GLYPHS[index % GLYPHS.len()]
+    PHASE_GLYPHS[index % PHASE_GLYPHS.len()]
 }
 
 /// The "tokens over time" stacked chart's own clock axis (DESIGN.md:
@@ -2242,9 +2250,10 @@ fn draw_cost_table(
         // ended-without-finishing) row with nothing reported shows
         // the same placeholder text its tile does, never `↑0 t ↓0 t
         // 0%` read back as if it meant something.
+        let share_text = oscilloscope_core::format::format_share_pct(share);
         let value_text = if row.tokens_sent + row.tokens_received > 0 {
             format!(
-                "↑{} ↓{}{cost}  {share:.0}%",
+                "↑{} ↓{}{cost}  {share_text}",
                 oscilloscope_core::format::format_tokens(row.tokens_sent),
                 oscilloscope_core::format::format_tokens(row.tokens_received),
             )
@@ -2255,7 +2264,7 @@ fn draw_cost_table(
                     "no tokens reported".to_string()
                 }
                 _ => format!(
-                    "↑{} ↓{}{cost}  {share:.0}%",
+                    "↑{} ↓{}{cost}  {share_text}",
                     oscilloscope_core::format::format_tokens(row.tokens_sent),
                     oscilloscope_core::format::format_tokens(row.tokens_received),
                 ),
@@ -7324,7 +7333,9 @@ mod golden_tests {
             &kinds,
             state,
             Measure::Total,
+            model,
             "2026-01-01T00:05:00Z",
+            PHASE_GLYPHS.len(),
         );
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -7591,6 +7602,35 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Issue #641: a store with well under 1% of the run's total
+    /// tokens must read `<1%` in the largest-stores table, never a
+    /// plain `0%` that looks the same as an actual zero share.
+    #[test]
+    fn the_table_shows_a_small_nonzero_share_as_under_one_percent() {
+        use oscilloscope_core::plan::PlanTree;
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "big": {"value": "y", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
+                "tokens_sent_total": 10000, "tokens_received_total": 0
+            }},
+            "tiny": {"value": "y", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
+                "tokens_sent_total": 30, "tokens_received_total": 0
+            }}
+        }});
+        let text = cost_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+        );
+        assert!(text.contains("<1%"), "{text}");
+    }
+
     #[test]
     fn cost_finished_at_80x20() {
         let plan = sample_plan();
@@ -7669,7 +7709,9 @@ mod golden_tests {
             &kinds,
             Some(&state),
             Measure::Total,
+            &model,
             "2026-01-01T00:05:00Z",
+            PHASE_GLYPHS.len(),
         );
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -9376,7 +9418,9 @@ mod golden_tests {
             &kinds,
             Some(&state),
             Measure::Total,
+            &model,
             "t2001",
+            PHASE_GLYPHS.len(),
         );
         let mut cost_app = App::new(false);
         cost_app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -10283,7 +10327,9 @@ mod golden_tests {
             &kinds,
             Some(&state),
             Measure::Total,
+            &model,
             "2026-01-01T00:05:00Z",
+            PHASE_GLYPHS.len(),
         );
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
