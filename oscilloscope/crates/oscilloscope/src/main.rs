@@ -21,6 +21,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod highlight;
+mod history_io;
 mod icon;
 mod keys;
 mod terminal;
@@ -91,6 +92,11 @@ struct RunArgs {
     /// this isn't given; `terminal` (today's look) otherwise.
     #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
+    /// Turns run history off (issue #649): nothing is read or written,
+    /// and no history directory is created. `OSI_HISTORY=off` does the
+    /// same.
+    #[arg(long)]
+    no_history: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -138,6 +144,10 @@ struct WatchArgs {
     /// this isn't given; `terminal` (today's look) otherwise.
     #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
+    /// Turns run history off (issue #649) -- see `osi --help`'s own
+    /// `--no-history`.
+    #[arg(long)]
+    no_history: bool,
 }
 
 /// `--theme`, else `OSI_THEME`, else `terminal` (DESIGN.md §6.3) --
@@ -491,6 +501,7 @@ fn write_glance_line(
     is_tty: bool,
     final_line: bool,
     engine_alive_override: Option<bool>,
+    history: &history_io::HistoryHandle,
 ) {
     if !is_tty && !final_line {
         // DESIGN.md: "when stdout isn't a terminal, it prints one
@@ -509,6 +520,7 @@ fn write_glance_line(
         &now,
         &[],
     );
+    history_io::apply_history_eta(history, &mut rendered.header, state, plan, &now);
     // `osi watch` owns no process of its own for `render::build`'s
     // own `engine_alive` (derived from `process`, which `watch_
     // glance` always passes as `Running` while it's still watching)
@@ -572,6 +584,8 @@ fn run_glance(
     document: String,
     mut signals: Option<SignalWatcher>,
     no_animation: bool,
+    history: &history_io::HistoryHandle,
+    engine_name: &str,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -635,6 +649,7 @@ fn run_glance(
                 is_tty,
                 false,
                 None,
+                history,
             );
             last_write = Instant::now();
         }
@@ -666,6 +681,7 @@ fn run_glance(
         has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
         exited_at: Some(now_rfc3339()),
     };
+    history.write(Some(engine_name), current_state.as_ref(), &model, &plan);
     write_glance_line(
         &mut out,
         &document,
@@ -679,6 +695,7 @@ fn run_glance(
         is_tty,
         true,
         None,
+        history,
     );
 
     ExitCode::from(exit_code(exit_status) as u8)
@@ -710,6 +727,7 @@ fn watch_glance(
     fallback_document: String,
     no_animation: bool,
     once: bool,
+    history: &history_io::HistoryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -763,7 +781,11 @@ fn watch_glance(
             is_tty,
             true,
             engine_alive,
+            history,
         );
+        // Issue #649: "`osi watch --glance --once` only reads" --
+        // never a write, even when the one state it happened to read
+        // already shows the run ended.
         return ExitCode::from(0);
     }
 
@@ -831,6 +853,7 @@ fn watch_glance(
                 is_tty,
                 false,
                 engine_alive,
+                history,
             );
             last_write = Instant::now();
         }
@@ -857,6 +880,11 @@ fn watch_glance(
             .run_start_pid()
             .is_some_and(oscilloscope_core::supervise::process_alive),
     );
+    // Issue #649: "`osi watch` writes only when the watched run
+    // really ended" -- `HistoryHandle::write` itself checks
+    // `run_ended`, so a voluntary detach or a dead-pid abort (neither
+    // of which ever sets that on `last_state`) writes nothing.
+    history.write(model.run_start_engine(), last_state.as_ref(), &model, &plan);
     write_glance_line(
         &mut out,
         &document,
@@ -870,6 +898,7 @@ fn watch_glance(
         is_tty,
         true,
         engine_alive,
+        history,
     );
     // Signals and exit codes work exactly as `--log`'s own do
     // (DESIGN.md) -- the same rule `finish_watch` uses, not a second
@@ -909,6 +938,10 @@ fn do_run(args: RunArgs) -> ExitCode {
 
     let orchestration = PathBuf::from(&args.orchestration);
     let config = args.config.as_ref().map(PathBuf::from);
+    let history = history_io::HistoryHandle::for_run(
+        history_io::resolve_history_dir(args.no_history),
+        history_io::resolve_run_document_path(&orchestration),
+    );
 
     if args.engine == EngineChoice::Electricity {
         if let Some(cfg) = &config {
@@ -1052,6 +1085,8 @@ fn do_run(args: RunArgs) -> ExitCode {
             args.orchestration.clone(),
             signals,
             args.no_animation,
+            &history,
+            engine.name(),
         );
     }
 
@@ -1071,6 +1106,7 @@ fn do_run(args: RunArgs) -> ExitCode {
             signals,
             args.no_animation,
             theme_name,
+            &history,
         );
     }
 
@@ -1119,6 +1155,8 @@ fn do_run(args: RunArgs) -> ExitCode {
         &run_dir,
         exit_status,
         args.out_dir.is_none(),
+        &history,
+        engine.name(),
     );
     ExitCode::from(code)
 }
@@ -1148,6 +1186,8 @@ fn finish_run(
     run_dir: &Path,
     exit_status: std::process::ExitStatus,
     print_run_dir: bool,
+    history: &history_io::HistoryHandle,
+    engine_name: &str,
 ) -> u8 {
     let exit_status = child.wait().unwrap_or(exit_status);
 
@@ -1175,6 +1215,12 @@ fn finish_run(
     for line in lines {
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
+    // Issue #649: every ending writes the record, once the final
+    // state is in hand -- `HistoryHandle::write` itself is a no-op
+    // for a run that never truly ended (an abort with no final
+    // write), a dry run, a validate-only run, or one with no
+    // `document_hash`.
+    history.write(Some(engine_name), final_state.as_ref(), model, plan);
 
     // M1: the run's own summary line is computed exactly once, here,
     // after every other line this run will ever produce has already
@@ -1842,6 +1888,7 @@ fn run_tui(
     mut signals: Option<SignalWatcher>,
     no_animation: bool,
     mut theme_name: theme::ThemeName,
+    history: &history_io::HistoryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
@@ -1935,6 +1982,8 @@ fn run_tui(
                 &run_dir,
                 exit_status,
                 print_run_dir,
+                history,
+                &engine_name,
             );
             return ExitCode::from(code);
         }
@@ -1984,6 +2033,13 @@ fn run_tui(
         &[],
         app.fold_enabled,
         &app.expanded_quick_steps,
+    );
+    history_io::apply_history_eta(
+        history,
+        &mut render_state.header,
+        current_state.as_ref(),
+        &plan,
+        &now_str,
     );
     let mut overview = build_overview_if_active(
         &app,
@@ -2144,6 +2200,13 @@ fn run_tui(
                 &[],
                 app.fold_enabled,
                 &app.expanded_quick_steps,
+            );
+            history_io::apply_history_eta(
+                history,
+                &mut render_state.header,
+                current_state.as_ref(),
+                &plan,
+                &now_str,
             );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
@@ -2568,6 +2631,8 @@ fn run_tui(
         &run_dir,
         exit_status,
         print_run_dir,
+        history,
+        &engine_name,
     );
     // Design: `spawn_event_reader`'s own
     // background thread may still be stuck forever inside crossterm
@@ -2955,6 +3020,10 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         },
         None => PlanTree::empty(),
     };
+    let history = history_io::HistoryHandle::for_watch(
+        history_io::resolve_history_dir(args.no_history),
+        args.plan.clone(),
+    );
 
     // Issue #626: `--glance` wins over both the TUI and `--log`,
     // same as `osi <doc>`.
@@ -2966,6 +3035,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.target.clone(),
             args.no_animation,
             args.once,
+            &history,
         );
     }
 
@@ -2980,6 +3050,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.target.clone(),
             args.no_animation,
             theme_name,
+            &history,
         );
     }
 
@@ -3022,6 +3093,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &mut last_state,
         local_signal,
         false,
+        &history,
     );
     let _ = writeln!(out, "exit {code}");
     ExitCode::from(code as u8)
@@ -3046,6 +3118,7 @@ fn run_tui_watch(
     fallback_document: String,
     no_animation: bool,
     mut theme_name: theme::ThemeName,
+    history: &history_io::HistoryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
@@ -3124,6 +3197,7 @@ fn run_tui_watch(
                 &mut last_state,
                 local_signal,
                 false,
+                history,
             );
             let _ = writeln!(out, "exit {code}");
             return ExitCode::from(code as u8);
@@ -3170,6 +3244,13 @@ fn run_tui_watch(
     render_state.header.engine_alive = model
         .run_start_pid()
         .is_some_and(oscilloscope_core::supervise::process_alive);
+    history_io::apply_history_eta(
+        history,
+        &mut render_state.header,
+        last_state.as_ref(),
+        &plan,
+        &now_str,
+    );
     let mut overview = build_overview_if_active(
         &app,
         &render_state,
@@ -3363,6 +3444,13 @@ fn run_tui_watch(
             render_state.header.engine_alive = model
                 .run_start_pid()
                 .is_some_and(oscilloscope_core::supervise::process_alive);
+            history_io::apply_history_eta(
+                history,
+                &mut render_state.header,
+                last_state.as_ref(),
+                &plan,
+                &now_str,
+            );
             let baseline_exists = prev_render_state.is_some();
             mark_highlights(
                 &mut highlights,
@@ -3657,6 +3745,7 @@ fn run_tui_watch(
         &mut last_state,
         local_signal,
         detached_while_live,
+        history,
     );
     let _ = writeln!(out, "exit {code}");
     // Design -- see `run_tui`'s own matching
@@ -3689,6 +3778,7 @@ fn finish_watch(
     last_state: &mut Option<serde_json::Value>,
     local_signal: Option<ForwardSignal>,
     detached_while_live: bool,
+    history: &history_io::HistoryHandle,
 ) -> u8 {
     if let Some(state) =
         drain_observations(out, clock, live_poller, events_tailer, differ, model, plan)
@@ -3732,6 +3822,12 @@ fn finish_watch(
     if let Some(state) = &final_state {
         *last_state = Some(state.clone());
     }
+    // Issue #649: only ever reached once `detached_while_live` has
+    // already returned above, so this is exactly "the watched run
+    // really ended" -- `HistoryHandle::write` itself checks
+    // `run_ended` too, so a dead-pid abort with no final write still
+    // writes nothing.
+    history.write(model.run_start_engine(), final_state.as_ref(), model, plan);
     let summary = final_state
         .as_ref()
         .and_then(|state| differ.finish(state, failure_reason_fallback(run_dir, model).as_deref()))
@@ -4844,6 +4940,7 @@ mod tests {
             &mut last_state,
             None,
             true,
+            &history_io::HistoryHandle::for_watch(None, None),
         );
         assert_eq!(code, 0);
         let text = String::from_utf8(buf).unwrap();

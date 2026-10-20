@@ -204,11 +204,18 @@ fn resolve_interval(
     })
 }
 
-fn build_steps(model: &RunModel, plan: &PlanTree, run_start_ts: &str) -> BTreeMap<String, StepRecord> {
+fn build_steps(
+    model: &RunModel,
+    plan: &PlanTree,
+    run_start_ts: &str,
+) -> BTreeMap<String, StepRecord> {
     let mut by_key: BTreeMap<String, Vec<ResolvedInterval>> = BTreeMap::new();
     for interval in model.step_intervals() {
         if let Some(resolved) = resolve_interval(interval, plan, run_start_ts) {
-            by_key.entry(resolved.key.clone()).or_default().push(resolved);
+            by_key
+                .entry(resolved.key.clone())
+                .or_default()
+                .push(resolved);
         }
         let overflowed = model.overflowed_passes(&interval.path);
         if overflowed > 0 {
@@ -238,7 +245,10 @@ fn build_steps(model: &RunModel, plan: &PlanTree, run_start_ts: &str) -> BTreeMa
             .iter()
             .map(|i| i.start_s)
             .fold(f64::INFINITY, f64::min);
-        let end_s = intervals.iter().map(|i| i.end_s).fold(f64::NEG_INFINITY, f64::max);
+        let end_s = intervals
+            .iter()
+            .map(|i| i.end_s)
+            .fold(f64::NEG_INFINITY, f64::max);
         let busy_s = merged_busy_s(ranges);
         let passes = intervals.len() as u64 + overflow_passes.get(&key).copied().unwrap_or(0);
         let ok = intervals.iter().all(|i| i.ok);
@@ -266,11 +276,9 @@ fn build_steps(model: &RunModel, plan: &PlanTree, run_start_ts: &str) -> BTreeMa
 fn sum_optional<I: Iterator<Item = Option<u64>>>(values: I) -> Option<u64> {
     let mut any = false;
     let mut total = 0u64;
-    for v in values {
-        if let Some(v) = v {
-            any = true;
-            total += v;
-        }
+    for v in values.flatten() {
+        any = true;
+        total += v;
     }
     any.then_some(total)
 }
@@ -278,11 +286,9 @@ fn sum_optional<I: Iterator<Item = Option<u64>>>(values: I) -> Option<u64> {
 fn sum_optional_f64<I: Iterator<Item = Option<f64>>>(values: I) -> Option<f64> {
     let mut any = false;
     let mut total = 0.0;
-    for v in values {
-        if let Some(v) = v {
-            any = true;
-            total += v;
-        }
+    for v in values.flatten() {
+        any = true;
+        total += v;
     }
     any.then_some(total)
 }
@@ -373,7 +379,10 @@ pub fn build_record(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let started_at = last_run.get("started_at").and_then(Value::as_str)?.to_string();
+    let started_at = last_run
+        .get("started_at")
+        .and_then(Value::as_str)?
+        .to_string();
     let wall_s = duration_seconds(&started_at, completed_at).unwrap_or(0.0);
     let outcome = match ended_outcome(state) {
         crate::model::EndedOutcome::Ok => Outcome::Ok,
@@ -467,7 +476,10 @@ pub fn ensure_history_dir(dir: &Path) -> std::io::Result<()> {
         }
         return Ok(());
     }
-    std::fs::DirBuilder::new().mode(0o700).recursive(true).create(dir)
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(dir)
 }
 
 /// The history file for `document_path` -- the SHA-256 hex digest of
@@ -488,7 +500,10 @@ struct FileLock {
 impl FileLock {
     fn acquire(path: &Path) -> std::io::Result<Self> {
         use std::os::unix::io::AsRawFd;
-        let file = OpenOptions::new().create(true).write(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
         let fd = file.as_raw_fd();
         // Blocking advisory lock (issue #649): several `osi` processes
         // can finish runs of the same document at once; the first to
@@ -566,7 +581,9 @@ fn count_lines(path: &Path) -> std::io::Result<usize> {
 fn compact(file_path: &Path) -> std::io::Result<()> {
     let lines = read_raw_lines(file_path)?;
     let kept: Vec<&String> = if lines.len() > MAX_RUNS_PER_DOCUMENT {
-        lines[lines.len() - MAX_RUNS_PER_DOCUMENT..].iter().collect()
+        lines[lines.len() - MAX_RUNS_PER_DOCUMENT..]
+            .iter()
+            .collect()
     } else {
         lines.iter().collect()
     };
@@ -882,6 +899,20 @@ pub struct EtaOutput {
     pub whole_run_count: usize,
 }
 
+impl EtaOutput {
+    /// `remaining_s`, as an absolute clock time (`now` plus the
+    /// remaining seconds) -- the same shape `Header::innermost_loop_
+    /// eta_ts` already uses, so a front end formats either one
+    /// identically. `None` exactly when `remaining_s` is.
+    pub fn eta_ts(&self, now: &str) -> Option<String> {
+        self.remaining_s.and_then(|s| {
+            parse_instant(now).map(|now_dt| {
+                (now_dt + chrono::Duration::milliseconds((s * 1000.0).round() as i64)).to_rfc3339()
+            })
+        })
+    }
+}
+
 /// The whole-run ETA (issue #649's own rules): the anchor is the most
 /// recently finished step with known per-step statistics (or the
 /// run's own start, before any has); a running step's own usual time
@@ -918,14 +949,16 @@ pub fn compute_eta(stats: &DocumentStats, input: &EtaInput) -> EtaOutput {
         }
     }
     remaining_s = remaining_s.max(0.0);
-    let past_usual = whole_run
-        .p90_s
-        .is_some_and(|p90| input.now_offset_s > p90);
+    let past_usual = whole_run.p90_s.is_some_and(|p90| input.now_offset_s > p90);
     EtaOutput {
         remaining_s: if past_usual { None } else { Some(remaining_s) },
         past_usual,
-        low_s: whole_run.p10_s.map(|p10| (p10 - input.now_offset_s).max(0.0)),
-        high_s: whole_run.p90_s.map(|p90| (p90 - input.now_offset_s).max(0.0)),
+        low_s: whole_run
+            .p10_s
+            .map(|p10| (p10 - input.now_offset_s).max(0.0)),
+        high_s: whole_run
+            .p90_s
+            .map(|p90| (p90 - input.now_offset_s).max(0.0)),
         whole_run_count: whole_run.count,
     }
 }
@@ -947,7 +980,13 @@ mod tests {
         }
     }
 
-    fn record(run_id: &str, started_at: &str, wall_s: f64, outcome: Outcome, hash: &str) -> HistoryRecord {
+    fn record(
+        run_id: &str,
+        started_at: &str,
+        wall_s: f64,
+        outcome: Outcome,
+        hash: &str,
+    ) -> HistoryRecord {
         HistoryRecord {
             v: FORMAT_VERSION,
             run_id: run_id.to_string(),
@@ -974,7 +1013,10 @@ mod tests {
 
     #[test]
     fn normalize_iter_segments_replaces_only_real_pass_segments() {
-        assert_eq!(normalize_iter_segments("items.iter_3.step"), "items.iter_*.step");
+        assert_eq!(
+            normalize_iter_segments("items.iter_3.step"),
+            "items.iter_*.step"
+        );
         assert_eq!(normalize_iter_segments("iteration.step"), "iteration.step");
     }
 
@@ -1032,11 +1074,14 @@ mod tests {
     #[test]
     fn compute_stats_pools_per_step_figures_across_every_hash() {
         let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
-        r1.steps.insert("plan".to_string(), step(0.0, 10.0, 10.0, 1, true));
+        r1.steps
+            .insert("plan".to_string(), step(0.0, 10.0, 10.0, 1, true));
         let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h2");
-        r2.steps.insert("plan".to_string(), step(0.0, 12.0, 12.0, 1, true));
+        r2.steps
+            .insert("plan".to_string(), step(0.0, 12.0, 12.0, 1, true));
         let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h2");
-        r3.steps.insert("plan".to_string(), step(0.0, 11.0, 11.0, 1, true));
+        r3.steps
+            .insert("plan".to_string(), step(0.0, 11.0, 11.0, 1, true));
         let stats = compute_stats(&[r1, r2, r3], Some("h2"));
         let plan_stats = stats.per_step.get("plan").expect("pooled across hashes");
         assert_eq!(plan_stats.count, 3);
@@ -1085,11 +1130,14 @@ mod tests {
     #[test]
     fn eta_anchors_on_the_most_recently_finished_step() {
         let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
-        r1.steps.insert("plan".to_string(), step(0.0, 20.0, 20.0, 1, true));
+        r1.steps
+            .insert("plan".to_string(), step(0.0, 20.0, 20.0, 1, true));
         let mut r2 = record("r2", "2026-01-01T00:01:00Z", 110.0, Outcome::Ok, "h1");
-        r2.steps.insert("plan".to_string(), step(0.0, 25.0, 25.0, 1, true));
+        r2.steps
+            .insert("plan".to_string(), step(0.0, 25.0, 25.0, 1, true));
         let mut r3 = record("r3", "2026-01-01T00:02:00Z", 90.0, Outcome::Ok, "h1");
-        r3.steps.insert("plan".to_string(), step(0.0, 15.0, 15.0, 1, true));
+        r3.steps
+            .insert("plan".to_string(), step(0.0, 15.0, 15.0, 1, true));
         let stats = compute_stats(&[r1, r2, r3], Some("h1"));
         let eta = compute_eta(
             &stats,
@@ -1108,11 +1156,14 @@ mod tests {
     #[test]
     fn eta_never_earlier_than_a_running_steps_own_usual_time_left() {
         let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
-        r1.steps.insert("slow".to_string(), step(0.0, 90.0, 90.0, 1, true));
+        r1.steps
+            .insert("slow".to_string(), step(0.0, 90.0, 90.0, 1, true));
         let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
-        r2.steps.insert("slow".to_string(), step(0.0, 90.0, 90.0, 1, true));
+        r2.steps
+            .insert("slow".to_string(), step(0.0, 90.0, 90.0, 1, true));
         let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
-        r3.steps.insert("slow".to_string(), step(0.0, 90.0, 90.0, 1, true));
+        r3.steps
+            .insert("slow".to_string(), step(0.0, 90.0, 90.0, 1, true));
         let stats = compute_stats(&[r1, r2, r3], Some("h1"));
         let eta = compute_eta(
             &stats,
@@ -1186,7 +1237,10 @@ mod tests {
         let history_dir = dir.path().join("history");
         let rec = record("r1", "2026-01-01T00:00:00Z", 12.0, Outcome::Ok, "h1");
         append_record(&history_dir, "/doc.yml", &rec).unwrap();
-        let dir_mode = std::fs::metadata(&history_dir).unwrap().permissions().mode();
+        let dir_mode = std::fs::metadata(&history_dir)
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(dir_mode & 0o777, 0o700);
         let file_path = history_file_path(&history_dir, "/doc.yml");
         let file_mode = std::fs::metadata(&file_path).unwrap().permissions().mode();
@@ -1231,14 +1285,18 @@ mod tests {
         let history_dir = dir.path().join("history");
         ensure_history_dir(&history_dir).unwrap();
         let file_path = history_file_path(&history_dir, "/doc.yml");
-        let good_one = serde_json::to_string(&record("r1", "2026-01-01T00:00:00Z", 1.0, Outcome::Ok, "h")).unwrap();
-        let unknown_v = serde_json::to_string(&serde_json::json!({"v": 99, "run_id": "r-bad-v"})).unwrap();
-        let good_two = serde_json::to_string(&record("r2", "2026-01-01T00:01:00Z", 2.0, Outcome::Ok, "h")).unwrap();
+        let good_one =
+            serde_json::to_string(&record("r1", "2026-01-01T00:00:00Z", 1.0, Outcome::Ok, "h"))
+                .unwrap();
+        let unknown_v =
+            serde_json::to_string(&serde_json::json!({"v": 99, "run_id": "r-bad-v"})).unwrap();
+        let good_two =
+            serde_json::to_string(&record("r2", "2026-01-01T00:01:00Z", 2.0, Outcome::Ok, "h"))
+                .unwrap();
         let oversized = "x".repeat(MAX_LINE_BYTES + 1);
         let torn = r#"{"v":1,"run_id":"torn", "document": "trunc"#.to_string();
-        let contents = format!(
-            "{good_one}\nnot json at all\n{unknown_v}\n{good_two}\n{oversized}\n{torn}"
-        );
+        let contents =
+            format!("{good_one}\nnot json at all\n{unknown_v}\n{good_two}\n{oversized}\n{torn}");
         std::fs::write(&file_path, contents).unwrap();
         let records = read_records(&history_dir, "/doc.yml");
         let ids: Vec<_> = records.iter().map(|r| r.run_id.clone()).collect();
@@ -1296,17 +1354,27 @@ mod tests {
             },
         });
         let mut model = RunModel::new();
-        model.observe(&state, &PlanTree::empty(), crate::model::ProcessState::exited(false));
+        model.observe(
+            &state,
+            &PlanTree::empty(),
+            crate::model::ProcessState::exited(false),
+        );
         let record = build_record("/doc.yml", Some("cof"), &state, &model, &PlanTree::empty())
             .expect("a completed, hashed, non-dry run is recorded");
         let serialized = serde_json::to_string(&record).unwrap();
-        assert!(!serialized.contains(MARKER), "history line leaked a marker: {serialized}");
+        assert!(
+            !serialized.contains(MARKER),
+            "history line leaked a marker: {serialized}"
+        );
     }
 
     #[test]
     fn no_history_dir_reads_as_empty_history() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_records(&dir.path().join("missing"), "/doc.yml"), Vec::new());
+        assert_eq!(
+            read_records(&dir.path().join("missing"), "/doc.yml"),
+            Vec::new()
+        );
     }
 
     #[test]

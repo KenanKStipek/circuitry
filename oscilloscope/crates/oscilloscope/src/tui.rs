@@ -7991,6 +7991,8 @@ mod highlight_tests {
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
+                history_eta_ts: None,
+                history_eta_past_usual: false,
                 latest_report: None,
                 engine_alive: true,
             },

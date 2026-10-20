@@ -164,11 +164,25 @@ pub fn header_line(
     };
     let elapsed_text = crate::format::format_duration(header.elapsed_s);
     let clock_text = format_clock_time(now, zone).unwrap_or_default();
-    let eta_text = header
-        .innermost_loop_eta_ts
+    // Issue #649: the whole-run ETA from history, once there are
+    // enough runs, in place of the innermost loop's own -- `ETA ?`
+    // once the run is past its own usual end, rather than a time
+    // that keeps sliding.
+    let eta_text = if header.history_eta_past_usual {
+        Some("ETA ?".to_string())
+    } else if let Some(hhmmss) = header
+        .history_eta_ts
         .as_deref()
         .and_then(|ts| format_clock_time(ts, zone))
-        .map(|hhmmss| format!("ETA ~{}", &hhmmss[..5.min(hhmmss.len())]));
+    {
+        Some(format!("ETA ~{}", &hhmmss[..5.min(hhmmss.len())]))
+    } else {
+        header
+            .innermost_loop_eta_ts
+            .as_deref()
+            .and_then(|ts| format_clock_time(ts, zone))
+            .map(|hhmmss| format!("loop ETA ~{}", &hhmmss[..5.min(hhmmss.len())]))
+    };
     let report_full = header.latest_report.as_ref().map(|report| {
         let prefix = match report.level {
             crate::observe::ReportLevel::Warning => "warning: ",
@@ -1314,6 +1328,8 @@ mod tests {
             tokens_received: 500,
             innermost_loop_eta_s: Some(360.0),
             innermost_loop_eta_ts: Some("2026-10-08T11:58:00Z".to_string()),
+            history_eta_ts: None,
+            history_eta_past_usual: false,
             latest_report: None,
             engine_alive: true,
         }
@@ -1345,7 +1361,7 @@ mod tests {
         assert!(text.contains("running"));
         assert!(text.contains("47m57s"));
         assert!(text.contains("11:52:55"));
-        assert!(text.contains("ETA ~11:58"));
+        assert!(text.contains("loop ETA ~11:58"));
         assert!(text.contains("[0 overview]"));
         assert!(text.contains("2 flow"));
         assert_eq!(text.chars().count(), segments_width(&segments));
@@ -1433,7 +1449,7 @@ mod tests {
         // it dropped too.
         assert_eq!(
             text,
-            "⠔⠒⠒⠤⠤⠔⠒⠒ …nt-name.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2  3"
+            "⠔⠒⠒⠤⠤⠔⠒⠒ …me.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸   [0]  2  3"
         );
     }
 
@@ -1466,15 +1482,15 @@ mod tests {
             (50u16, "⠔⠒⠒⠤⠤⠔⠒⠒  · ♥ running 47m57s · 11:52:55   [0]  2  3"),
             (
                 80,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ …e-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0]  2  3",
             ),
             (
                 100,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0]  2  3",
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58   [0 overview]  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 overview]  2 flow  3 cost",
             ),
         ];
         for (width, want) in expected {
@@ -1506,15 +1522,15 @@ mod tests {
             ),
             (
                 80,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ …re-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ …17.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸   [0]  2  3",
             ),
             (
                 100,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 block…   [0]  2  3",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸ fixing 1 …   [0]  2  3",
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · ETA ~11:58 · ▸ fixing 1 blocker   [0 overview]  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58 · ▸ fixing 1 blocker   [0]  2  3",
             ),
         ];
         for (width, want) in expected {
