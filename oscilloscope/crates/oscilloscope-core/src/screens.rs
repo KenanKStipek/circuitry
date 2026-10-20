@@ -749,12 +749,13 @@ fn build_focused_step(
     // the whole run has ended, `now` is wall-clock time at render,
     // long past the run's own end, which would otherwise inflate a
     // finished step's duration by however long it's been since.
-    let elapsed_s = since_ts.as_deref().and_then(|start| {
-        match node.and_then(|n| n.completed_at.as_deref()) {
-            Some(end) => duration_seconds(start, end),
-            None => duration_seconds(start, now),
-        }
-    });
+    let elapsed_s =
+        since_ts
+            .as_deref()
+            .and_then(|start| match node.and_then(|n| n.completed_at.as_deref()) {
+                Some(end) => duration_seconds(start, end),
+                None => duration_seconds(start, now),
+            });
     let details = details_for(&row.path, plan, model, state);
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
@@ -1744,8 +1745,28 @@ fn build_vs_usual_pane(
             ..Default::default()
         };
     }
+    // The same "a loop's own passes never appear as the base tree's
+    // own rows" rule `draw_time_timeline` applies when drawing the
+    // timeline itself -- history keeps one figure per loop step
+    // across every pass (summed for a chain, overlap-merged for a
+    // tree), so comparing one of its own passes against that figure
+    // compares a part against the whole. A collapsed loop's pass
+    // rows (breadcrumbed or not) stay out of vs usual entirely, same
+    // as an expanded loop's `TimeDisplayRow::Pass` rows, which never
+    // reach this `rows` list at all.
+    let loop_prefixes: Vec<String> = rows
+        .iter()
+        .filter(|r| r.kind == RowKind::Loop)
+        .map(|r| format!("{}.", r.path))
+        .collect();
     let mut vs_rows = Vec::new();
     for row in rows {
+        if loop_prefixes
+            .iter()
+            .any(|p| row.path.starts_with(p.as_str()))
+        {
+            continue;
+        }
         let Some(key) = crate::history::display_key(&row.path, plan) else {
             continue;
         };
@@ -3330,6 +3351,80 @@ mod tests {
             model: None,
         };
         PlanTree::from_program(&program)
+    }
+
+    /// History keeps one figure per loop step across every pass
+    /// (issue #650's design), so a pass's own child row must never be
+    /// compared against it in vs usual -- only the full timeline's
+    /// own rows are, and a loop's passes never appear there at all.
+    #[test]
+    fn build_vs_usual_pane_never_compares_a_loop_passs_own_child() {
+        let plan = each_loop_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"
+            },
+            "items": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"
+                },
+                "iter_0": {
+                    "nap": {"value": "ok", "meta": {
+                        "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z",
+                        "provider": "shell"
+                    }}
+                },
+                "iter_1": {
+                    "nap": {"value": "ok", "meta": {
+                        "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:10Z",
+                        "provider": "shell"
+                    }}
+                }
+            }
+        }});
+        let mut rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+            10.0,
+            "2026-01-01T00:00:10Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        rendered.header.history_same_hash_count = Some(3);
+        rendered
+            .header
+            .history_step_usual
+            .insert("items.iter_*.nap".to_string(), stats_usual(100.0));
+        let flat = flat_from(state.clone());
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:10Z",
+        );
+        assert!(
+            screen.vs_usual.rows.is_empty(),
+            "a pass's own child must never appear in vs usual: {:?}",
+            screen.vs_usual.rows
+        );
+    }
+
+    fn stats_usual(busy_p50: f64) -> crate::history::StepStats {
+        crate::history::StepStats {
+            count: 3,
+            busy_p50_s: Some(busy_p50),
+            ..Default::default()
+        }
     }
 
     #[test]

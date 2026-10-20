@@ -1926,7 +1926,12 @@ neither has anywhere else to be read from.
   live.transcript`), since this is the first screen that ever shows a
   finished agent's own bands.
 
-**"vs usual"** (`time::vs_usual_mark`): a step with 5 or more runs of
+**"vs usual"** (`time::vs_usual_mark`): lists only the timeline's own
+rows, in the timeline's order -- a collapsed loop is one row, with
+the loop's own figures (history keeps one, summed across a chain's
+passes or overlap-merged across a tree's); a loop's own pass rows
+never appear here at all, collapsed or expanded, since history keeps
+no figure for any one pass on its own. A step with 5 or more runs of
 history is marked `▲`/`▼` outside its own p10/p90, else `≈`; with 3 or
 4, more than 20% from p50 either way -- a still-*running* step never
 reads `▼` purely for not having gotten as far as p10/20%-under yet,
