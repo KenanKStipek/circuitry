@@ -766,10 +766,30 @@ fn pressing_1_during_a_live_run_opens_the_time_screen() {
         );
     }
 
+    // `ratatui` only ever writes bytes for cells that actually
+    // changed -- a keypress whose own effect, if any, never touches
+    // what's on screen (the whole buffer already contained
+    // "timeline" from the very first redraw) would otherwise pass
+    // this check for doing nothing at all. Checking each keypress's
+    // own incremental output is non-empty instead proves each one
+    // really did redraw something.
+    let before_plus = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"+");
     std::thread::sleep(Duration::from_millis(300));
+    let after_plus = captured_buf.lock().unwrap()[before_plus..].to_vec();
+    assert!(
+        !after_plus.is_empty(),
+        "+ should zoom the timeline in and redraw it; got no output at all"
+    );
+
+    let before_equals = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"=");
     std::thread::sleep(Duration::from_millis(300));
+    let after_equals = captured_buf.lock().unwrap()[before_equals..].to_vec();
+    assert!(
+        !after_equals.is_empty(),
+        "= should fit the timeline back to the whole run and redraw it; got no output at all"
+    );
     {
         let snapshot = captured_buf.lock().unwrap().clone();
         let rendered = String::from_utf8_lossy(&snapshot);

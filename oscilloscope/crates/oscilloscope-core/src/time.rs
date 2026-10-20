@@ -400,9 +400,19 @@ fn expand_named_loop(
             let mut end_ts: Option<&str> = None;
             let mut running = false;
             let mut ok = true;
-            for (child_path, node) in flat {
+            // A `BTreeMap`'s own sorted order makes every key that is
+            // either `pass_path` itself or starts with `pass_prefix`
+            // contiguous, starting right at `pass_path` -- any byte
+            // after the shared `"iter_{index}"` prefix that isn't
+            // `.` (a later pass's own digits, `iter_30` after
+            // `iter_3`, or an unrelated sibling) sorts strictly past
+            // every `pass_prefix`-matching key, so the scan can break
+            // the moment it sees one, rather than walking every
+            // entry in `flat` once per pass (O(passes × flat)
+            // otherwise).
+            for (child_path, node) in flat.range(pass_path.clone()..) {
                 if child_path != &pass_path && !child_path.starts_with(&pass_prefix) {
-                    continue;
+                    break;
                 }
                 if let Some(created_at) = node.created_at.as_deref() {
                     if start_ts.is_none_or(|s| created_at < s) {
@@ -1657,6 +1667,48 @@ mod tests {
             loop_progress: None,
             dim: None,
             has_children: false,
+        }
+    }
+
+    /// `expand_named_loop`'s own `BTreeMap::range` scan (its own doc
+    /// comment) leans on `iter_9`'s own children sorting strictly
+    /// before `iter_10`'s -- a naive string-prefix check alone would
+    /// also have `iter_1` match `iter_10`'s children, so this pins
+    /// the double-digit boundary a smaller fixture never reaches.
+    #[test]
+    fn expand_named_loop_tells_double_digit_pass_indices_apart() {
+        use serde_json::json;
+        let mut prime = serde_json::Map::new();
+        for i in [1, 9, 10, 11] {
+            prime.insert(
+                format!("iter_{i}"),
+                json!({"value": null, "meta": {
+                    "created_at": format!("2026-01-01T00:00:{i:02}Z"),
+                    "completed_at": format!("2026-01-01T00:00:{:02}Z", i + 1)
+                }}),
+            );
+        }
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}, "items": serde_json::Value::Object(prime)}});
+        let flat = crate::model::flatten_state(&state);
+        let model = RunModel::new();
+        let passes = expand_loop(
+            "prime.items",
+            &flat,
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:01:00Z",
+        );
+        assert_eq!(passes.len(), 4);
+        assert_eq!(passes[0].label, "pass 2", "iter_1, 1-based");
+        assert_eq!(passes[1].label, "pass 10", "iter_9");
+        assert_eq!(passes[2].label, "pass 11", "iter_10");
+        assert_eq!(passes[3].label, "pass 12", "iter_11");
+        for pass in &passes {
+            assert_eq!(
+                pass.duration_s,
+                Some(1.0),
+                "each pass is its own one-second span, not merged with a neighbour's"
+            );
         }
     }
 

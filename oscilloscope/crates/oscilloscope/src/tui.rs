@@ -8487,6 +8487,131 @@ mod golden_tests {
         );
     }
 
+    /// [`redraw_from_a_2000_node_state_...`]'s own 2,000-node state
+    /// uses `"t{i}"` timestamps, which `duration_seconds` can't
+    /// parse at all -- every bar and strip in that test's own Time
+    /// screen is blank, so its timing never actually exercises
+    /// `bar_cells`/`bucket_weighted`/`in_flight_heights` at scale.
+    /// This one uses real RFC 3339 clock times instead, one second
+    /// apart, so the bars and strips really do get built.
+    #[test]
+    fn time_screen_performance_on_a_2000_node_state_with_real_clock_times() {
+        let plan = PlanTree::empty();
+        let mut prime = serde_json::Map::new();
+        prime.insert("value".to_string(), Value::Null);
+        let mut prime_meta = serde_json::Map::new();
+        prime_meta.insert(
+            "created_at".to_string(),
+            Value::String("2026-01-01T00:00:00Z".to_string()),
+        );
+        prime_meta.insert("completed_at".to_string(), Value::Null);
+        prime.insert("meta".to_string(), Value::Object(prime_meta));
+        for i in 0..2000 {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "created_at".to_string(),
+                Value::String(format!("2026-01-01T00:{:02}:{:02}Z", (i / 60) % 60, i % 60)),
+            );
+            if i == 1999 {
+                meta.insert("completed_at".to_string(), Value::Null);
+                meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            } else {
+                meta.insert(
+                    "completed_at".to_string(),
+                    Value::String(format!(
+                        "2026-01-01T00:{:02}:{:02}Z",
+                        ((i + 1) / 60) % 60,
+                        (i + 1) % 60
+                    )),
+                );
+                meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            }
+            let mut node = serde_json::Map::new();
+            node.insert("value".to_string(), Value::String(format!("ok{i}\n")));
+            node.insert("meta".to_string(), Value::Object(meta));
+            prime.insert(format!("n{i}"), Value::Object(node));
+        }
+        let mut root = serde_json::Map::new();
+        root.insert("prime".to_string(), Value::Object(prime));
+        let state = Value::Object(root);
+
+        let mut model = RunModel::new();
+        let now = "2026-01-01T00:33:20Z";
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2000.0,
+            now,
+            &[],
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let start = std::time::Instant::now();
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some("prime.n1999"),
+            &Default::default(),
+            now,
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.selected_path = Some("prime.n1999".to_string());
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let elapsed = start.elapsed();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains('█') || text.contains('▶'),
+            "a real-clock state must actually draw a bar, or this timing proves nothing:\n{text}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "building and drawing the Time screen for a 2000-node real-clock state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
+    }
+
     /// A tree-loop pass's prompt never
     /// appears in live state at all while it runs (DESIGN.md §1.4), on
     /// either engine -- `fan.iter_0.ask` here has no node of its own in

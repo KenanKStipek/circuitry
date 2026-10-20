@@ -1531,6 +1531,48 @@ mod tests {
         );
     }
 
+    /// Past the interval log's own cap (issue #649), a dropped
+    /// pass's own path is no longer kept at all -- `build_record`
+    /// folds the whole total into `(other)` rather than attributing
+    /// it to whatever path happened to be running when the cap hit.
+    #[test]
+    fn build_record_folds_overflowed_passes_into_other() {
+        let mut model = RunModel::new();
+        for i in 0..(crate::model::MAX_STEP_INTERVALS + 5) {
+            let id = i as i64 + 1;
+            model.observe_event(&crate::observe::Event::Start {
+                ts: "2026-01-01T00:00:00Z".to_string(),
+                id: Some(id),
+                path: "prime.loop.nap".to_string(),
+            });
+            model.observe_event(&crate::observe::Event::End {
+                ts: "2026-01-01T00:00:01Z".to_string(),
+                id: Some(id),
+                path: "prime.loop.nap".to_string(),
+                ok: true,
+                ms: Some(1000),
+                error: None,
+            });
+        }
+        let state = serde_json::json!({
+            "runtime": {"last_run": {
+                "run_id": "r1", "document_hash": "h1",
+                "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:02:00Z",
+                "totals": {"effects_run": 1, "tokens_sent": 0, "tokens_received": 0},
+            }},
+            "prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:02:00Z", "error": null,
+            }},
+        });
+        let record = build_record("/doc.yml", Some("cof"), &state, &model, &PlanTree::empty())
+            .expect("a completed, hashed, non-dry run is recorded");
+        let other = record
+            .steps
+            .get(OTHER_STEP)
+            .expect("the overflow folds into (other)");
+        assert_eq!(other.passes, 5, "only the 5 pushes past the cap overflowed");
+    }
+
     /// A real (not [`PlanTree::empty`]) plan, so `build_record` takes
     /// its actual plan-known-or-`(other)` branch: a top-level tool
     /// is recorded by its own name, a chain loop's two passes
