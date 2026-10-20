@@ -19,7 +19,7 @@ fn bin() -> PathBuf {
 /// (which the stub also fails today, but will *succeed* once lane B2
 /// lands), every test below that only needs an ordinary ``--out``-
 /// writing failure, not any particular error text, uses this instead
-/// (PR #441 review finding 10).
+/// (PR #441).
 const FAILURE_DOC: &str = "\
 effects:\n  - name: broken\n    type: tool\n    provider: json\n    params: {mode: parse, input: 123}\n";
 
@@ -87,8 +87,8 @@ fn help_prints_usage_and_preview_notice_and_exits_zero() {
 /// few checks fully resolvable without a real VM, so its exact text
 /// -- not just a marker naming an unimplemented lane -- is a stable
 /// thing to assert here. An ordinary run failure's own error lives in
-/// the stdout JSON payload, never on stderr (PR #441 review finding 4,
-/// K1: `cli/app.py::run`'s own non-TTY failure path prints no `Error:`
+/// the stdout JSON payload, never on stderr (PR #441:
+/// `cli/app.py::run`'s own non-TTY failure path prints no `Error:`
 /// line on stderr at all, only `Warning:` ones).
 #[test]
 fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
@@ -141,7 +141,7 @@ fn a_missing_config_file_fails_with_circuitrys_own_text_and_writes_no_out() {
 /// found" text on *stdout* (not stderr, and not the ordinary `{"ok":
 /// false, ...}` JSON payload either -- `cof` resolves the document in
 /// the CLI layer, before `run()`'s own JSON-output logic is ever
-/// reached, same as a config error -- PR #441 review finding 5).
+/// reached, same as a config error -- PR #441).
 #[test]
 fn a_missing_orchestration_file_fails_with_cofs_own_text_and_writes_no_out() {
     let (mut cmd, home) = command("missing-orchestration");
@@ -163,8 +163,8 @@ fn a_missing_orchestration_file_fails_with_cofs_own_text_and_writes_no_out() {
     assert!(!out.exists());
 }
 
-/// The missing-document check runs before `-e` is ever parsed (PR #441
-/// review finding 5): a malformed `-e` alongside a missing document
+/// The missing-document check runs before `-e` is ever parsed (PR #441):
+/// a malformed `-e` alongside a missing document
 /// still exits 1 (the missing-document text), not 2 (the `-e` usage
 /// error) -- matching `cof`'s own order (`_resolve_orchestration`
 /// before `_parse_env_vars`).
@@ -186,7 +186,7 @@ fn a_missing_orchestration_file_wins_over_a_malformed_e_value() {
 /// point in its resolution order -- config first, before the missing-
 /// orchestration check -- so it must still print even though the
 /// orchestration-not-found error then ends the run before
-/// `run_orchestration` is ever reached (PR #452 review finding 2: the
+/// `run_orchestration` is ever reached (PR #452: the
 /// warning must not be lost just because this invocation never runs
 /// anything).
 #[test]
@@ -225,8 +225,7 @@ fn known_run_flag_in_first_position_is_a_run_request() {
     // `--profile` is now a real path (issue #495, lane R): `p` doesn't
     // exist relative to this process's own cwd, so the run fails with
     // electricity's own not-found text (DESIGN §6.11) -- exit 1, the
-    // ordinary run-failure JSON payload on stdout, not stderr (PR #441
-    // review finding 4, K1).
+    // ordinary run-failure JSON payload on stdout, not stderr (PR #441).
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -666,7 +665,7 @@ fn malformed_e_value_is_a_usage_error_with_circuitrys_own_message() {
 /// [`a_config_warning_still_prints_when_the_orchestration_is_missing`],
 /// for the other early-exit path: a malformed `-e` still ends the run
 /// (exit 2) after config resolution's own warning has already printed
-/// (PR #452 review finding 2).
+/// (PR #452).
 #[test]
 fn a_config_warning_still_prints_before_a_malformed_e_value_error() {
     let (mut cmd, home) = command("run-e-malformed-config-warning");
@@ -764,7 +763,7 @@ fn a_failure_with_no_out_flag_still_prints_the_json_payload_on_stdout() {
 /// is where `cof run` actually writes the state (`main.rs:710`'s
 /// `effective_out_path` falls back to `RunResult::out_path`) -- and
 /// `runtime.effective_settings.out` in that written file must name the
-/// same path, not `null` (PR #497 review finding 1): Python's own
+/// same path, not `null` (PR #497): Python's own
 /// `effective_settings` always records whichever of `--out`/profile/
 /// default actually applies (`cli/runtime_shim.py:708`), never only a
 /// literal `--out` flag. Checked directly against a real `cof run
