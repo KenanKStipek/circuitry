@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn uint_key_against_an_int_entry_raises() {
-        // fourth review finding 1/5: `cel`'s own map indexing
+        // The fourth review found that `cel`'s own map indexing
         // cross-converts int/uint keys; celpy's own `IntType.__eq__`
         // raises instead of finding the entry.
         assert!(eval("{1: 'a'}[1u]").is_err());

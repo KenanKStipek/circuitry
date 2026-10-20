@@ -307,7 +307,7 @@ fn mid_run_live_state_shows_a_finished_branch_before_its_tree_merges() {
         observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
     );
 
-    // PR #549's review, finding 2: electricity's own overlay shows a
+    // PR #549's review: electricity's own overlay shows a
     // branch's *in-progress* node too, as soon as it starts -- unlike
     // cof's own publisher, which republishes a branch only once that
     // branch itself has called `on_write` at least once (a `prompt`/

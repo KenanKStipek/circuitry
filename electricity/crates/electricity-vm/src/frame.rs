@@ -84,7 +84,7 @@ pub struct Frame {
     /// lookup). [`Frame::apply_rebase`] applies every entry, *last
     /// pushed first* -- a reflector nested inside another reflector's
     /// own `effects:` pushes a second entry onto the outer's own stack
-    /// rather than replacing it (review finding 3 on PR #510's first
+    /// rather than replacing it (PR #510's first
     /// review: a single `Option` here could only ever rewrite the
     /// innermost reflector's own prefix, losing every outer one's own
     /// rewrite entirely) -- applying the innermost rule first and
@@ -526,8 +526,8 @@ mod tests {
         // <refl>.inner" rule applies at every nesting depth), so IR's
         // own rebased call -- on the frame the outer reflector already
         // built -- must push its own entry onto that frame's own
-        // stack rather than replacing the outer's entry (review
-        // finding 3 on PR #510's first review: a single Option field
+        // stack rather than replacing the outer's entry (PR #510's
+        // first review: a single Option field
         // here used to lose the outer rewrite entirely, reporting
         // prime.outer.ir.inner.propose_steps instead of Python's own
         // prime.outer.inner.ir.inner.propose_steps).

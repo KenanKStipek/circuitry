@@ -249,8 +249,8 @@ fn replays_timeout_text_cases() {
     // function this crate exposes for a direct call -- `timeout_message`
     // is that text's own extraction, so this corpus (real output from
     // `run_agent_cli` itself, generated via a mocked `run_tracked`) can
-    // be replayed without spawning a process (review finding 3 on PR
-    // #525: the corpus carried this data, but nothing in Rust replayed it).
+    // be replayed without spawning a process (PR #525's review:
+    // the corpus carried this data, but nothing in Rust replayed it).
     let corpus = corpus();
     for case in cases(&corpus, "timeout_text_cases") {
         let binary = str_field(case, "binary").unwrap();

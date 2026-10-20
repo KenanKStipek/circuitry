@@ -112,7 +112,7 @@ async fn a_short_body_on_an_error_response_is_a_returned_failure_not_a_raise() {
     // urllib's own `except HTTPError` handler reads the error body
     // lazily, under `except Exception: text = ""` -- a short/failed
     // read on a 4xx/5xx is a *returned* empty-text result, never a
-    // raised `IncompleteRead` (issue #485 review finding 8; contrast
+    // raised `IncompleteRead` (issue #485; contrast
     // `a_short_body_against_content_length_is_incomplete_read` in
     // `http_client_send.rs`, the same short body on a *2xx*, which
     // does still raise).

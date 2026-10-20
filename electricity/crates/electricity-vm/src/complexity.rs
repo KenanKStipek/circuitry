@@ -276,7 +276,7 @@ pub(crate) fn score_and_route(
             // effect will run without a recorded score", self.defn.name,
             // exc_info=True)` -- the traceback lines `exc_info=True` adds
             // are not `WARNING:` lines and are not reproduced (issue #516
-            // §3 finding 6).
+            // §3).
             let name_repr = Value::Str(name.to_string()).py_repr();
             log::warn!(
                 "Complexity scoring failed for prompt {name_repr}; the effect will run without a recorded score"
@@ -818,7 +818,7 @@ mod tests {
         let mut prompt = template_op("hi");
         prompt.routing_override = Some(RoutingOverride::Named("big".to_string()));
         // A 400-digit integer overflows `f64`, forcing `score()` to
-        // `Err` (issue #516 §3 finding 6/case `complexity-scoring-
+        // `Err` (issue #516 §3, case `complexity-scoring-
         // failure-warns`).
         let mut params = Dict::new();
         params.insert(

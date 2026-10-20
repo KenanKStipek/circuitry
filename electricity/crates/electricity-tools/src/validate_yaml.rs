@@ -112,8 +112,7 @@ impl ToolPlugin for ValidateYamlPlugin {
                 // `OverflowError`/`ValueError` CPython never catches here
                 // (`except (TypeError, ValueError)` doesn't name
                 // `OverflowError`) -- it escapes bare, unwrapped, with no
-                // "must be an integer:" prefix (review finding 4 on PR
-                // #524).
+                // "must be an integer:" prefix (PR #524's review).
                 Err(err) if err.py_class == PyExc::OverflowError => {
                     return Err(ToolError {
                         py_class: PyExc::OverflowError,

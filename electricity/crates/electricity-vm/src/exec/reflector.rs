@@ -101,7 +101,7 @@ pub(crate) async fn execute_reflector(
         // No cancellation check of this loop's own -- the issue's own
         // Rust design ("Paths, --resume, loops and finally:") adds
         // none beyond what the containers this calls already respect
-        // (review finding 5 on PR #510's first review: a check here,
+        // (PR #510's first review: a check here,
         // between iterations, would suppress the inner dynamic's own
         // start/end pair for a signal that lands in that exact window,
         // where Python's own `_run_iteration` has no such check either
@@ -259,8 +259,8 @@ async fn run_iteration(
         // comment on "Fatal errors"), with `IterationRecord::fatal` set
         // so [`execute_reflector`] still re-raises the bare, unwrapped
         // `Refused` afterward rather than folding it into the usual
-        // `RuntimeError(rec.error)` wrap -- review finding 1 on PR
-        // #510's first review: this branch used to fall into the same
+        // `RuntimeError(rec.error)` wrap -- PR #510's first review:
+        // this branch used to fall into the same
         // arm as `Cancelled` below, skipping every one of those writes
         // and `effect_complete` itself.
         Err(e @ VmError::Refused { .. }) => {

@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn has_over_a_non_select_argument_parses_and_evaluates() {
-        // issue #379 review finding 3: `cel`'s own `has` macro only
+        // Issue #379: `cel`'s own `has` macro only
         // accepts a field selection; celpy evaluates `has()` over any
         // expression.
         assert_eq!(eval("has([1][0])"), Ok(Value::Bool(true)));
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn has_over_a_failing_root_is_false_not_an_error() {
-        // issue #379 review finding 2: a root that itself fails to
+        // Issue #379: a root that itself fails to
         // evaluate (an undeclared identifier) must resolve to `false`,
         // not propagate the failure.
         assert_eq!(eval("has(nope.x)"), Ok(Value::Bool(false)));

@@ -699,7 +699,7 @@ pub(crate) fn compile_use(
         // the *raw*, untrimmed `inline` value -- only `inline_field`
         // (trimmed, for the IR) is stripped; a leading blank line
         // would otherwise shift a "malformed ... at line N" message's
-        // own line number (finding 20).
+        // own line number.
         let raw_inline = effect.get(&Value::Str("inline".to_string())).cloned();
         if let Some(raw_inline) = raw_inline {
             check_templates(&raw_inline, effect_path, "inline", true)?;

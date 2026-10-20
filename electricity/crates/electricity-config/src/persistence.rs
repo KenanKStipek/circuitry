@@ -251,7 +251,7 @@ mod tests {
         assert!(validate_persistence_block(Some(&runtime)).is_ok());
     }
 
-    // PR #441 review finding 2: `enabled` is Python-truthy, not a
+    // PR #441: `enabled` is Python-truthy, not a
     // literal `true` -- `1`/`"yes"` both turn persistence on, exactly
     // as `if not config.get("enabled")` does, so both must validate
     // (and so later refuse) a backend just as `enabled: true` would.

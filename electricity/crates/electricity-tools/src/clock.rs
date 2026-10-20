@@ -377,7 +377,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Finding 5: the tz reader must evaluate a TZif file's own
+    // The tz reader must evaluate a TZif file's own
     // trailing POSIX-TZ rule (its "footer"), not just its explicit
     // transition table -- a "slim" tzdata build relies on exactly that
     // for every instant past its last explicit transition.

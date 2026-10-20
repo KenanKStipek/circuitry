@@ -282,7 +282,7 @@ impl<'a> Supported<'a> {
 
     /// This build's own actual capability set -- the one value
     /// `electricity` (lib)'s own run wiring passes to
-    /// [`first_unsupported`] (review finding/P2-b on PR #454: without
+    /// [`first_unsupported`] (PR #454: without
     /// a named function for "what this build can really run today",
     /// every M1 lane would otherwise flip its own flag in the same
     /// bare `Supported::m0(...)` call expression at that one call

@@ -748,7 +748,7 @@ mod tests {
 
     #[test]
     fn timeout_display_quotes_the_binary_like_pythons_own_repr() {
-        // Review finding/P2-d on PR #454: `plugins/_subprocess.py`'s
+        // PR #454: `plugins/_subprocess.py`'s
         // own `{binary!r}` is single-quoted; Rust's `{:?}` on a `String`
         // is double-quoted.
         let err = ProcError::Timeout {

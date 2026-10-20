@@ -982,7 +982,7 @@ mod coercion_tests {
         }
     }
 
-    /// Finding 15: `max_concurrency: 0` is `is not None` in Python, not
+    /// `max_concurrency: 0` is `is not None` in Python, not
     /// `or`-chained -- `0` is a real, meaningful setting (zero workers
     /// allowed under `flow: tree`), kept as `Some(0)` rather than
     /// collapsing to `None` the way a truthiness filter would.
@@ -1024,7 +1024,7 @@ mod coercion_tests {
         assert_eq!(*max_concurrency, Some(0));
     }
 
-    /// Finding 16: a `max_iterations` beyond `u32::MAX` saturates
+    /// A `max_iterations` beyond `u32::MAX` saturates
     /// rather than wrapping (`4294967297` -- `2^32 + 1` -- must not
     /// become `1`).
     #[test]

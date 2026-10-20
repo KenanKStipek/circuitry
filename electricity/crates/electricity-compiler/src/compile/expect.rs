@@ -155,7 +155,7 @@ mod tests {
         );
     }
 
-    /// Finding 16: `backoff_ms: 5000000000` (over `u32::MAX`) saturates
+    /// `backoff_ms: 5000000000` (over `u32::MAX`) saturates
     /// rather than wrapping.
     #[test]
     fn retries_backoff_ms_beyond_u32_saturates_instead_of_wrapping() {

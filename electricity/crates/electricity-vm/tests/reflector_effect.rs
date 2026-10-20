@@ -322,7 +322,7 @@ async fn done_true_with_stop_on_done_never_runs_the_generated_plan() {
 
 #[tokio::test]
 async fn an_inner_refusal_is_recorded_on_the_reflector_node_and_returned_unwrapped() {
-    // Review finding 1 on PR #510's first review: a `VmError::Refused`
+    // PR #510's first review: a `VmError::Refused`
     // from the inner planner's own dispatch (an unbuildable
     // `adapter:`, `exec::prompt`'s own `is_unbuildable` check) used to
     // take the same no-record branch as `VmError::Cancelled` --

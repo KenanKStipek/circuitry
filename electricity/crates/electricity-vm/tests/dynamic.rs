@@ -913,7 +913,7 @@ async fn dispatch_reports_branches_and_concurrency_in_the_observers_own_paramete
 #[tokio::test]
 async fn a_deeply_nested_dynamics_own_if_sees_an_earlier_siblings_write_through_the_qualified_prime_path()
  {
-    // The P0 "frozen ancestor" finding on PR #440's review: `d` (nested
+    // The P0 "frozen ancestor" case from PR #440's review: `d` (nested
     // two levels under the document root, with no `if`/loop overlay of
     // its own anywhere in between) runs an empty dynamic `first`, then a
     // named `if` whose condition reads that write back through the
