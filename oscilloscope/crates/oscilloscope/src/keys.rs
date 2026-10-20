@@ -128,9 +128,9 @@ pub struct App {
     /// asked ⏎ to expand in place -- the existing collapse key (`←`)
     /// removes a path from here, folding that group again.
     pub expanded_quick_steps: std::collections::BTreeSet<String>,
-    /// Which screen is on display (issue #626): `0`/`2` switch
-    /// here, `1`/`3` do nothing (`Screen::from_key` already refuses
-    /// them). Selection, follow, folding, filters and collapsed rows
+    /// Which screen is on display (issue #626, #632, #650): `0`-`3`
+    /// all switch here now. Selection, follow, folding, filters and
+    /// collapsed rows
     /// all live outside this field, so switching screens never
     /// touches them.
     pub screen: Screen,
@@ -481,27 +481,27 @@ impl App {
             }
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
-            // not by parsing its label.
-            KeyCode::Enter if self.pane == Pane::Tree && self.screen != Screen::Time => {
-                if let Some(path) = &self.selected_path {
-                    if rows.iter().any(|r| {
-                        r.path == *path && r.kind == oscilloscope_core::render::RowKind::QuickSteps
-                    }) {
-                        self.expanded_quick_steps.insert(path.clone());
-                    }
-                }
-            }
-            // Issue #650: ⏎ on the Time screen's own timeline toggles
-            // a loop row's own expansion -- a non-loop row, or a loop
-            // not yet expandable (`TimeRow::loop_expandable`, checked
-            // by the caller before this ever inserts a path:
+            // not by parsing its label. Issue #650: on the Time
+            // screen, ⏎ on a loop row instead toggles its own
+            // expansion into one row per pass -- a non-loop row, or a
+            // loop not yet expandable (`TimeRow::loop_expandable`,
+            // checked by the caller before this ever inserts a path:
             // `oscilloscope_core::screens::build_time_screen` simply
             // never expands an entry that stays in here with nothing
-            // to show for it), is a no-op either way.
-            KeyCode::Enter if self.pane == Pane::Tree && self.screen == Screen::Time => {
+            // to show for it), is a no-op either way. The two never
+            // both apply to the same row (a quick-steps summary is
+            // never a loop), so one key serves both.
+            KeyCode::Enter if self.pane == Pane::Tree => {
                 if let Some(path) = self.selected_path.clone() {
-                    if !self.time_expanded_loops.remove(&path) {
-                        self.time_expanded_loops.insert(path);
+                    let is_quick_steps = rows.iter().any(|r| {
+                        r.path == path && r.kind == oscilloscope_core::render::RowKind::QuickSteps
+                    });
+                    if is_quick_steps {
+                        self.expanded_quick_steps.insert(path);
+                    } else if self.screen == Screen::Time {
+                        if !self.time_expanded_loops.remove(&path) {
+                            self.time_expanded_loops.insert(path);
+                        }
                     }
                 }
             }
@@ -548,10 +548,16 @@ impl App {
                     }
                 } else if self.screen == Screen::Time {
                     // Issue #650: the Time screen's own cycle is
-                    // timeline -> zoom -> vs usual -> timeline.
+                    // timeline -> zoom -> vs usual -> timeline --
+                    // skipping a pane `tui::draw` didn't actually
+                    // draw this frame (too small a terminal for the
+                    // three-pane layout), the same "must not focus a
+                    // pane with nothing to show or scroll" rule the
+                    // state pane and the Flow screen's story pane
+                    // already follow below.
                     match self.pane {
-                        Pane::Tree => Pane::Zoom,
-                        Pane::Zoom => Pane::VsUsual,
+                        Pane::Tree if self.time_zoom_viewport > 0 => Pane::Zoom,
+                        Pane::Zoom if self.time_vs_usual_viewport > 0 => Pane::VsUsual,
                         _ => Pane::Tree,
                     }
                 } else {
@@ -566,11 +572,10 @@ impl App {
                     }
                 };
             }
-            // Issue #626: `0`/`2` switch screens; `1`/`3` do
-            // nothing yet (`Screen::from_key` already refuses them,
-            // same as any other key with no binding). Selection,
-            // follow, folding, filters and collapsed rows are all
-            // outside `App::screen`, so none of them reset here.
+            // Issue #626, #632, #650: `0`-`3` all switch screens now.
+            // Selection, follow, folding, filters and collapsed rows
+            // are all outside `App::screen`, so none of them reset
+            // here.
             KeyCode::Char(c @ '0'..='3') => {
                 if let Some(screen) = Screen::from_key(c) {
                     self.screen = screen;
@@ -1039,6 +1044,35 @@ pub fn visible_rows_for_flow<'a>(
             selectable.contains(r.path.as_str())
                 || app.selected_path.as_deref() == Some(r.path.as_str())
         })
+        .collect()
+}
+
+/// The Time screen's own selectable rows (issue #650): the same real
+/// `Row` list every other screen moves over, minus whatever sits
+/// under a loop row -- the timeline collapses a loop to one row by
+/// default, so `j`/`k` must never land the selection on a pass it
+/// isn't drawing (the same real-`Row` list `draw_time_timeline`'s own
+/// `is_under_a_loop` filters, kept in sync here rather than
+/// recomputed differently by each caller).
+pub fn visible_rows_for_time<'a>(
+    rows: &'a [Row],
+    time_rows: &[oscilloscope_core::screens::TimeDisplayRow],
+    app: &App,
+) -> Vec<&'a Row> {
+    let loop_prefixes: Vec<String> = time_rows
+        .iter()
+        .filter_map(|r| match r {
+            oscilloscope_core::screens::TimeDisplayRow::Row(tr)
+                if tr.kind == oscilloscope_core::render::RowKind::Loop =>
+            {
+                Some(format!("{}.", tr.path))
+            }
+            _ => None,
+        })
+        .collect();
+    visible_rows(rows, app)
+        .into_iter()
+        .filter(|r| !loop_prefixes.iter().any(|p| r.path.starts_with(p.as_str())))
         .collect()
 }
 
@@ -2107,6 +2141,8 @@ mod tests {
     fn time_screens_tab_cycle_is_timeline_zoom_vs_usual_timeline() {
         let mut app = App::new(false);
         app.screen = Screen::Time;
+        app.time_zoom_viewport = 10;
+        app.time_vs_usual_viewport = 10;
         assert_eq!(app.pane, Pane::Tree);
         app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Zoom);
@@ -2114,6 +2150,20 @@ mod tests {
         assert_eq!(app.pane, Pane::VsUsual);
         app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn time_screens_tab_skips_a_pane_with_nothing_drawn_into_it() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.time_zoom_viewport = 0;
+        app.time_vs_usual_viewport = 0;
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(
+            app.pane,
+            Pane::Tree,
+            "neither pane is drawn below the three-pane layout"
+        );
     }
 
     #[test]

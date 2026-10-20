@@ -2368,10 +2368,14 @@ fn run_tui(
         // hidden under an untaken branch or merged into its own
         // single-pass loop row -- `visible_rows_for_flow` narrows the
         // same real-`Row` list every other screen moves over to
-        // exactly those.
-        let visible = match &flow_screen {
-            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+        // exactly those. Issue #650: the same rule, for the Time
+        // screen's own collapsed loop rows.
+        let visible = match (&flow_screen, &time_screen) {
+            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
+                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };
@@ -3631,11 +3635,14 @@ fn run_tui_watch(
                 &mut transcript_cache,
             );
         }
-        // Issue #635: same narrowing as `osi <doc>`'s own main
+        // Issue #635/#650: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
-        let visible = match &flow_screen {
-            Some(screen) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+        let visible = match (&flow_screen, &time_screen) {
+            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            }
+            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
+                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };

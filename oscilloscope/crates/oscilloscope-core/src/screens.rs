@@ -1424,11 +1424,22 @@ pub enum TimeDisplayRow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeStrips {
-    pub events: crate::time::EventsPerMinuteStrip,
+    /// Unbucketed (DESIGN.md's events/min strip): `oscilloscope`'s
+    /// `tui.rs` buckets these at whatever width and visible window
+    /// the bars themselves are drawn at right now, so the two always
+    /// line up (issue #650) -- a separate, fixed resolution here
+    /// couldn't keep up with `+`/`-`'s own axis zoom.
+    pub events_points: Vec<(f64, u64)>,
+    pub events_from_state: bool,
     pub decisions: Vec<f64>,
-    pub in_flight: Vec<u64>,
-    pub in_flight_max: u64,
+    /// Every currently-in-view leaf row's own `[start_s, end_s]`
+    /// (DESIGN.md's in-flight strip), a running leaf's own end
+    /// extended to now -- a container row never counts here, or one
+    /// running leaf inside a chain of containers would read as two
+    /// or three "in flight" instead of one.
+    pub in_flight_intervals: Vec<(f64, f64)>,
     pub queued: u64,
+    pub quiet_agent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1517,26 +1528,21 @@ pub fn build_time_screen(
 
     let strips = run_start_ts.as_deref().map_or_else(
         || TimeStrips {
-            events: Default::default(),
+            events_points: Vec::new(),
+            events_from_state: !model.has_events(),
             decisions: Vec::new(),
-            in_flight: Vec::new(),
-            in_flight_max: 0,
+            in_flight_intervals: Vec::new(),
             queued: crate::time::queued_now(flat),
+            quiet_agent: false,
         },
         |run_start_ts| {
-            let axis_start_s = 0.0;
-            let axis_end_s = duration_seconds(run_start_ts, &axis.end_ts).unwrap_or(0.0);
-            let width = 60usize;
-            let events = crate::time::events_per_minute_strip(
-                axis_start_s,
-                axis_end_s,
-                width,
-                model,
-                run_start_ts,
-            );
-            let decisions = crate::time::decision_points(story_lines, run_start_ts);
-            let intervals: Vec<(f64, f64)> = rows
+            // Leaf rows only (`RowKind::is_leaf`) -- a container
+            // counting alongside the one leaf actually running
+            // inside it would read "in flight" as 2 or 3 for a
+            // single running step.
+            let leaf_intervals: Vec<(f64, f64, RowKind, StatusKind)> = rows
                 .iter()
+                .filter(|r| r.kind.is_leaf())
                 .filter_map(|r| {
                     let start = row_run_relative_start(r, flat, model, run_start_ts)?;
                     let end = if r.status.kind == StatusKind::Running {
@@ -1544,18 +1550,41 @@ pub fn build_time_screen(
                     } else {
                         start + r.duration_s.unwrap_or(0.0)
                     };
-                    Some((start, end))
+                    Some((start, end, r.kind, r.status.kind))
                 })
                 .collect();
-            let in_flight =
-                crate::time::in_flight_heights(axis_start_s, axis_end_s, width, &intervals);
-            let in_flight_max = in_flight.iter().copied().max().unwrap_or(0);
+            let in_flight_intervals: Vec<(f64, f64)> =
+                leaf_intervals.iter().map(|&(s, e, _, _)| (s, e)).collect();
+            let running_starts: Vec<f64> = leaf_intervals
+                .iter()
+                .filter(|&&(_, _, _, status)| status == StatusKind::Running)
+                .map(|&(s, _, _, _)| s)
+                .collect();
+            let events_points = crate::time::event_points(model, run_start_ts, &running_starts);
+            let decisions = crate::time::decision_points(story_lines, run_start_ts);
+            let running_leaf_kinds: Vec<RowKind> = leaf_intervals
+                .iter()
+                .filter(|&&(_, _, _, status)| status == StatusKind::Running)
+                .map(|&(_, _, kind, _)| kind)
+                .collect();
+            // The strip's own rate over the last minute, read from
+            // the same points it draws from -- "quiet = agent" is
+            // about the rate having actually dropped, not merely
+            // about an agent happening to be the only thing running.
+            let recent_rate = now_s.map_or(0u64, |now_offset| {
+                events_points
+                    .iter()
+                    .filter(|&&(t, _)| t >= now_offset - 60.0)
+                    .map(|&(_, w)| w)
+                    .sum()
+            });
             TimeStrips {
-                events,
+                events_points,
+                events_from_state: !model.has_events(),
                 decisions,
-                in_flight,
-                in_flight_max,
+                in_flight_intervals,
                 queued: crate::time::queued_now(flat),
+                quiet_agent: crate::time::quiet_agent(&running_leaf_kinds, recent_rate),
             }
         },
     );

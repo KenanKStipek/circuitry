@@ -552,6 +552,32 @@ pub fn events_per_minute_strip(
     model: &RunModel,
     run_start_ts: &str,
 ) -> EventsPerMinuteStrip {
+    EventsPerMinuteStrip {
+        heights: bucket_weighted(
+            axis_start_s,
+            axis_end_s,
+            width,
+            &event_points(model, run_start_ts, &[]),
+        ),
+        from_state: !model.has_events(),
+    }
+}
+
+/// The events/min strip's own raw points, unbucketed: a drawing front
+/// end re-buckets these at whatever width and visible window the
+/// bars themselves are drawn at right now (issue #650's own axis
+/// zoom), rather than at a separate, fixed resolution that can't
+/// line up with them. One point per logged interval's own start and
+/// end, plus the interval log's own per-minute overflow tail folded
+/// in at the minute's own midpoint, plus `running_starts` -- a
+/// currently running step's own start (DESIGN.md: "start and end
+/// events per minute"), which [`RunModel::step_intervals`] never
+/// carries at all until the step actually finishes.
+pub fn event_points(
+    model: &RunModel,
+    run_start_ts: &str,
+    running_starts: &[f64],
+) -> Vec<(f64, u64)> {
     let mut points: Vec<(f64, u64)> = Vec::new();
     for interval in model.step_intervals() {
         if let Some(s) = duration_seconds(run_start_ts, &interval.start_ts) {
@@ -560,6 +586,9 @@ pub fn events_per_minute_strip(
         if let Some(e) = duration_seconds(run_start_ts, &interval.end_ts) {
             points.push((e, 1));
         }
+    }
+    for &s in running_starts {
+        points.push((s, 1));
     }
     for (minute, count) in model.overflowed_minute_counts() {
         // `minute` is `"2026-01-01T00:05"` -- `:30Z` places the
@@ -570,10 +599,41 @@ pub fn events_per_minute_strip(
             points.push((s, u64::from(*count)));
         }
     }
-    EventsPerMinuteStrip {
-        heights: bucket_weighted(axis_start_s, axis_end_s, width, &points),
-        from_state: !model.has_events(),
+    points
+}
+
+/// "events / min ... quiet = agent" (DESIGN.md) -- shown when the
+/// only step running right now is an agent, and the strip's own rate
+/// has actually dropped (`recent_rate`, the caller's own count of
+/// start/end events in some short trailing window), not merely
+/// because an agent happens to be running.
+pub fn quiet_agent(running_leaf_kinds: &[RowKind], recent_rate: u64) -> bool {
+    running_leaf_kinds == [RowKind::Prompt] && recent_rate == 0
+}
+
+/// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
+/// round clock times ... whichever keeps labels about 10 columns
+/// apart") -- one entry per tick, each paired with its own
+/// run-relative offset for a caller to format into an actual clock
+/// time and place on the same `width` columns the bars themselves
+/// use.
+pub fn axis_tick_columns(axis_start_s: f64, axis_end_s: f64, width: usize) -> Vec<(usize, f64)> {
+    let width = width.max(1);
+    let span = (axis_end_s - axis_start_s).max(0.0);
+    let tick_s = crate::format::clock_tick_seconds(span, width, 10);
+    if tick_s <= 0.0 {
+        return Vec::new();
     }
+    let first_tick = (axis_start_s / tick_s).ceil() * tick_s;
+    let mut out = Vec::new();
+    let mut t = first_tick;
+    while t <= axis_end_s + 1e-9 {
+        if let Some(col) = now_column(axis_start_s, axis_end_s, width, t) {
+            out.push((col, t));
+        }
+        t += tick_s;
+    }
+    out
 }
 
 /// The decisions strip's own marks (DESIGN.md: "`◆` at the time each
@@ -1031,6 +1091,58 @@ mod tests {
         assert_eq!(strip.heights.iter().sum::<u64>(), 2);
         assert_eq!(strip.heights[1], 1);
         assert_eq!(strip.heights[4], 1);
+    }
+
+    #[test]
+    fn event_points_includes_a_running_steps_own_start() {
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:10Z".to_string(),
+            id: Some(1),
+            path: "prime.a".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:40Z".to_string(),
+            id: Some(1),
+            path: "prime.a".to_string(),
+            ok: true,
+            ms: Some(30_000),
+            error: None,
+        });
+        // Finished interval contributes 2 points (start + end); the
+        // currently running step's own start is a third, read from
+        // `running_starts` since `step_intervals` has no entry for
+        // it until it finishes.
+        let points = event_points(&model, "2026-01-01T00:00:00Z", &[55.0]);
+        assert_eq!(points.len(), 3);
+        assert!(points.contains(&(55.0, 1)));
+    }
+
+    #[test]
+    fn quiet_agent_is_true_only_for_a_lone_quiet_running_prompt() {
+        assert!(quiet_agent(&[RowKind::Prompt], 0));
+        assert!(
+            !quiet_agent(&[RowKind::Prompt], 2),
+            "the rate must be low too"
+        );
+        assert!(!quiet_agent(&[RowKind::Tool], 0), "a tool isn't an agent");
+        assert!(!quiet_agent(&[RowKind::Prompt, RowKind::Tool], 0));
+        assert!(!quiet_agent(&[], 0));
+    }
+
+    #[test]
+    fn axis_tick_columns_keeps_ticks_about_10_columns_apart() {
+        let ticks = axis_tick_columns(0.0, 600.0, 60);
+        assert!(ticks.len() >= 2);
+        for window in ticks.windows(2) {
+            assert!(window[1].0 - window[0].0 >= 9);
+        }
+        assert_eq!(ticks[0].1 % 60.0, 0.0);
+    }
+
+    #[test]
+    fn axis_tick_columns_is_empty_for_a_zero_span() {
+        assert_eq!(axis_tick_columns(10.0, 10.0, 40), Vec::new());
     }
 
     #[test]
