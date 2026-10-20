@@ -918,7 +918,18 @@ pub fn visible_rows_for_flow<'a>(
         .collect();
     visible_rows(rows, app)
         .into_iter()
-        .filter(|r| selectable.contains(r.path.as_str()))
+        // A merged pass's own path (`prime.fan.iter_0`) or a hidden
+        // step under an untaken branch can still be `selected_path`
+        // (the Flow pane maps it to the loop row or the `· else:`
+        // line instead of hiding the selection outright) -- dropping
+        // it here too would leave `move_tree_selection` with no
+        // `current` at all, so `j`/`k` jump to the first or last row
+        // instead of moving one step from where the pane shows the
+        // selection to be.
+        .filter(|r| {
+            selectable.contains(r.path.as_str())
+                || app.selected_path.as_deref() == Some(r.path.as_str())
+        })
         .collect()
 }
 
@@ -1887,5 +1898,97 @@ mod tests {
         assert_eq!(app.cost_measure, Measure::Total);
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
         assert_eq!(app.cost_selected, None);
+    }
+
+    fn flow_row(path: &str, merged_pass: bool) -> oscilloscope_core::flow::FlowRow {
+        oscilloscope_core::flow::FlowRow {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind: oscilloscope_core::flow::FlowRowKind::Row(RowKind::Tool),
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress: None,
+            has_children: false,
+            merged_pass,
+        }
+    }
+
+    /// A single-pass loop's own pass (`prime.fan.iter_0`) is merged
+    /// into its loop row in the Flow screen's own `flow_rows`, so it
+    /// has no path of its own there at all -- but it can still be
+    /// `App::selected_path` (the loop row is drawn in its place).
+    /// `visible_rows_for_flow` must keep it anyway, or `j`/`k` have
+    /// no current position to move from at all.
+    #[test]
+    fn visible_rows_for_flow_keeps_a_selected_path_the_flow_screen_merged_away() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0", 2, StatusKind::Running),
+        ];
+        let flow_rows = [flow_row("prime", false), flow_row("prime.fan", true)];
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.fan.iter_0".to_string());
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan", "prime.fan.iter_0"],
+            "the merged-away pass must stay in the list while it's selected"
+        );
+    }
+
+    #[test]
+    fn visible_rows_for_flow_drops_an_unselected_merged_pass() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0", 2, StatusKind::Running),
+        ];
+        let flow_rows = [flow_row("prime", false), flow_row("prime.fan", true)];
+        let app = App::new(false);
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan"],
+            "a merged pass that isn't selected is still hidden, same as before"
+        );
+    }
+
+    /// The regression itself: watching a single-pass loop (selection
+    /// on its merged pass) and pressing `j` must move to the next row
+    /// the Flow pane actually draws, not jump to the first row
+    /// because `move_tree_selection` can't find a current position.
+    #[test]
+    fn j_from_a_merged_pass_moves_to_the_row_after_its_loop_not_to_the_top() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let flow_rows = [
+            flow_row("prime", false),
+            flow_row("prime.fan", true),
+            flow_row("prime.next", false),
+        ];
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.selected_path = Some("prime.fan.iter_0".to_string());
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        app.handle_key(key(KeyCode::Char('j')), &visible, &[], false, false, &[]);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.next"),
+            "must move one row past the loop, not jump to prime"
+        );
     }
 }
