@@ -22,6 +22,11 @@ pub enum Pane {
     /// reached from `Details` by `tab` only while `screen == Flow`;
     /// every other screen's own cycle never visits it at all.
     Story,
+    /// The Time screen's own zoom pane (issue #650) -- reached from
+    /// `Tree` by `tab` only while `screen == Time`.
+    Zoom,
+    /// The Time screen's own vs usual pane.
+    VsUsual,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +170,27 @@ pub struct App {
     /// `l` (issue #635): the Flow screen's story pane shows the full
     /// log instead. `l` again swaps back.
     pub flow_story_shows_log: bool,
+    /// The Time screen's own loop rows the user has expanded with
+    /// `⏎` (issue #650), by path -- the same path a collapsed loop's
+    /// own `TimeRow::path` has, so `⏎` again removes it, collapsing
+    /// it back to one row.
+    pub time_expanded_loops: std::collections::BTreeSet<String>,
+    /// The Time screen's own axis zoom (issue #650): the visible
+    /// span as a fraction of the whole axis `+`/`-` narrow or widen,
+    /// `None` meaning the whole run (`=`'s own "fit" state, and the
+    /// default). `tui::draw` is the only thing that turns this into
+    /// an actual `[start_s, end_s]` window, since only it knows the
+    /// axis's own full span and the now/selection centre to zoom
+    /// around.
+    pub time_zoom: Option<f64>,
+    /// The zoom pane's own scroll position and interior height
+    /// (issue #650), the same pairing `tree_scroll`/`tree_viewport`
+    /// already are.
+    pub time_zoom_scroll: usize,
+    pub time_zoom_viewport: usize,
+    /// The vs usual pane's own scroll position and interior height.
+    pub time_vs_usual_scroll: usize,
+    pub time_vs_usual_viewport: usize,
 }
 
 impl App {
@@ -199,7 +225,36 @@ impl App {
             story_viewport: 0,
             flow_selected_shows_state: false,
             flow_story_shows_log: false,
+            time_expanded_loops: std::collections::BTreeSet::new(),
+            time_zoom: None,
+            time_zoom_scroll: 0,
+            time_zoom_viewport: 0,
+            time_vs_usual_scroll: 0,
+            time_vs_usual_viewport: 0,
         }
+    }
+
+    /// `+`/`-`'s own step (issue #650: "zoom in/out around now"):
+    /// narrows or widens the visible fraction of the whole axis by
+    /// this ratio each press, clamped so it never zooms in past a
+    /// sliver or widens back out past the whole run (`=` resets to
+    /// that "fit" state directly, rather than relying on this ever
+    /// landing exactly on `1.0`).
+    const TIME_ZOOM_STEP: f64 = 0.7;
+    const TIME_ZOOM_MIN: f64 = 0.05;
+
+    pub fn time_zoom_in(&mut self) {
+        let current = self.time_zoom.unwrap_or(1.0);
+        self.time_zoom = Some((current * Self::TIME_ZOOM_STEP).max(Self::TIME_ZOOM_MIN));
+    }
+
+    pub fn time_zoom_out(&mut self) {
+        let next = self.time_zoom.unwrap_or(1.0) / Self::TIME_ZOOM_STEP;
+        self.time_zoom = if next >= 1.0 { None } else { Some(next) };
+    }
+
+    pub fn time_zoom_fit(&mut self) {
+        self.time_zoom = None;
     }
 
     /// The orchestration pane's own selection, resetting the details
@@ -427,7 +482,7 @@ impl App {
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
             // not by parsing its label.
-            KeyCode::Enter if self.pane == Pane::Tree => {
+            KeyCode::Enter if self.pane == Pane::Tree && self.screen != Screen::Time => {
                 if let Some(path) = &self.selected_path {
                     if rows.iter().any(|r| {
                         r.path == *path && r.kind == oscilloscope_core::render::RowKind::QuickSteps
@@ -436,6 +491,26 @@ impl App {
                     }
                 }
             }
+            // Issue #650: ⏎ on the Time screen's own timeline toggles
+            // a loop row's own expansion -- a non-loop row, or a loop
+            // not yet expandable (`TimeRow::loop_expandable`, checked
+            // by the caller before this ever inserts a path:
+            // `oscilloscope_core::screens::build_time_screen` simply
+            // never expands an entry that stays in here with nothing
+            // to show for it), is a no-op either way.
+            KeyCode::Enter if self.pane == Pane::Tree && self.screen == Screen::Time => {
+                if let Some(path) = self.selected_path.clone() {
+                    if !self.time_expanded_loops.remove(&path) {
+                        self.time_expanded_loops.insert(path);
+                    }
+                }
+            }
+            // Issue #650: `+`/`-` zoom the Time screen's own axis in
+            // and out, `=` fits the whole run again -- no-ops on
+            // every other screen.
+            KeyCode::Char('+') if self.screen == Screen::Time => self.time_zoom_in(),
+            KeyCode::Char('-') if self.screen == Screen::Time => self.time_zoom_out(),
+            KeyCode::Char('=') if self.screen == Screen::Time => self.time_zoom_fit(),
             // Issue #535: the state pane collapses/expands with the
             // same two keys, on its own independent collapsed set.
             KeyCode::Left if self.pane == Pane::State => {
@@ -469,7 +544,15 @@ impl App {
                         // the three-pane layout, so `tab` must not
                         // land on it with nothing to show or scroll.
                         Pane::Details | Pane::State if self.story_viewport > 0 => Pane::Story,
-                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                        _ => Pane::Tree,
+                    }
+                } else if self.screen == Screen::Time {
+                    // Issue #650: the Time screen's own cycle is
+                    // timeline -> zoom -> vs usual -> timeline.
+                    match self.pane {
+                        Pane::Tree => Pane::Zoom,
+                        Pane::Zoom => Pane::VsUsual,
+                        _ => Pane::Tree,
                     }
                 } else {
                     // On a small terminal the state pane isn't drawn
@@ -479,7 +562,7 @@ impl App {
                     match self.pane {
                         Pane::Tree => Pane::Details,
                         Pane::Details if self.state_viewport > 0 => Pane::State,
-                        Pane::Details | Pane::State | Pane::Story => Pane::Tree,
+                        _ => Pane::Tree,
                     }
                 };
             }
@@ -560,6 +643,8 @@ impl App {
             Pane::State => self.state_viewport.max(1),
             Pane::Details => self.details_viewport.max(1),
             Pane::Story => self.story_viewport.max(1),
+            Pane::Zoom => self.time_zoom_viewport.max(1),
+            Pane::VsUsual => self.time_vs_usual_viewport.max(1),
         }
     }
 
@@ -672,6 +757,24 @@ impl App {
             Pane::State => self.move_state_selection(state_rows, delta),
             Pane::Details => self.scroll_details(delta),
             Pane::Story => self.scroll_story(delta),
+            Pane::Zoom => self.scroll_time_zoom(delta),
+            Pane::VsUsual => self.scroll_time_vs_usual(delta),
+        }
+    }
+
+    fn scroll_time_zoom(&mut self, delta: i32) {
+        if delta < 0 {
+            self.time_zoom_scroll = self.time_zoom_scroll.saturating_sub((-delta) as usize);
+        } else {
+            self.time_zoom_scroll = self.time_zoom_scroll.saturating_add(delta as usize);
+        }
+    }
+
+    fn scroll_time_vs_usual(&mut self, delta: i32) {
+        if delta < 0 {
+            self.time_vs_usual_scroll = self.time_vs_usual_scroll.saturating_sub((-delta) as usize);
+        } else {
+            self.time_vs_usual_scroll = self.time_vs_usual_scroll.saturating_add(delta as usize);
         }
     }
 
@@ -716,6 +819,12 @@ impl App {
             }
             Pane::Story => {
                 self.story_scroll = if to_first { 0 } else { usize::MAX };
+            }
+            Pane::Zoom => {
+                self.time_zoom_scroll = if to_first { 0 } else { usize::MAX };
+            }
+            Pane::VsUsual => {
+                self.time_vs_usual_scroll = if to_first { 0 } else { usize::MAX };
             }
         }
     }
@@ -1992,5 +2101,52 @@ mod tests {
             Some("prime.next"),
             "must move one row past the loop, not jump to prime"
         );
+    }
+
+    #[test]
+    fn time_screens_tab_cycle_is_timeline_zoom_vs_usual_timeline() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Zoom);
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::VsUsual);
+        app.handle_key(key(KeyCode::Tab), &[], &[], false, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn enter_on_the_time_screen_toggles_a_loop_rows_expansion() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.select_tree_path(Some("prime.loop".to_string()));
+        app.handle_key(key(KeyCode::Enter), &[], &[], false, false, &[]);
+        assert!(app.time_expanded_loops.contains("prime.loop"));
+        app.handle_key(key(KeyCode::Enter), &[], &[], false, false, &[]);
+        assert!(!app.time_expanded_loops.contains("prime.loop"));
+    }
+
+    #[test]
+    fn plus_minus_and_equals_zoom_the_time_screens_own_axis() {
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        assert_eq!(app.time_zoom, None);
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
+        let zoomed_in = app.time_zoom.expect("+ narrows the axis");
+        assert!(zoomed_in < 1.0);
+        app.handle_key(key(KeyCode::Char('=')), &[], &[], false, false, &[]);
+        assert_eq!(app.time_zoom, None);
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
+        app.handle_key(key(KeyCode::Char('-')), &[], &[], false, false, &[]);
+        assert_eq!(app.time_zoom, None, "- undoes a single + back to fit");
+    }
+
+    #[test]
+    fn plus_minus_and_equals_are_no_ops_off_the_time_screen() {
+        let mut app = App::new(false);
+        app.screen = Screen::Overview;
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
+        assert_eq!(app.time_zoom, None);
     }
 }
