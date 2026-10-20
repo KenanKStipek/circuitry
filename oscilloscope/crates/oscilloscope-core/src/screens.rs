@@ -2372,6 +2372,48 @@ mod tests {
         program
     }
 
+    /// [`program_with_ifs`], with its `if` unnamed -- the decision it
+    /// produces is inferred (issue #643's first follow-up), not read
+    /// straight from a real node's own `meta.branch`.
+    fn program_with_an_unnamed_if() -> electricity_bytecode::Program {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "osi-screens-test-unnamed-if-{}-{call}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("doc.yml");
+        std::fs::write(
+            &path,
+            r#"effects:
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: taken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["ok"]
+    else:
+      - name: untaken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["no"]
+"#,
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
+        std::fs::remove_dir_all(&tmp).ok();
+        program
+    }
+
     fn flat_from(json: Value) -> BTreeMap<String, NodeMeta> {
         crate::model::flatten_state(&json)
     }
@@ -2759,6 +2801,72 @@ mod tests {
         let decision = screen.selected_decision.expect("a decision selection");
         assert_eq!(decision.branch.as_deref(), Some("then"));
         assert!(!decision.inferred);
+        assert_eq!(
+            decision.condition,
+            Some(crate::plan::ConditionInfo {
+                mode: crate::plan::ConditionMode::Cel,
+                text: "true".to_string()
+            })
+        );
+    }
+
+    /// Issue #643's first follow-up: selecting an unnamed `if`'s own
+    /// inferred decision row (no real path of its own) gives the
+    /// selected pane the same condition/branch detail a named one's
+    /// does, not an ordinary `FocusedStep`.
+    #[test]
+    fn build_flow_screen_selected_inferred_decision_reads_the_condition_and_branch() {
+        let plan = PlanTree::from_program(&program_with_an_unnamed_if());
+        let state = json!({
+            "prime": {
+                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
+                "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:05Z"}}
+            }
+        });
+        let flat = flat_from(state.clone());
+        let mut model = RunModel::new();
+        let statuses = model.observe(&state, &plan, ProcessState::Running);
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
+        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
+        let (flow_rows, _) = crate::flow::build_flow_rows(&folded, &rows, &flat, &plan, &[]);
+        let inferred = flow_rows
+            .iter()
+            .find(|r| {
+                matches!(
+                    r.kind,
+                    crate::flow::FlowRowKind::Decision { inferred: true, .. }
+                )
+            })
+            .expect("an inferred decision row");
+        let screen = build_flow_screen(
+            &folded,
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            Some(inferred.path.as_str()),
+            &utc(),
+            "2026-10-08T11:00:10Z",
+        );
+        assert!(screen.selected.is_none());
+        let decision = screen.selected_decision.expect("a decision selection");
+        assert_eq!(decision.branch.as_deref(), Some("then"));
+        assert!(decision.inferred);
         assert_eq!(
             decision.condition,
             Some(crate::plan::ConditionInfo {

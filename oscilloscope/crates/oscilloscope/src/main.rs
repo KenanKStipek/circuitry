@@ -2312,8 +2312,10 @@ fn run_tui(
             last_rebuild = Instant::now();
             needs_rebuild = false;
             if app.follow {
-                if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.select_tree_path_keeping_details(Some(target.to_string()));
+                if let Some(target) =
+                    App::follow_target_or_nearest_visible(&render_state.rows, &app)
+                {
+                    app.select_tree_path_keeping_details(Some(target));
                 }
             }
             app.reconcile_folding(&render_state.rows);
@@ -2373,10 +2375,24 @@ fn run_tui(
         // single-pass loop row -- `visible_rows_for_flow` narrows the
         // same real-`Row` list every other screen moves over to
         // exactly those. Issue #650: the same rule, for the Time
-        // screen's own collapsed loop rows.
+        // screen's own collapsed loop rows. `visible_rows_for_flow`
+        // returns owned rows (issue #643's first follow-up: an
+        // unnamed `if`'s own synthesised decision has no real `Row`
+        // of its own to borrow), so `flow_owned` holds them for as
+        // long as `visible`'s own references into it need to live.
+        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
+            == oscilloscope_core::screens::Screen::Flow
+        {
+            flow_screen
+                .as_ref()
+                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let visible = match (&flow_screen, &time_screen) {
-            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
@@ -3591,8 +3607,10 @@ fn run_tui_watch(
             last_rebuild = Instant::now();
             needs_rebuild = false;
             if app.follow {
-                if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.select_tree_path_keeping_details(Some(target.to_string()));
+                if let Some(target) =
+                    App::follow_target_or_nearest_visible(&render_state.rows, &app)
+                {
+                    app.select_tree_path_keeping_details(Some(target));
                 }
             }
             app.reconcile_folding(&render_state.rows);
@@ -3641,9 +3659,19 @@ fn run_tui_watch(
         }
         // Issue #635/#650: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
+        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
+            == oscilloscope_core::screens::Screen::Flow
+        {
+            flow_screen
+                .as_ref()
+                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let visible = match (&flow_screen, &time_screen) {
-            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)

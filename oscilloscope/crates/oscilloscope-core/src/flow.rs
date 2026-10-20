@@ -69,13 +69,27 @@ pub enum FlowRowKind {
 /// named `if`'s decision row counts (it shares that `if`'s own real
 /// path), but the untaken branch's dim summary and an unnamed `if`'s
 /// synthesised decision never do -- neither has a path of its own in
-/// the real tree, and (the Flow screen's own follow-up 1) an
-/// inferred decision row can't be selected at all yet.
+/// the real tree. Drawing (`tui::draw_flow_pane`'s own `drawable`)
+/// uses this to decide what collapse/filter can ever hide: the two
+/// kinds with no real path are drawn unconditionally.
 pub fn is_real_flow_row(kind: &FlowRowKind) -> bool {
     !matches!(
         kind,
         FlowRowKind::UntakenBranch { .. } | FlowRowKind::Decision { inferred: true, .. }
     )
+}
+
+/// Whether `kind` can ever be `App::selected_path` on the Flow screen
+/// (issue #643's first follow-up): everything [`is_real_flow_row`]
+/// allows, plus an unnamed `if`'s own synthesised decision -- it has
+/// no real path for collapse/filter to hide, but `j`/`k` must still
+/// be able to reach it, and the selected pane shows its condition and
+/// the branch that ran the same way a named one's does. Only the
+/// untaken branch's own dim summary line is never selectable: it has
+/// no condition or branch of its own to show, just the other side's
+/// steps already summarised.
+pub fn is_selectable_flow_row(kind: &FlowRowKind) -> bool {
+    !matches!(kind, FlowRowKind::UntakenBranch { .. })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -507,35 +521,60 @@ pub fn build_flow_rows(
     }
     let hidden = untaken_root_paths(unfolded_rows, flat, plan, &resolved);
 
+    // Issue #643's fourth follow-up: each anchor's own attach row is
+    // found once here, not rescanned for every row in the main loop
+    // below -- `rows.iter().find` already walks in the same order
+    // the old per-row `starts_with`/exact-match check did, so the
+    // first qualifying row (an exact match, or the descendant a
+    // breadcrumb folded it into) is still exactly the one that wins;
+    // `quick_steps_row_covering` only runs as the fallback, once per
+    // anchor, not once per anchor *per row*.
+    let mut anchors_at: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for anchor in by_anchor.keys() {
+        let attach_path = rows
+            .iter()
+            .find(|r| r.path == *anchor || r.path.starts_with(&format!("{anchor}.")))
+            .map(|r| r.path.clone())
+            .or_else(|| quick_steps_row_covering(rows, unfolded_rows, anchor));
+        if let Some(path) = attach_path {
+            anchors_at.entry(path).or_default().push(anchor.clone());
+        }
+    }
+
     let mut out = Vec::new();
     let mut footer = FlowFooter::default();
+    // Issue #643's third follow-up: two unnamed `if`s sharing one
+    // `host_path` get distinct `.__if`/`.__untaken` paths -- counted
+    // across *both* groups below (an anchor-based one and a host-
+    // after one can each hold a decision with the very same host),
+    // never reset per group, or two decisions in different groups
+    // that happen to share a host would both land on index 0.
+    let mut host_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut next_index_for_host = |host_path: &str| -> usize {
+        let counter = host_counts.entry(host_path.to_string()).or_insert(0);
+        let idx = *counter;
+        *counter += 1;
+        idx
+    };
 
     for row in rows {
         if is_under_any(&row.path, &hidden) {
             continue;
         }
-        // An anchor path a breadcrumb folded away still has *some*
-        // surviving row at or under its own prefix (a breadcrumb
-        // only ever merges into a descendant, never moves content
-        // outside its own subtree) -- `starts_with` catches the
-        // position the fold left it at. A quick-steps run folds its
-        // own *siblings* together instead, so an anchor folded into
-        // one that isn't the run's own first step needs
-        // `quick_steps_row_covering`'s own matching, not `starts_with`.
-        let anchored_here: Vec<String> = by_anchor
-            .keys()
-            .filter(|anchor| {
-                row.path == **anchor
-                    || row.path.starts_with(&format!("{anchor}."))
-                    || quick_steps_row_covering(rows, unfolded_rows, anchor).as_deref()
-                        == Some(row.path.as_str())
-            })
-            .cloned()
-            .collect();
-        for anchor in anchored_here {
-            if let Some(decisions) = by_anchor.remove(&anchor) {
-                for decision in decisions {
-                    push_unnamed_decision(&mut out, decision, unfolded_rows, flat, row.depth);
+        if let Some(anchors) = anchors_at.get(&row.path) {
+            for anchor in anchors.clone() {
+                if let Some(decisions) = by_anchor.remove(&anchor) {
+                    for decision in decisions {
+                        let idx = next_index_for_host(&decision.host_path);
+                        push_unnamed_decision(
+                            &mut out,
+                            decision,
+                            unfolded_rows,
+                            flat,
+                            row.depth,
+                            idx,
+                        );
+                    }
                 }
             }
         }
@@ -546,7 +585,8 @@ pub fn build_flow_rows(
         }
         if let Some(decisions) = by_host_after.remove(&row.path) {
             for decision in decisions {
-                push_unnamed_decision(&mut out, decision, unfolded_rows, flat, row.depth + 1);
+                let idx = next_index_for_host(&decision.host_path);
+                push_unnamed_decision(&mut out, decision, unfolded_rows, flat, row.depth + 1, idx);
             }
         }
         if row.status.retrying {
@@ -852,8 +892,21 @@ fn push_unnamed_decision(
     rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     depth: usize,
+    // Issue #643's third follow-up: two unnamed `if`s with neither
+    // branch anchored yet share one `host_path` (both fall back to
+    // `by_host_after`'s own grouping), which would otherwise give
+    // them the exact same `.__if`/`.__untaken` path -- its index
+    // among the decisions sharing that same host/anchor (0 for the
+    // first, however many share it) makes each one's path its own,
+    // without changing a lone decision's path at all.
+    index_among_siblings: usize,
 ) {
     let (branch, nothing_ran) = unnamed_branch_state(decision, rows);
+    let suffix = if index_among_siblings == 0 {
+        String::new()
+    } else {
+        format!("_{index_among_siblings}")
+    };
     let host_row = rows.iter().find(|r| r.path == decision.host_path);
     let same_names = !decision.then_paths.is_empty()
         && decision.then_paths == decision.else_paths
@@ -867,7 +920,7 @@ fn push_unnamed_decision(
         _ => None,
     };
     out.push(FlowRow {
-        path: format!("{}.__if", decision.host_path),
+        path: format!("{}.__if{suffix}", decision.host_path),
         depth,
         label: if same_names {
             "if → ?".to_string()
@@ -907,7 +960,7 @@ fn push_unnamed_decision(
     };
     if let Some((summary, paths)) = untaken {
         out.push(FlowRow {
-            path: format!("{}.__untaken", decision.host_path),
+            path: format!("{}.__untaken{suffix}", decision.host_path),
             depth: depth + 1,
             label: summary,
             kind: FlowRowKind::UntakenBranch { paths },
@@ -1206,6 +1259,66 @@ mod tests {
             enabled: true,
         };
         PlanTree::from_program(&program(root))
+    }
+
+    /// Two unnamed `if`s directly inside the same block, neither one
+    /// anchored yet (no branch has started on either) -- both fall
+    /// back to `by_host_after`'s own grouping by `host_path`, which
+    /// is `"prime"` for both (issue #643's third follow-up).
+    fn two_unnamed_ifs_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_then = root_path.clone().push_name("a_then");
+        let a_else = root_path.clone().push_name("a_else");
+        let b_then = root_path.clone().push_name("b_then");
+        let b_else = root_path.clone().push_name("b_else");
+        let if_op = |cond_text: &str,
+                     then_child: EffectPath,
+                     then_name: &str,
+                     else_child: EffectPath,
+                     else_name: &str| Op {
+            path: root_path.clone(),
+            name: None,
+            kind: NodeKind::Control(Region::If {
+                cond: cel(cond_text),
+                then_: Box::new(block(vec![tool_op(then_child, then_name)])),
+                else_: Some(Box::new(block(vec![tool_op(else_child, else_name)]))),
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(block(vec![
+                if_op("a", a_then, "a_then", a_else, "a_else"),
+                if_op("b", b_then, "b_then", b_else, "b_else"),
+            ])),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&program(root))
+    }
+
+    #[test]
+    fn two_unnamed_ifs_sharing_a_host_get_their_own_distinct_paths() {
+        let plan = two_unnamed_ifs_plan();
+        let state =
+            json!({"prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}});
+        let (rows, flat) = rows_for(&plan, &state, "t1");
+        let (flow_rows, _) = build_flow_rows(&rows, &rows, &flat, &plan, &[]);
+        let decision_paths: Vec<&str> = flow_rows
+            .iter()
+            .filter(|r| matches!(r.kind, FlowRowKind::Decision { inferred: true, .. }))
+            .map(|r| r.path.as_str())
+            .collect();
+        assert_eq!(decision_paths.len(), 2, "{decision_paths:?}");
+        assert_ne!(
+            decision_paths[0], decision_paths[1],
+            "two unnamed ifs sharing a host must not collide on the same path"
+        );
     }
 
     #[test]

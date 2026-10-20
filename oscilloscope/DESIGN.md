@@ -544,9 +544,13 @@ actually have). Two branches that would read as the same step names
 read `◆ if → ?` rather than guessing. A named loop with a known total of
 exactly one pass, or an unsettled (`dynamic`) total once the loop
 itself has finished with only one pass observed, merges its own
-container row with that one pass row into a single `⟲ <name>  pass N
-of M` line; more than one pass keeps one row per pass, as the
-orchestration pane already did. The pane's own
+container row with that one pass row into a single `<status glyph>
+⟲ <name>  pass N of M` line; more than one pass keeps one row per
+pass, as the orchestration pane already did -- but the loop
+container's own row then reads `<status glyph> ⟲ <name>` too, not
+just its plain status glyph (issue #643): one rule for a loop row's
+own glyph, merged or not, the same order the Time screen's own
+`⟲ N/M` suffix keeps a loop's identity next to its status either way. The pane's own
 footer totals every quick step in the run (from `unfolded_rows`, the
 same way the overview's own flow card already counts them) and a
 health line (failed/retrying/warning counts, read off the already-

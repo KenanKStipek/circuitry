@@ -917,6 +917,31 @@ impl App {
             .map(|r| r.path.as_str())
     }
 
+    /// [`Self::follow_target`], mapped onto the nearest drawn
+    /// ancestor when the target itself is hidden by collapse or the
+    /// filter (issue #643's second follow-up): follow must always
+    /// land on a row `visible_rows` still draws, or nothing is
+    /// highlighted and the next `j`/`k` jumps to the top instead of
+    /// moving from where the run actually is. `None` only when
+    /// `follow_target` itself is (nothing running), same as before.
+    pub fn follow_target_or_nearest_visible(rows: &[Row], app: &App) -> Option<String> {
+        let target = Self::follow_target(rows)?;
+        let visible: std::collections::BTreeSet<&str> = visible_rows(rows, app)
+            .into_iter()
+            .map(|r| r.path.as_str())
+            .collect();
+        let mut candidate = target;
+        loop {
+            if visible.contains(candidate) {
+                return Some(candidate.to_string());
+            }
+            match candidate.rsplit_once('.') {
+                Some((parent, _)) => candidate = parent,
+                None => return None,
+            }
+        }
+    }
+
     /// Keeps selection and `collapsed` meaningful once folding has
     /// changed what `rows` actually draws (issue #613): if the
     /// selected path (or a `collapsed` entry) is no longer among
@@ -1010,40 +1035,87 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
 }
 
 /// `visible_rows`, further narrowed to exactly what the Flow screen's
-/// own pane draws (issue #635): a path the Flow screen hides
-/// entirely (the untaken branch's own real steps) or merges away (a
-/// single-pass loop's own pass) never appears in `flow_rows` under
-/// its own path at all, so filtering by "does a real row in
-/// `flow_rows` still have this path" drops exactly those, leaving
-/// `j`/`k`/PgUp/PgDn/Home/End to move over the same rows the pane
-/// itself draws, in the same order -- without needing a second,
-/// `FlowRow`-shaped movement implementation alongside the real-`Row`
-/// one every other screen already shares.
-pub fn visible_rows_for_flow<'a>(
-    rows: &'a [Row],
+/// own pane draws (issue #635), in the exact order it draws them
+/// (`flow_rows`' own order, the same list `tui::draw_flow_pane`'s own
+/// `drawable` builds) -- a path the Flow screen hides entirely (the
+/// untaken branch's own real steps) or merges away (a single-pass
+/// loop's own pass) is simply never one of `flow_rows`' own
+/// selectable entries, so `j`/`k`/PgUp/PgDn/Home/End never land on
+/// it. An unnamed `if`'s own synthesised decision (issue #643's first
+/// follow-up) has no real path of its own to look up in `rows` at
+/// all, so it gets a synthetic `Row` instead, always kept -- it has
+/// no collapse state of its own either, same as the Flow pane's own
+/// drawing.
+pub fn visible_rows_for_flow(
+    rows: &[Row],
     flow_rows: &[oscilloscope_core::flow::FlowRow],
     app: &App,
-) -> Vec<&'a Row> {
-    let selectable: std::collections::BTreeSet<&str> = flow_rows
-        .iter()
-        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+) -> Vec<Row> {
+    use oscilloscope_core::flow::{FlowRowKind, is_selectable_flow_row};
+    let visible_real_paths: std::collections::BTreeSet<&str> = visible_rows(rows, app)
+        .into_iter()
         .map(|r| r.path.as_str())
         .collect();
-    visible_rows(rows, app)
-        .into_iter()
-        // A merged pass's own path (`prime.fan.iter_0`) or a hidden
-        // step under an untaken branch can still be `selected_path`
-        // (the Flow pane maps it to the loop row or the `· else:`
-        // line instead of hiding the selection outright) -- dropping
-        // it here too would leave `move_tree_selection` with no
-        // `current` at all, so `j`/`k` jump to the first or last row
-        // instead of moving one step from where the pane shows the
-        // selection to be.
-        .filter(|r| {
-            selectable.contains(r.path.as_str())
-                || app.selected_path.as_deref() == Some(r.path.as_str())
+    let by_path: std::collections::BTreeMap<&str, &Row> =
+        rows.iter().map(|r| (r.path.as_str(), r)).collect();
+    let mut out: Vec<Row> = flow_rows
+        .iter()
+        .filter(|fr| is_selectable_flow_row(&fr.kind))
+        .filter_map(|fr| {
+            if matches!(fr.kind, FlowRowKind::Decision { inferred: true, .. }) {
+                return Some(synthetic_row_for_flow_row(fr));
+            }
+            if visible_real_paths.contains(fr.path.as_str()) {
+                by_path.get(fr.path.as_str()).map(|r| (*r).clone())
+            } else {
+                None
+            }
         })
-        .collect()
+        .collect();
+    // A merged pass's own path (`prime.fan.iter_0`) has no `flow_rows`
+    // entry of its own at all -- it is folded into its loop row's --
+    // but it can still be `selected_path` (the Flow pane maps it to
+    // the loop row instead of hiding the selection outright). Leaving
+    // it out here too would leave `move_tree_selection` with no
+    // `current` at all, so `j`/`k` would jump to the first or last
+    // row instead of moving one step from where the pane shows the
+    // selection to be -- spliced back in right after its own loop
+    // row (the closest already-kept ancestor path), the same
+    // position `rows`' own order already puts it in.
+    if let Some(selected) = app.selected_path.as_deref() {
+        if !out.iter().any(|r| r.path == selected) {
+            if let Some(real) = by_path.get(selected) {
+                let insert_at = out
+                    .iter()
+                    .rposition(|r| selected.starts_with(&format!("{}.", r.path)))
+                    .map(|idx| idx + 1)
+                    .unwrap_or(out.len());
+                out.insert(insert_at, (*real).clone());
+            }
+        }
+    }
+    out
+}
+
+/// A placeholder `Row` for an unnamed `if`'s own synthesised decision
+/// (issue #643): just enough for movement (`path`/`depth`) and the
+/// handful of real-`Row` fields [`App::handle_key_normal`] also
+/// reads for other rows' sake (none of which ever matches a
+/// synthetic path -- it is never a quick-steps summary, the
+/// document root, or anything with real children of its own to
+/// collapse).
+fn synthetic_row_for_flow_row(fr: &oscilloscope_core::flow::FlowRow) -> Row {
+    Row {
+        path: fr.path.clone(),
+        depth: fr.depth,
+        label: fr.label.clone(),
+        kind: oscilloscope_core::render::RowKind::If,
+        status: fr.status.clone(),
+        duration_s: fr.duration_s,
+        loop_progress: None,
+        dim: None,
+        has_children: false,
+    }
 }
 
 /// The Time screen's own selectable rows (issue #650): the same real
@@ -1261,6 +1333,59 @@ mod tests {
     fn follow_target_is_none_when_nothing_is_running() {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         assert_eq!(App::follow_target(&rows), None);
+    }
+
+    /// Issue #643's second follow-up: `follow_target`'s own pick
+    /// (`prime.fan.inner`) is hidden once its container collapses --
+    /// follow must land on `prime.fan` (the nearest row `visible_
+    /// rows` still draws) instead of a path nothing highlights.
+    #[test]
+    fn follow_maps_onto_the_nearest_visible_ancestor_once_collapsed() {
+        let rows = [
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.inner", 2, StatusKind::Running),
+        ];
+        let mut app = App::new(false);
+        app.collapsed.insert("prime.fan".to_string());
+        assert_eq!(
+            App::follow_target_or_nearest_visible(&rows, &app),
+            Some("prime.fan".to_string())
+        );
+    }
+
+    /// Same follow-up, for the filter: `prime.fan.inner` (the
+    /// follow target) has no match of its own and no matching
+    /// descendant, so the filter drops it -- but its container
+    /// still has one, through the sibling that does match, so it
+    /// stays, and follow lands there instead.
+    #[test]
+    fn follow_maps_onto_the_nearest_visible_ancestor_once_filtered() {
+        let rows = [
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.inner", 2, StatusKind::Running),
+            row("prime.fan.sibling", 2, StatusKind::Done),
+        ];
+        let mut app = App::new(false);
+        app.filter = Some("sibling".to_string());
+        assert_eq!(
+            App::follow_target_or_nearest_visible(&rows, &app),
+            Some("prime.fan".to_string())
+        );
+    }
+
+    /// With nothing hidden at all, follow still lands straight on
+    /// its own real target, same as `follow_target` alone.
+    #[test]
+    fn follow_maps_onto_its_own_target_when_nothing_is_hidden() {
+        let rows = [
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.inner", 2, StatusKind::Running),
+        ];
+        let app = App::new(false);
+        assert_eq!(
+            App::follow_target_or_nearest_visible(&rows, &app),
+            Some("prime.fan.inner".to_string())
+        );
     }
 
     #[test]
@@ -2100,6 +2225,61 @@ mod tests {
         );
     }
 
+    /// Issue #643's first follow-up: an unnamed `if`'s own
+    /// synthesised decision has no real path in `rows` at all, but
+    /// `j`/`k` must still be able to reach it, and `move_tree_
+    /// selection` must advance to the row right after it.
+    #[test]
+    fn visible_rows_for_flow_includes_an_inferred_decision_and_j_reaches_it() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.a", 1, StatusKind::Running),
+            row("prime.b", 1, StatusKind::Running),
+        ];
+        let mut inferred = flow_row("prime.__if", false);
+        inferred.kind = oscilloscope_core::flow::FlowRowKind::Decision {
+            branch: Some("then".to_string()),
+            inferred: true,
+            nothing_ran: false,
+            answer: None,
+        };
+        let flow_rows = [
+            flow_row("prime", false),
+            inferred,
+            flow_row("prime.a", false),
+        ];
+        let app = App::new(false);
+        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.__if", "prime.a"],
+            "the inferred decision must be selectable, in its own drawn position"
+        );
+
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.selected_path = Some("prime".to_string());
+        let visible_refs: Vec<&Row> = visible.iter().collect();
+        app.handle_key(
+            key(KeyCode::Char('j')),
+            &visible_refs,
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(app.selected_path.as_deref(), Some("prime.__if"));
+        app.handle_key(
+            key(KeyCode::Char('j')),
+            &visible_refs,
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+    }
+
     #[test]
     fn visible_rows_for_flow_drops_an_unselected_merged_pass() {
         let rows = [
@@ -2138,7 +2318,15 @@ mod tests {
         app.screen = Screen::Flow;
         app.selected_path = Some("prime.fan.iter_0".to_string());
         let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
-        app.handle_key(key(KeyCode::Char('j')), &visible, &[], false, false, &[]);
+        let visible_refs: Vec<&Row> = visible.iter().collect();
+        app.handle_key(
+            key(KeyCode::Char('j')),
+            &visible_refs,
+            &[],
+            false,
+            false,
+            &[],
+        );
         assert_eq!(
             app.selected_path.as_deref(),
             Some("prime.next"),

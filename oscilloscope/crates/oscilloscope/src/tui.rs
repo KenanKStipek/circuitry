@@ -158,9 +158,19 @@ mod thresholds {
 
 /// A scroll position suffix for a pane's own border title (issue
 /// #527: "show a scroll indicator or a position ... in the border"),
-/// only when some row is actually hidden above or below.
-fn scroll_indicator(selected: Option<usize>, total: usize, viewport: usize) -> Option<String> {
-    if total <= viewport {
+/// only when some row is actually hidden above or below --
+/// `hides_something` is the caller's own call, not `total >
+/// viewport` here: issue #643's fifth follow-up is exactly that
+/// comparing a plain row count against a *line* budget drifts once
+/// some rows draw as more than one line apiece (the Flow pane's own
+/// decision rows, with their own condition line) -- the caller sums
+/// each row's real line count instead.
+fn scroll_indicator(
+    selected: Option<usize>,
+    total: usize,
+    hides_something: bool,
+) -> Option<String> {
+    if !hides_something {
         return None;
     }
     let position = selected.map(|idx| idx + 1).unwrap_or(1);
@@ -175,17 +185,34 @@ mod scroll_tests {
 
     #[test]
     fn scroll_indicator_is_none_when_everything_already_fits() {
-        assert_eq!(scroll_indicator(Some(0), 4, 4), None);
+        assert_eq!(scroll_indicator(Some(0), 4, false), None);
     }
 
     #[test]
     fn scroll_indicator_shows_a_one_based_position_and_the_total() {
-        assert_eq!(scroll_indicator(Some(6), 10, 4), Some(" 7/10 ".to_string()));
+        assert_eq!(
+            scroll_indicator(Some(6), 10, true),
+            Some(" 7/10 ".to_string())
+        );
     }
 
     #[test]
     fn scroll_indicator_defaults_the_position_to_one_with_no_selection() {
-        assert_eq!(scroll_indicator(None, 10, 4), Some(" 1/10 ".to_string()));
+        assert_eq!(scroll_indicator(None, 10, true), Some(" 1/10 ".to_string()));
+    }
+
+    /// Issue #643's fifth follow-up: `hides_something` is the
+    /// caller's own call, decoupled from the row `total` shown --
+    /// a row count that would alone read as "everything fits" must
+    /// still show the indicator once the caller (comparing real
+    /// line counts, for a pane with multi-line rows) says something
+    /// is hidden.
+    #[test]
+    fn scroll_indicator_follows_hides_something_not_the_row_count() {
+        assert_eq!(
+            scroll_indicator(Some(2), 4, true),
+            Some(" 3/4 ".to_string())
+        );
     }
 
     #[test]
@@ -2629,13 +2656,19 @@ fn flow_row_lines(
     let mut spans = Vec::new();
     match &row.kind {
         FlowRowKind::Row(_) => {
-            let glyph = if row.merged_pass {
-                '⟲'
+            // Issue #643's seventh follow-up: a loop row's own status
+            // glyph is never replaced by `⟲` -- merged (a single
+            // observed pass) or not (`loop_progress` still set, more
+            // than one pass), it always shows both, the same order
+            // the Time screen's own loop rows already do.
+            let is_loop_row = row.merged_pass || row.loop_progress.is_some();
+            let prefix = if is_loop_row {
+                format!("{indent}{} ⟲ ", status_glyph(row.status.kind))
             } else {
-                status_glyph(row.status.kind)
+                format!("{indent}{} ", status_glyph(row.status.kind))
             };
             spans.push(Span::styled(
-                format!("{indent}{glyph} "),
+                prefix,
                 status_style(row.status.kind, ctx.theme),
             ));
             spans.push(Span::raw(row.label.clone()));
@@ -2902,6 +2935,90 @@ mod flow_selected_row_path_tests {
     }
 }
 
+/// Issue #643's seventh follow-up: one rule for every loop row's own
+/// glyph, merged or not.
+#[cfg(test)]
+mod flow_row_lines_tests {
+    use super::*;
+    use oscilloscope_core::flow::{FlowRow, FlowRowKind};
+    use oscilloscope_core::model::{RowStatus, StatusKind};
+    use oscilloscope_core::render::{LoopProgress, RowKind};
+
+    fn render_label(row: &FlowRow) -> String {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let columns = FlowColumns {
+            cost: false,
+            start: false,
+            tokens: false,
+        };
+        let lines = flow_row_lines(row, columns, false, false, &ctx);
+        lines[0].to_string()
+    }
+
+    fn base_row(merged_pass: bool, loop_progress: Option<LoopProgress>) -> FlowRow {
+        FlowRow {
+            path: "prime.fan".to_string(),
+            depth: 0,
+            label: "fan".to_string(),
+            kind: FlowRowKind::Row(RowKind::Loop),
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress,
+            has_children: false,
+            merged_pass,
+        }
+    }
+
+    #[test]
+    fn a_merged_single_pass_loop_row_shows_its_status_glyph_and_the_loop_glyph() {
+        let row = base_row(true, None);
+        let text = render_label(&row);
+        assert!(text.contains("◐ ⟲ fan"), "{text}");
+    }
+
+    #[test]
+    fn a_multi_pass_loop_row_also_shows_both_glyphs() {
+        let row = base_row(
+            false,
+            Some(LoopProgress {
+                done: 1,
+                total: Some(4),
+                eta_s: None,
+            }),
+        );
+        let text = render_label(&row);
+        assert!(text.contains("◐ ⟲ fan"), "{text}");
+    }
+
+    #[test]
+    fn an_ordinary_non_loop_row_gets_no_loop_glyph() {
+        let mut row = base_row(false, None);
+        row.kind = FlowRowKind::Row(RowKind::Tool);
+        let text = render_label(&row);
+        assert!(!text.contains('⟲'), "{text}");
+        assert!(text.contains("◐ fan"), "{text}");
+    }
+}
+
 /// The flow pane (issue #635's left pane): today's orchestration-pane
 /// keys (`↑↓`/`jk`, `PgUp`/`PgDn`, collapse, follow, `z`, `e`, `/`,
 /// `⏎` on a quick-steps row) still act on the real `Row`s
@@ -2994,7 +3111,7 @@ fn draw_flow_pane(
 
     let selectable: Vec<&oscilloscope_core::flow::FlowRow> = drawable
         .iter()
-        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+        .filter(|r| oscilloscope_core::flow::is_selectable_flow_row(&r.kind))
         .copied()
         .collect();
     let selectable_idx = selected_key
@@ -3030,7 +3147,8 @@ fn draw_flow_pane(
         title.push_str("(following) ");
     }
     title.push_str("◆ decision ⟲ loop ▶ running");
-    match scroll_indicator(selectable_idx, selectable.len(), viewport) {
+    let total_lines: usize = line_counts.iter().sum();
+    match scroll_indicator(selectable_idx, selectable.len(), total_lines > viewport) {
         Some(indicator) => title.push_str(&indicator),
         None => title.push(' '),
     }
@@ -4491,7 +4609,7 @@ fn draw_time_timeline(
             }
         }
     }
-    let title = scroll_indicator(selected_idx, drawable.len(), viewport)
+    let title = scroll_indicator(selected_idx, drawable.len(), drawable.len() > viewport)
         .map(|s| format!(" timeline{s}"))
         .unwrap_or_else(|| " timeline ".to_string());
     frame.render_widget(
