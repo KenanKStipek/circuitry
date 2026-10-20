@@ -483,7 +483,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unsafe_reason_refuses_an_owner_mismatch_even_at_a_safe_mode() {
-        // #468 requires this case,
+        // #471/#468 requires this case,
         // and `permission_refusal`'s own `getuid()` call left no way to
         // supply a different uid without owning two real uids --
         // `unsafe_reason` takes both as plain arguments instead.
@@ -571,7 +571,7 @@ mod tests {
     fn a_single_quoted_key_containing_equals_is_skipped_not_set() {
         // `std::env::set_var` panics
         // on a key containing `=`, and the panic message would include
-        // the value -- this must never reach `set_var` at all.
+        // the value -- this must never reach `set_var` at all (#471: a secret leak).
         let _guard = ENV_MUTATION_LOCK.lock().unwrap();
         let dir = ScratchDir::new("secret-leak-key-equals");
         let path = dir.0.join(".env");
@@ -679,7 +679,7 @@ mod tests {
     fn a_nul_byte_in_a_value_is_skipped_not_set() {
         // A raw NUL decodes as
         // valid UTF-8, but `std::env::set_var` panics on one in a
-        // value, again printing the value in its own panic message.
+        // value, again printing the value in its own panic message (#471).
         let _guard = ENV_MUTATION_LOCK.lock().unwrap();
         let dir = ScratchDir::new("secret-leak-nul-value");
         let path = dir.0.join(".env");
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn a_real_non_utf8_value_still_wins_over_the_file() {
         // The real environment wins on
-        // `var_os`, never on whether the real value happens to decode
+        // `var_os` (#471), never on whether the real value happens to decode
         // as UTF-8 -- the same reasoning `real_env`'s own doc comment
         // gives for using `var_os` here rather than a `HashMap` lookup.
         use std::ffi::OsStr;
