@@ -862,7 +862,7 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
 /// latest draft -- `jsonschema.validate`'s own `validator_for` default),
 /// matched here by [`is_2020_12_or_unset`]'s own exact-URI lookup against
 /// Python's own `_META_SCHEMAS`, never [`jsonschema::validator_for`]'s
-/// prefix-shaped equivalent (PR #502's round-4 fix, finding F3: any
+/// prefix-shaped equivalent (PR #502's round-4 fix: any
 /// `$schema` value *not* one of the handful Python itself registers
 /// falls back to the latest draft there too, not just an exact 2020-12
 /// match). Unlike [`orchestration_errors`]/[`profile_errors`],
@@ -877,7 +877,7 @@ pub enum PromptSchemaCheck {
     /// `jsonschema.ValidationError.message` text -- matched exactly
     /// against Python's own `jsonschema` output for the keyword
     /// families [`python_message::python_message`] covers (issue #498
-    /// ruling 6, tightened by PR #502's review finding 2,
+    /// ruling 6, tightened by PR #502's review,
     /// ruling 2), `oneOf`/`anyOf` included (`engine::render`'s own
     /// text, not the `jsonschema` crate's `Display` -- PR #502's
     /// round-6 fix); the remaining gaps are narrower ones named in
@@ -932,7 +932,7 @@ const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
 /// [`is_2020_12_or_unset`] and [`engine::schema_is_fully_supported`]
 /// both hold -- and on that path, the `jsonschema` crate is never
 /// built or consulted *at all* (issue #498's own
-/// follow-up, finding F5): the crate's own schema-compile step can
+/// follow-up): the crate's own schema-compile step can
 /// fail on a document the engine understands perfectly well (a `$ref`
 /// an instance never actually reaches, lazily resolved exactly as
 /// Python does -- probe-schema7 c15; a YAML `maximum: .inf` instance
@@ -1008,7 +1008,7 @@ fn validate_prompt_schema_impl(
     // always a `SchemaError`, never routed to crate authority (whose
     // own ECMA-262 regex engine can silently accept syntax Python's
     // own `re` rejects) and never a wrong accept (issue #498's own
-    // follow-up, finding V2).
+    // follow-up).
     if let Some(message) = engine::find_invalid_pattern(schema) {
         return PromptSchemaCheck::SchemaError(message);
     }
@@ -1031,7 +1031,7 @@ fn validate_prompt_schema_impl(
         // discarded either way once that check fires.
         PromptSchemaCheck::Valid
     } else if fully_supported {
-        // Ruling R6 (follow-up), tightened by finding F5:
+        // Ruling R6 (follow-up):
         // the engine is the accept/reject authority whenever it fully
         // understands the schema, never the crate -- the crate's own
         // `serde_json::Value` can't even represent a `NaN`/`Infinity`
@@ -1151,7 +1151,7 @@ fn validate_prompt_schema_impl(
                             // _describe_schema_error`, [`orchestration_
                             // errors`]/[`profile_errors`]'s own
                             // compile-time convention), never this one
-                            // (follow-up, finding N10).
+                            // (follow-up).
                             let message = python_message::python_message(&err, &schema_json)
                                 .unwrap_or_else(|| err.to_string());
                             PromptSchemaCheck::Invalid(message)
@@ -1203,8 +1203,8 @@ const KNOWN_OLDER_DRAFT_SCHEMAS: [&str; 5] = [
 /// authority unconditionally, `ignore_ref_siblings` quirk and all).
 ///
 /// Mirrors Python's own `jsonschema.validators.validator_for` exactly, not
-/// a `starts_with` guess (issue #498's own follow-up, finding
-/// F3): `$schema` absent, *or* present but not an exact match for one of
+/// a `starts_with` guess (issue #498's own follow-up):
+/// `$schema` absent, *or* present but not an exact match for one of
 /// [`KNOWN_OLDER_DRAFT_SCHEMAS`] (an unversioned/garbage/unrecognized URI,
 /// or `http://`'s own 2020-12 URI -- 2020-12 only ever registers under
 /// `https://`) *all* fall back to the latest draft (2020-12) in Python
@@ -1251,7 +1251,7 @@ fn value_to_json(value: &electricity_value::Value) -> Value {
 }
 
 /// [`validate_prompt_schema`]'s own engine-authority well-formedness
-/// probe (finding F5) needs a schema turned into JSON too -- but unlike
+/// probe needs a schema turned into JSON too -- but unlike
 /// an *instance*'s own `NaN`/`Infinity` (genuinely absent from JSON,
 /// correctly `null`), a *schema literal* using one (`maximum: .inf`) is
 /// never actually serialized at all on this path -- the engine decides
@@ -1789,7 +1789,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn an_unrecognized_schema_uri_defaults_to_the_latest_draft() {
-        // issue #498's own follow-up, finding F3: Python's
+        // Python's
         // own `validator_for` falls back to the latest draft for *any*
         // `$schema` it doesn't recognize verbatim (an unversioned/old
         // URI included), with a warning, never an error -- not a
@@ -1802,7 +1802,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn an_unknown_keyword_is_an_annotation_never_a_reason_to_fall_back() {
-        // issue #498's own follow-up, finding F4: Python's
+        // Python's
         // own `Draft202012Validator.VALIDATORS` dict has no `dependencies`
         // entry at all (a legacy Draft ≤7 keyword) and obviously no
         // `descripton` (a typo) -- both are silently ignored, never
@@ -1815,7 +1815,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn a_nested_id_changing_the_ref_base_routes_to_crate_authority() {
-        // issue #498's own follow-up, finding F10: this
+        // This
         // engine's own `resolve_ref` only ever resolves a `"#/..."`
         // pointer against the *document* root, never a nested `$id`
         // subtree's own base -- routed to the crate (which does resolve
@@ -1837,7 +1837,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn multiple_of_a_float_divisor_against_nan_is_a_generic_failure() {
-        // issue #498's own follow-up, finding F11: Python's
+        // Python's
         // own `_keywords.multipleOf` calls `int(instance / dB)` for a
         // `float` divisor -- `int(nan)` is an uncaught `ValueError`, not
         // an ordinary `ValidationError`, so `core/prompt.py` never adds
@@ -1851,7 +1851,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn multiple_of_a_float_divisor_against_infinity_is_a_generic_failure() {
-        // The same finding, the `OverflowError`-then-`Fraction` branch:
+        // The same case, the `OverflowError`-then-`Fraction` branch:
         // `int(inf)` raises `OverflowError`, caught only to retry via
         // `Fraction(inf)`, which raises its own, different, still-
         // uncaught `OverflowError` constructing a `Fraction` from an
@@ -1865,7 +1865,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn additional_properties_pattern_filter_joins_pattern_properties_keys() {
-        // issue #498's own follow-up, finding F7:
+        // Issue #498's own follow-up:
         // `_utils.find_additional_properties` is `"|".join(patternProperties)`,
         // one *joined* pattern -- an empty `patternProperties` dict (or
         // one whose only key is the empty string) joins to `""`, which
@@ -1881,7 +1881,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn additional_properties_pattern_filter_applies_a_leading_inline_flag_to_the_whole_join() {
-        // The same finding: a leading `(?i)` on the *first* joined
+        // Likewise, a leading `(?i)` on the *first* joined
         // pattern scopes over the whole alternation, exactly as it would
         // in a hand-written `"(?i)^x|^y"` -- not just its own branch.
         let schema = json!({
@@ -2092,7 +2092,7 @@ mod tests {
 
     #[test]
     fn nested_missing_name_errors_sort_the_shorter_schema_path_first() {
-        // Issue #528, review finding 1's repro: a container missing its own
+        // Issue #528's repro: a container missing its own
         // `name` that holds a child also missing its own `name` -- Python's
         // sort key drops the firing keyword (`relative_schema_path[:-1]`),
         // so the two `'name' is a required property` messages tie and the
