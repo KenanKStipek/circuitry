@@ -44,8 +44,8 @@ def case(name: str, text: str, *, real_env: dict[str, str] | None = None) -> dic
     `open(path, encoding=...)`, a text-mode read that translates
     `\\r\\n`/a lone `\\r` to `\\n` before the parser ever sees a
     character. A `stream=io.StringIO(text)` call skips that translation
-    entirely, so it could never catch the Rust port missing it (#471
-    review finding 1) -- this always goes through a real file instead.
+    entirely, so it could never catch the Rust port missing it (issue
+    #471) -- this always goes through a real file instead.
 
     `dotenv_values` interpolates `${VAR}` against the *real* `os.environ`
     -- reproduced here by temporarily overlaying *real_env* onto it so
@@ -152,7 +152,7 @@ def build_cases() -> list[dict[str, Any]]:
     cases.append(case("multiple_variables_in_one_value", "A=1\nB=2\nC=${A}-${B}\n"))
     cases.append(case("unset_variable_in_middle_of_text", "A=${B}x${C:-y}\n"))
 
-    # #471 review finding 1: CRLF and lone-CR newlines inside a quoted
+    # CRLF and lone-CR newlines inside a quoted
     # value, only reachable now that `case()` reads through a real file
     # (see its own docstring) rather than an untranslated `StringIO`.
     cases.append(case("crlf_inside_a_multiline_quoted_value", 'K="a\r\nb"\r\n'))
@@ -164,7 +164,7 @@ def build_cases() -> list[dict[str, Any]]:
         )
     )
 
-    # #471 review finding 7: the four C0 separators `\x1c`-`\x1f` count
+    # The four C0 separators `\x1c`-`\x1f` count
     # as whitespace to Python's `\s`/`str.isspace()`, so each of these
     # should parse exactly as it would with an ordinary space there.
     cases.append(case("c0_separator_in_an_unquoted_key_is_whitespace", "A\x1fB=1\n"))
