@@ -141,24 +141,6 @@ mod thresholds {
     pub const FLOW_CONDITION_LINE_MIN_WIDTH: u16 = FLOW_THREE_PANE_MIN_WIDTH;
 }
 
-/// Keeps `scroll` (the top-of-viewport index into a list of `total`
-/// items) showing `selected` without moving it any more than it has
-/// to (issue #527: "the selected row is always kept in view") —
-/// jumping straight to the top or bottom only when the selection is
-/// already outside the current viewport, never re-centring it.
-fn clamp_scroll(scroll: usize, selected: Option<usize>, total: usize, viewport: usize) -> usize {
-    let viewport = viewport.max(1);
-    let mut top = scroll.min(total);
-    if let Some(idx) = selected {
-        if idx < top {
-            top = idx;
-        } else if idx + 1 > top + viewport {
-            top = idx + 1 - viewport;
-        }
-    }
-    top.min(total.saturating_sub(viewport))
-}
-
 /// A scroll position suffix for a pane's own border title (issue
 /// #527: "show a scroll indicator or a position ... in the border"),
 /// only when some row is actually hidden above or below.
@@ -170,32 +152,11 @@ fn scroll_indicator(selected: Option<usize>, total: usize, viewport: usize) -> O
     Some(format!(" {position}/{total} "))
 }
 
-/// Finding F6: unit tests for [`clamp_scroll`]/[`scroll_indicator`]
-/// on their own, beyond the rendered goldens that already exercise
-/// them indirectly.
+/// Finding F6: unit tests for [`scroll_indicator`] on their own,
+/// beyond the rendered goldens that already exercise it indirectly.
 #[cfg(test)]
 mod scroll_tests {
     use super::*;
-
-    #[test]
-    fn clamp_scroll_pulls_the_viewport_down_to_a_selection_below_it() {
-        assert_eq!(clamp_scroll(0, Some(7), 10, 4), 4);
-    }
-
-    #[test]
-    fn clamp_scroll_pulls_the_viewport_up_to_a_selection_above_it() {
-        assert_eq!(clamp_scroll(5, Some(2), 10, 4), 2);
-    }
-
-    #[test]
-    fn clamp_scroll_does_not_move_when_the_selection_is_already_visible() {
-        assert_eq!(clamp_scroll(3, Some(4), 10, 4), 3);
-    }
-
-    #[test]
-    fn clamp_scroll_never_leaves_the_viewport_underfull_with_no_selection() {
-        assert_eq!(clamp_scroll(9, None, 10, 4), 6);
-    }
 
     #[test]
     fn scroll_indicator_is_none_when_everything_already_fits() {
@@ -2375,6 +2336,79 @@ fn is_under_any_untaken_path(path: &str, roots: &[String]) -> bool {
         .any(|root| path == root || path.starts_with(&format!("{root}.")))
 }
 
+#[cfg(test)]
+mod flow_selected_row_path_tests {
+    use super::*;
+    use oscilloscope_core::flow::{FlowRow, FlowRowKind};
+    use oscilloscope_core::model::{RowStatus, StatusKind};
+    use oscilloscope_core::render::RowKind;
+
+    fn flow_row(path: &str, kind: FlowRowKind, merged_pass: bool) -> FlowRow {
+        FlowRow {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress: None,
+            has_children: false,
+            merged_pass,
+        }
+    }
+
+    #[test]
+    fn an_exact_match_is_returned_as_is() {
+        let rows = [flow_row("prime", FlowRowKind::Row(RowKind::Tool), false)];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(
+            flow_selected_row_path(&refs, "prime"),
+            Some("prime".to_string())
+        );
+    }
+
+    #[test]
+    fn a_merged_passs_own_pass_maps_to_its_loop_row() {
+        let rows = [flow_row("prime.fan", FlowRowKind::Row(RowKind::Loop), true)];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(
+            flow_selected_row_path(&refs, "prime.fan.iter_0"),
+            Some("prime.fan".to_string())
+        );
+    }
+
+    #[test]
+    fn a_step_under_an_untaken_branch_maps_to_its_summary_line() {
+        let rows = [flow_row(
+            "prime.gate.__untaken",
+            FlowRowKind::UntakenBranch {
+                paths: vec!["prime.gate.other".to_string()],
+            },
+            false,
+        )];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(
+            flow_selected_row_path(&refs, "prime.gate.other"),
+            Some("prime.gate.__untaken".to_string())
+        );
+    }
+
+    #[test]
+    fn a_path_covered_by_nothing_drawn_resolves_to_none() {
+        let rows = [flow_row("prime", FlowRowKind::Row(RowKind::Tool), false)];
+        let refs: Vec<&FlowRow> = rows.iter().collect();
+        assert_eq!(flow_selected_row_path(&refs, "prime.other"), None);
+    }
+}
+
 /// The flow pane (issue #635's left pane): today's orchestration-pane
 /// keys (`↑↓`/`jk`, `PgUp`/`PgDn`, collapse, follow, `z`, `e`, `/`,
 /// `⏎` on a quick-steps row) still act on the real `Row`s
@@ -2443,19 +2477,26 @@ fn draw_flow_pane(
     let selected_idx = selected_key
         .as_deref()
         .and_then(|key| drawable.iter().position(|r| r.path == key));
-    app.tree_scroll = clamp_scroll(app.tree_scroll, selected_idx, drawable.len(), viewport);
+    // A decision row with a condition takes two screen lines, not
+    // one (`flow_row_lines`), so scrolling and the viewport both
+    // have to work over line counts rather than row counts, the
+    // same way `draw_state` already does for a token line.
+    let line_counts: Vec<usize> = drawable
+        .iter()
+        .map(|row| 1 + (show_condition && row.condition.is_some()) as usize)
+        .collect();
+    app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (idx, row) in drawable.iter().enumerate().skip(app.tree_scroll) {
+    let mut end_idx = app.tree_scroll;
+    for row in drawable.iter().skip(app.tree_scroll) {
         let selected = selected_key.as_deref() == Some(row.path.as_str());
-        lines.extend(flow_row_lines(row, columns, show_condition, selected, ctx));
-        if lines.len() >= viewport.saturating_add(4) {
-            // A generous overshoot margin, trimmed by the `List`
-            // widget's own area -- this just stops building lines
-            // for an arbitrarily long run far past what fits.
+        let row_lines = flow_row_lines(row, columns, show_condition, selected, ctx);
+        if lines.len() + row_lines.len() > viewport {
             break;
         }
-        let _ = idx;
+        lines.extend(row_lines);
+        end_idx += 1;
     }
 
     let selectable: Vec<&oscilloscope_core::flow::FlowRow> = drawable
@@ -2468,7 +2509,7 @@ fn draw_flow_pane(
         .and_then(|key| selectable.iter().position(|r| r.path == key));
     let more_planned = drawable
         .iter()
-        .skip(app.tree_scroll + viewport)
+        .skip(end_idx)
         .filter(|r| r.status.kind == oscilloscope_core::model::StatusKind::Pending)
         .count() as u64;
 
@@ -2500,13 +2541,24 @@ fn draw_flow_pane(
         Some(indicator) => title.push_str(&indicator),
         None => title.push(' '),
     }
-    let list = List::new(lines.into_iter().map(ListItem::new).collect::<Vec<_>>()).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style),
-    );
-    frame.render_widget(list, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    // The list is drawn only into the rows above the 3-line footer
+    // (`viewport` is already `inner`'s height minus those 3 lines),
+    // so a row the loop above couldn't fit never lands on the
+    // footer's own lines underneath it.
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: viewport as u16,
+    };
+    let list = List::new(lines.into_iter().map(ListItem::new).collect::<Vec<_>>());
+    frame.render_widget(list, list_area);
 
     draw_flow_footer(frame, area, &screen.footer, more_planned, ctx);
 }
@@ -2804,7 +2856,7 @@ fn draw_flow_story_pane(
     // "the latest line is followed when the story is scrolled to the
     // bottom") -- the same bottom-biased default the log pane already
     // has, just without a selection to keep in view.
-    if app.story_scroll + height >= total || app.story_scroll == usize::MAX {
+    if app.story_scroll == usize::MAX || app.story_scroll.saturating_add(height) >= total {
         app.story_scroll = total.saturating_sub(height);
     }
     app.story_viewport = height;
@@ -6726,6 +6778,229 @@ mod golden_tests {
             ProcessState::exited(false),
             "prime.gate.chosen",
             &flow_matrix_story(),
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// `End`/`G` sets `story_scroll` to `usize::MAX` (`keys::jump`),
+    /// and used to add `height` to it before checking for that
+    /// sentinel at all, which panics on overflow in a debug build.
+    #[test]
+    fn end_in_the_story_pane_draws_without_overflowing() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+        let plan = flow_matrix_plan();
+        let state = flow_matrix_state(false);
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2.0,
+            "2026-01-01T00:00:02Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let details = render::details_for("prime.fan.iter_0", &plan, &model, Some(&state));
+        let story = flow_matrix_story();
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &model,
+            Some(&state),
+            &story,
+            Some("prime.fan.iter_0"),
+            &test_zone(),
+            "2026-01-01T00:00:02Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some("prime.fan.iter_0".to_string());
+        app.follow = false;
+        app.pane = Pane::Story;
+        app.handle_key(
+            KeyEvent {
+                code: KeyCode::End,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+            &[],
+            &[],
+            true,
+            false,
+            &[],
+        );
+        assert_eq!(app.story_scroll, usize::MAX);
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:02Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+    }
+
+    /// Eight named `if`s in a row, each with a condition (shown at
+    /// 100 columns and wider, so each takes two screen lines), then
+    /// one more step -- enough two-line rows ahead of the selected
+    /// one to overflow a 100x30 viewport if scrolling still counted
+    /// rows instead of screen lines.
+    fn flow_overflow_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let mut ops = Vec::new();
+        for i in 1..=8 {
+            let gate_path = root_path.clone().push_name(format!("g{i}"));
+            let then_path = gate_path.clone().push_name("then_step");
+            let else_path = gate_path.clone().push_name("else_step");
+            ops.push(Op {
+                path: gate_path,
+                name: Some(format!("g{i}")),
+                kind: NodeKind::Control(Region::If {
+                    cond: Condition::Cel {
+                        expr: format!("x{i} > 1"),
+                        strict: false,
+                    },
+                    then_: Box::new(Region::Block {
+                        ops: vec![tool(then_path, "then_step", OnError::Fail)],
+                        overlay: true,
+                    }),
+                    else_: Some(Box::new(Region::Block {
+                        ops: vec![tool(else_path, "else_step", OnError::Fail)],
+                        overlay: true,
+                    })),
+                    threshold: 0.5,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            });
+        }
+        ops.push(tool(
+            root_path.clone().push_name("tail"),
+            "tail",
+            OnError::Fail,
+        ));
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    /// [`flow_overflow_plan`]'s own state: every gate has taken
+    /// `then`, and `tail` (the selected row, below all eight) is
+    /// still running.
+    fn flow_overflow_state() -> Value {
+        let mut prime = serde_json::Map::new();
+        prime.insert("value".to_string(), Value::Null);
+        prime.insert(
+            "meta".to_string(),
+            json!({"created_at": "2026-01-01T00:00:00Z", "completed_at": null}),
+        );
+        for i in 1..=8 {
+            prime.insert(
+                format!("g{i}"),
+                json!({"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.100Z",
+                    "branch": "then"
+                },
+                    "then_step": {"value": "ok\n", "meta": {
+                        "created_at": "2026-01-01T00:00:00.100Z", "completed_at": "2026-01-01T00:00:00.200Z",
+                        "provider": "shell"
+                    }}
+                }),
+            );
+        }
+        prime.insert(
+            "tail".to_string(),
+            json!({"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "shell"
+            }}),
+        );
+        json!({"runtime": Value::Null, "prime": Value::Object(prime)})
+    }
+
+    /// At 100x30, eight named `if`s each take two lines (their own
+    /// condition shown underneath), overflowing the viewport, so
+    /// `tail` -- selected, below all eight -- must still be drawn
+    /// above the footer, not cut off by it or drawn into it, which a
+    /// by-row (rather than by-line) scroll clamp used to do.
+    #[test]
+    fn flow_matrix_overflow_at_100x30_keeps_the_selected_row_above_the_footer() {
+        let plan = flow_overflow_plan();
+        let state = flow_overflow_state();
+        let mut model = RunModel::new();
+        let text = flow_matrix_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            &state,
+            ProcessState::Running,
+            "prime.tail",
+            &[],
+        );
+        let tail_idx = text
+            .lines()
+            .position(|l| l.contains("◐ tail"))
+            .unwrap_or_else(|| panic!("the selected flow-pane row must be drawn at all: {text}"));
+        let footer_idx = text
+            .lines()
+            .position(|l| l.contains("quick steps folded"))
+            .unwrap_or_else(|| panic!("the footer must be drawn: {text}"));
+        assert!(
+            tail_idx < footer_idx,
+            "the selected row must be drawn above the footer, not under or inside it: {text}"
         );
         insta::assert_snapshot!(text);
     }
