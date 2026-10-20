@@ -130,6 +130,54 @@ fn a_failed_run_is_recorded_as_failed_and_never_feeds_the_statistics() {
 }
 
 #[test]
+fn no_history_and_history_off_read_nothing_and_create_nothing() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    for flag in ["--no-history", "OSI_HISTORY=off"] {
+        // Never created by `tempfile` itself (unlike `tempdir()`,
+        // which exists the moment it's made) -- a path under one
+        // that's never touched at all, so its own non-existence
+        // after the run proves nothing was ever written there.
+        let container = tempfile::tempdir().unwrap();
+        let history_dir = container.path().join("history");
+        let run_dir = work.path().join(format!("run-{}", flag.replace('=', "-")));
+        let mut cmd = osi_command(&home);
+        cmd.arg(&doc)
+            .arg(&config)
+            .arg("--out-dir")
+            .arg(&run_dir)
+            .arg("--log")
+            .env("OSI_HISTORY_DIR", &history_dir)
+            .current_dir(work.path());
+        if flag == "--no-history" {
+            cmd.arg("--no-history");
+        } else {
+            cmd.env("OSI_HISTORY", "off");
+        }
+        let (status, stdout) = wait_with_timeout_capturing_stdout(
+            cmd.spawn().expect("spawn osi"),
+            Duration::from_secs(30),
+        );
+        assert!(status.success(), "stdout:\n{stdout}");
+        assert!(
+            !history_dir.exists(),
+            "{flag} must create no history directory at all"
+        );
+    }
+}
+
+#[test]
 fn a_fourth_runs_glance_line_shows_the_history_eta_while_earlier_ones_show_the_loop_eta_or_none() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");

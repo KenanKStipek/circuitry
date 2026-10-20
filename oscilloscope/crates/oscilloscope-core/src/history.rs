@@ -461,7 +461,9 @@ pub fn resolve_history_dir(
     home: Option<&Path>,
 ) -> Option<PathBuf> {
     if let Some(dir) = override_dir {
-        return Some(dir.to_path_buf());
+        if !dir.as_os_str().is_empty() {
+            return Some(dir.to_path_buf());
+        }
     }
     let state_home = match xdg_state_home {
         Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
@@ -1490,6 +1492,161 @@ mod tests {
         );
     }
 
+    /// A real (not [`PlanTree::empty`]) plan, so `build_record` takes
+    /// its actual plan-known-or-`(other)` branch: a top-level tool
+    /// is recorded by its own name, a chain loop's two passes
+    /// normalize to one `iter_*` entry, and a path the plan never
+    /// heard of (an inline `use`'s own child, same as issue #649's
+    /// "names a `dynamic`/`use: inline:` child makes up at run time
+    /// ... summed into `(other)`") folds into `(other)` instead of
+    /// trivially matching everything the way `PlanTree::empty` does.
+    #[test]
+    fn build_record_resolves_steps_against_a_real_plan() {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopId, NodeKind, OnError, Op, Program, Region,
+        };
+
+        fn tool_op(path: EffectPath, name: &str) -> Op {
+            Op {
+                path,
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(electricity_bytecode::ToolOp {
+                    provider: "shell".to_string(),
+                    params: electricity_bytecode::ParamNode::Literal(
+                        electricity_value::Value::None,
+                    ),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: Default::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }
+        }
+
+        let root_path = EffectPath::root();
+        let step1_path = root_path.push_name("step1");
+        let loop_path = root_path.push_name("items");
+        let pass0 = loop_path.push_pass(LoopId(0));
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool_op(step1_path, "step1"),
+                    Op {
+                        path: loop_path.clone(),
+                        name: Some("items".to_string()),
+                        kind: NodeKind::Control(Region::Loop {
+                            name: Some("items".to_string()),
+                            spec: electricity_bytecode::LoopSpec::Each {
+                                in_path: "prime.xs".to_string(),
+                                as_name: "x".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![tool_op(pass0.push_name("nap"), "nap")],
+                                overlay: true,
+                            }),
+                            flow: electricity_bytecode::LoopFlow::Chain,
+                            max_concurrency: None,
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        let state = serde_json::json!({
+            "runtime": {
+                "last_run": {
+                    "run_id": "r1",
+                    "document_hash": "h1",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z",
+                    "totals": {"effects_run": 5, "tokens_sent": 10, "tokens_received": 20},
+                },
+            },
+            "prime": {
+                "value": null,
+                "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "error": null},
+                "step1": {"value": "hi", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"}},
+                "items": {
+                    "value": null,
+                    "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": "2026-01-01T00:00:40Z"},
+                    "iter_0": {
+                        "value": null,
+                        "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": "2026-01-01T00:00:20Z"},
+                        "nap": {"value": "n0", "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": "2026-01-01T00:00:20Z"}},
+                    },
+                    "iter_1": {
+                        "value": null,
+                        "meta": {"created_at": "2026-01-01T00:00:20Z", "completed_at": "2026-01-01T00:00:40Z"},
+                        "nap": {"value": "n1", "meta": {"created_at": "2026-01-01T00:00:20Z", "completed_at": "2026-01-01T00:00:40Z"}},
+                    },
+                },
+                "my_use": {
+                    "value": null,
+                    "meta": {"created_at": "2026-01-01T00:00:40Z", "completed_at": "2026-01-01T00:01:00Z"},
+                    "child1": {"value": "c1", "meta": {"created_at": "2026-01-01T00:00:40Z", "completed_at": "2026-01-01T00:01:00Z"}},
+                },
+            },
+        });
+        let mut model = RunModel::new();
+        model.observe(&state, &plan, crate::model::ProcessState::exited(false));
+        let record = build_record("/doc.yml", Some("cof"), &state, &model, &plan)
+            .expect("a completed, hashed, non-dry run is recorded");
+
+        let step1 = record
+            .steps
+            .get("step1")
+            .expect("a plan-known top-level step is recorded by its own name");
+        assert_eq!(step1.passes, 1);
+
+        let nap = record
+            .steps
+            .get("items.iter_*.nap")
+            .expect("the loop's two passes normalize to one iter_* entry");
+        assert_eq!(nap.passes, 2);
+        // The two passes run back to back (00:10-00:20, then
+        // 00:20-00:40), so their merged busy time is the full 30s
+        // span.
+        assert_eq!(nap.busy_s, 30.0);
+
+        let other = record
+            .steps
+            .get(OTHER_STEP)
+            .expect("my_use and its own undeclared child fold into (other)");
+        assert!(other.passes >= 1);
+    }
+
     #[test]
     fn no_history_dir_reads_as_empty_history() {
         let dir = tempfile::tempdir().unwrap();
@@ -1520,12 +1677,122 @@ mod tests {
                 });
             }
         });
-        // Compaction may have run partway through (100-line threshold
-        // crossed mid-stream), trimming to the newest 50 -- the point
-        // of this test is that every append landed on disk as a whole
-        // line, never that none of the 200 were ever compacted away.
+        // Every append is serialized by the file's own lock, so the
+        // 200 appends land in *some* total order, but one that's
+        // always true regardless of which: the 100th append in that
+        // order triggers a compaction down to 50, the 150th
+        // retriggers it (back up to 100, down to 50 again), and the
+        // 200th does too -- so the file holds exactly 50 lines
+        // afterwards, never fewer (an append lost to the race) or
+        // more (a compaction that ran on a stale read and lost a
+        // concurrent append).
         let records = read_records(&history_dir, "/doc.yml");
-        assert!(!records.is_empty());
-        assert!(records.len() <= 200);
+        assert_eq!(records.len(), MAX_RUNS_PER_DOCUMENT);
+        let ids: std::collections::BTreeSet<_> = records.iter().map(|r| &r.run_id).collect();
+        assert_eq!(
+            ids.len(),
+            MAX_RUNS_PER_DOCUMENT,
+            "no two records share a run_id"
+        );
+    }
+
+    #[test]
+    fn a_repeated_run_id_is_not_appended_a_second_time_at_the_file_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = record("same-id", "2026-01-01T00:00:00Z", 12.0, Outcome::Ok, "h1");
+        append_record(dir.path(), "/doc.yml", &rec).unwrap();
+        append_record(dir.path(), "/doc.yml", &rec).unwrap();
+        append_record(dir.path(), "/doc.yml", &rec).unwrap();
+        let file_path = history_file_path(dir.path(), "/doc.yml");
+        let lines = read_raw_lines(&file_path).unwrap();
+        assert_eq!(
+            lines.len(),
+            1,
+            "a repeated run_id must not add a second line to the file itself, \
+             not just read back as one"
+        );
+    }
+
+    #[test]
+    fn empty_override_dir_falls_back_to_the_xdg_state_path() {
+        let xdg = Path::new("/xdg-state");
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            resolve_history_dir(Some(Path::new("")), Some(xdg), Some(home)),
+            resolve_history_dir(None, Some(xdg), Some(home)),
+        );
+    }
+
+    #[test]
+    fn resolve_history_dir_prefers_override_then_xdg_state_home_then_home() {
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            resolve_history_dir(Some(Path::new("/custom")), None, Some(home)),
+            Some(PathBuf::from("/custom"))
+        );
+        assert_eq!(
+            resolve_history_dir(None, Some(Path::new("/xdg")), Some(home)),
+            Some(PathBuf::from("/xdg/circuitry/osi/history"))
+        );
+        assert_eq!(
+            resolve_history_dir(None, None, Some(home)),
+            Some(PathBuf::from(
+                "/home/alice/.local/state/circuitry/osi/history"
+            ))
+        );
+        assert_eq!(resolve_history_dir(None, None, None), None);
+    }
+
+    #[test]
+    fn an_open_group_accessible_directory_is_warned_about_not_chmodded() {
+        let dir = tempfile::tempdir().unwrap();
+        let history_dir = dir.path().join("history");
+        std::fs::create_dir(&history_dir).unwrap();
+        std::fs::set_permissions(&history_dir, std::fs::Permissions::from_mode(0o750)).unwrap();
+        ensure_history_dir(&history_dir).unwrap();
+        let mode = std::fs::metadata(&history_dir)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o750,
+            "an existing, already-open directory must be left exactly as it was"
+        );
+    }
+
+    #[test]
+    fn eviction_removes_the_least_recently_written_documents_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let history_dir = dir.path().join("history");
+        ensure_history_dir(&history_dir).unwrap();
+        let mut oldest_path = None;
+        for i in 0..3 {
+            let doc = format!("/doc-{i}.yml");
+            let rec = record("r1", "2026-01-01T00:00:00Z", 1.0, Outcome::Ok, "h1");
+            append_record(&history_dir, &doc, &rec).unwrap();
+            let path = history_file_path(&history_dir, &doc);
+            let old_time =
+                std::time::SystemTime::now() - std::time::Duration::from_secs(3600 * (3 - i));
+            let file = std::fs::File::open(&path).unwrap();
+            file.set_modified(old_time).unwrap();
+            if i == 0 {
+                oldest_path = Some(path);
+            }
+        }
+        // Forces eviction regardless of total size (issue #649's own
+        // "at most 500 documents") by lowering the effective count
+        // past it: easier to pin than writing 64 MiB of real history
+        // just to cross the byte limit instead.
+        for i in 3..MAX_DOCUMENTS + 1 {
+            let doc = format!("/doc-extra-{i}.yml");
+            let rec = record("r1", "2026-01-01T00:00:00Z", 1.0, Outcome::Ok, "h1");
+            append_record(&history_dir, &doc, &rec).unwrap();
+        }
+        evict_if_needed(&history_dir).unwrap();
+        assert!(
+            !oldest_path.unwrap().exists(),
+            "the least recently written document must be evicted first"
+        );
     }
 }
