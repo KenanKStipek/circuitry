@@ -135,11 +135,10 @@ On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
 osi has four screens, switched with `0`-`3`: the overview (`0`, the
-default for both `osi <doc>` and `osi watch`), flow (`2`, the tree as
-control flow, below) and cost (`3`, below); time (`1`) arrives in its
-own issue, so its key does nothing yet and it has no tab. Selection,
-follow, folding, filters and collapsed rows are shared across every
-screen.
+default for both `osi <doc>` and `osi watch`), time (`1`, a clock-axis
+timeline, below), flow (`2`, the tree as control flow, below) and cost
+(`3`, below). Selection, follow, folding, filters and collapsed rows
+are shared across every screen.
 
 Every screen shares one header line: the scope icon's own animated
 trace (a static `◉` with `--no-animation`), the document, `♥` while
@@ -191,6 +190,61 @@ combined. `osi watch <dir> --glance --once` prints the current line
 once and exits 0, for a tmux status line that runs its own command on
 a timer instead of leaving one process attached. When stdout isn't a
 terminal, only that one final line is ever printed.
+
+### Screen 1 (`time`): a clock-axis timeline
+
+The timeline (top) is one row per folded step (the same breadcrumbs,
+`pass N of M` and quick-steps folding the overview and Flow use) with a
+bar on a shared clock axis, start and duration columns on the right. The
+axis runs from the run's own start to the later of now and the usual
+(p90) end while the run is going, plus a small margin, or start to end
+once it has finished; labelled ticks (1, 2, 5, 10, 15 or 30 minutes, or a
+whole number of hours) stay about 10 columns apart. A `┃` marks the
+current time through every row and strip, gone once the run has ended. A
+running bar ends in a `▶` head; a failed one ends in `✗`. A pending step
+with enough history gets a ghost bar (`░`), its own usual start and end
+shifted by how far ahead or behind the run is right now — gone without
+enough runs of this document version, and after an edit, since both need
+whole-run figures. The last row, `planned`, is a ghost from now to the
+ETA. A loop collapses to one row by default (`⟲ 3/8`, one bar from its
+first pass's start to its last pass's end); `⏎` expands it into one row
+per pass — an unnamed loop's own passes (which share one path) need
+`--events` to tell them apart at all, numbered `#1`, `#2`, …, or the row
+stays one.
+
+Below the timeline, three strips on the same axis: **events/min** (start
+and end events per minute, as bar heights; without `--events`, the same
+`created_at`/`completed_at` transitions stand in, and the strip reads
+`(from state)`); **decisions** (a `◆` at the time each named `if`
+decided); and **in flight** (how many steps are running at once, ending
+in the run's own peak, and `N queued` when a prompt is waiting on a
+concurrency slot).
+
+The zoom pane (bottom left) is the selected step's own timeline: a
+container's own children as rows; an agent's own tool calls as one band
+per kind (read, edit, bash, other) from its transcript, with a `think`
+band covering the time between calls, and a footer (`turn 14 · 31 tools ·
+bash 4m10s (67%)`) from its live summary while running or `meta.raw`
+once finished; a prompt or tool's own bar, with its usual (p50/p90)
+marked when history has it.
+
+"vs usual" (bottom right) lists each timed row's own `now`, `p50`, and
+a mark — `▲` slower, `▼` faster, `≈` usual (outside p10–p90 with 5 or
+more runs, more than 20% from p50 with 3 or 4) — with a footer
+(`finish ~12:05 · usual 11:58–12:09 · from 7 runs`). After an edit, the
+title reads `vs usual · earlier versions` instead, with no finish time;
+with fewer than 3 runs, the pane reads `history: 1 of 3 runs of this
+version` instead of any rows.
+
+`+`/`-` zoom the axis in and out, around now while follow is on or
+around the selection otherwise; `=` fits the whole run again. `tab`
+cycles timeline → zoom → vs usual → timeline; the zoom and vs usual
+panes scroll when focused. `↑↓`/`jk`/`PgUp`/`PgDn`/`Home`/`End`/`g`/`G`
+select rows, shared with every other screen. At 100×30 and larger, the
+timeline with its strips sits above the zoom pane and the vs usual pane,
+side by side (62/38); 80×20 up to that, the timeline and strips alone,
+with the start/duration columns additionally dropped below 90 columns;
+below 80×20, a plain list (status, step, start, duration), no axis.
 
 ### Screen 2 (`flow`): the tree as control flow
 
