@@ -3543,9 +3543,13 @@ fn time_layout(
 ) -> TimeLayout {
     let show_columns = frame_width >= thresholds::TIME_START_DURATION_COLUMN_MIN_WIDTH;
     let label_width = 22usize.min((area_width as usize).saturating_sub(10));
-    let column_width = if show_columns { 20 } else { 0 };
+    // A row reads `label_width` + 1 (the gutter space) + the bar,
+    // plus 18 more (`"  " + 9 + 7`) when the start/duration columns
+    // are shown -- all inside the box's own inner width, 2 columns
+    // narrower than `area_width` for its left/right border.
+    let column_width = if show_columns { 18 } else { 0 };
     let bar_width = (area_width as usize)
-        .saturating_sub(label_width + column_width + 2)
+        .saturating_sub(label_width + 1 + column_width + 2)
         .max(4);
     let run_start_ts = screen.axis.start_ts.as_deref();
     let full_end_s = run_start_ts
@@ -3758,7 +3762,13 @@ fn multi_segment_bar(
         let mut end_idx = cells.start_col + cells.full_cells;
         if let Some(partial) = cells.partial_end {
             if end_idx < width {
-                out[end_idx] = partial;
+                // `partial_block` reads a near-full fraction as a
+                // solid `'█'` regardless of the band it's filling --
+                // right for a single-fill status bar, but a stray
+                // bash-looking glyph inside a `'▓'`/`'▒'` band here.
+                // This band's own fill reads as "nearly full" just as
+                // well.
+                out[end_idx] = if partial == '█' { fill } else { partial };
             }
         }
         if running {
@@ -3865,6 +3875,87 @@ mod time_bar_tests {
         let chars: Vec<char> = bar.chars().collect();
         assert_eq!(&chars[0..2], ['█', '█']);
         assert_eq!(chars[8], '▶', "the running segment's own head");
+    }
+
+    /// A near-full end cell reads as a solid `'█'` from `partial_block`
+    /// alone, which looks like a `bash` band dropped into the middle
+    /// of any other one -- this band's own fill must show instead.
+    #[test]
+    fn multi_segment_bar_uses_its_own_fill_for_a_near_full_end_cell() {
+        let segments = [(0.0, 1.99, false)];
+        let bar = multi_segment_bar(&segments, 0.0, 10.0, 10, '▓');
+        let chars: Vec<char> = bar.chars().collect();
+        assert_eq!(&chars[0..2], ['▓', '▓'], "{bar:?}");
+    }
+
+    fn test_time_row(
+        start_s: Option<f64>,
+        duration_s: Option<f64>,
+        status_kind: StatusKind,
+    ) -> oscilloscope_core::time::TimeRow {
+        oscilloscope_core::time::TimeRow {
+            path: "prime.a".to_string(),
+            depth: 1,
+            label: "a".to_string(),
+            kind: oscilloscope_core::render::RowKind::Tool,
+            status: oscilloscope_core::model::RowStatus {
+                kind: status_kind,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_s,
+            duration_s,
+            loop_progress: None,
+            has_children: false,
+            loop_expandable: false,
+            ghost: None,
+        }
+    }
+
+    fn test_draw_ctx<'a>(
+        theme: &'a crate::theme::Theme,
+        tracker: &'a crate::highlight::Tracker,
+        zone: &'a chrono::FixedOffset,
+    ) -> DrawCtx<'a> {
+        DrawCtx {
+            theme,
+            highlights: tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone,
+            no_animation: false,
+        }
+    }
+
+    /// A running step's own time line always reads `→ now`, growing
+    /// with `now_s` itself, not a stored duration.
+    #[test]
+    fn zoom_axis_line_a_running_step_reads_arrow_now() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = test_draw_ctx(&theme, &tracker, &zone);
+        let row = test_time_row(Some(10.0), None, StatusKind::Running);
+        let line = zoom_axis_line(&row, "2026-01-01T00:00:00Z", 70.0, &ctx).unwrap();
+        assert!(line.contains("\u{2192} now"), "{line:?}");
+        assert!(line.contains("1m00s"), "{line:?}");
+    }
+
+    /// A cancelled step with no real duration of its own must not
+    /// keep growing with how long ago `now_s` is -- its own time line
+    /// reads the same regardless of how far in the future `now_s` is.
+    #[test]
+    fn zoom_axis_line_a_cancelled_step_does_not_grow_with_now() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = test_draw_ctx(&theme, &tracker, &zone);
+        let row = test_time_row(Some(10.0), None, StatusKind::Cancelled);
+        let soon = zoom_axis_line(&row, "2026-01-01T00:00:00Z", 15.0, &ctx).unwrap();
+        let much_later = zoom_axis_line(&row, "2026-01-01T00:00:00Z", 10_000.0, &ctx).unwrap();
+        assert_eq!(soon, much_later, "{soon:?} vs {much_later:?}");
+        assert!(!soon.contains("now"), "{soon:?}");
     }
 }
 
@@ -4399,35 +4490,38 @@ fn time_zoom_label_width(
 /// container, a prompt, a tool or an agent alike. `None` only
 /// without a `since_ts` at all (a step that has never actually
 /// started).
+/// The selected row's own time line (DESIGN.md): its own `start_s`/
+/// `duration_s` -- the same fields its bar draws from, never
+/// `FocusedStep::since_ts`/`elapsed_s`, which fall back to `now -
+/// created_at` for a cancelled, aborted, or likely-running/queued
+/// step with no `completed_at` of its own and so keep growing for as
+/// long as the TUI stays open. Any status still unfinished and in
+/// progress (`Running`/`LikelyRunning`/`RunningOrQueued`) reads
+/// `→ now`; every other status reads its own real end, already
+/// capped at the run's own end once it has ended (`render`'s own
+/// `duration_s` fallback chain).
 fn zoom_axis_line(
-    step: &oscilloscope_core::screens::FocusedStep,
-    now: &str,
+    row: &oscilloscope_core::time::TimeRow,
+    run_start_ts: &str,
+    now_s: f64,
     ctx: &DrawCtx,
 ) -> Option<String> {
-    let since_ts = step.since_ts.as_deref()?;
-    let since_dt = oscilloscope_core::diff::parse_instant(since_ts)?;
-    let start_text = ctx
-        .zone
-        .local(since_dt.with_timezone(&chrono::Utc))
-        .format("%H:%M:%S")
-        .to_string();
-    let (end_text, duration_s) = if step.status.kind == StatusKind::Running {
-        let now_dt = oscilloscope_core::diff::parse_instant(now)?;
-        let duration_s = (now_dt - since_dt).num_milliseconds() as f64 / 1000.0;
-        ("now".to_string(), duration_s)
+    let start_s = row.start_s?;
+    let is_in_progress = matches!(
+        row.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
+    let (end_s, end_text) = if is_in_progress {
+        (now_s, "now".to_string())
     } else {
-        let duration_s = step.elapsed_s?;
-        let end_dt = since_dt + chrono::Duration::milliseconds((duration_s * 1000.0) as i64);
-        let end_text = ctx
-            .zone
-            .local(end_dt.with_timezone(&chrono::Utc))
-            .format("%H:%M:%S")
-            .to_string();
-        (end_text, duration_s)
+        let end_s = start_s + row.duration_s.unwrap_or(0.0);
+        let end_text = offset_clock_label(run_start_ts, end_s, ctx.zone, "%H:%M:%S")?;
+        (end_s, end_text)
     };
+    let start_text = offset_clock_label(run_start_ts, start_s, ctx.zone, "%H:%M:%S")?;
     Some(format!(
         "{start_text} → {end_text} · {}",
-        oscilloscope_core::format::format_duration(duration_s)
+        oscilloscope_core::format::format_duration(end_s - start_s)
     ))
 }
 
@@ -4484,6 +4578,7 @@ fn draw_time_zoom_pane(
 ) {
     let label_width = time_zoom_label_width(screen, area.width);
     let bar_width = (area.width as usize).saturating_sub(2 + label_width).max(4);
+    let (by_path, _) = time_row_groups(&screen.rows);
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &screen.selected {
         None => lines.push(Line::styled(
@@ -4491,8 +4586,19 @@ fn draw_time_zoom_pane(
             Style::default().fg(ctx.theme.dim),
         )),
         Some(step) => {
-            if let Some(axis_line) = zoom_axis_line(step, now, ctx) {
-                lines.push(Line::styled(axis_line, Style::default().fg(ctx.theme.dim)));
+            if let Some(row) = app.selected_path.as_deref().and_then(|p| by_path.get(p)) {
+                if let (Some(run_start_ts), Some(now_s)) = (
+                    screen.axis.start_ts.as_deref(),
+                    screen
+                        .axis
+                        .start_ts
+                        .as_deref()
+                        .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now)),
+                ) {
+                    if let Some(axis_line) = zoom_axis_line(row, run_start_ts, now_s, ctx) {
+                        lines.push(Line::styled(axis_line, Style::default().fg(ctx.theme.dim)));
+                    }
+                }
             }
             match &step.detail {
                 oscilloscope_core::screens::FocusDetail::Agent {
@@ -4603,11 +4709,19 @@ fn draw_time_zoom_pane(
                         .and_then(|l| l.tool_calls)
                         .or(*raw_tool_calls);
                     let elapsed = (axis_end_s - session_start_s).max(0.0);
-                    let running_tool = run_start_ts.as_deref().and_then(|rs| {
+                    // Only while the agent is actually live: a
+                    // finished session's own transcript can end in an
+                    // unmatched `tool_start` (an interrupted call that
+                    // was never followed by a `tool_end`), which would
+                    // otherwise add wall-clock time to a call that
+                    // isn't running any more, growing for as long as
+                    // the TUI stays open.
+                    let running_tool = live.as_deref().and_then(|l| {
+                        let rs = run_start_ts.as_deref()?;
                         let calls = transcript_view.map(|v| v.calls.as_slice()).unwrap_or(&[]);
-                        let current = live
-                            .as_deref()
-                            .and_then(|l| l.current_tool.as_ref())
+                        let current = l
+                            .current_tool
+                            .as_ref()
                             .map(|c| (c.name.as_str(), c.started_at.as_str()));
                         oscilloscope_core::time::running_tool_elapsed_ms(calls, current, now_s, rs)
                     });
@@ -4785,6 +4899,13 @@ fn draw_time_vs_usual_pane(
     app: &mut App,
     ctx: &DrawCtx,
 ) {
+    // `now`, `p50` and the mark each take a fixed width (10 + 10 +
+    // 1); the label gets whatever is left of the pane's own inner
+    // width (2 narrower than `area.width` for its own border), cut
+    // with the usual truncation rather than pushing the fixed columns
+    // past it.
+    let inner_width = (area.width as usize).saturating_sub(2);
+    let label_width = inner_width.saturating_sub(21);
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some((count, threshold)) = screen.vs_usual.too_few_runs {
         lines.push(Line::styled(
@@ -4805,9 +4926,9 @@ fn draw_time_vs_usual_pane(
                 now_text
             };
             let p50_text = oscilloscope_core::format::format_duration(row.p50_s);
+            let label = truncate_label(&row.label, label_width);
             lines.push(Line::from(format!(
-                "{:<20}{now_text:<10}{p50_text:<10}{mark}",
-                row.label
+                "{label:<label_width$}{now_text:<10}{p50_text:<10}{mark}"
             )));
         }
         let hhmm = |ts: &str| {
@@ -4826,6 +4947,12 @@ fn draw_time_vs_usual_pane(
         }
         if let Some(runs) = screen.vs_usual.from_runs {
             footer.push(format!("from {runs} runs"));
+        }
+        // Drops whole parts from the end (`from N runs` first, then
+        // the usual range) until what's left fits the pane -- never a
+        // part cut to a partial fragment.
+        while footer.join(" · ").chars().count() > inner_width && !footer.is_empty() {
+            footer.pop();
         }
         if !footer.is_empty() {
             lines.push(Line::styled(
@@ -10626,6 +10753,106 @@ mod golden_tests {
             .unwrap();
         let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
+    }
+
+    /// A finished agent's own transcript can end in an unmatched
+    /// `tool_start` (the session stopped mid-call) -- the footer's
+    /// busiest-tool figure must come from `meta.raw`'s own aggregate
+    /// alone, never grow with how long ago `now` is from that stale
+    /// call.
+    #[test]
+    fn time_agent_zoom_pane_footer_does_not_grow_for_a_finished_agent() {
+        let plan = sample_plan();
+        let mut state = agent_finished_state();
+        state["prime"]["fix"]["meta"]["raw"]["tool_counts"] = json!({
+            "bash": {"calls": 3, "ms": 2_500},
+            "edit": {"calls": 2, "ms": 900},
+        });
+        let transcript = agent_running_transcript();
+        let footer_line = |now: &str| -> String {
+            let mut model = RunModel::new();
+            let rendered = render::build_folded(
+                "do-thing.yml",
+                "cof",
+                &plan,
+                &mut model,
+                Some(&state),
+                ProcessState::exited(true),
+                372.0,
+                now,
+                &[],
+                true,
+                &Default::default(),
+            );
+            let flat = oscilloscope_core::model::flatten_state(&state);
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                Some("prime.fix"),
+                &Default::default(),
+                now,
+            );
+            let mut app = App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Time;
+            app.selected_path = Some("prime.fix".to_string());
+            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+            let test_tracker = crate::highlight::Tracker::new();
+            let test_ctx = DrawCtx {
+                theme: &test_theme,
+                highlights: &test_tracker,
+                now: Instant::now(),
+                color_mode: ColorMode::TrueColor,
+                theme_banner: None,
+                zone: &test_zone(),
+                no_animation: false,
+            };
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        0,
+                        &mut app,
+                        Some(&state),
+                        &test_ctx,
+                        0,
+                        now,
+                        None,
+                        None,
+                        None,
+                        Some(&time_screen),
+                        Some(&transcript),
+                        &mut CostLayoutCache::default(),
+                    )
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .to_string()
+                .lines()
+                .find(|l| l.contains("tools"))
+                .unwrap()
+                .to_string()
+        };
+        let right_after = footer_line("2026-01-01T11:52:55Z");
+        let hours_later = footer_line("2026-01-01T13:00:00Z");
+        assert_eq!(
+            right_after, hours_later,
+            "the footer must not keep growing once the agent has finished"
+        );
+        assert!(
+            right_after.contains("bash 2.5s"),
+            "the busiest tool must come from meta.raw alone: {right_after:?}"
+        );
     }
 
     /// DESIGN.md's zoom pane: "With no transcript, the footer and a
