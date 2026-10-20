@@ -1810,29 +1810,41 @@ ghost from now to the ETA (`time::planned_ghost_bar`).
 **Loop collapse and expand:** a loop row is drawn collapsed by
 default -- its own bar already spans first-pass-start to last-pass-
 end for a named loop (the loop container's own `created_at`/
-`completed_at` already cover that), or whatever single pass is
-currently visible for an unnamed one. `⏎` toggles `App::
-time_expanded_loops` (by the row's own path); when a loop's path is
-in that set, `time::expand_loop` replaces the base tree's own
-(breadcrumbed) rows for that loop's passes with the Time screen's
-own: for a named loop, one row per `iter_N` index found under its own
-path, each pass's own span aggregated from every flat node in its own
-subtree (a chain each loop's own `iter_N` carries no `{value, meta}`
-of its own in either engine's real state -- only its children do; a
-tree loop's own pass container happens to have one, but aggregating
-either way gives the same answer when it's the only node in its own
-subtree) -- two tree passes running at once simply overlap, shown as
-such, never merged away. An unnamed loop's own body never gets a `RowKind::Loop` row at all
-(§1.3: it writes no path segment of its own, so it takes its
-enclosing scope's own kind, a leaf's); its own passes, which
-therefore all share that one leaf's path, come from `RunModel::
-step_intervals` by event id order (`#1`, `#2`, …) instead of from
-`iter_N` children -- without `--events` they can't be told apart, so
-the row stays one and `⏎` is a no-op (`TimeRow::loop_expandable` is
-`false`). `time::loop_is_expandable`'s own unnamed branch finds this
-by checking the leaf's own *parent* path for a `PlanEntryKind::Loop
-{ named: false, .. }` entry -- the control node's own entry, like its
-row, sits at the enclosing scope's path, one level up from the leaf.
+`completed_at` already cover that). An unnamed loop's own body never
+gets a `RowKind::Loop` row at all (§1.3: it writes no path segment of
+its own, so it takes its enclosing scope's own kind, a leaf's); its
+own passes, which therefore all share that one leaf's path, come from
+`RunModel::step_intervals` by event id order (`#1`, `#2`, …) instead
+of from `iter_N` children -- without `--events` they can't be told
+apart, so the row stays one and `⏎` is a no-op (`TimeRow::
+loop_expandable` is `false`). With `--events` and more than one
+logged interval at the leaf's own path, its collapsed row reads the
+whole loop's own span too: its first pass's own start (the one thing
+state alone can never answer, since each later pass overwrites the
+same path's node) combined with state's own last-pass end (already
+extended to now while it's still running, same as any other row's
+own `duration_s`, never an event-sourced end of its own, which a step
+right after it could start running before by a little clock skew
+between the two logs), and a `⟲ N/M` progress count, both passes done
+and the total alike (every logged interval is a finished pass, so the
+loop has no "still to come" of its own to show separately). `⏎`
+toggles `App::time_expanded_loops` (by the row's own path); when a
+loop's path is in that set, `time::expand_loop` replaces the base
+tree's own (breadcrumbed) rows for that loop's passes with the Time
+screen's own: for a named loop, one row per `iter_N` index found
+under its own path, each pass's own span aggregated from every flat
+node in its own subtree (a chain each loop's own `iter_N` carries no
+`{value, meta}` of its own in either engine's real state -- only its
+children do; a tree loop's own pass container happens to have one,
+but aggregating either way gives the same answer when it's the only
+node in its own subtree) -- two tree passes running at once simply
+overlap, shown as such, never merged away; for an unnamed loop, one
+row per logged interval, in event id order. `time::loop_is_
+expandable`'s own unnamed branch requires the leaf's own path itself
+(not merely its parent's) to be one `PlanTree::is_unnamed_loop_body_
+path` says an unnamed loop's own body directly contributes -- a
+sibling at the same parent path that merely happens to sit next to
+the loop must never expand, or read its own progress count, either.
 Drawing always hides every row under any loop's own path from the
 base tree, collapsed or expanded, since the Time screen's own pass
 rows (or lack of them) are what stands in for them either way.
@@ -1877,7 +1889,13 @@ is overlaid on every strip the same way it is on every bar row.
   it, not how many merely touch it -- a sweep over every interval's
   own start and end, ends processed before starts at an equal time,
   so a purely sequential run reads 1 throughout rather than 2 at
-  every step boundary. Both the suffix figures and the start/duration
+  every step boundary -- rounded to the millisecond first, since one
+  interval's own end can come from state (microsecond precision)
+  while the next's own start comes from `--events` (millisecond
+  precision, §3's format table): without that, ordinary clock skew
+  between the two logs can round-trip as a few microseconds of
+  apparent overlap between two steps that never actually ran at the
+  same time at all. Both the suffix figures and the start/duration
   columns drop below 90 columns, the same width the timeline's own
   columns do.
 

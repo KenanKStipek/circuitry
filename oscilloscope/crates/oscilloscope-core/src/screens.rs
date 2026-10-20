@@ -1656,6 +1656,36 @@ pub fn build_time_screen(
                 .iter()
                 .filter(|r| r.kind.is_leaf() && !r.has_children)
                 .filter_map(|r| {
+                    // An unnamed loop's body leaf: in flight across
+                    // its own whole span, one interval for the whole
+                    // loop, not one per pass -- its own passes run
+                    // one at a time, so this alone is what keeps a
+                    // sequential loop's own max at 1. The end comes
+                    // from state, exactly like every other row below
+                    // (never an event-sourced one of its own, which a
+                    // step right after it could, by a little clock
+                    // skew between the two logs, start before).
+                    if model.has_events() && plan.is_unnamed_loop_body_path(&r.path) {
+                        if let Some((first_s, _)) =
+                            crate::time::unnamed_loop_first_pass_start(&r.path, model, run_start_ts)
+                        {
+                            if let Some(state_start) =
+                                row_run_relative_start(r, flat, model, run_start_ts)
+                            {
+                                let end = if r.status.kind == StatusKind::Running {
+                                    duration_seconds(run_start_ts, now).unwrap_or(state_start)
+                                } else {
+                                    state_start + r.duration_s.unwrap_or(0.0)
+                                };
+                                return Some((
+                                    first_s.min(state_start),
+                                    end,
+                                    is_agent_row(r, flat, plan),
+                                    r.status.kind,
+                                ));
+                            }
+                        }
+                    }
                     let start = row_run_relative_start(r, flat, model, run_start_ts)?;
                     let end = if r.status.kind == StatusKind::Running {
                         duration_seconds(run_start_ts, now).unwrap_or(start)

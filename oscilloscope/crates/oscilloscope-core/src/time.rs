@@ -351,8 +351,44 @@ pub fn build_time_rows(
     };
     rows.iter()
         .map(|row| {
-            let start_s = row_start_s(&row.path, flat, model, run_start_ts);
             let loop_expandable = loop_is_expandable(&row.path, flat, model, plan, row.kind);
+            let state_start_s = row_start_s(&row.path, flat, model, run_start_ts);
+            // An unnamed loop's body shares its row with the leaf
+            // underneath it, which has no span or progress of its
+            // own to read from state alone at all -- state keeps only
+            // the *last* pass's own node, overwritten by each pass in
+            // turn. Collapsed, its row reads the whole loop's own
+            // span (DESIGN.md) instead: its first pass's own start,
+            // from the same event id pairs `expand_loop` reads for
+            // its own rows (the one thing events alone can answer),
+            // combined with state's own last-pass end (already
+            // extended to now while it's still running, the same way
+            // every other row's own `duration_s` is) -- never an
+            // event-sourced end of its own, which a `use` step right
+            // after it could, by a few milliseconds of clock skew
+            // between the two logs, start running before.
+            let unnamed_loop_body = model.has_events() && plan.is_unnamed_loop_body_path(&row.path);
+            let first_pass = unnamed_loop_body
+                .then(|| unnamed_loop_first_pass_start(&row.path, model, run_start_ts))
+                .flatten();
+            let (start_s, duration_s, loop_progress) = match first_pass {
+                Some((first_s, count)) => {
+                    let end_s = state_start_s.zip(row.duration_s).map(|(s, d)| s + d);
+                    let start_s = Some(
+                        end_s.map_or(first_s, |_| first_s.min(state_start_s.unwrap_or(first_s))),
+                    );
+                    (
+                        start_s,
+                        end_s.zip(start_s).map(|(e, s)| e - s),
+                        Some(LoopProgress {
+                            done: count as u64,
+                            total: Some(count as u64),
+                            eta_s: None,
+                        }),
+                    )
+                }
+                None => (state_start_s, row.duration_s, row.loop_progress),
+            };
             let ghost = if row.status.kind == StatusKind::Pending {
                 let key = crate::history::display_key(&row.path, plan);
                 let stats = key.as_deref().and_then(|k| step_usual.get(k));
@@ -367,14 +403,36 @@ pub fn build_time_rows(
                 kind: row.kind,
                 status: row.status.clone(),
                 start_s,
-                duration_s: row.duration_s,
-                loop_progress: row.loop_progress,
+                duration_s,
+                loop_progress,
                 has_children: row.has_children,
                 loop_expandable,
                 ghost,
             }
         })
         .collect()
+}
+
+/// An unnamed loop's own body row, collapsed (DESIGN.md): its first
+/// pass's own start, run-relative to `run_start_ts` -- the one thing
+/// state alone can never answer, since each later pass overwrites the
+/// same path's node -- and how many passes have finished. `None` with
+/// no finished pass logged at this path at all yet (the row still
+/// reads from state alone, same as before this existed).
+pub(crate) fn unnamed_loop_first_pass_start(
+    path: &str,
+    model: &RunModel,
+    run_start_ts: &str,
+) -> Option<(f64, usize)> {
+    let mut start_s: Option<f64> = None;
+    let mut count = 0usize;
+    for interval in model.step_intervals().iter().filter(|i| i.path == path) {
+        count += 1;
+        if let Some(s) = duration_seconds(run_start_ts, &interval.start_ts) {
+            start_s = Some(start_s.map_or(s, |cur: f64| cur.min(s)));
+        }
+    }
+    Some((start_s?, count))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -803,10 +861,18 @@ pub fn in_flight_heights(
         return heights;
     }
     let span = axis_end_s - axis_start_s;
+    // Rounded to the millisecond: an interval's own two ends can come
+    // from state (microsecond precision) while a neighbour's comes
+    // from `--events` (millisecond precision, DESIGN.md §3's format
+    // table) -- without this, clock skew between the two logs can
+    // round-trip as a few *microseconds* of apparent overlap between
+    // two steps that never actually ran at the same time at all, one
+    // sequential run briefly reading 2 in flight instead of 1.
+    let round_ms = |t: f64| (t * 1000.0).round() / 1000.0;
     let mut events: Vec<(f64, InFlightEdge)> = Vec::with_capacity(intervals.len() * 2);
     for &(start, end) in intervals {
-        let start = start.clamp(axis_start_s, axis_end_s);
-        let end = end.clamp(axis_start_s, axis_end_s);
+        let start = round_ms(start.clamp(axis_start_s, axis_end_s));
+        let end = round_ms(end.clamp(axis_start_s, axis_end_s));
         if end <= start {
             continue;
         }
@@ -1689,6 +1755,18 @@ mod tests {
         let intervals = vec![(0.0, 20.0), (20.0, 40.0), (40.0, 60.0)];
         let heights = in_flight_heights(0.0, 60.0, 6, &intervals);
         assert_eq!(heights, vec![1, 1, 1, 1, 1, 1]);
+    }
+
+    /// One interval's own end came from state (microsecond
+    /// precision), the next's own start from `--events` (millisecond
+    /// precision) -- a few dozen microseconds apart from rounding
+    /// alone, never a real overlap, which this must still read as a
+    /// purely sequential run (max 1), not 2.
+    #[test]
+    fn in_flight_heights_tolerates_sub_millisecond_clock_skew_between_sources() {
+        let intervals = vec![(0.0, 3.589970), (3.590000, 10.0)];
+        let heights = in_flight_heights(0.0, 10.0, 10, &intervals);
+        assert_eq!(heights.iter().copied().max(), Some(1), "{heights:?}");
     }
 
     /// Three intervals overlap at once, and a fourth starts exactly
