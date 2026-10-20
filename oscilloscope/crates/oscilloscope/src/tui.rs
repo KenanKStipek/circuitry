@@ -7885,6 +7885,57 @@ mod golden_tests {
             cached_elapsed < std::time::Duration::from_millis(100),
             "redrawing the Cost screen with nothing changed took {cached_elapsed:?} -- the layout cache should have skipped squarify entirely"
         );
+
+        // Issue #650: the Time screen's own model and drawing are
+        // built only while screen 1 is actually on display, same
+        // performance rule as every other screen above -- on the
+        // same 2,000-node state, and only the rows actually in view
+        // (120x40's own viewport) are drawn.
+        let time_start = std::time::Instant::now();
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &story_2000,
+            Some("n0"),
+            &Default::default(),
+            "t2001",
+        );
+        let mut time_app = App::new(false);
+        time_app.screen = oscilloscope_core::screens::Screen::Time;
+        time_app.selected_path = Some("n0".to_string());
+        let time_backend = TestBackend::new(120, 40);
+        let mut time_terminal = Terminal::new(time_backend).unwrap();
+        time_terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut time_app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let time_elapsed = time_start.elapsed();
+        assert!(
+            time_elapsed < std::time::Duration::from_millis(500),
+            "building and drawing the Time screen for a 2000-node state took {time_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
     }
 
     /// A tree-loop pass's prompt never
@@ -9373,6 +9424,89 @@ mod golden_tests {
             "a collapsed loop row shows its own progress:\n{text}"
         );
         insta::assert_snapshot!(text);
+    }
+
+    /// DESIGN.md's own performance rule: "A 400-pass loop collapsed
+    /// is one row."
+    #[test]
+    fn a_400_pass_loop_collapses_to_one_row() {
+        let plan = each_loop_plan_for_tui();
+        let mut prime = serde_json::Map::new();
+        prime.insert("value".to_string(), Value::Null);
+        let mut prime_meta = serde_json::Map::new();
+        prime_meta.insert("created_at".to_string(), Value::String("t0".to_string()));
+        prime_meta.insert("completed_at".to_string(), Value::Null);
+        prime.insert("meta".to_string(), Value::Object(prime_meta));
+        let mut iters = serde_json::Map::new();
+        for i in 0..400 {
+            let mut nap_meta = serde_json::Map::new();
+            nap_meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
+            nap_meta.insert(
+                "completed_at".to_string(),
+                Value::String(format!("t{}", i + 1)),
+            );
+            nap_meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            let mut nap = serde_json::Map::new();
+            nap.insert("value".to_string(), Value::String("ok\n".to_string()));
+            nap.insert("meta".to_string(), Value::Object(nap_meta));
+            let mut iter_meta = serde_json::Map::new();
+            iter_meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
+            iter_meta.insert(
+                "completed_at".to_string(),
+                Value::String(format!("t{}", i + 1)),
+            );
+            let mut iter = serde_json::Map::new();
+            iter.insert("value".to_string(), Value::Null);
+            iter.insert("meta".to_string(), Value::Object(iter_meta));
+            iter.insert("nap".to_string(), Value::Object(nap));
+            iters.insert(format!("iter_{i}"), Value::Object(iter));
+        }
+        let mut items_meta = serde_json::Map::new();
+        items_meta.insert("created_at".to_string(), Value::String("t0".to_string()));
+        items_meta.insert(
+            "completed_at".to_string(),
+            Value::String("t400".to_string()),
+        );
+        items_meta.insert(
+            "progress".to_string(),
+            serde_json::json!({"done": 400, "total": 400}),
+        );
+        let mut items = serde_json::Map::new();
+        items.insert("value".to_string(), Value::Null);
+        items.insert("meta".to_string(), Value::Object(items_meta));
+        for (k, v) in iters {
+            items.insert(k, v);
+        }
+        prime.insert("items".to_string(), Value::Object(items));
+        let mut root = serde_json::Map::new();
+        root.insert("prime".to_string(), Value::Object(prime));
+        let state = Value::Object(root);
+
+        let mut model = RunModel::new();
+        let text = time_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            Some("prime.items"),
+            &Default::default(),
+            false,
+        );
+        assert_eq!(
+            text.matches('⟲').count(),
+            1,
+            "a 400-pass loop collapsed is one row:\n{text}"
+        );
+        assert!(
+            text.contains("400/400"),
+            "the collapsed row shows the real pass count:\n{text}"
+        );
+        assert!(
+            !text.contains("pass "),
+            "a collapsed loop shows no per-pass rows:\n{text}"
+        );
     }
 
     #[test]
