@@ -1453,6 +1453,12 @@ pub struct TimeStrips {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeVsUsualRow {
+    /// The timeline's own row path -- a front end filters against
+    /// its own currently *visible* rows with this (DESIGN.md: vs
+    /// usual "lists only the timeline's own rows", a collapsed or
+    /// filtered-out row included), since `build_vs_usual_pane` itself
+    /// has no view of a collapse or filter state of its own.
+    pub path: String,
     pub label: String,
     pub now_s: f64,
     pub running: bool,
@@ -1804,6 +1810,7 @@ fn build_vs_usual_pane(
             continue;
         };
         vs_rows.push(TimeVsUsualRow {
+            path: row.path.clone(),
             label: row.label.clone(),
             now_s,
             running,

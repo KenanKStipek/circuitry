@@ -1052,7 +1052,14 @@ pub fn visible_rows_for_flow<'a>(
 /// default, so `j`/`k` must never land the selection on a pass it
 /// isn't drawing (the same real-`Row` list `draw_time_timeline`'s own
 /// `is_under_a_loop` filters, kept in sync here rather than
-/// recomputed differently by each caller).
+/// recomputed differently by each caller). A row under a loop that is
+/// nonetheless `selected_path` (follow picked a leaf inside a loop
+/// that was collapsed afterwards) stays in, the same reason
+/// `visible_rows_for_flow` keeps a merged pass in -- dropping it here
+/// too would leave `move_tree_selection` with no `current` row to
+/// move from, so `j`/`k` would jump to the first or last row instead
+/// of moving one step from where the loop row shows the selection to
+/// be.
 pub fn visible_rows_for_time<'a>(
     rows: &'a [Row],
     time_rows: &[oscilloscope_core::screens::TimeDisplayRow],
@@ -1071,7 +1078,10 @@ pub fn visible_rows_for_time<'a>(
         .collect();
     visible_rows(rows, app)
         .into_iter()
-        .filter(|r| !loop_prefixes.iter().any(|p| r.path.starts_with(p.as_str())))
+        .filter(|r| {
+            !loop_prefixes.iter().any(|p| r.path.starts_with(p.as_str()))
+                || app.selected_path.as_deref() == Some(r.path.as_str())
+        })
         .collect()
 }
 
@@ -2128,6 +2138,105 @@ mod tests {
         app.screen = Screen::Flow;
         app.selected_path = Some("prime.fan.iter_0".to_string());
         let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
+        app.handle_key(key(KeyCode::Char('j')), &visible, &[], false, false, &[]);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.next"),
+            "must move one row past the loop, not jump to prime"
+        );
+    }
+
+    fn time_display_row(path: &str, kind: RowKind) -> oscilloscope_core::screens::TimeDisplayRow {
+        oscilloscope_core::screens::TimeDisplayRow::Row(oscilloscope_core::time::TimeRow {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_s: None,
+            duration_s: None,
+            loop_progress: None,
+            has_children: false,
+            loop_expandable: false,
+            ghost: None,
+        })
+    }
+
+    /// A leaf under a collapsed loop (follow picked it, same as
+    /// `visible_rows_for_flow`'s own merged-pass case) must stay in
+    /// the list while it's `selected_path`, or `j`/`k` have no
+    /// current position to move from at all and jump to an end
+    /// instead.
+    #[test]
+    fn visible_rows_for_time_keeps_a_selected_path_hidden_under_a_collapsed_loop() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0.nap", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let time_rows = [
+            time_display_row("prime", RowKind::Root),
+            time_display_row("prime.fan", RowKind::Loop),
+            time_display_row("prime.next", RowKind::Tool),
+        ];
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.fan.iter_0.nap".to_string());
+        let visible = visible_rows_for_time(&rows, &time_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan", "prime.fan.iter_0.nap", "prime.next"],
+            "the selected leaf under the loop must stay in the list"
+        );
+    }
+
+    #[test]
+    fn visible_rows_for_time_drops_an_unselected_row_under_a_collapsed_loop() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0.nap", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let time_rows = [
+            time_display_row("prime", RowKind::Root),
+            time_display_row("prime.fan", RowKind::Loop),
+            time_display_row("prime.next", RowKind::Tool),
+        ];
+        let app = App::new(false);
+        let visible = visible_rows_for_time(&rows, &time_rows, &app);
+        assert_eq!(
+            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            vec!["prime", "prime.fan", "prime.next"],
+            "an unselected row under the loop is still hidden"
+        );
+    }
+
+    /// The regression itself: `j`/`k` from a selection follow placed
+    /// on a leaf inside a collapsed loop must move one row from where
+    /// the loop row shows it to be, not jump to the first or last row
+    /// because `move_tree_selection` can't find a current position.
+    #[test]
+    fn j_from_a_leaf_hidden_under_a_collapsed_loop_moves_to_the_next_row_not_to_the_top() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.fan", 1, StatusKind::Running),
+            row("prime.fan.iter_0.nap", 2, StatusKind::Running),
+            row("prime.next", 1, StatusKind::Pending),
+        ];
+        let time_rows = [
+            time_display_row("prime", RowKind::Root),
+            time_display_row("prime.fan", RowKind::Loop),
+            time_display_row("prime.next", RowKind::Tool),
+        ];
+        let mut app = App::new(false);
+        app.screen = Screen::Time;
+        app.selected_path = Some("prime.fan.iter_0.nap".to_string());
+        let visible = visible_rows_for_time(&rows, &time_rows, &app);
         app.handle_key(key(KeyCode::Char('j')), &visible, &[], false, false, &[]);
         assert_eq!(
             app.selected_path.as_deref(),

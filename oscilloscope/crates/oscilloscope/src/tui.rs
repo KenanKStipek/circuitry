@@ -4895,6 +4895,7 @@ fn draw_time_zoom_pane(
 fn draw_time_vs_usual_pane(
     frame: &mut Frame,
     area: Rect,
+    state: &oscilloscope_core::render::RenderState,
     screen: &oscilloscope_core::screens::TimeScreen,
     app: &mut App,
     ctx: &DrawCtx,
@@ -4906,6 +4907,15 @@ fn draw_time_vs_usual_pane(
     // past it.
     let inner_width = (area.width as usize).saturating_sub(2);
     let label_width = inner_width.saturating_sub(21);
+    // `build_vs_usual_pane` has no view of the user's own collapse or
+    // filter state -- it must list exactly the timeline's own visible
+    // rows (DESIGN.md), so a row collapsed with `←`, or hidden by `/`
+    // or `e`, is filtered out here instead.
+    let visible_paths: std::collections::BTreeSet<&str> =
+        crate::keys::visible_rows_for_time(&state.rows, &screen.rows, app)
+            .into_iter()
+            .map(|r| r.path.as_str())
+            .collect();
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some((count, threshold)) = screen.vs_usual.too_few_runs {
         lines.push(Line::styled(
@@ -4913,7 +4923,12 @@ fn draw_time_vs_usual_pane(
             Style::default().fg(ctx.theme.dim),
         ));
     } else {
-        for row in &screen.vs_usual.rows {
+        for row in screen
+            .vs_usual
+            .rows
+            .iter()
+            .filter(|r| visible_paths.contains(r.path.as_str()))
+        {
             let mark = match row.mark {
                 oscilloscope_core::time::VsUsualMark::Slower => '▲',
                 oscilloscope_core::time::VsUsualMark::Faster => '▼',
@@ -4987,7 +5002,7 @@ fn draw_time_plain_list(
     area: Rect,
     state: &oscilloscope_core::render::RenderState,
     screen: &oscilloscope_core::screens::TimeScreen,
-    app: &App,
+    app: &mut App,
     ctx: &DrawCtx,
 ) {
     let all_visible = visible_rows(&state.rows, app);
@@ -5006,9 +5021,17 @@ fn draw_time_plain_list(
         .into_iter()
         .filter(|r| !is_under_a_loop(&r.path))
         .collect();
+    let selected_idx = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| visible.iter().position(|r| r.path == p));
+    let viewport = (area.height as usize).max(1);
+    app.tree_viewport = viewport;
+    let line_counts = vec![1usize; visible.len()];
+    app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
     let run_start_ts = screen.axis.start_ts.as_deref();
     let mut lines = Vec::new();
-    for row in &visible {
+    for row in visible.iter().skip(app.tree_scroll).take(viewport) {
         let Some(time_row) = by_path.get(row.path.as_str()) else {
             continue;
         };
@@ -5130,7 +5153,7 @@ fn draw_time_screen(
             ])
             .split(top_bottom[1]);
         draw_time_zoom_pane(frame, columns[0], screen, app, transcript_view, ctx, now);
-        draw_time_vs_usual_pane(frame, columns[1], screen, app, ctx);
+        draw_time_vs_usual_pane(frame, columns[1], state, screen, app, ctx);
     } else {
         app.time_zoom_viewport = 0;
         app.time_vs_usual_viewport = 0;
@@ -5785,6 +5808,260 @@ mod golden_tests {
             })
             .unwrap();
         terminal.backend().to_string()
+    }
+
+    /// vs usual lists only the timeline's own currently visible rows
+    /// (DESIGN.md) -- collapsing `prime` with `\u2190` hides its own
+    /// children `a` and `b` from the timeline, so neither belongs in
+    /// vs usual either, even though both still have history stats of
+    /// their own.
+    #[test]
+    fn time_vs_usual_pane_excludes_a_row_collapsed_out_of_the_timeline() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let now = "2026-01-01T00:05:00Z";
+        let mut rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            300.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        rendered.header.history_same_hash_count = Some(7);
+        rendered.header.history_step_usual.insert(
+            "a".to_string(),
+            oscilloscope_core::history::StepStats {
+                count: 7,
+                busy_p50_s: Some(60.0),
+                busy_p10_s: Some(50.0),
+                busy_p90_s: Some(70.0),
+                ..Default::default()
+            },
+        );
+        rendered.header.history_step_usual.insert(
+            "b".to_string(),
+            oscilloscope_core::history::StepStats {
+                count: 7,
+                busy_p50_s: Some(300.0),
+                busy_p10_s: Some(240.0),
+                busy_p90_s: Some(360.0),
+                ..Default::default()
+            },
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            now,
+        );
+        // Both rows are really there before any collapsing -- proves
+        // the fixture itself would otherwise show them.
+        assert_eq!(
+            time_screen
+                .vs_usual
+                .rows
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.collapsed.insert("prime".to_string());
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        let vs_usual_pane: String = text
+            .lines()
+            .filter(|l| l.contains("vs usual") || l.contains('\u{2502}'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !vs_usual_pane.contains('≈')
+                && !vs_usual_pane.contains('▲')
+                && !vs_usual_pane.contains('▼'),
+            "no row's own mark may still be drawn once both rows are collapsed out: {vs_usual_pane}"
+        );
+    }
+
+    fn many_steps_plan(n: usize) -> PlanTree {
+        let root_path = EffectPath::root();
+        let ops: Vec<Op> = (0..n)
+            .map(|i| {
+                tool(
+                    root_path.clone().push_name(format!("s{i}")),
+                    &format!("s{i}"),
+                    OnError::Fail,
+                )
+            })
+            .collect();
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    /// Below 80x20 the Time screen falls back to a plain list
+    /// (DESIGN.md's "Small terminals") -- it must follow the
+    /// selection the same way every other list does, not render every
+    /// row starting from the top regardless of height.
+    #[test]
+    fn time_plain_list_below_80x20_scrolls_to_follow_the_selection() {
+        let n = 30;
+        let plan = many_steps_plan(n);
+        let mut model = RunModel::new();
+        let mut state = serde_json::Map::new();
+        for i in 0..n {
+            state.insert(
+                format!("s{i}"),
+                json!({"value": "ok", "meta": {
+                    "created_at": format!("2026-01-01T00:{:02}:00Z", i),
+                    "completed_at": format!("2026-01-01T00:{:02}:01Z", i)
+                }}),
+            );
+        }
+        let state = json!({"prime": Value::Object(state)});
+        let now = "2026-01-01T00:30:00Z";
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+            1800.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let last = format!("prime.s{}", n - 1);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some(&last),
+            &Default::default(),
+            now,
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.selected_path = Some(last.clone());
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        // Below both of the Time screen's own width/height
+        // thresholds -- the plain-list fallback.
+        let backend = TestBackend::new(70, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains(&format!("s{}", n - 1)),
+            "the selected, last row must be visible: {text}"
+        );
+        assert!(
+            !text.contains("s0 "),
+            "scrolled past the first row, which must no longer show: {text}"
+        );
     }
 
     /// Issue #637: a single top-level `agent` tool step, still
