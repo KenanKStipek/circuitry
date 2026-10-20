@@ -6827,8 +6827,13 @@ mod golden_tests {
         // bounded read is part of this same budget, not a cost the
         // 2,000-node measurement never actually pays.
         let mut transcript_cache = crate::TranscriptTailCache::default();
-        let transcript_view =
-            crate::tail_focused_transcript(&app, None, Some(&flow_screen), &mut transcript_cache);
+        let transcript_view = crate::tail_focused_transcript(
+            &app,
+            None,
+            Some(&flow_screen),
+            None,
+            &mut transcript_cache,
+        );
         assert!(
             transcript_view
                 .as_ref()
