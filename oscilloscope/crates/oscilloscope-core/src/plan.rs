@@ -635,8 +635,8 @@ struct WalkCtx<'a> {
 fn normalize_pass_segments(path: &str) -> String {
     path.split('.')
         .map(|seg| {
-            if seg.starts_with("iter_") && seg["iter_".len()..].bytes().all(|b| b.is_ascii_digit())
-            {
+            let digits = seg.strip_prefix("iter_").unwrap_or("");
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
                 "iter_*"
             } else {
                 seg
@@ -3030,6 +3030,18 @@ mod tests {
             decisions[0].then_paths,
             vec!["prime.fan.iter_*.nap".to_string()]
         );
+    }
+
+    /// Only `iter_<digits>` is a pass segment: a step that is really
+    /// named `iter_`, or `iter_x`, keeps its own name.
+    #[test]
+    fn normalize_pass_segments_needs_a_pass_number() {
+        assert_eq!(
+            normalize_pass_segments("prime.loop.iter_3.x"),
+            "prime.loop.iter_*.x"
+        );
+        assert_eq!(normalize_pass_segments("prime.iter_.x"), "prime.iter_.x");
+        assert_eq!(normalize_pass_segments("prime.iter_x"), "prime.iter_x");
     }
 
     /// An unnamed loop directly inside a *named* loop's own pass body
