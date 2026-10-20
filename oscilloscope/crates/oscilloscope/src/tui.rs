@@ -5274,7 +5274,25 @@ fn draw_time_vs_usual_pane(
         ) {
             footer.push(format!("usual {low}–{high}"));
         }
-        if let Some(runs) = screen.vs_usual.from_runs {
+        // Issue #654: `screen.vs_usual.from_runs` pools across
+        // every row `build_vs_usual_pane` ever computed, collapsed
+        // or filtered out or not -- recomputed here from only the
+        // rows actually drawn above, the same `visible_paths` filter,
+        // whenever it's a per-row pooled figure at all (`earlier_
+        // versions`; otherwise it's the whole run's own current-hash
+        // count, which no row filtering could ever change).
+        let from_runs = if screen.vs_usual.earlier_versions {
+            screen
+                .vs_usual
+                .rows
+                .iter()
+                .filter(|r| visible_paths.contains(r.path.as_str()))
+                .map(|r| r.pooled_count)
+                .max()
+        } else {
+            screen.vs_usual.from_runs
+        };
+        if let Some(runs) = from_runs {
             footer.push(format!("from {runs} runs"));
         }
         // Drops whole parts from the end (`from N runs` first, then
@@ -6243,6 +6261,130 @@ mod golden_tests {
                 && !vs_usual_pane.contains('▼'),
             "no row's own mark may still be drawn once both rows are collapsed out: {vs_usual_pane}"
         );
+    }
+
+    /// Issue #654: "earlier versions" pools a different run count per
+    /// step -- the footer's own `from N runs` must come only from the
+    /// rows actually shown, same as the row list right above it, not
+    /// from a row collapsed away even though it has the larger
+    /// pooled count.
+    #[test]
+    fn time_vs_usual_pane_from_runs_excludes_a_filtered_rows_own_pooled_count() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let now = "2026-01-01T00:05:00Z";
+        let mut rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            300.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        // Below the same-hash threshold, with pooled history -- "earlier
+        // versions" applies, and `from_runs` pools per step.
+        rendered.header.history_same_hash_count = Some(1);
+        rendered.header.history_step_usual.insert(
+            "a".to_string(),
+            oscilloscope_core::history::StepStats {
+                // `vs_usual_mark` needs at least 3 runs to produce a
+                // mark at all; 3 is still fewer than `b`'s 5, so the
+                // visible-only max below has to actually come from
+                // this row, not `b`'s.
+                count: 3,
+                busy_p50_s: Some(60.0),
+                busy_p10_s: Some(50.0),
+                busy_p90_s: Some(70.0),
+                ..Default::default()
+            },
+        );
+        rendered.header.history_step_usual.insert(
+            "b".to_string(),
+            oscilloscope_core::history::StepStats {
+                count: 5,
+                busy_p50_s: Some(300.0),
+                busy_p10_s: Some(240.0),
+                busy_p90_s: Some(360.0),
+                ..Default::default()
+            },
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            now,
+        );
+        assert!(time_screen.vs_usual.earlier_versions);
+        assert_eq!(
+            time_screen
+                .vs_usual
+                .rows
+                .iter()
+                .map(|r| (r.path.as_str(), r.pooled_count))
+                .collect::<Vec<_>>(),
+            vec![("prime.a", 3), ("prime.b", 5)]
+        );
+        // The pane's own pre-pooled figure (across both rows) would
+        // read 5 -- the point of this test is that the front end must
+        // not just use it as-is once `b` is collapsed away.
+        assert_eq!(time_screen.vs_usual.from_runs, Some(5));
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        // `a`/`b` are both leaves, so collapsing either hides nothing
+        // of its own -- the filter, matching `a`'s own path/label but
+        // not `b`'s, is what actually removes `b` from the timeline.
+        app.filter = Some("a".to_string());
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("from 3 runs"), "{text}");
+        assert!(!text.contains("from 5 runs"), "{text}");
     }
 
     fn many_steps_plan(n: usize) -> PlanTree {

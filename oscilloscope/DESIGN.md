@@ -1831,7 +1831,18 @@ midnight rather than stepped from the last by a fixed duration
 (`time::next_round_local_time`), so an hour tick lands on a local
 whole hour even in a zone offset by a half hour from UTC, or across a
 daylight-saving change -- never merely at the axis's own start, which
-is whatever odd second the run happened to begin at. A sub-minute
+is whatever odd second the run happened to begin at. A candidate
+whose own local reading, read back from the zone, disagrees with what
+was actually asked for means the offset itself changes somewhere in
+between -- `time::offset_transition_between` binary-searches for
+exactly where, and the whole computation restarts from there (issue
+#654): a "spring forward" gap skips the requested elapsed time
+outright (it never existed), while a "fall back" repeat means an
+earlier elapsed time, already behind by the stale reading this
+started from, is due again under the new offset -- without this, the
+whole repeated local hour got no ticks under an interval shorter than
+it (an hour-or-longer tick happened to round-trip either way, so this
+never showed there). A sub-minute
 tick is labelled `HH:MM:SS` rather than `HH:MM`, so a short run's axis
 still has labels; once the axis's own start and end fall on different
 local calendar dates, the tick at each local midnight is labelled

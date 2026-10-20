@@ -1542,6 +1542,14 @@ pub struct TimeVsUsualRow {
     pub running: bool,
     pub p50_s: f64,
     pub mark: crate::time::VsUsualMark,
+    /// This row's own step's pooled "earlier versions" run count
+    /// (`history::StepStats::count`, issue #654) -- `TimeVsUsualPane
+    /// ::from_runs` pools across every row here regardless of
+    /// collapse or filter, so a front end that means to show only
+    /// the largest pooled count among the rows it actually draws
+    /// needs each row's own count to recompute that from, not the
+    /// pane's own pre-pooled figure.
+    pub pooled_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1951,6 +1959,7 @@ fn build_vs_usual_pane(
             running,
             p50_s: p50,
             mark,
+            pooled_count: stats.count,
         });
     }
     let finish_ts = if earlier_versions {

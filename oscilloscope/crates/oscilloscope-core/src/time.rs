@@ -757,38 +757,61 @@ fn next_round_local_time(
     let local = zone.local(from_utc);
     let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let elapsed_s = (local.naive_local() - midnight).num_milliseconds() as f64 / 1000.0;
-    let mut next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
-    // A candidate local naive time is tried against `from_utc`'s own
-    // offset first, then re-checked against whatever offset the zone
-    // actually reports for the resulting instant -- not the same
-    // offset whenever a daylight-saving change falls between the
-    // two. Neither agreeing means the naive time itself never
-    // existed at all (a "spring forward" gap skips straight over an
-    // hour of local clock time) -- advancing to the next candidate
-    // tick and trying again, rather than returning an instant whose
-    // own real local label would silently disagree with the one this
-    // was asked for.
-    loop {
-        let next_local_naive =
-            midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
-        let to_utc = |offset: chrono::FixedOffset| {
-            offset
-                .from_local_datetime(&next_local_naive)
-                .single()
-                .unwrap_or_else(|| offset.from_utc_datetime(&next_local_naive))
-                .with_timezone(&chrono::Utc)
-        };
-        let first_guess = to_utc(*local.offset());
-        let first_local = zone.local(first_guess);
-        if first_local.naive_local() == next_local_naive {
-            return first_guess;
-        }
-        let second_guess = to_utc(*first_local.offset());
-        if zone.local(second_guess).naive_local() == next_local_naive {
-            return second_guess;
-        }
-        next_elapsed_s += tick_s;
+    let next_elapsed_s = (elapsed_s / tick_s).ceil() * tick_s;
+    let next_local_naive =
+        midnight + chrono::Duration::milliseconds((next_elapsed_s * 1000.0).round() as i64);
+    // A plain `FixedOffset` is never itself ambiguous or has a gap --
+    // only a real zone's own *varying* offset (`zone.local`, checked
+    // below) can disagree with this.
+    let guess = local
+        .offset()
+        .from_local_datetime(&next_local_naive)
+        .single()
+        .expect("a fixed offset is never ambiguous or has a gap")
+        .with_timezone(&chrono::Utc);
+    if zone.local(guess).naive_local() == next_local_naive {
+        return guess;
     }
+    // The zone's own offset changes somewhere between `from_utc` and
+    // `guess` (a daylight-saving transition) -- a "spring forward"
+    // gap skips the elapsed time just asked for outright (it never
+    // existed), while a "fall back" repeat means an *earlier*
+    // elapsed time, already behind `from_utc`'s own stale reading,
+    // is due again under the new offset (issue #654: this is what
+    // left the whole repeated hour with no ticks of its own at all).
+    // Either way, finding exactly where the offset changes and
+    // re-deriving this tick from *that* instant's own local reading,
+    // rather than carrying on from the one `from_utc` already used,
+    // is what actually finds it -- a gap skips forward past it, a
+    // repeat re-ties the elapsed clock back to where the new offset
+    // picks up.
+    let transition = offset_transition_between(from_utc, guess, zone);
+    next_round_local_time(transition, tick_s, zone)
+}
+
+/// Binary-searches `(after, up_to]` for the instant `zone`'s own
+/// offset changes (issue #654's daylight-saving ticks) -- `zone.
+/// local(after).offset()` and `zone.local(up_to).offset()` must
+/// already differ, or there is nothing to find. Second-level
+/// resolution is enough for any real-world transition, which always
+/// falls on a whole minute.
+fn offset_transition_between(
+    after: chrono::DateTime<chrono::Utc>,
+    up_to: chrono::DateTime<chrono::Utc>,
+    zone: &dyn crate::format::ClockZone,
+) -> chrono::DateTime<chrono::Utc> {
+    let after_offset = *zone.local(after).offset();
+    let mut lo = after;
+    let mut hi = up_to;
+    while (hi - lo).num_seconds() > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if *zone.local(mid).offset() == after_offset {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
 }
 
 /// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
@@ -1797,6 +1820,33 @@ mod tests {
             5.0 * 3600.0,
             "4 nominal local hours pass, plus the one repeated hour: {ticks:?}"
         );
+    }
+
+    /// Issue #654: with a sub-hour tick interval, the repeated local
+    /// hour must still get ticks of its own, not a gap -- the
+    /// previous test's own 1-hour cadence happens to round-trip
+    /// either way, which never actually exercised this.
+    #[test]
+    fn axis_tick_columns_a_us_fall_back_span_still_ticks_within_the_repeated_hour() {
+        let zone = FallBackZone;
+        // 30-minute ticks: 4 real hours (04:00Z-08:00Z) over 100
+        // columns is 144s/column, landing on the 1800s candidate
+        // (900s needs 10 columns per tick, this is only ~6.25).
+        let ticks = axis_tick_columns("2026-11-01T04:00:00Z", 0.0, 4.0 * 3600.0, 100, &zone);
+        let offsets: Vec<f64> = ticks.iter().map(|(_, s, _)| *s).collect();
+        for pair in offsets.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "ticks must stay strictly increasing across the change: {ticks:?}"
+            );
+            assert!(
+                pair[1] - pair[0] <= 1800.0,
+                "no gap wider than one tick interval, including through the repeated hour: {ticks:?}"
+            );
+        }
+        let labels: Vec<&str> = ticks.iter().map(|(_, _, l)| l.as_str()).collect();
+        assert!(labels.contains(&"01:00"), "{labels:?}");
+        assert!(labels.contains(&"01:30"), "{labels:?}");
     }
 
     /// A span crossing a local day labels the tick at local midnight
