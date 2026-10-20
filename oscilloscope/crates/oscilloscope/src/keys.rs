@@ -498,10 +498,9 @@ impl App {
                     });
                     if is_quick_steps {
                         self.expanded_quick_steps.insert(path);
-                    } else if self.screen == Screen::Time {
-                        if !self.time_expanded_loops.remove(&path) {
-                            self.time_expanded_loops.insert(path);
-                        }
+                    } else if self.screen == Screen::Time && !self.time_expanded_loops.remove(&path)
+                    {
+                        self.time_expanded_loops.insert(path);
                     }
                 }
             }

@@ -3563,7 +3563,11 @@ fn offset_clock_label(
 ) -> Option<String> {
     let dt = oscilloscope_core::diff::parse_instant(run_start_ts)?
         + chrono::Duration::milliseconds((offset_s * 1000.0) as i64);
-    Some(zone.local(dt.with_timezone(&chrono::Utc)).format(fmt).to_string())
+    Some(
+        zone.local(dt.with_timezone(&chrono::Utc))
+            .format(fmt)
+            .to_string(),
+    )
 }
 
 /// Writes `┃` (DESIGN.md's now line) into `bar` at `now_s`'s own
@@ -3573,9 +3577,12 @@ fn offset_clock_label(
 /// (the mockup's own `█▶┃`).
 fn overlay_now_line(bar: &mut String, now_s: Option<f64>, layout: &TimeLayout, running: bool) {
     let Some(now_s) = now_s else { return };
-    let Some(col) =
-        oscilloscope_core::time::now_column(layout.vis_start_s, layout.vis_end_s, layout.bar_width, now_s)
-    else {
+    let Some(col) = oscilloscope_core::time::now_column(
+        layout.vis_start_s,
+        layout.vis_end_s,
+        layout.bar_width,
+        now_s,
+    ) else {
         return;
     };
     let mut chars: Vec<char> = bar.chars().collect();
@@ -3610,7 +3617,10 @@ enum TimeDrawRow<'a> {
 fn time_drawable_rows<'a>(
     visible: &[&Row],
     by_path: &std::collections::BTreeMap<String, &'a oscilloscope_core::time::TimeRow>,
-    passes: &std::collections::BTreeMap<String, Vec<&'a oscilloscope_core::screens::TimeLoopPassRow>>,
+    passes: &std::collections::BTreeMap<
+        String,
+        Vec<&'a oscilloscope_core::screens::TimeLoopPassRow>,
+    >,
     planned: Option<oscilloscope_core::time::GhostBar>,
     app: &App,
 ) -> Vec<TimeDrawRow<'a>> {
@@ -3708,6 +3718,47 @@ fn time_bar_string(
     out.into_iter().collect()
 }
 
+/// A zoom-pane band row's own line (DESIGN.md: "one band per kind of
+/// tool ... from the transcript's `tool_start`/`tool_end` times"):
+/// unlike [`time_bar_string`], a kind can have more than one segment
+/// on the same row (an agent calls the same kind of tool more than
+/// once in a session), so each of `segments` (`start_s, end_s,
+/// running`) is drawn in turn, the last one still running getting
+/// its own `▶` head.
+fn multi_segment_bar(
+    segments: &[(f64, f64, bool)],
+    axis_start_s: f64,
+    axis_end_s: f64,
+    width: usize,
+    fill: char,
+) -> String {
+    let mut out = vec![' '; width];
+    for &(start, end, running) in segments {
+        if end < axis_start_s || start > axis_end_s {
+            continue;
+        }
+        let cells = oscilloscope_core::time::bar_cells(axis_start_s, axis_end_s, width, start, end);
+        for slot in out
+            .iter_mut()
+            .take((cells.start_col + cells.full_cells).min(width))
+            .skip(cells.start_col)
+        {
+            *slot = fill;
+        }
+        let mut end_idx = cells.start_col + cells.full_cells;
+        if let Some(partial) = cells.partial_end {
+            if end_idx < width {
+                out[end_idx] = partial;
+            }
+        }
+        if running {
+            end_idx = end_idx.min(width.saturating_sub(1));
+            out[end_idx] = '▶';
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// The visible window (issue #650's `+`/`-`/`=`): the whole axis by
 /// default, narrowed by `app.time_zoom` around now (while following)
 /// or around the selected row's own bar (otherwise), clamped back
@@ -3785,7 +3836,6 @@ fn time_row_groups(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn draw_time_timeline(
     frame: &mut Frame,
     area: Rect,
@@ -3837,9 +3887,11 @@ fn draw_time_timeline(
     let gutter = " ".repeat(layout.label_width + 1);
     let mut tick_label_row = vec![' '; layout.bar_width];
     let mut tick_rule_row = vec!['─'; layout.bar_width];
-    for (col, offset_s) in
-        oscilloscope_core::time::axis_tick_columns(layout.vis_start_s, layout.vis_end_s, layout.bar_width)
-    {
+    for (col, offset_s) in oscilloscope_core::time::axis_tick_columns(
+        layout.vis_start_s,
+        layout.vis_end_s,
+        layout.bar_width,
+    ) {
         tick_rule_row[col] = if col == 0 {
             '├'
         } else if col == layout.bar_width.saturating_sub(1) {
@@ -3847,9 +3899,14 @@ fn draw_time_timeline(
         } else {
             '┼'
         };
-        if let Some(label) = run_start_ts.and_then(|rs| offset_clock_label(rs, offset_s, ctx.zone, "%H:%M")) {
-            for (i, ch) in label.chars().enumerate() {
-                if col + i < tick_label_row.len() {
+        if let Some(label) =
+            run_start_ts.and_then(|rs| offset_clock_label(rs, offset_s, ctx.zone, "%H:%M"))
+        {
+            // Skip a label that would be cut off rather than write
+            // a stray, unreadable fragment of it -- the rule row's
+            // own tick mark still lands on `col` either way.
+            if col + label.chars().count() <= tick_label_row.len() {
+                for (i, ch) in label.chars().enumerate() {
                     tick_label_row[col + i] = ch;
                 }
             }
@@ -3913,7 +3970,10 @@ fn draw_time_timeline(
                         format!("{label:<label_width$} "),
                         status_style(time_row.status.kind, ctx.theme),
                     ),
-                    Span::styled(bar, Style::default().fg(status_color(time_row.status.kind, ctx.theme))),
+                    Span::styled(
+                        bar,
+                        Style::default().fg(status_color(time_row.status.kind, ctx.theme)),
+                    ),
                 ];
                 if layout.show_columns {
                     let start_text = time_row
@@ -4064,7 +4124,8 @@ fn draw_time_strips(
         .map(|h| time_height_glyph(*h, in_flight_max))
         .collect();
 
-    let decision_points: Vec<(f64, u64)> = screen.strips.decisions.iter().map(|&d| (d, 1)).collect();
+    let decision_points: Vec<(f64, u64)> =
+        screen.strips.decisions.iter().map(|&d| (d, 1)).collect();
     let decision_heights = oscilloscope_core::time::bucket_weighted(
         layout.vis_start_s,
         layout.vis_end_s,
@@ -4107,7 +4168,9 @@ fn draw_time_strips(
             ""
         };
         vec![
-            Line::from(format!("{events_label:<label_width$} {events_line}  {events_suffix}")),
+            Line::from(format!(
+                "{events_label:<label_width$} {events_line}  {events_suffix}"
+            )),
             Line::from(format!("{:<label_width$} {decisions_line}", "decisions")),
             Line::from(format!(
                 "{:<label_width$} {in_flight_line}  {in_flight_suffix}",
@@ -4133,6 +4196,8 @@ fn draw_time_zoom_pane(
     ctx: &DrawCtx,
     now: &str,
 ) {
+    let label_width = 8usize;
+    let bar_width = (area.width as usize).saturating_sub(2 + label_width).max(4);
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &screen.selected {
         None => lines.push(Line::styled(
@@ -4140,7 +4205,13 @@ fn draw_time_zoom_pane(
             Style::default().fg(ctx.theme.dim),
         )),
         Some(step) => match &step.detail {
-            oscilloscope_core::screens::FocusDetail::Agent { live, .. } => {
+            oscilloscope_core::screens::FocusDetail::Agent {
+                live,
+                raw_turns,
+                raw_tool_calls,
+                raw_tool_counts,
+                ..
+            } => {
                 let run_start_ts = screen.axis.start_ts.clone();
                 let session_start_s = step
                     .since_ts
@@ -4152,9 +4223,14 @@ fn draw_time_zoom_pane(
                     .as_deref()
                     .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now))
                     .unwrap_or(session_start_s);
+                // The session's own end: its real elapsed time once
+                // known, `now` while it's still running.
+                let axis_end_s = step
+                    .elapsed_s
+                    .map_or(now_s, |elapsed| session_start_s + elapsed);
+                let running = live.is_some();
                 if let (Some(view), Some(run_start_ts)) = (transcript_view, run_start_ts.as_deref())
                 {
-                    let running = live.is_some();
                     let bands = oscilloscope_core::time::agent_zoom_bands(
                         &view.calls,
                         session_start_s,
@@ -4162,34 +4238,79 @@ fn draw_time_zoom_pane(
                         run_start_ts,
                         running,
                     );
-                    for band in &bands {
-                        let glyph = match band.kind {
-                            oscilloscope_core::time::ZoomBandKind::Read => '░',
-                            oscilloscope_core::time::ZoomBandKind::Edit => '▒',
-                            oscilloscope_core::time::ZoomBandKind::Bash => '█',
-                            oscilloscope_core::time::ZoomBandKind::Other => '·',
-                            oscilloscope_core::time::ZoomBandKind::Think => ' ',
-                        };
-                        let label = match band.kind {
-                            oscilloscope_core::time::ZoomBandKind::Think => "think",
-                            _ => "",
-                        };
-                        lines.push(Line::from(format!(
-                            "{glyph} {:>6.0}s-{:>6.0}s {label}",
-                            band.start_s - session_start_s,
-                            band.end_s - session_start_s
-                        )));
+                    // DESIGN.md: "the bands start where the window
+                    // starts, after a dim `…`" -- shown only when the
+                    // window itself is actually cut off and the
+                    // earliest band really does start right at it (a
+                    // band starting later than the session's own
+                    // start is ordinary thinking time, not a gap the
+                    // window missed).
+                    if view.truncated
+                        && bands
+                            .first()
+                            .is_some_and(|b| (b.start_s - session_start_s).abs() < 1e-6)
+                    {
+                        lines.push(Line::styled("…", Style::default().fg(ctx.theme.dim)));
                     }
+                    const ORDER: [oscilloscope_core::time::ZoomBandKind; 5] = [
+                        oscilloscope_core::time::ZoomBandKind::Think,
+                        oscilloscope_core::time::ZoomBandKind::Read,
+                        oscilloscope_core::time::ZoomBandKind::Edit,
+                        oscilloscope_core::time::ZoomBandKind::Bash,
+                        oscilloscope_core::time::ZoomBandKind::Other,
+                    ];
+                    for kind in ORDER {
+                        let segments: Vec<(f64, f64, bool)> = bands
+                            .iter()
+                            .filter(|b| b.kind == kind)
+                            .map(|b| (b.start_s, b.end_s, b.running))
+                            .collect();
+                        if segments.is_empty() {
+                            continue;
+                        }
+                        let (label, fill) = match kind {
+                            oscilloscope_core::time::ZoomBandKind::Think => ("think", '▓'),
+                            oscilloscope_core::time::ZoomBandKind::Read => ("read", '░'),
+                            oscilloscope_core::time::ZoomBandKind::Edit => ("edit", '▒'),
+                            oscilloscope_core::time::ZoomBandKind::Bash => ("bash", '█'),
+                            oscilloscope_core::time::ZoomBandKind::Other => ("other", '·'),
+                        };
+                        let bar = multi_segment_bar(
+                            &segments,
+                            session_start_s,
+                            axis_end_s,
+                            bar_width,
+                            fill,
+                        );
+                        lines.push(Line::from(format!("{label:<label_width$}{bar}")));
+                    }
+                } else if let Some(current) = live.as_deref().and_then(|l| l.current_tool.as_ref())
+                {
+                    // DESIGN.md: "With no transcript, the footer and
+                    // a `running: <tool>` line (from `current_tool`)
+                    // are all it shows."
+                    lines.push(Line::styled(
+                        format!("running: {}", current.name),
+                        Style::default().fg(ctx.theme.dim),
+                    ));
                 } else {
                     lines.push(Line::styled(
-                        "live session data isn't available yet",
+                        oscilloscope_core::screens::AGENT_LIVE_DATA_NOTE,
                         Style::default().fg(ctx.theme.dim),
                     ));
                 }
-                let tools = live.as_deref().map(|l| l.tools.clone()).unwrap_or_default();
-                let turns = live.as_deref().and_then(|l| l.turns);
-                let tool_calls = live.as_deref().and_then(|l| l.tool_calls);
-                let elapsed = (now_s - session_start_s).max(0.0);
+                // `meta.live`'s own tools/turns/tool_calls while
+                // running, `meta.raw`'s once finished (DESIGN.md).
+                let tools = live
+                    .as_deref()
+                    .map(|l| l.tools.clone())
+                    .unwrap_or_else(|| raw_tool_counts.clone());
+                let turns = live.as_deref().and_then(|l| l.turns).or(*raw_turns);
+                let tool_calls = live
+                    .as_deref()
+                    .and_then(|l| l.tool_calls)
+                    .or(*raw_tool_calls);
+                let elapsed = (axis_end_s - session_start_s).max(0.0);
                 let footer =
                     oscilloscope_core::time::zoom_agent_footer(turns, tool_calls, &tools, elapsed);
                 let mut footer_parts = Vec::new();
@@ -4212,19 +4333,122 @@ fn draw_time_zoom_pane(
                     ));
                 }
             }
-            _ => {
-                lines.push(Line::from(step.breadcrumb.clone()));
-                if let Some(since) = step
-                    .since_ts
-                    .as_deref()
-                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                {
-                    lines.push(Line::styled(
-                        format!("since {since}"),
-                        Style::default().fg(ctx.theme.dim),
-                    ));
+            _ => match &screen.zoom_extra {
+                Some(oscilloscope_core::screens::TimeZoomExtra::Container {
+                    children,
+                    start_s,
+                    axis_end_s,
+                }) => {
+                    let viewport = (area.height.saturating_sub(2) as usize).max(1);
+                    let budget = if children.len() > viewport {
+                        viewport.saturating_sub(1)
+                    } else {
+                        viewport
+                    };
+                    for child in children.iter().take(budget) {
+                        let glyph = status_glyph(child.status.kind);
+                        let label =
+                            truncate_label(&format!("{glyph} {}", child.label), label_width - 1);
+                        let bar = time_bar_string(
+                            child.start_s,
+                            child.duration_s,
+                            child.status.kind == StatusKind::Running,
+                            child.ghost,
+                            child.status.kind == StatusKind::Failed,
+                            *start_s,
+                            *axis_end_s,
+                            bar_width,
+                        );
+                        lines.push(Line::styled(
+                            format!("{label:<label_width$}{bar}"),
+                            status_style(child.status.kind, ctx.theme),
+                        ));
+                    }
+                    let more = children.len().saturating_sub(budget);
+                    if more > 0 {
+                        lines.push(Line::styled(
+                            format!("+{more} more"),
+                            Style::default().fg(ctx.theme.dim),
+                        ));
+                    }
                 }
-            }
+                Some(oscilloscope_core::screens::TimeZoomExtra::StepBar {
+                    start_s,
+                    p50_s,
+                    p90_s,
+                    axis_end_s,
+                    waiting_label,
+                }) => {
+                    // Wide enough to also show p50/p90 when either
+                    // falls past the step's own real end (DESIGN.md:
+                    // "with its p50 and p90 marked on the axis").
+                    let window_end_s = axis_end_s
+                        .max(start_s + p50_s.unwrap_or(0.0))
+                        .max(start_s + p90_s.unwrap_or(0.0));
+                    let mut bar: Vec<char> = time_bar_string(
+                        Some(*start_s),
+                        Some(axis_end_s - start_s),
+                        waiting_label.is_some(),
+                        None,
+                        step.error.is_some(),
+                        *start_s,
+                        window_end_s,
+                        bar_width,
+                    )
+                    .chars()
+                    .collect();
+                    for (offset, mark) in [(*p50_s, '┆'), (*p90_s, '┄')] {
+                        if let Some(offset) = offset {
+                            if let Some(col) = oscilloscope_core::time::now_column(
+                                *start_s,
+                                window_end_s,
+                                bar_width,
+                                start_s + offset,
+                            ) {
+                                if col < bar.len() {
+                                    bar[col] = mark;
+                                }
+                            }
+                        }
+                    }
+                    lines.push(Line::from(bar.into_iter().collect::<String>()));
+                    let mut marks = Vec::new();
+                    if let Some(p50) = p50_s {
+                        marks.push(format!(
+                            "p50 {}",
+                            oscilloscope_core::format::format_duration(*p50)
+                        ));
+                    }
+                    if let Some(p90) = p90_s {
+                        marks.push(format!(
+                            "p90 {}",
+                            oscilloscope_core::format::format_duration(*p90)
+                        ));
+                    }
+                    if !marks.is_empty() {
+                        lines.push(Line::styled(
+                            marks.join(" · "),
+                            Style::default().fg(ctx.theme.dim),
+                        ));
+                    }
+                    if let Some(label) = waiting_label {
+                        lines.push(Line::styled(*label, Style::default().fg(ctx.theme.dim)));
+                    }
+                }
+                None => {
+                    lines.push(Line::from(step.breadcrumb.clone()));
+                    if let Some(since) = step
+                        .since_ts
+                        .as_deref()
+                        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                    {
+                        lines.push(Line::styled(
+                            format!("since {since}"),
+                            Style::default().fg(ctx.theme.dim),
+                        ));
+                    }
+                }
+            },
         },
     }
     let max_scroll = lines
@@ -4425,7 +4649,15 @@ fn draw_time_screen(
     // the same width, `timeline_area_split` only having split their
     // shared column vertically.
     let layout = time_layout(screen, app, timeline_area_split[0].width, frame_area.width);
-    draw_time_timeline(frame, timeline_area_split[0], state, screen, &layout, app, ctx);
+    draw_time_timeline(
+        frame,
+        timeline_area_split[0],
+        state,
+        screen,
+        &layout,
+        app,
+        ctx,
+    );
     draw_time_strips(frame, timeline_area_split[1], screen, &layout);
 
     if three_pane {
@@ -9762,20 +9994,82 @@ mod golden_tests {
 
     #[test]
     fn time_agent_zoom_pane_at_120x40() {
+        // Not `time_snapshot_at`: that helper's own hardcoded `now`
+        // (`"2026-01-01T00:05:00Z"`) belongs to `sample_plan`'s own
+        // state, not `agent_running_state`'s real clock
+        // (`11:46:43`-`11:52:54`) -- a real transcript, tailed and
+        // drawn the way `main.rs`'s own `tail_focused_transcript`
+        // would, is also why this test exists at all.
         let plan = sample_plan();
         let mut model = RunModel::new();
         let state = agent_running_state();
-        let text = time_snapshot_at(
-            120,
-            40,
+        let now = "2026-01-01T11:52:55Z";
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
             &plan,
             &mut model,
             Some(&state),
             ProcessState::Running,
+            372.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
             Some("prime.fix"),
             &Default::default(),
-            false,
+            now,
         );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.selected_path = Some("prime.fix".to_string());
+        let transcript = agent_running_transcript();
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    Some(&transcript),
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
         insta::assert_snapshot!(text);
     }
 }

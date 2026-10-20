@@ -1234,9 +1234,18 @@ mod tests {
             busy_p90_s: Some(140.0),
             ..Default::default()
         };
-        assert_eq!(vs_usual_mark(150.0, &stats, false), Some(VsUsualMark::Slower));
-        assert_eq!(vs_usual_mark(70.0, &stats, false), Some(VsUsualMark::Faster));
-        assert_eq!(vs_usual_mark(100.0, &stats, false), Some(VsUsualMark::Usual));
+        assert_eq!(
+            vs_usual_mark(150.0, &stats, false),
+            Some(VsUsualMark::Slower)
+        );
+        assert_eq!(
+            vs_usual_mark(70.0, &stats, false),
+            Some(VsUsualMark::Faster)
+        );
+        assert_eq!(
+            vs_usual_mark(100.0, &stats, false),
+            Some(VsUsualMark::Usual)
+        );
     }
 
     #[test]
@@ -1246,9 +1255,18 @@ mod tests {
             busy_p50_s: Some(100.0),
             ..Default::default()
         };
-        assert_eq!(vs_usual_mark(130.0, &stats, false), Some(VsUsualMark::Slower));
-        assert_eq!(vs_usual_mark(70.0, &stats, false), Some(VsUsualMark::Faster));
-        assert_eq!(vs_usual_mark(110.0, &stats, false), Some(VsUsualMark::Usual));
+        assert_eq!(
+            vs_usual_mark(130.0, &stats, false),
+            Some(VsUsualMark::Slower)
+        );
+        assert_eq!(
+            vs_usual_mark(70.0, &stats, false),
+            Some(VsUsualMark::Faster)
+        );
+        assert_eq!(
+            vs_usual_mark(110.0, &stats, false),
+            Some(VsUsualMark::Usual)
+        );
     }
 
     #[test]
@@ -1275,7 +1293,10 @@ mod tests {
         // there yet.
         assert_eq!(vs_usual_mark(70.0, &stats, true), Some(VsUsualMark::Usual));
         // Past p90 while still running is genuinely slower already.
-        assert_eq!(vs_usual_mark(150.0, &stats, true), Some(VsUsualMark::Slower));
+        assert_eq!(
+            vs_usual_mark(150.0, &stats, true),
+            Some(VsUsualMark::Slower)
+        );
     }
 
     fn stats_usual(busy_p50: f64) -> StepStats {

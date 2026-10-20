@@ -1476,7 +1476,99 @@ pub struct TimeScreen {
     pub planned: Option<crate::time::GhostBar>,
     pub strips: TimeStrips,
     pub selected: Option<FocusedStep>,
+    /// The zoom pane's own extra data (DESIGN.md's zoom pane) for a
+    /// container, a prompt or a tool -- `None` for an agent (whose
+    /// own zoom draws straight from [`Self::selected`]'s
+    /// `FocusDetail::Agent`) or for nothing selected at all.
+    pub zoom_extra: Option<TimeZoomExtra>,
     pub vs_usual: TimeVsUsualPane,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimeZoomExtra {
+    /// DESIGN.md's zoom pane: "A container: its own children as rows
+    /// with bars" -- direct children only, on the container's own
+    /// axis (`axis_end_s`, from its own start, DESIGN.md: "on its own
+    /// axis from its start to its end (or now)").
+    Container {
+        children: Vec<crate::time::TimeRow>,
+        start_s: f64,
+        axis_end_s: f64,
+    },
+    /// DESIGN.md's zoom pane: "A prompt or tool: its own bar, with
+    /// its p50 and p90 marked on the axis when history has them, and
+    /// `waiting for the reply` or `running`".
+    StepBar {
+        start_s: f64,
+        p50_s: Option<f64>,
+        p90_s: Option<f64>,
+        axis_end_s: f64,
+        /// `Some("waiting for the reply")` for a running prompt,
+        /// `Some("running")` for a running tool, `None` once it has
+        /// finished.
+        waiting_label: Option<&'static str>,
+    },
+}
+
+/// [`TimeZoomExtra`], for `selected_path`'s own row -- `None` for an
+/// agent (`FocusDetail::Agent` already has everything its own zoom
+/// needs) or any row with neither children nor a leaf kind.
+fn build_time_zoom_extra(
+    selected_path: &str,
+    display_rows: &[TimeDisplayRow],
+    plan: &PlanTree,
+    header: &crate::render::Header,
+    now_s: Option<f64>,
+) -> Option<TimeZoomExtra> {
+    let selected = display_rows.iter().find_map(|r| match r {
+        TimeDisplayRow::Row(tr) if tr.path == selected_path => Some(tr),
+        _ => None,
+    })?;
+    let start_s = selected.start_s?;
+    let axis_end_s = start_s
+        + selected
+            .duration_s
+            .unwrap_or_else(|| now_s.map_or(0.0, |n| (n - start_s).max(0.0)));
+    if selected.has_children {
+        let children: Vec<crate::time::TimeRow> = display_rows
+            .iter()
+            .filter_map(|r| match r {
+                TimeDisplayRow::Row(tr)
+                    if tr.depth == selected.depth + 1
+                        && tr.path.starts_with(&format!("{selected_path}.")) =>
+                {
+                    Some(tr.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        return Some(TimeZoomExtra::Container {
+            children,
+            start_s,
+            axis_end_s,
+        });
+    }
+    if matches!(selected.kind, RowKind::Tool | RowKind::Prompt) {
+        let key = crate::history::display_key(selected_path, plan);
+        let stats = key
+            .as_deref()
+            .and_then(|k| header.history_step_usual.get(k));
+        let waiting_label = (selected.status.kind == StatusKind::Running).then(|| {
+            if selected.kind == RowKind::Prompt {
+                "waiting for the reply"
+            } else {
+                "running"
+            }
+        });
+        return Some(TimeZoomExtra::StepBar {
+            start_s,
+            p50_s: stats.and_then(|s| s.busy_p50_s),
+            p90_s: stats.and_then(|s| s.busy_p90_s),
+            axis_end_s,
+            waiting_label,
+        });
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1592,6 +1684,8 @@ pub fn build_time_screen(
     let selected = selected_path
         .and_then(|path| rows.iter().find(|r| r.path == path))
         .map(|row| build_focused_step(row, flat, plan, model, state, now));
+    let zoom_extra = selected_path
+        .and_then(|path| build_time_zoom_extra(path, &display_rows, plan, header, now_s));
 
     let vs_usual = build_vs_usual_pane(rows, flat, plan, model, header, now);
 
@@ -1602,6 +1696,7 @@ pub fn build_time_screen(
         planned,
         strips,
         selected,
+        zoom_extra,
         vs_usual,
     }
 }
@@ -3233,5 +3328,175 @@ mod tests {
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[0].label, "pass 1");
         assert_eq!(passes[1].label, "pass 2");
+    }
+
+    fn time_row(
+        path: &str,
+        depth: usize,
+        kind: RowKind,
+        status_kind: StatusKind,
+        start_s: Option<f64>,
+        duration_s: Option<f64>,
+        has_children: bool,
+    ) -> crate::time::TimeRow {
+        crate::time::TimeRow {
+            path: path.to_string(),
+            depth,
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind,
+            status: RowStatus {
+                kind: status_kind,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_s,
+            duration_s,
+            loop_progress: None,
+            has_children,
+            loop_expandable: false,
+            ghost: None,
+        }
+    }
+
+    #[test]
+    fn zoom_extra_lists_a_containers_direct_children_only() {
+        let display_rows = vec![
+            TimeDisplayRow::Row(time_row(
+                "prime.review",
+                1,
+                RowKind::If,
+                StatusKind::Running,
+                Some(0.0),
+                None,
+                true,
+            )),
+            TimeDisplayRow::Row(time_row(
+                "prime.review.agent",
+                2,
+                RowKind::Tool,
+                StatusKind::Done,
+                Some(0.0),
+                Some(10.0),
+                false,
+            )),
+            TimeDisplayRow::Row(time_row(
+                "prime.review.agent.deep",
+                3,
+                RowKind::Tool,
+                StatusKind::Done,
+                Some(0.0),
+                Some(5.0),
+                false,
+            )),
+            TimeDisplayRow::Row(time_row(
+                "prime.review.check",
+                2,
+                RowKind::Tool,
+                StatusKind::Pending,
+                None,
+                None,
+                false,
+            )),
+        ];
+        let plan = PlanTree::empty();
+        let header = base_header();
+        let extra =
+            build_time_zoom_extra("prime.review", &display_rows, &plan, &header, Some(20.0));
+        match extra {
+            Some(TimeZoomExtra::Container {
+                children,
+                start_s,
+                axis_end_s,
+            }) => {
+                assert_eq!(
+                    children.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+                    vec!["prime.review.agent", "prime.review.check"],
+                    "only direct children, not the grandchild"
+                );
+                assert_eq!(start_s, 0.0);
+                assert_eq!(axis_end_s, 20.0, "no duration yet, so the axis runs to now");
+            }
+            other => panic!("expected Container, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zoom_extra_marks_a_running_tool_as_running_and_a_running_prompt_as_waiting() {
+        let plan = PlanTree::empty();
+        let header = base_header();
+        let tool_rows = vec![TimeDisplayRow::Row(time_row(
+            "prime.a",
+            1,
+            RowKind::Tool,
+            StatusKind::Running,
+            Some(5.0),
+            None,
+            false,
+        ))];
+        match build_time_zoom_extra("prime.a", &tool_rows, &plan, &header, Some(8.0)) {
+            Some(TimeZoomExtra::StepBar {
+                waiting_label,
+                start_s,
+                axis_end_s,
+                ..
+            }) => {
+                assert_eq!(waiting_label, Some("running"));
+                assert_eq!(start_s, 5.0);
+                assert_eq!(axis_end_s, 8.0);
+            }
+            other => panic!("expected StepBar, got {other:?}"),
+        }
+        let prompt_rows = vec![TimeDisplayRow::Row(time_row(
+            "prime.b",
+            1,
+            RowKind::Prompt,
+            StatusKind::Running,
+            Some(5.0),
+            None,
+            false,
+        ))];
+        match build_time_zoom_extra("prime.b", &prompt_rows, &plan, &header, Some(8.0)) {
+            Some(TimeZoomExtra::StepBar { waiting_label, .. }) => {
+                assert_eq!(waiting_label, Some("waiting for the reply"))
+            }
+            other => panic!("expected StepBar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zoom_extra_reads_p50_p90_from_pooled_history_for_a_finished_tool() {
+        let plan = PlanTree::empty();
+        let mut header = base_header();
+        header.history_step_usual.insert(
+            "a".to_string(),
+            crate::history::StepStats {
+                count: 5,
+                busy_p50_s: Some(60.0),
+                busy_p90_s: Some(90.0),
+                ..Default::default()
+            },
+        );
+        let rows = vec![TimeDisplayRow::Row(time_row(
+            "prime.a",
+            1,
+            RowKind::Tool,
+            StatusKind::Done,
+            Some(0.0),
+            Some(70.0),
+            false,
+        ))];
+        match build_time_zoom_extra("prime.a", &rows, &plan, &header, None) {
+            Some(TimeZoomExtra::StepBar {
+                p50_s,
+                p90_s,
+                waiting_label,
+                ..
+            }) => {
+                assert_eq!(p50_s, Some(60.0));
+                assert_eq!(p90_s, Some(90.0));
+                assert_eq!(waiting_label, None, "finished, not waiting or running");
+            }
+            other => panic!("expected StepBar, got {other:?}"),
+        }
     }
 }
