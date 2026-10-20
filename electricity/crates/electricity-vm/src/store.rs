@@ -62,7 +62,7 @@ pub enum Slot {
 /// chain_slots`/`dict_slots` already pay once per `if`-branch-step/rare
 /// multi-entry-chain call, never per pass) -- plain `.iter()`/`.get()`/
 /// Deref on such a node silently drops every key *fallback* alone
-/// carries (issue #501 review finding 1: `exec::conditional`'s
+/// carries (issue #501's review: `exec::conditional`'s
 /// `chain_slots`/`dict_slots` did exactly that for a release, losing an
 /// `if`'s enclosing scope from its second branch step on inside any
 /// loop body). [`Store::saved`] never sees an overlay node at all: it
@@ -247,7 +247,7 @@ pub fn node_with_fallback(entries: IndexMap<Value, Slot>, fallback: NodeRef) -> 
 
 /// [`node_with_fallback`], plus [`Node::hidden`] -- a single key
 /// *fallback* must never expose through this overlay, even once
-/// *fallback* itself comes to carry it (issue #501 review finding 2).
+/// *fallback* itself comes to carry it (issue #501's review).
 pub fn node_with_fallback_hiding(
     entries: IndexMap<Value, Slot>,
     fallback: NodeRef,

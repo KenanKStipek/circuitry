@@ -370,7 +370,7 @@ async fn the_child_roots_own_pair_is_suppressed_and_every_other_hook_forwards_na
     );
 }
 
-/// Review finding 6 on PR #472: every existing refused-child test used
+/// PR #472's review: every existing refused-child test used
 /// an *inline* child (`support::refused_use_leaf`); this one is a real
 /// `path:` child, with an ordinary `json` step placed *before* the
 /// unsupported `prompt` step in the same chain -- `first_unsupported`
@@ -492,7 +492,7 @@ async fn use_inside_a_tree_dynamic_has_no_false_cycle_between_sibling_branches()
 /// the same absolute path its own start/end events use, namespaced
 /// under the use node like every other child effect (this test used
 /// to pin the opposite, unnamespaced behaviour per a now-superseded
-/// review finding 3 on PR #472). Also a Rust test, not a conformance
+/// finding from PR #472's review). Also a Rust test, not a conformance
 /// case, for the same `known_divergence` single-location reason as
 /// the sibling test above (the child's own dynamic container also
 /// picks up the use-triggered real-adapter heuristic).

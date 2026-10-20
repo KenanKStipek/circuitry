@@ -18,7 +18,7 @@ use support::{
 };
 
 /// A `generate` that always answers `"yes"`, with token counts --
-/// issue #513 review finding 4: lets a model `if`'s own container-level
+/// issue #513's review: lets a model `if`'s own container-level
 /// `record_totals` hook be exercised end to end, not just probed for
 /// reaching `NoopAdapter`'s own failure.
 struct YesAdapter;
@@ -107,7 +107,7 @@ async fn run_with_adapter(
     (store, observer, result)
 }
 
-/// Issue #513 review finding 4: a named model `if`'s own successful
+/// Issue #513's review: a named model `if`'s own successful
 /// pass calls `record_totals` exactly once.
 #[tokio::test]
 async fn a_named_model_if_calls_record_totals_once_on_success() {
