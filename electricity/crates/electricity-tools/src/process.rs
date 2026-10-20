@@ -567,7 +567,7 @@ pub fn kill_process_group(pid: u32) {
             if pgid == libc::getpgrp() {
                 // The child shares this interpreter's own process
                 // group -- `killpg` here would take this process down
-                // with it, so kill just the child (#357 review N1).
+                // with it, so kill just the child (#357).
                 libc::kill(pid, libc::SIGKILL);
                 return;
             }
@@ -663,9 +663,8 @@ fn strerror_text(err: &io::Error) -> String {
 /// found on `PATH` (or an absolute path that exists), else `None`;
 /// never an error -- Python's own version takes a list because a
 /// plugin like `imagemagick` ships under several names (`magick`/
-/// `convert`), tried in order (review P2-6 on PR #454's second
-/// review: the gate's own first signature took one binary and
-/// returned `Result`, matching neither shape).
+/// `convert`), tried in order (the gate's own first signature took
+/// one binary and returned `Result`, matching neither shape).
 pub fn resolve_binary(candidates: &[&str]) -> Option<String> {
     for name in candidates {
         if name.is_empty() {

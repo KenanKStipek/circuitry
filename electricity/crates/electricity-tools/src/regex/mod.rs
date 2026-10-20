@@ -71,8 +71,8 @@ fn invalid_pattern(message: impl std::fmt::Display) -> ToolError {
 
 /// Our own wording for a `fancy_regex::Error` reached *after* this
 /// translator's own `translate()` already succeeded -- never
-/// `fancy-regex`'s own `Display` text verbatim (PR #480 review R9:
-/// leaking its "Error compiling regex: Look-behind assertion without
+/// `fancy-regex`'s own `Display` text verbatim (PR #480: leaking its
+/// "Error compiling regex: Look-behind assertion without
 /// constant size" broke the "Circuitry's own messages, never a
 /// third-party one" rule). The one construct known to reach this
 /// point is a backreference inside a look-behind (this module's own
@@ -525,8 +525,8 @@ mod tests {
 
     #[tokio::test]
     async fn backreference_inside_lookbehind_never_leaks_fancy_regexs_own_text() {
-        // PR #480 review R9: a group with fixed width ("a") makes
-        // this translator's own analysis accept `\1` inside the
+        // A group with fixed width ("a") makes this translator's
+        // own analysis accept `\1` inside the
         // look-behind (CPython accepts it too), but `fancy-regex`'s
         // own compiler rejects every backreference there regardless
         // (DESIGN.md §7.3's own divergence note). The resulting error
@@ -580,8 +580,8 @@ mod tests {
 
     #[tokio::test]
     async fn word_boundary_no_match_findall_succeeds_on_a_two_megabyte_input() {
-        // PR #480 review R8: `\b` forces the backtracking VM (it's
-        // translated into a lookaround), and `fancy-regex`'s own
+        // `\b` forces the backtracking VM (it's translated into a
+        // lookaround), and `fancy-regex`'s own
         // 1,000,000 default backtrack limit counts across every start
         // position of the search, not just the eventual match -- so
         // this used to fail past roughly 150 KB even though `cof`
