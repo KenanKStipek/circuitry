@@ -327,7 +327,7 @@ fn ollama_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // Review finding F6: the recorded headers are compared
+        // The recorded headers are compared
         // against the adapter's own `ollama::request_headers()`, the
         // same function `generate()` itself calls, never a list
         // written by hand in the test a second time.
@@ -373,7 +373,7 @@ fn openai_compat_request_building_matches_circuitry() {
         // `LMStudioAdapter` carries no `api_key_env`, so every case
         // here sends only the one static header -- compared against
         // `openai_compat::request_headers`, the same function
-        // `chat_completion()` itself calls (review finding F6), plus
+        // `chat_completion()` itself calls, plus
         // the fixed URL every case here was recorded against.
         assert_headers_match_expected(
             &openai_compat::request_headers("", &[]),
@@ -426,7 +426,7 @@ fn openai_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // Review finding F6: compared against `openai::
+        // Compared against `openai::
         // request_headers`, the same function `generate()` itself
         // calls, plus the fixed URL every case here was recorded
         // against.
@@ -474,7 +474,7 @@ fn anthropic_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // Review finding F6: compared against `anthropic::
+        // Compared against `anthropic::
         // request_headers`, the same function `generate()` itself
         // calls, plus the fixed URL every case here was recorded
         // against.
