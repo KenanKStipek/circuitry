@@ -724,7 +724,7 @@ pub struct StepInterval {
 }
 
 /// [`RunModel::step_intervals`]'s own bound (issue #649).
-const MAX_STEP_INTERVALS: usize = 50_000;
+pub(crate) const MAX_STEP_INTERVALS: usize = 50_000;
 
 /// One `report` event, as last seen (#610). `ts`/`level`/`message`
 /// are the header status line and the details pane's own fields;
@@ -1192,6 +1192,16 @@ impl RunModel {
     /// carried one.
     pub fn run_start_engine(&self) -> Option<&str> {
         self.run_start_engine.as_deref()
+    }
+
+    /// Whether `--events` has actually been flowing at all (any
+    /// `start`/`end` line seen) -- the Time screen's events/min
+    /// strip reads this to decide between counting logged intervals
+    /// and falling back to state's own `created_at`/`completed_at`
+    /// (DESIGN.md: "without `--events`, osi counts state's ...
+    /// instead and labels the strip `(from state)`").
+    pub fn has_events(&self) -> bool {
+        self.latest_event_ts.is_some()
     }
 
     /// Recomputes every row's status from one snapshot, the plan, and
