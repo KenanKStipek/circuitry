@@ -1452,6 +1452,93 @@ mod tests {
     }
 
     #[test]
+    fn header_line_shows_the_history_eta_in_place_of_the_loop_eta() {
+        let mut header = base_header();
+        header.history_eta_ts = Some("2026-10-08T12:05:00Z".to_string());
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            120,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
+        let text = header_line_text(&segments);
+        assert!(text.contains("ETA ~12:05"), "{text}");
+        assert!(!text.contains("loop ETA"), "{text}");
+    }
+
+    #[test]
+    fn header_line_shows_eta_question_mark_once_past_the_usual_end() {
+        let mut header = base_header();
+        header.history_eta_past_usual = true;
+        let segments = header_line(
+            &header,
+            "2026-10-08T11:52:55Z",
+            &utc(),
+            120,
+            true,
+            0,
+            Some(Screen::Overview),
+        );
+        let text = header_line_text(&segments);
+        assert!(text.contains("ETA ?"), "{text}");
+        assert!(!text.contains("loop ETA"), "{text}");
+    }
+
+    #[test]
+    fn time_card_shows_the_history_eta_vs_usual_and_usual_range_once_there_is_enough_history() {
+        let mut header = base_header();
+        header.history_eta_ts = Some("2026-10-08T12:05:00Z".to_string());
+        header.history_eta_remaining_s = Some(720.0);
+        header.history_vs_usual_s = Some(180.0);
+        header.history_usual_total_s = Some(2700.0);
+        header.history_eta_low_ts = Some("2026-10-08T11:58:00Z".to_string());
+        header.history_eta_high_ts = Some("2026-10-08T12:09:00Z".to_string());
+        header.history_same_hash_count = 7;
+        let card = build_time_card(&header, &[]);
+        assert!(card.eta_from_history);
+        assert!(!card.eta_past_usual);
+        assert_eq!(card.eta_ts, header.history_eta_ts);
+        assert_eq!(card.eta_remaining_s, Some(720.0));
+        assert_eq!(card.vs_usual_s, Some(180.0));
+        assert_eq!(card.usual_total_s, Some(2700.0));
+        assert_eq!(card.usual_low_ts, header.history_eta_low_ts);
+        assert_eq!(card.usual_high_ts, header.history_eta_high_ts);
+        // Once there's a real ETA, the run count is enough on its
+        // own (via `ETA ~`) -- `history: N of 3 runs` is only for
+        // when there isn't one yet.
+        assert_eq!(card.history_count, None);
+    }
+
+    #[test]
+    fn time_card_shows_a_run_count_instead_of_an_eta_below_the_threshold() {
+        let mut header = base_header();
+        header.history_same_hash_count = 1;
+        let card = build_time_card(&header, &[]);
+        assert!(!card.eta_from_history);
+        assert_eq!(card.eta_ts, header.innermost_loop_eta_ts);
+        assert_eq!(card.history_count, Some(1));
+        assert_eq!(card.vs_usual_s, None);
+    }
+
+    #[test]
+    fn time_card_shows_no_eta_at_all_once_past_the_usual_end() {
+        let mut header = base_header();
+        header.history_eta_past_usual = true;
+        header.history_same_hash_count = 7;
+        let card = build_time_card(&header, &[]);
+        assert!(card.eta_from_history);
+        assert!(card.eta_past_usual);
+        assert_eq!(card.eta_ts, None);
+        assert_eq!(
+            card.history_count, None,
+            "a run count is only shown below the ETA's own threshold, not past usual"
+        );
+    }
+
+    #[test]
     fn header_line_shows_a_report_in_place_of_a_run_id() {
         let mut header = base_header();
         header.latest_report = Some(crate::render::HeaderReport {
@@ -2056,6 +2143,60 @@ mod tests {
             NowFocus::Running(step, more) => {
                 assert_eq!(step.path, "prime.review.fix.agent");
                 assert_eq!(more, 0, "only the leaf is a real running step");
+            }
+            other => panic!("expected Running, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_running_steps_own_usual_busy_time_is_filled_in_from_history() {
+        fn running_row(path: &str) -> Row {
+            Row {
+                path: path.to_string(),
+                depth: 1,
+                label: path.to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: Some(1.0),
+                loop_progress: None,
+                dim: Some("shell".to_string()),
+                has_children: false,
+            }
+        }
+        let rows = vec![running_row("prime.slow")];
+        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut header = base_header();
+        header.history_step_usual.insert(
+            "slow".to_string(),
+            crate::history::StepStats {
+                count: 5,
+                busy_p50_s: Some(300.0),
+                busy_p10_s: None,
+                busy_p90_s: Some(540.0),
+                remaining_after_p50_s: None,
+            },
+        );
+        let pane = build_now_pane(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            None,
+            &header,
+            &[],
+            None,
+            "2026-10-08T11:00:00Z",
+        );
+        match pane.focus {
+            NowFocus::Running(step, _) => {
+                assert_eq!(step.usual_busy_p50_s, Some(300.0));
+                assert_eq!(step.usual_busy_p90_s, Some(540.0));
             }
             other => panic!("expected Running, got {other:?}"),
         }
