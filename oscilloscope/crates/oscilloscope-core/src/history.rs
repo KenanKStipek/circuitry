@@ -787,6 +787,14 @@ pub struct StepStats {
     pub busy_p50_s: Option<f64>,
     pub busy_p10_s: Option<f64>,
     pub busy_p90_s: Option<f64>,
+    /// p50 of the step's own `start_s`/`end_s` (run-relative
+    /// seconds), pooled the same "earlier versions" way `busy_p50_s`
+    /// is -- the Time screen's own ghost bars (issue #650), shifted
+    /// by how far ahead or behind the current run is at its ETA
+    /// anchor. `None` below [`P50_MIN_RUNS`], same threshold as every
+    /// other p50 here.
+    pub start_p50_s: Option<f64>,
+    pub end_p50_s: Option<f64>,
     /// p50 of `run.wall_s - step.end_s`, pooled across every ok run
     /// of this path, any hash -- shown generically for a step, but
     /// never read by [`compute_eta`] itself; see
@@ -881,6 +889,14 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
             .iter()
             .filter_map(|r| r.steps.get(key).map(|s| r.wall_s - s.end_s))
             .collect();
+        let start_s: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key).map(|s| s.start_s))
+            .collect();
+        let end_s: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key).map(|s| s.end_s))
+            .collect();
         per_step.insert(
             key.clone(),
             StepStats {
@@ -888,6 +904,8 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
                 busy_p50_s: percentile_with_threshold(&busy, 50.0, P50_MIN_RUNS),
                 busy_p10_s: percentile_with_threshold(&busy, 10.0, P10_P90_MIN_RUNS),
                 busy_p90_s: percentile_with_threshold(&busy, 90.0, P10_P90_MIN_RUNS),
+                start_p50_s: percentile_with_threshold(&start_s, 50.0, P50_MIN_RUNS),
+                end_p50_s: percentile_with_threshold(&end_s, 50.0, P50_MIN_RUNS),
                 remaining_after_p50_s: percentile_with_threshold(&remaining, 50.0, P50_MIN_RUNS),
             },
         );
@@ -1198,6 +1216,39 @@ mod tests {
         let plan_stats = stats.per_step.get("plan").expect("pooled across hashes");
         assert_eq!(plan_stats.count, 3);
         assert!(plan_stats.busy_p50_s.is_some());
+    }
+
+    /// Issue #650's own ghost bars need a step's usual `start_s`/
+    /// `end_s`, not just its usual `busy_s` -- pooled the same
+    /// "earlier versions" way.
+    #[test]
+    fn compute_stats_pools_per_step_start_and_end_times() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step(10.0, 20.0, 10.0, 1, true));
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps
+            .insert("plan".to_string(), step(12.0, 22.0, 10.0, 1, true));
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps
+            .insert("plan".to_string(), step(14.0, 24.0, 10.0, 1, true));
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        assert_eq!(plan_stats.start_p50_s, Some(12.0));
+        assert_eq!(plan_stats.end_p50_s, Some(22.0));
+    }
+
+    /// Below [`P50_MIN_RUNS`], there aren't enough runs for a usual
+    /// start/end either.
+    #[test]
+    fn compute_stats_leaves_start_and_end_p50_unset_with_too_few_runs() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step(10.0, 20.0, 10.0, 1, true));
+        let stats = compute_stats(&[r1], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        assert_eq!(plan_stats.start_p50_s, None);
+        assert_eq!(plan_stats.end_p50_s, None);
     }
 
     #[test]

@@ -2204,7 +2204,7 @@ mod tests {
                 busy_p50_s: Some(300.0),
                 busy_p10_s: None,
                 busy_p90_s: Some(540.0),
-                remaining_after_p50_s: None,
+                ..Default::default()
             },
         );
         let pane = build_now_pane(
