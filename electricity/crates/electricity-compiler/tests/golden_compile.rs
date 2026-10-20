@@ -264,7 +264,7 @@ fn malformed_cel_expression_fails_at_the_same_place() {
     assert!(err.0.ends_with("Expression: 'state.a =='"));
 }
 
-/// Finding 3: a `while`-loop's CEL parse error uses its own label
+/// A `while`-loop's CEL parse error uses its own label
 /// (`"Loop while CEL expression"`, not the default `"CEL expression"`),
 /// wrapping the same third-party parser text
 /// `malformed_cel_expression_fails_at_the_same_place` already carves

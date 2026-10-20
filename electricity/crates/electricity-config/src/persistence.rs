@@ -178,7 +178,7 @@ fn canonical_backend(requested: &str) -> Option<&'static str> {
 /// one place this crate's own callers ask whether persistence is
 /// actually turned on, so [`validate_persistence_block`]'s own skip
 /// condition and a caller deciding whether to refuse a run for
-/// configuring persistence (PR #441 review finding 2) can never
+/// configuring persistence (PR #441) can never
 /// disagree about what counts as "enabled".
 pub fn persistence_enabled(runtime: Option<&Value>) -> bool {
     let Some(persistence_cfg) = runtime

@@ -5,7 +5,7 @@
 //! always immediately followed by a second, separate call re-evaluating
 //! the identical branch/instance pair just to collect its violations --
 //! recursively exponential in nesting depth once a document fails deep
-//! enough (PR #502's round-4 fix, finding F12; probe-schema7 c18/c19,
+//! enough (PR #502's round-4 fix; probe-schema7 c18/c19,
 //! 12/16 levels). This pins a much deeper, still-failing instance (30
 //! levels) staying well under a second in an unoptimized debug build.
 

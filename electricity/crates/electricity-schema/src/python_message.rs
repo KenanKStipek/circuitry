@@ -1,5 +1,5 @@
 //! `validate_prompt_schema`'s own Python-`jsonschema`-exact message text
-//! (issue #498 ruling 6, tightened by PR #502's review finding 2,
+//! (issue #498 ruling 6, tightened by PR #502's review,
 //! ruling 2) -- `jsonschema.validate` raises `jsonschema.exceptions.best_match(
 //! validator.iter_errors(instance))`, so matching it exactly needs both the
 //! *selection* (`best_match`'s own relevance key) and the *text* (each

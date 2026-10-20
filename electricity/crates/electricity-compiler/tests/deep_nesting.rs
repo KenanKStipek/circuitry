@@ -1,4 +1,4 @@
-//! Finding 1 (review of PR #415): the depth acceptance criterion
+//! Review of PR #415: the depth acceptance criterion
 //! (issue #408's own list) was untested -- "on a 2 MiB thread stack,
 //! the deepest nesting `electricity-yaml` accepts either compiles or
 //! is rejected with a distinct depth error, never a stack overflow."

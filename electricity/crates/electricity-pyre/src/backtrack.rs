@@ -10,8 +10,8 @@
 //! even though `cof` succeeds instantly). Shared by
 //! `electricity-tools::regex` (moved out from under it, PR #502's
 //! round-5 fix) and `electricity-schema::engine` (`pattern`/
-//! `patternProperties` -- issue #498's own follow-up,
-//! finding V4), the two places either crate needs a backtrack-limit
+//! `patternProperties` -- issue #498's own follow-up),
+//! the two places either crate needs a backtrack-limit
 //! sized to the text actually being matched rather than the crate's
 //! own flat default.
 //!

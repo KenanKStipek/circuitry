@@ -1,8 +1,8 @@
 //! A schema that is itself recursive (a `$ref` cycle back to an
 //! ancestor) describes a real, finite-instance-terminating shape -- a
 //! tree or a linked list -- that Python validates up to roughly 200-240
-//! levels before its own `RecursionError` (PR #502's round-4 fix,
-//! finding F1). Before that fix, `schema_is_fully_supported` had no
+//! levels before its own `RecursionError` (PR #502's round-4 fix).
+//! Before that fix, `schema_is_fully_supported` had no
 //! visited set and walked a cyclic schema's own structure forever
 //! (bounded only by a plain depth budget), so *every* instance of *any*
 //! recursive schema -- even a depth-1 one -- was wrongly reported as

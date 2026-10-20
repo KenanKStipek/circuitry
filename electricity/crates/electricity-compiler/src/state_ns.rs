@@ -56,7 +56,7 @@ pub fn migrate_legacy_input_namespace(
 
 /// `core/state_ns.py::migrate_legacy_state`, in full -- the whole root,
 /// not just [`migrate_legacy_input_namespace`]'s own `input`-only
-/// projection of it (PR #441 review finding 1d: a root key `-e`
+/// projection of it (PR #441: a root key `-e`
 /// supplies that is itself a namespace name (`prime`/`runtime`) or
 /// `_`-prefixed must survive at the root, not be silently dropped just
 /// because it was never going to be lifted under `input`).
