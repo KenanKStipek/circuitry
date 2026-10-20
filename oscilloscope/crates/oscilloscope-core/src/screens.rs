@@ -2163,4 +2163,161 @@ mod tests {
             other => panic!("expected Ended, got {other:?}"),
         }
     }
+
+    fn agent_row(path: &str) -> Row {
+        Row {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
+    /// Issue #637: a running agent's own `meta.live` fills
+    /// `FocusDetail::Agent::live`, replacing the old always-on
+    /// fallback note.
+    #[test]
+    fn a_running_agents_live_summary_fills_focus_detail() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "agent1": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:43Z",
+                    "completed_at": null,
+                    "provider": "agent",
+                    "live": {
+                        "engine": "pi", "model": "sonnet", "turns": 14, "tool_calls": 31,
+                        "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
+                        "updated_at": "2026-10-08T11:52:54Z"
+                    }
+                }}
+            }}),
+        );
+        let row = agent_row("prime.agent1");
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: Some(live), ..
+            } => {
+                assert_eq!(live.engine, Some("pi".to_string()));
+                assert_eq!(live.turns, Some(14));
+                assert!(live.is_recent("2026-10-08T11:52:55Z"));
+            }
+            other => panic!("expected a populated Agent detail, got {other:?}"),
+        }
+    }
+
+    /// An interrupted run's own leftover `meta.live` (no
+    /// `completed_at`, no further heartbeat) still fills `live` --
+    /// the front end, not this builder, decides running vs stopped
+    /// from `AgentLive::is_recent` -- but it must read as stale here.
+    #[test]
+    fn an_interrupted_agents_leftover_live_summary_reads_as_stale() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "agent1": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:43Z",
+                    "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:50Z"}
+                }}
+            }}),
+        );
+        let row = agent_row("prime.agent1");
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: Some(live), ..
+            } => {
+                assert!(!live.is_recent("2026-10-08T11:52:55Z"));
+            }
+            other => panic!("expected a populated Agent detail, got {other:?}"),
+        }
+    }
+
+    /// A finished agent step has no `meta.live` left at all (removed
+    /// once the attempt ended) -- `live` is `None`, and the generic
+    /// `tokens`/`cost_usd`/`value` fields (shared with every other
+    /// tool step) are what a front end reads instead.
+    #[test]
+    fn a_finished_agent_step_has_no_live_field_and_falls_back_to_the_note() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": "t"},
+                "agent1": {"value": "done", "meta": {
+                    "created_at": "2026-10-08T11:46:43Z",
+                    "completed_at": "2026-10-08T11:52:55Z",
+                    "provider": "agent",
+                    "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10
+                }}
+            }}),
+        );
+        let mut row = agent_row("prime.agent1");
+        row.status = RowStatus {
+            kind: StatusKind::Done,
+            skip_reason: None,
+            retrying: false,
+        };
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:56Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: None, note, ..
+            } => assert_eq!(note, AGENT_LIVE_DATA_NOTE),
+            other => panic!("expected no live summary, got {other:?}"),
+        }
+        assert_eq!(step.tokens, Some(2_100_000 + 18_000));
+        assert_eq!(step.cost_usd, Some(1.10));
+    }
+
+    /// A retried attempt's own `meta.live.earlier_attempts` survives
+    /// into `FocusDetail::Agent::live` unchanged.
+    #[test]
+    fn a_retried_attempts_earlier_attempts_is_carried_through() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "agent1": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:50:00Z",
+                    "completed_at": null,
+                    "provider": "agent",
+                    "live": {
+                        "attempt": 2,
+                        "updated_at": "2026-10-08T11:52:54Z",
+                        "earlier_attempts": {"tokens_sent": 500, "tokens_received": 40}
+                    }
+                }}
+            }}),
+        );
+        let row = agent_row("prime.agent1");
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: Some(live), ..
+            } => {
+                assert_eq!(live.attempt, Some(2));
+                assert_eq!(
+                    live.earlier_attempts,
+                    Some(crate::model::AgentLiveEarlierAttempts {
+                        tokens_sent: Some(500),
+                        tokens_received: Some(40)
+                    })
+                );
+            }
+            other => panic!("expected a populated Agent detail, got {other:?}"),
+        }
+    }
 }
