@@ -207,7 +207,7 @@ def test_a_dotenv_defined_variable_reaches_a_running_tool_call_the_same_way_on_b
 def test_a_group_readable_dotenv_prints_the_exact_same_warning_text_on_both_engines(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:
-    """#471 review finding 8: the readable-by-others warning, compared
+    """Issue #471: the readable-by-others warning, compared
     byte for byte rather than with `contains`."""
     home_dir = tmp_path / "home"
     home_dir.mkdir()
@@ -232,7 +232,7 @@ def test_a_group_readable_dotenv_prints_the_exact_same_warning_text_on_both_engi
 def test_an_unreadable_dotenv_prints_the_exact_same_warning_text_on_both_engines(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:
-    """#471 review finding 8: the unreadable-file warning, compared byte
+    """Issue #471: the unreadable-file warning, compared byte
     for byte -- mode 0 rather than `contains`."""
     home_dir = tmp_path / "home"
     home_dir.mkdir()
@@ -264,7 +264,7 @@ def test_an_unreadable_dotenv_prints_the_exact_same_warning_text_on_both_engines
 def test_a_directory_at_the_dotenv_path_parses_as_empty_on_both_engines(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:
-    """#471 review finding 6: `DotEnv._get_stream`'s own
+    """Issue #471: `DotEnv._get_stream`'s own
     `_is_file_or_fifo` check means a directory there is never opened at
     all -- it parses as an empty file (loaded, nothing supplied), not
     an OSError."""
