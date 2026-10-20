@@ -1148,7 +1148,7 @@ does internally, just performed before the snapshot rather than after it) — an
 both engines (`core/cel_eval.py::evaluate_cel_expect` too) — narrowing it would silently fix that
 divergence, which this lane is not about.
 
-**A timing change, not just a speedup (review finding 1 on PR #482).** Before this lane, a `tool`
+**A timing change, not just a speedup (PR #482).** Before this lane, a `tool`
 leaf's own `ctx` was `live_ctx`'s one-time snapshot taken in `exec/mod.rs`, *before* `execute_tool`
 ever ran — so every render, every retry attempt's own re-render, and `expect:`'s own `state` saw
 the state from before the tool started, never this attempt's own write. After this lane, `exec/
@@ -1169,7 +1169,7 @@ saw it live. Confirmed divergent against a pre-#482 electricity build (fails out
 retries on an identical, stale render both attempts) and byte-identical against both cof and
 post-#482 electricity.
 
-**`use` checked the same way (review finding 1(d)/2) — a pure perf fix, no observable behaviour
+**`use` checked the same way — a pure perf fix, no observable behaviour
 change.** `core/use.py::UseRuntime.execute` takes `ctx` the same live-reference way tool.py does,
 so its own input render already matched cof's live read for the same reason — but unlike a tool
 leaf, `core/use.py` (and `exec::use_`, before and after this lane) resets *both* `node["value"]`

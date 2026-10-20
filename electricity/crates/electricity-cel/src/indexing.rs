@@ -1,6 +1,6 @@
 //! Python-style indexing and containment, replacing `cel`'s own `_[_]`
-//! (DESIGN.md §7.2, issue #379 review finding 3, and the fourth
-//! review's finding 1): celpy's `_[_]` on a `list` is Python's own
+//! (DESIGN.md §7.2, issue #379, and the fourth
+//! review): celpy's `_[_]` on a `list` is Python's own
 //! `operator.getitem` (`evaluation.py`'s `"_[_]": operator.getitem`),
 //! which accepts a negative index (wraps from the end), tolerates
 //! `bool` (an `int` subclass — `True`/`False` is `1`/`0`), and rejects

@@ -78,8 +78,8 @@ const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
 /// Lane L2's own native provider (#448) -- #448's decision 3: made a
 /// native tool (not refused behind the M2 plugin bridge like every
 /// other plugin) because decomposition's own bundled planner calls it.
-/// Its own flag, not folded into any of the four sets above (review
-/// finding 3 on PR #454): L2's effect type isn't process-, stdlib-,
+/// Its own flag, not folded into any of the four sets above (PR #454):
+/// L2's effect type isn't process-, stdlib-,
 /// regex- or HTTP-backed, so it would otherwise force L2 to add a
 /// field to this already-final struct rather than flip one lane A
 /// already named for it.

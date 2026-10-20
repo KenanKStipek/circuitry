@@ -67,7 +67,7 @@ pub struct UserEnvResult {
 /// `std::env::home_dir()` is `Path.home()`'s own fallback order on
 /// Unix: `HOME` if set and non-empty, else a `getpwuid_r` lookup --
 /// matching `os.path.expanduser("~")` (what `Path.home()` calls), not
-/// just this one environment variable (#471 review finding 7: under
+/// just this one environment variable (#471: under
 /// `env -i`, with `HOME` unset entirely, cof's own fallback still
 /// finds a home directory; electricity's used to return `None` there).
 pub fn user_env_path() -> Option<PathBuf> {
@@ -114,8 +114,8 @@ fn invalid_entry_warning(path: &Path, key: &str) -> String {
 /// masked to the low 12 bits, *file_uid*/*current_uid* already read
 /// (by [`permission_refusal`]'s own `stat`/`getuid`, or a test's
 /// literal values) -- so a unit test can exercise an owner mismatch
-/// without ever needing a file this process doesn't own (#471 review
-/// finding 3: `getuid()` called *inside* the old single function left
+/// without ever needing a file this process doesn't own (#471:
+/// `getuid()` called *inside* the old single function left
 /// no seam for that).
 #[cfg(unix)]
 fn unsafe_reason(mode: u32, file_uid: u32, current_uid: u32, path: &Path) -> Option<String> {

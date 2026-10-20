@@ -97,7 +97,7 @@ fn float_cmp(f: f64, other: f64) -> Option<Ordering> {
 /// `f64` first and so loses precision once `i` needs more than 53 bits
 /// (`9007199254740993`, one above `2^53`, rounds to the same `f64` as
 /// `9007199254740992.0`). Python's `float.__lt__`/`int.__lt__` compare
-/// the two exactly, never rounding the `int` operand first (finding 8).
+/// the two exactly, never rounding the `int` operand first.
 /// `None` for a `NaN` *f*, same as [`float_cmp`].
 fn float_cmp_i64(f: f64, i: i64) -> Option<Ordering> {
     if f.is_nan() {

@@ -296,9 +296,9 @@ pub fn rewrite(node: &mut IdedExpr) {
 /// instead — a previous version of this did, to decide both of the above
 /// in one check — was itself the P0 this ported from Python to fix
 /// (overwriting a placed non-dict leaf with `{}` the moment a longer,
-/// `has()`-guarded path tried to extend past it, issue #379 review
-/// finding 1) and *re-broke* the same way for a `NaN` leaf (review
-/// finding 7, `has(state.a.n.x) || state.a.n > 0.0`): `NaN != NaN`, so
+/// `has()`-guarded path tried to extend past it, issue #379)
+/// and *re-broke* the same way for a `NaN` leaf
+/// (`has(state.a.n.x) || state.a.n > 0.0`): `NaN != NaN`, so
 /// the equality check wrongly decided a *different* value was now being
 /// placed and overwrote the leaf with `{}` to keep descending.
 pub fn project(state: &Value, paths: &[StatePath]) -> Value {
