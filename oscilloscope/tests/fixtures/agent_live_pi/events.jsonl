@@ -1,0 +1,11 @@
+{"v":1,"seq":0,"ts":"2026-10-20T02:08:50.120Z","ev":"run_start","run_id":"a3c78a10-ca30-4e2e-a432-12de88ef81f1","orchestration":"do.yml","engine":"cof 0.1.0","pid":48409}
+{"v":1,"seq":1,"ts":"2026-10-20T02:08:50.124Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-20T02:08:50.124Z","ev":"start","id":1,"path":"prime.top_agent"}
+{"v":1,"seq":3,"ts":"2026-10-20T02:08:55.164Z","ev":"end","id":1,"path":"prime.top_agent","ok":true,"ms":5040}
+{"v":1,"seq":4,"ts":"2026-10-20T02:08:55.164Z","ev":"start","id":2,"path":"prime.fan"}
+{"v":1,"seq":5,"ts":"2026-10-20T02:08:55.164Z","ev":"dispatch","path":"prime.fan","branches":1,"concurrency":1}
+{"v":1,"seq":6,"ts":"2026-10-20T02:08:55.164Z","ev":"start","id":3,"path":"prime.fan.iter_0.tree_agent"}
+{"v":1,"seq":7,"ts":"2026-10-20T02:09:00.208Z","ev":"end","id":3,"path":"prime.fan.iter_0.tree_agent","ok":true,"ms":5044}
+{"v":1,"seq":8,"ts":"2026-10-20T02:09:00.209Z","ev":"end","id":2,"path":"prime.fan","ok":true,"ms":5045}
+{"v":1,"seq":9,"ts":"2026-10-20T02:09:00.209Z","ev":"end","id":0,"path":"prime","ok":true,"ms":10085}
+{"v":1,"seq":10,"ts":"2026-10-20T02:09:00.210Z","ev":"run_end","ok":true}

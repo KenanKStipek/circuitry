@@ -403,27 +403,80 @@ pub enum FocusDetail {
         command: Option<String>,
     },
     /// A `tool` step whose own `provider` is `"agent"` (DESIGN.md's
-    /// token-bar rule). `note` is always [`AGENT_LIVE_DATA_NOTE`] --
-    /// kept on the variant, not read from the constant by the front
-    /// end, so a test can assert what this step actually says
-    /// without reaching past the model for it.
+    /// token-bar rule). `live` carries `meta.live` (issue #637) for as
+    /// long as the agent tool is tracking the session -- running, or
+    /// an interrupted run's own stale leftover (`AgentLive::is_recent`
+    /// tells the two apart); it is `None` once the step has finished
+    /// normally, at which point the generic [`FocusedStep::tokens`],
+    /// [`FocusedStep::cost_usd`] and [`FocusedStep::value`] already
+    /// carry its totals the same way any other tool step's do, and
+    /// `note` is the one thing left to say (only ever shown while the
+    /// step is still running, in the brief window before the very
+    /// first `meta.live` write).
     Agent {
-        engine: Option<String>,
-        model: Option<String>,
-        /// The same `params_rendered.command` an ordinary tool step's
-        /// own [`FocusDetail::Tool::command`] reads -- an agent step
-        /// is still a `tool` leaf underneath, so its own invocation
-        /// is "asked" the same way.
-        command: Option<String>,
+        /// The first line of `params_rendered.prompt`, or the file's
+        /// own path for a prompt read from one (`docs/plugins/
+        /// agent.md`'s "A prompt from a file") -- never `params_
+        /// rendered.command`, which an agent effect's own params
+        /// never set at all.
+        asked: Option<String>,
+        live: Option<Box<crate::model::AgentLive>>,
+        /// `live.is_some()` and its own `updated_at` is no longer
+        /// within 5 seconds of `now` (`AgentLive::is_recent`) -- an
+        /// interrupted run's own leftover `meta.live`, never removed
+        /// because nothing was left running to remove it
+        /// (`docs/plugins/agent.md`: "a watcher shows it as
+        /// stopped"). Computed once here, from the same `now` this
+        /// step was built with, so a front end never needs its own
+        /// wall clock to tell a stale summary from a live one.
+        stale: bool,
         note: &'static str,
+        /// `meta.raw.transcript`, set once the session has finished
+        /// (`meta.raw` only exists then) -- `None` while running, same
+        /// as [`Self::Agent::live`]'s own transcript path reads it
+        /// from `meta.live` instead for as long as that lasts.
+        raw_transcript: Option<String>,
+        /// `meta.raw.files_changed`.
+        raw_files_changed: Option<u64>,
+        /// `meta.raw.turns`.
+        raw_turns: Option<u64>,
     },
     Plain,
 }
 
-/// [`FocusDetail::Agent`]'s own note (issue #626): live agent session
-/// data (a running transcript, its token usage) is a later issue
-/// (#612's "live agent data"), so this is the one honest thing the
-/// overview can say about an agent step today.
+/// [`FocusDetail::Agent::asked`]: the first line of `params_rendered.
+/// prompt` (a plain string), or the file's own path when the prompt
+/// was read from one (the `{file, within}` form `docs/plugins/
+/// agent.md`'s "A prompt from a file" records, resolved paths
+/// included) -- `None` for neither shape, or no `prompt` at all.
+fn agent_asked_text(meta: &Value) -> Option<String> {
+    let prompt = meta.pointer("/params_rendered/prompt")?;
+    if let Some(text) = prompt.as_str() {
+        return Some(text.lines().next().unwrap_or(text).to_string());
+    }
+    prompt
+        .get("file")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// [`FocusDetail::Agent`]'s own `raw_transcript`/`raw_files_changed`/
+/// `raw_turns`, all read from `meta.raw` -- present only once the
+/// session has actually finished and reported one.
+fn agent_raw_summary(meta: &Value) -> (Option<String>, Option<u64>, Option<u64>) {
+    let transcript = meta
+        .pointer("/raw/transcript")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let files_changed = meta.pointer("/raw/files_changed").and_then(Value::as_u64);
+    let turns = meta.pointer("/raw/turns").and_then(Value::as_u64);
+    (transcript, files_changed, turns)
+}
+
+/// [`FocusDetail::Agent`]'s own fallback note: shown only when the
+/// step has neither live data nor a finished result yet -- the brief
+/// window between the tool starting and the agent tool's first
+/// `meta.live` write.
 pub const AGENT_LIVE_DATA_NOTE: &str = "live session data isn't available yet";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -466,6 +519,11 @@ pub struct EndedSummary {
     pub tokens_sent: u64,
     pub tokens_received: u64,
     pub cost_usd: Option<f64>,
+    /// The agent node still holding `meta.live` with no `completed_at`
+    /// once the whole run has ended (issue #637: an interrupted run's
+    /// agent reads `stopped`, not silently dropped) -- `None` for an
+    /// ordinary finished or failed run with no session left mid-way.
+    pub stopped_agent: Option<FocusedStep>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -543,6 +601,12 @@ pub struct CostCard {
     pub tokens_over_time: Vec<u64>,
     pub top_store: Option<(String, u64)>,
     pub in_flight: String,
+    /// The ended run's own stopped agent (issue #637) -- its label,
+    /// and its last-known `meta.live.tokens_sent`/`tokens_received`
+    /// (either may be `None`, same as the live summary itself) --
+    /// since `tokens_sent`/`tokens_received` above never include a
+    /// session that never completed.
+    pub stopped_agent: Option<(String, Option<u64>, Option<u64>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -580,6 +644,23 @@ fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -
     provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"))
 }
 
+/// Issue #637: once the whole run has ended, the first agent row
+/// still holding `meta.live` with no `completed_at` of its own --
+/// an interrupted session, never removed because nothing was left
+/// running to remove it (`docs/plugins/agent.md`: "a watcher shows
+/// it as stopped"). `None` once every agent either finished normally
+/// or never started at all.
+fn stopped_agent_row<'a>(
+    rows: &'a [Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> Option<&'a Row> {
+    rows.iter().find(|r| {
+        is_agent_row(r, flat, plan)
+            && node_for(r, flat).is_some_and(|n| n.live.is_some() && n.completed_at.is_none())
+    })
+}
+
 fn build_focused_step(
     row: &Row,
     flat: &BTreeMap<String, NodeMeta>,
@@ -604,22 +685,19 @@ fn build_focused_step(
     let details = details_for(&row.path, plan, model, state);
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
-        let meta = node.map(|n| &n.meta);
+        let live = node.and_then(|n| n.live.clone()).map(Box::new);
+        let stale = live.as_deref().is_some_and(|l| !l.is_recent(now));
+        let (raw_transcript, raw_files_changed, raw_turns) = node
+            .map(|n| agent_raw_summary(&n.meta))
+            .unwrap_or((None, None, None));
         FocusDetail::Agent {
-            engine: meta
-                .and_then(|m| m.get("engine"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            model: meta
-                .and_then(|m| m.get("model"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            command: details
-                .meta_summary
-                .iter()
-                .find(|(k, _)| k == "command")
-                .map(|(_, v)| v.clone()),
+            asked: node.and_then(|n| agent_asked_text(&n.meta)),
+            live,
+            stale,
             note: AGENT_LIVE_DATA_NOTE,
+            raw_transcript,
+            raw_files_changed,
+            raw_turns,
         }
     } else if row.kind == RowKind::Tool {
         FocusDetail::Tool {
@@ -690,6 +768,8 @@ fn build_now_pane(
     let log_lines: Vec<String> = log.iter().rev().take(LOG_TAIL).rev().cloned().collect();
 
     let focus = if !matches!(header.status, RunStatus::Running) {
+        let stopped_agent = stopped_agent_row(rows, flat, plan)
+            .map(|row| build_focused_step(row, flat, plan, model, state, now));
         NowFocus::Ended(EndedSummary {
             outcome: header.status,
             start_ts: header.run_start_ts.clone(),
@@ -697,6 +777,7 @@ fn build_now_pane(
             tokens_sent: header.tokens_sent,
             tokens_received: header.tokens_received,
             cost_usd: effective_cost_usd(state, flat),
+            stopped_agent,
         })
     } else {
         // The document root is "running" for the whole run, which
@@ -957,12 +1038,26 @@ fn build_tokens_over_time(
 }
 
 fn build_cost_card(
+    rows: &[Row],
     header: &crate::render::Header,
     state: Option<&Value>,
     flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
     token_bar: &TokenBar,
     now: &str,
 ) -> CostCard {
+    // Issue #637: `header.tokens_sent`/`received` (`runtime.last_run.
+    // totals`, or the subtree fallback) never carry a session that
+    // never completed -- its own `meta.live` is the only place its
+    // last-known figures ever existed, so the stopped agent's own
+    // tokens are reported separately here rather than folded in.
+    let stopped_agent = (!matches!(header.status, RunStatus::Running))
+        .then(|| stopped_agent_row(rows, flat, plan))
+        .flatten()
+        .and_then(|row| {
+            let live = node_for(row, flat)?.live.as_ref()?;
+            Some((row.label.clone(), live.tokens_sent, live.tokens_received))
+        });
     CostCard {
         tokens_sent: header.tokens_sent,
         tokens_received: header.tokens_received,
@@ -977,6 +1072,7 @@ fn build_cost_card(
         // actually on display.
         top_store: crate::cost::top_store(flat, "prime"),
         in_flight: token_bar_in_flight_line(token_bar),
+        stopped_agent,
     }
 }
 
@@ -1092,7 +1188,7 @@ pub fn build_overview(
     );
     let time_card = build_time_card(header, &phase_strip);
     let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(header, state, flat, token_bar, now);
+    let cost_card = build_cost_card(rows, header, state, flat, plan, token_bar, now);
     Overview {
         phase_strip,
         now_pane,
@@ -1950,6 +2046,7 @@ mod tests {
                 progress_done: None,
                 progress_total: None,
                 progress_eta_s: None,
+                live: None,
                 value: Value::Null,
                 meta: json!({"branch": "then"}),
             },
@@ -2007,17 +2104,21 @@ mod tests {
         let token_bar = TokenBar::default();
         let flat = BTreeMap::new();
         let no_cost = build_cost_card(
+            &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
             &flat,
+            &PlanTree::empty(),
             &token_bar,
             "2026-10-08T11:52:55Z",
         );
         assert_eq!(no_cost.cost_usd, None);
         let with_cost = build_cost_card(
+            &[],
             &header,
             Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
             &flat,
+            &PlanTree::empty(),
             &token_bar,
             "2026-10-08T11:52:55Z",
         );
@@ -2039,6 +2140,7 @@ mod tests {
                 progress_done: None,
                 progress_total: None,
                 progress_eta_s: None,
+                live: None,
                 value: Value::Null,
                 meta: json!({"cost_usd": 1.5}),
             },
@@ -2053,11 +2155,20 @@ mod tests {
                 progress_done: None,
                 progress_total: None,
                 progress_eta_s: None,
+                live: None,
                 value: Value::Null,
                 meta: json!({"cost_usd": 0.75}),
             },
         );
-        let card = build_cost_card(&header, None, &flat, &token_bar, "2026-10-08T11:52:55Z");
+        let card = build_cost_card(
+            &[],
+            &header,
+            None,
+            &flat,
+            &PlanTree::empty(),
+            &token_bar,
+            "2026-10-08T11:52:55Z",
+        );
         assert_eq!(card.cost_usd, Some(2.25));
     }
 
@@ -2076,6 +2187,7 @@ mod tests {
                 progress_done: None,
                 progress_total: None,
                 progress_eta_s: None,
+                live: None,
                 value: Value::Null,
                 meta: json!({"tokens_sent": 100, "tokens_received": 0}),
             },
@@ -2090,6 +2202,7 @@ mod tests {
                 progress_done: None,
                 progress_total: None,
                 progress_eta_s: None,
+                live: None,
                 value: Value::Null,
                 meta: json!({"tokens_sent": 0, "tokens_received": 40}),
             },
@@ -2159,6 +2272,195 @@ mod tests {
         match pane.focus {
             NowFocus::Ended(summary) => assert_eq!(summary.outcome, RunStatus::Failed),
             other => panic!("expected Ended, got {other:?}"),
+        }
+    }
+
+    fn agent_row(path: &str) -> Row {
+        Row {
+            path: path.to_string(),
+            depth: 0,
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
+    /// Issue #637: a running agent's own `meta.live` fills
+    /// `FocusDetail::Agent::live`, replacing the old always-on
+    /// fallback note.
+    #[test]
+    fn a_running_agents_live_summary_fills_focus_detail() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "agent1": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:43Z",
+                    "completed_at": null,
+                    "provider": "agent",
+                    "live": {
+                        "engine": "pi", "model": "sonnet", "turns": 14, "tool_calls": 31,
+                        "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
+                        "updated_at": "2026-10-08T11:52:54Z"
+                    }
+                }}
+            }}),
+        );
+        let row = agent_row("prime.agent1");
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: Some(live),
+                stale,
+                ..
+            } => {
+                assert_eq!(live.engine, Some("pi".to_string()));
+                assert_eq!(live.turns, Some(14));
+                assert!(live.is_recent("2026-10-08T11:52:55Z"));
+                assert!(!stale);
+            }
+            other => panic!("expected a populated Agent detail, got {other:?}"),
+        }
+    }
+
+    /// An interrupted run's own leftover `meta.live` (no
+    /// `completed_at`, no further heartbeat) still fills `live` --
+    /// the front end, not this builder, decides running vs stopped
+    /// from `AgentLive::is_recent` -- but it must read as stale here.
+    #[test]
+    fn an_interrupted_agents_leftover_live_summary_reads_as_stale() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "agent1": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:43Z",
+                    "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:50Z"}
+                }}
+            }}),
+        );
+        let row = agent_row("prime.agent1");
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: Some(live),
+                stale,
+                ..
+            } => {
+                assert!(!live.is_recent("2026-10-08T11:52:55Z"));
+                assert!(stale);
+            }
+            other => panic!("expected a populated Agent detail, got {other:?}"),
+        }
+    }
+
+    /// A finished agent step has no `meta.live` left at all (removed
+    /// once the attempt ended) -- `live` is `None`, and the generic
+    /// `tokens`/`cost_usd`/`value` fields (shared with every other
+    /// tool step), plus `meta.raw`'s own transcript/files_changed/
+    /// turns, are what a front end reads instead.
+    #[test]
+    fn a_finished_agent_step_has_no_live_field_and_carries_raw_fields() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": "t"},
+                "agent1": {"value": "done", "meta": {
+                    "created_at": "2026-10-08T11:46:43Z",
+                    "completed_at": "2026-10-08T11:52:55Z",
+                    "provider": "agent",
+                    "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
+                    "raw": {"transcript": "/tmp/t.jsonl", "files_changed": 3, "turns": 14}
+                }}
+            }}),
+        );
+        let mut row = agent_row("prime.agent1");
+        row.status = RowStatus {
+            kind: StatusKind::Done,
+            skip_reason: None,
+            retrying: false,
+        };
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:56Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: None,
+                note,
+                raw_transcript,
+                raw_files_changed,
+                raw_turns,
+                ..
+            } => {
+                assert_eq!(note, AGENT_LIVE_DATA_NOTE);
+                assert_eq!(raw_transcript, Some("/tmp/t.jsonl".to_string()));
+                assert_eq!(raw_files_changed, Some(3));
+                assert_eq!(raw_turns, Some(14));
+            }
+            other => panic!("expected no live summary, got {other:?}"),
+        }
+        assert_eq!(step.tokens, Some(2_100_000 + 18_000));
+        assert_eq!(step.cost_usd, Some(1.10));
+    }
+
+    #[test]
+    fn agent_asked_reads_the_first_line_of_a_plain_prompt() {
+        let meta =
+            json!({"params_rendered": {"prompt": "Fix the bug.\nSee the issue for details."}});
+        assert_eq!(agent_asked_text(&meta), Some("Fix the bug.".to_string()));
+    }
+
+    #[test]
+    fn agent_asked_reads_the_file_path_for_a_prompt_read_from_one() {
+        let meta =
+            json!({"params_rendered": {"prompt": {"file": "/repo/prompt.md", "within": "/repo"}}});
+        assert_eq!(agent_asked_text(&meta), Some("/repo/prompt.md".to_string()));
+    }
+
+    /// A retried attempt's own `meta.live.earlier_attempts` survives
+    /// into `FocusDetail::Agent::live` unchanged.
+    #[test]
+    fn a_retried_attempts_earlier_attempts_is_carried_through() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "agent1": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:50:00Z",
+                    "completed_at": null,
+                    "provider": "agent",
+                    "live": {
+                        "attempt": 2,
+                        "updated_at": "2026-10-08T11:52:54Z",
+                        "earlier_attempts": {"tokens_sent": 500, "tokens_received": 40}
+                    }
+                }}
+            }}),
+        );
+        let row = agent_row("prime.agent1");
+        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        match step.detail {
+            FocusDetail::Agent {
+                live: Some(live), ..
+            } => {
+                assert_eq!(live.attempt, Some(2));
+                assert_eq!(
+                    live.earlier_attempts,
+                    Some(crate::model::AgentLiveEarlierAttempts {
+                        tokens_sent: Some(500),
+                        tokens_received: Some(40)
+                    })
+                );
+            }
+            other => panic!("expected a populated Agent detail, got {other:?}"),
         }
     }
 }

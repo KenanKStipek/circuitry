@@ -1846,6 +1846,8 @@ mod tests {
             total: 100,
             weight: 100,
             status: Some(oscilloscope_core::model::StatusKind::Done),
+            live: false,
+            live_turns: None,
             children: vec![cost_leaf("agent", 60), cost_leaf("fix", 40)],
         }];
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);

@@ -170,6 +170,73 @@ impl EventsTailer {
     }
 }
 
+/// Issue #637: how much of an agent step's own transcript
+/// (`docs/plugins/agent.md`) osi ever reads -- a step whose own file
+/// has grown far larger than this still costs a bounded read every
+/// poll, never a read proportional to the whole file.
+pub const TRANSCRIPT_TAIL_BYTES: u64 = 64 * 1024;
+
+/// Reads the last `max_bytes` of `path` and returns its complete JSON
+/// lines, oldest first, parsed. Deliberately stateless (no offset kept
+/// between calls, unlike [`EventsTailer`]): the step this reads for
+/// changes with the user's own focus, is only read at all while that
+/// step is on screen, and this crate's own transcript lines are meant
+/// to be read as a *tail* -- the newest 64 KiB, not everything since
+/// the last poll -- so there is nothing worth remembering between one
+/// call and the next.
+///
+/// Tolerant of everything DESIGN.md's own transcript-tailing rules
+/// name: a missing or unreadable file (`Vec::new()`, not an error), a
+/// last line still being written (parsed only once it is complete --
+/// a trailing partial line is dropped), and a file replaced mid-run
+/// (the next call simply opens whatever is at `path` now; there is no
+/// stale offset to seek into the wrong place with). When the file is
+/// larger than `max_bytes`, the read starts partway through a line
+/// that was already complete elsewhere in the file -- that one partial
+/// first line is dropped too, same as the trailing one, so a reader
+/// never sees a torn line from either end of the window.
+pub fn tail_transcript_lines(path: &Path, max_bytes: u64) -> Vec<Value> {
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(meta) = file.metadata() else {
+        return Vec::new();
+    };
+    let len = meta.len();
+    let start = len.saturating_sub(max_bytes);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    // A file appended between `metadata()` above and this read could
+    // otherwise hand back more than `max_bytes` -- `take` hard-caps
+    // what actually gets read, not merely where the seek started.
+    if (&mut file).take(max_bytes).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut parts: Vec<&str> = text.split('\n').collect();
+    if start > 0 {
+        // The read didn't start at the real beginning of the file, so
+        // its own first "line" is whatever followed the previous
+        // newline before `start` -- a partial line this window never
+        // saw the start of.
+        if !parts.is_empty() {
+            parts.remove(0);
+        }
+    }
+    // The file's own trailing newline, if any, leaves one empty final
+    // element from `split`; without one, the last element is a line
+    // still being written and not yet complete. Either way it is not
+    // a complete line to parse.
+    parts.pop();
+    parts
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
+}
+
 /// One parsed `--events` line (DESIGN.md §3). `v`/`seq` aren't carried
 /// through: osi only orders by `ts`, same as a state diff, and the
 /// tailer already delivers lines in file order.
@@ -654,5 +721,90 @@ mod tests {
     fn duration_seconds_parses_rfc3339_timestamps() {
         let d = duration_seconds("2026-10-08T19:56:22.000Z", "2026-10-08T19:56:24.500Z").unwrap();
         assert!((d - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tail_transcript_lines_reads_every_complete_line_when_the_file_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(
+            &path,
+            "{\"t\":\"a\",\"type\":\"turn\"}\n{\"t\":\"b\",\"type\":\"tool_start\",\"id\":1}\n",
+        )
+        .unwrap();
+        let lines = tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["type"], "turn");
+        assert_eq!(lines[1]["type"], "tool_start");
+    }
+
+    #[test]
+    fn tail_transcript_lines_is_empty_for_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.jsonl");
+        assert_eq!(
+            tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES),
+            Vec::<Value>::new()
+        );
+    }
+
+    #[test]
+    fn tail_transcript_lines_drops_a_cut_off_trailing_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        let mut content = String::new();
+        content.push_str("{\"t\":\"a\",\"type\":\"turn\"}\n");
+        content.push_str("{\"t\":\"b\",\"type\":\"tool_sta");
+        std::fs::write(&path, &content).unwrap();
+        let lines = tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["type"], "turn");
+    }
+
+    #[test]
+    fn tail_transcript_lines_never_reads_more_than_max_bytes_and_drops_the_partial_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        // Each line is well over 100 bytes; with a 200-byte window only
+        // the newest two or so complete lines can possibly survive, and
+        // line 0 (the oldest) must never appear.
+        let mut content = String::new();
+        for i in 0..50 {
+            content.push_str(&format!(
+                "{{\"t\":\"t{i}\",\"type\":\"tool_start\",\"id\":{i},\"tool\":\"bash\",\"target\":\"padding-padding-padding-padding\"}}\n"
+            ));
+        }
+        std::fs::write(&path, &content).unwrap();
+        assert!(content.len() as u64 > 200, "fixture must exceed the window");
+        let lines = tail_transcript_lines(&path, 200);
+        assert!(!lines.is_empty());
+        for line in &lines {
+            assert_ne!(
+                line["id"], 0,
+                "the oldest line must have fallen outside the 200-byte window"
+            );
+        }
+        let last = lines.last().unwrap();
+        assert_eq!(last["id"], 49, "the newest line must always survive");
+    }
+
+    #[test]
+    fn tail_transcript_lines_handles_a_file_replaced_mid_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(&path, "{\"t\":\"a\",\"type\":\"turn\"}\n").unwrap();
+        let first = tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES);
+        assert_eq!(first.len(), 1);
+        // A fresh run reusing the same path, replaced by rename --
+        // stateless means the next read just sees the new file, with
+        // no leftover offset from the old one to go stale.
+        std::fs::write(
+            &path,
+            "{\"t\":\"z\",\"type\":\"reply\",\"text\":\"new run\"}\n",
+        )
+        .unwrap();
+        let second = tail_transcript_lines(&path, TRANSCRIPT_TAIL_BYTES);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["text"], "new run");
     }
 }

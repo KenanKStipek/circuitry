@@ -55,6 +55,8 @@ Every node has the shape `{value, meta}`. Every `meta` has `created_at`, `comple
 | `tool` (shell) | stdout, e.g. `"x\n"` | `provider`, `stdout`, `stderr`, `exit_code`, `waiting_for`, `params_rendered`, `binary`, `raw`. **When the command fails, `exit_code`, `stdout` and `stderr` are `null`.** The exit code appears only inside `error` (`"/bin/ls failed (exit 1): <stderr>"`). |
 | `tool` (json) | the parsed value | the same keys; `exit_code: null`, `raw: {mode}` |
 | `tool` + failed `expect` | `null` | `error: "expect failed: value == 'yes'"`, `expect: {mode, expr, result: false}`. `stdout` and `exit_code: 0` are kept. |
+| `tool` (agent), running | `null` | `provider: "agent"`, and (issue #637, from issue #636's engine side) **`live`**: `v`, `engine`, `model`, `session_id`, `transcript` (set from the first moment), `attempt`, `phase` (`"turn"`/`"repair"`), `started_at`/`updated_at`, `turns`, `tool_calls`, `tools: {name: {calls, ms}}`, `current_tool` (`{name, started_at}` or `null`), `tokens_sent`/`tokens_received`/`cost_usd` (`null` where the CLI doesn't report one live -- Claude Code's `tokens_received`/`cost_usd`), `tokens_cached_in`/`tokens_cache_write`, `context_tokens`/`context_window`, `turn_tokens` (so far), `files_changed`/`lines_added`/`lines_removed`, `earlier_attempts` (from the second attempt on). Published at most once a second. Removed once the attempt ends, except when the run itself was interrupted (see §1.4). |
+| `tool` (agent), finished | the reply text, or `result_file`'s parsed JSON | `provider: "agent"`, `raw: {engine, session_id, turns, tool_calls, tokens: {sent, received}, cost, repair_turn, transcript, context_tokens, context_window, tool_counts, turn_tokens, files_changed, lines_added, lines_removed, ...}` (docs/plugins/agent.md's full table) -- **no top-level `model`**, unlike `live`. The ordinary `tokens_sent`/`tokens_received`/`cost_usd` mirror (a `prompt` effect's own fields) carries the same totals as `raw.tokens`/`raw.cost`, so every other screen already reads a finished agent step the same way it reads any other tool. `live` is gone. |
 | `prompt` | the text, or the parsed JSON | `adapter`, `model`, `model_reason`, `prompt_type`, **`prompt_sent` (the full rendered prompt)**, `tokens_sent`/`tokens_received`, `tokens_*_total`, `fallback_attempts[{adapter, model, status, error, tokens_*}]`, `fallback_recovered`, `waiting_for`, `dry_run`. Also `retries_used` when it is above 0, and `finish_reason` when the provider reports one. |
 | `yield` | the rendered text | `dry_run` |
 | named `if` | `{result, branch, effects: [{index, type: "ToolDefinition", name}]}`. An untaken branch with nothing in it gives `effects: []`. | `mode`, `threshold`, `labels`, `condition_result`, `branch`. Already set while the branch is still running. |
@@ -96,6 +98,7 @@ These values were measured but were not what a reader would expect:
 | A prompt in flight | *(as measured against `cof` 0.1.0, before issue #634 fixed this.)* Was only visible as a chain-flow node; a tree-flow or `use`-child prompt in flight is visible the same way now. `completed_at: null`, and `prompt_sent` is already set. Model, adapter and the rendered prompt are visible. Elapsed time is not. |
 | A branch cancelled by `stop_on_error`, or an effect after a failure | No node at all. Hooks do not fire for it either. |
 | An effect interrupted by SIGINT/SIGTERM | **It stays `completed_at: null`, `error: null` in the final state.** Its enclosing loop also stays `completed_at: null`. `prime.meta.error` is `"Interrupted (Ctrl-C/SIGINT)"` or `"Interrupted (SIGTERM)"`, and `finally` effects run and appear. |
+| A running agent session (issue #637) | Yes, from `meta.live` alone: its tool-call counts, token usage and context size are published again on every stream event the CLI produces, at most once a second, with no `--events` needed -- not a periodic heartbeat of its own, so `updated_at` can still go stale during any quiet stretch longer than 5 seconds (a long tool call) even while the session is genuinely still running. osi treats `meta.live` as *running* only while `updated_at` is within 5 seconds of now; a run interrupted mid-session leaves `meta.live` in place (its one documented exception, above) with `updated_at` no longer moving, so it reads as stopped within a few seconds, never as still running -- its last-known figures stay on screen, under a `stopped` marker, in both the now pane and Flow's selected pane. Tool-call detail (a glyph strip, the clock-timed "doing" list, the last test command's own outcome) comes from the transcript file `meta.live.transcript` names, tailed directly -- only for the one step on screen, only its last 64 KiB, at the usual 100 ms poll; a missing file, a cut-off last line, or a file replaced mid-run all fall back to the summary alone (or, with no transcript tailed at all yet, to `meta.live`'s own `tools`/`current_tool` names and counts). |
 
 **The runtime hooks see more than the live state does** (probe plugin):
 
@@ -1257,7 +1260,12 @@ interval, and nothing here is built at all for a screen not shown.
   flight" already trust for exactly this case. With nothing
   running, the last finished row (by `completed_at`); once the run has
   ended (`header.status != Running`), the outcome, start/end and
-  totals instead.
+  totals, plus (issue #637) the run's own stopped agent if it has
+  one -- a `meta.live` node left behind by an interruption, with no
+  `completed_at` of its own, since an ended run otherwise has no
+  step left to focus on at all. It is named, with its last-known
+  live block shown the same way a running or last-finished step's
+  own already is, never as running.
 - **Time card:** the run's own start/end, elapsed, ETA, a bar of the
   phase strip's own durations (drawn as blocks scaled to the longest
   one, `tui.rs`'s own `draw_time_card`) and its slowest *finished*
@@ -1283,7 +1291,12 @@ interval, and nothing here is built at all for a screen not shown.
   equal spans across the run so far; the highest-token leaf
   (`cost::top_store`, the same leaf-scan rule §6.3b's own
   largest-stores table ranks first, so the two can't disagree about
-  which store is the run's biggest); and `render::token_bar_in_
+  which store is the run's biggest); once the run has ended, the
+  run's own stopped agent's last-known tokens (issue #637), as
+  `stopped <label>` with its sent/received figures -- `runtime.
+  last_run.totals` (the figures above) never includes a session that
+  never completed, so its last report lives only in its own
+  `meta.live`; and `render::token_bar_in_
   flight_line`'s own text (shared with the Cost screen's own data,
   so the two can't disagree about what's running either).
 

@@ -122,10 +122,19 @@ wrapper folded into one breadcrumb, each with its own status glyph,
 start time and duration); a now pane (the run's latest log lines next
 to whichever step follow selects — its breadcrumb, kind, provider or
 model, since/elapsed, and, for a prompt, its token estimate and a
-prompt snippet, for a tool its rendered command, for an agent its
-engine and model with a note that live session data isn't available
-yet; the last finished step with nothing running, or the run's own
-outcome, start-end and totals once it has ended); and three cards —
+prompt snippet, for a tool its rendered command, for a running agent
+session its own live summary (engine, model, turn and tool-call
+counts, tokens sent/received and cost — a figure the CLI doesn't
+report live reads `—`, never `0` — context size against its window
+when known, files/lines changed, the last test command's own outcome
+worked out from the transcript, and a glyph strip plus a clock-timed
+line per recent tool call, both from the same transcript, tailed only
+while this step is on screen; with no transcript tailed yet, the same
+activity reads from `meta.live`'s own tool names and counts instead);
+the last finished step with nothing running (a finished agent reads
+the same way any other finished tool step does),
+or the run's own outcome, start-end and totals once it has ended); and
+three cards —
 time (start/end, elapsed, ETA, a bar of the top-level steps' own
 durations, the slowest finished one), flow (effects done out of
 planned, failures, the latest decisions or reports, loop progress, the
@@ -175,12 +184,17 @@ tokens, cost) sit to the right of each row; a narrow pane
 drops them in this order — cost, start, tokens — duration always stays.
 
 The selected pane (top right) shows the flow pane's own selection: a
-prompt's text (or a tool's rendered command) under
+prompt's text, a tool's rendered command, or an agent's own first line
+of prompt text (the file's own path, for a prompt read from one) under
 "asked", what it's doing right now (a running prompt's token estimate, a
-running tool's elapsed time, or a running agent's engine/model with a note
-that live session data isn't available yet), and, once it finishes, its
+running tool's elapsed time, or a running agent's own live summary — the
+same one the overview's now pane shows, including its transcript's last
+few tool calls and the last test command's own outcome, tailed only while
+this step is selected), and, once it finishes, its
 value or reply, tokens, cost and any error under "produced" (a running step
-reads `(when done)`). A decision row shows its own condition, mode, the
+reads `(when done)`; a finished agent step's own "produced" additionally
+shows `meta.raw`'s own transcript path, files changed and turns). A
+decision row shows its own condition, mode, the
 branch it took and, for a model-mode condition, the model's own answer. `s`
 swaps this pane for today's state tree instead, so a named report
 (#605/#610) stays selectable; `s` again swaps back. `v` opens the full
@@ -284,7 +298,12 @@ single child. A loop pass with more than one step is labelled
 `pass N of M` there (the state pane keeps the real `iter_N` key). A
 running `agent` tool step counts in the overview's cost card's own
 in-flight line next to running prompts (`2 prompts · 1 agent in flight`),
-with no token estimate of its own.
+with no token estimate of its own. A step with a `meta.live` whose own
+`updated_at` is within 5 seconds of now counts as running there too,
+with no `--events` needed at all; an interrupted run's own leftover
+`meta.live`, whose `updated_at` has stopped moving, reads as stopped
+instead, in the now pane and the selected pane alike, with the
+session's own last-known figures still shown underneath.
 
 The engine exiting does not, on its own, end the TUI: the header, every
 row's final status and the selected pane stay live on whatever the run
@@ -362,6 +381,15 @@ cancelled) reads "no tokens reported" instead, rather than its own
 placeholder weight read back as if it were real. A `while: mode: model`
 loop's own tokens (written onto the loop's own meta alongside its
 passes) get a leaf of their own next to them, rather than being dropped.
+A running `agent` tool step is the one exception to "tokens when done":
+its own tile (and the largest-stores table's own row for it) sizes and
+labels itself `live` from its own live `tokens_sent` under the
+`tokens`/`input tokens` measures, growing as the session goes. A tile
+with room for a second row also draws a per-turn strip (`turn_tokens`,
+oldest first) and a cache bar (`tokens_cached_in`'s own share of
+`tokens_sent`). `output tokens`/`cost` still read "tokens when done"
+until the step finishes: pi does report `tokens_received`/`cost_usd`
+live too, but sizing a tile from them is left for a later issue.
 The treemap's own squarify layout accounts for the terminal's own tall
 character cells (about 2:1), so a tile that is actually square in
 character cells (and so visibly tall and narrow on screen) is never what

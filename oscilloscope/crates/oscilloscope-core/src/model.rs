@@ -9,6 +9,144 @@ use serde_json::Value;
 use crate::observe::Event;
 use crate::plan::{Flow, PlanTree};
 
+/// A tool name's own `{calls, ms}` entry under `meta.live.tools`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AgentLiveToolUsage {
+    pub calls: u64,
+    pub ms: u64,
+}
+
+/// `meta.live.current_tool` while a tool runs, else `None`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentLiveCurrentTool {
+    pub name: String,
+    pub started_at: String,
+}
+
+/// `meta.live.earlier_attempts`, present from the second attempt on.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AgentLiveEarlierAttempts {
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+}
+
+/// `meta.live` itself (`docs/plugins/agent.md`'s live-progress table)
+/// -- a summary the agent tool writes through `Store.set` while its
+/// session runs, parsed once here. A figure the CLI doesn't report
+/// live stays `None`, never `0`: a front end reads that as a dash,
+/// not a real zero.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AgentLive {
+    pub engine: Option<String>,
+    pub model: Option<String>,
+    pub session_id: Option<String>,
+    pub transcript: Option<String>,
+    pub attempt: Option<u64>,
+    pub phase: Option<String>,
+    pub started_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub turns: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub tools: BTreeMap<String, AgentLiveToolUsage>,
+    pub current_tool: Option<AgentLiveCurrentTool>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub tokens_cached_in: Option<u64>,
+    pub tokens_cache_write: Option<u64>,
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+    pub turn_tokens: Vec<u64>,
+    pub files_changed: Option<u64>,
+    pub lines_added: Option<u64>,
+    pub lines_removed: Option<u64>,
+    pub earlier_attempts: Option<AgentLiveEarlierAttempts>,
+}
+
+impl AgentLive {
+    /// `None` for anything that isn't a `meta.live` object at all --
+    /// every field inside it is read permissively (a wrong-typed or
+    /// missing field just leaves that one field `None`/empty), since
+    /// this is read every 100ms from a live, still-being-written
+    /// process and must never turn a transient oddity into a panic or
+    /// a stuck display.
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
+        let u64_field = |k: &str| obj.get(k).and_then(Value::as_u64);
+        let f64_field = |k: &str| obj.get(k).and_then(Value::as_f64);
+        let mut tools = BTreeMap::new();
+        if let Some(map) = obj.get("tools").and_then(Value::as_object) {
+            for (name, entry) in map {
+                let calls = entry.get("calls").and_then(Value::as_u64).unwrap_or(0);
+                let ms = entry.get("ms").and_then(Value::as_u64).unwrap_or(0);
+                tools.insert(name.clone(), AgentLiveToolUsage { calls, ms });
+            }
+        }
+        let current_tool = obj
+            .get("current_tool")
+            .filter(|v| !v.is_null())
+            .and_then(|v| {
+                let name = v.get("name").and_then(Value::as_str)?.to_string();
+                let started_at = v.get("started_at").and_then(Value::as_str)?.to_string();
+                Some(AgentLiveCurrentTool { name, started_at })
+            });
+        let turn_tokens = obj
+            .get("turn_tokens")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
+        let earlier_attempts = obj
+            .get("earlier_attempts")
+            .and_then(Value::as_object)
+            .map(|e| AgentLiveEarlierAttempts {
+                tokens_sent: e.get("tokens_sent").and_then(Value::as_u64),
+                tokens_received: e.get("tokens_received").and_then(Value::as_u64),
+            });
+        Some(AgentLive {
+            engine: str_field("engine"),
+            model: str_field("model"),
+            session_id: str_field("session_id"),
+            transcript: str_field("transcript"),
+            attempt: u64_field("attempt"),
+            phase: str_field("phase"),
+            started_at: str_field("started_at"),
+            updated_at: str_field("updated_at"),
+            turns: u64_field("turns"),
+            tool_calls: u64_field("tool_calls"),
+            tools,
+            current_tool,
+            tokens_sent: u64_field("tokens_sent"),
+            tokens_received: u64_field("tokens_received"),
+            cost_usd: f64_field("cost_usd"),
+            tokens_cached_in: u64_field("tokens_cached_in"),
+            tokens_cache_write: u64_field("tokens_cache_write"),
+            context_tokens: u64_field("context_tokens"),
+            context_window: u64_field("context_window"),
+            turn_tokens,
+            files_changed: u64_field("files_changed"),
+            lines_added: u64_field("lines_added"),
+            lines_removed: u64_field("lines_removed"),
+            earlier_attempts,
+        })
+    }
+
+    /// Issue #637's heartbeat rule: a session whose `updated_at` is
+    /// within 5 seconds of `now` is running right now, even with no
+    /// `--events` to confirm it. Once the process that would keep
+    /// writing it is gone (an interrupted run's leftover `meta.live`),
+    /// `updated_at` stops moving and this reads `false` within a few
+    /// seconds -- the same leftover summary then reads as stopped,
+    /// never as running, with no need to know anything about the
+    /// run's own process state.
+    pub fn is_recent(&self, now: &str) -> bool {
+        let Some(updated_at) = self.updated_at.as_deref() else {
+            return false;
+        };
+        crate::observe::duration_seconds(updated_at, now).is_some_and(|secs| secs.abs() <= 5.0)
+    }
+}
+
 /// One effect node's `{value, meta}` shape, flattened to its dotted
 /// state path (DESIGN.md §1.2-§1.3).
 #[derive(Debug, Clone)]
@@ -21,6 +159,15 @@ pub struct NodeMeta {
     pub progress_done: Option<u64>,
     pub progress_total: Option<u64>,
     pub progress_eta_s: Option<f64>,
+    /// `meta.live` (`docs/plugins/agent.md`'s "Live progress while the
+    /// session runs"), parsed once here so every reader (the overview's
+    /// now pane, Flow's selected pane, the Cost screen) shares one
+    /// parse instead of re-reading the raw `Value` each time. `None`
+    /// for every node that isn't a currently- or recently-live agent
+    /// session, including one that finished normally (`meta.live` is
+    /// removed once the attempt ends, success or failure, except when
+    /// the run itself was interrupted).
+    pub live: Option<AgentLive>,
     pub value: Value,
     pub meta: Value,
 }
@@ -47,6 +194,7 @@ impl NodeMeta {
             progress_done: meta.pointer("/progress/done").and_then(Value::as_u64),
             progress_total: meta.pointer("/progress/total").and_then(Value::as_u64),
             progress_eta_s: meta.pointer("/progress/eta_s").and_then(Value::as_f64),
+            live: meta.get("live").and_then(AgentLive::from_value),
             value: value.clone(),
             meta: meta.clone(),
         }
@@ -1204,6 +1352,145 @@ mod tests {
     use super::*;
     use crate::observe::Event;
     use serde_json::json;
+
+    #[test]
+    fn agent_live_parses_every_documented_field() {
+        let live = AgentLive::from_value(&json!({
+            "v": 1,
+            "engine": "pi",
+            "model": "sonnet",
+            "session_id": "s1",
+            "transcript": "/tmp/t.jsonl",
+            "attempt": 1,
+            "phase": "turn",
+            "started_at": "2026-10-08T11:46:43Z",
+            "updated_at": "2026-10-08T11:52:55Z",
+            "turns": 14,
+            "tool_calls": 31,
+            "tools": {"bash": {"calls": 3, "ms": 1200}},
+            "current_tool": {"name": "bash", "started_at": "2026-10-08T11:52:30Z"},
+            "tokens_sent": 2100000,
+            "tokens_received": 18000,
+            "cost_usd": 1.10,
+            "tokens_cached_in": 2000000,
+            "tokens_cache_write": 50000,
+            "context_tokens": 142000,
+            "context_window": 200000,
+            "turn_tokens": [100, 200, 300],
+            "files_changed": 3,
+            "lines_added": 12,
+            "lines_removed": 3
+        }))
+        .unwrap();
+        assert_eq!(live.engine, Some("pi".to_string()));
+        assert_eq!(live.model, Some("sonnet".to_string()));
+        assert_eq!(live.turns, Some(14));
+        assert_eq!(live.tool_calls, Some(31));
+        assert_eq!(
+            live.tools.get("bash"),
+            Some(&AgentLiveToolUsage { calls: 3, ms: 1200 })
+        );
+        assert_eq!(
+            live.current_tool,
+            Some(AgentLiveCurrentTool {
+                name: "bash".to_string(),
+                started_at: "2026-10-08T11:52:30Z".to_string()
+            })
+        );
+        assert_eq!(live.tokens_sent, Some(2_100_000));
+        assert_eq!(live.tokens_received, Some(18_000));
+        assert_eq!(live.cost_usd, Some(1.10));
+        assert_eq!(live.tokens_cached_in, Some(2_000_000));
+        assert_eq!(live.context_tokens, Some(142_000));
+        assert_eq!(live.context_window, Some(200_000));
+        assert_eq!(live.turn_tokens, vec![100, 200, 300]);
+        assert_eq!(live.files_changed, Some(3));
+        assert_eq!(live.lines_added, Some(12));
+        assert_eq!(live.lines_removed, Some(3));
+        assert_eq!(live.earlier_attempts, None);
+    }
+
+    /// `docs/plugins/agent.md`: a figure the CLI doesn't report live
+    /// (Claude Code's `tokens_received`/`cost_usd`) is absent from
+    /// `meta.live` entirely, not written as `0` -- parsing must leave
+    /// it `None`, the one shape a front end reads as a dash rather
+    /// than a real zero.
+    #[test]
+    fn a_figure_not_reported_live_parses_as_none_not_zero() {
+        let live = AgentLive::from_value(&json!({
+            "engine": "claude_code",
+            "tokens_sent": 1600,
+            "tokens_received": null,
+            "cost_usd": null
+        }))
+        .unwrap();
+        assert_eq!(live.tokens_sent, Some(1600));
+        assert_eq!(live.tokens_received, None);
+        assert_eq!(live.cost_usd, None);
+    }
+
+    /// An unknown context window (DESIGN.md: "with no window known,
+    /// osi shows context 142 kt with no bar") parses as a present
+    /// `context_tokens` and an absent `context_window`.
+    #[test]
+    fn an_unknown_context_window_parses_as_none() {
+        let live = AgentLive::from_value(&json!({"context_tokens": 142000})).unwrap();
+        assert_eq!(live.context_tokens, Some(142_000));
+        assert_eq!(live.context_window, None);
+    }
+
+    #[test]
+    fn earlier_attempts_is_present_from_the_second_attempt_on() {
+        let live = AgentLive::from_value(&json!({
+            "attempt": 2,
+            "earlier_attempts": {"tokens_sent": 500, "tokens_received": 40}
+        }))
+        .unwrap();
+        assert_eq!(live.attempt, Some(2));
+        assert_eq!(
+            live.earlier_attempts,
+            Some(AgentLiveEarlierAttempts {
+                tokens_sent: Some(500),
+                tokens_received: Some(40)
+            })
+        );
+    }
+
+    #[test]
+    fn is_recent_is_true_within_5_seconds_and_false_beyond_it() {
+        let live = AgentLive {
+            updated_at: Some("2026-10-08T11:52:50Z".to_string()),
+            ..Default::default()
+        };
+        assert!(live.is_recent("2026-10-08T11:52:55Z"));
+        assert!(!live.is_recent("2026-10-08T11:53:01Z"));
+    }
+
+    /// Issue #637's own interrupted-run rule: a leftover `meta.live`
+    /// with no further heartbeat reads as stopped, never as running,
+    /// once enough time has passed -- `is_recent` alone is what a
+    /// front end checks, with no need to know anything about the
+    /// run's own process state.
+    #[test]
+    fn an_interrupted_runs_stale_live_summary_is_not_recent() {
+        let live = AgentLive {
+            updated_at: Some("2026-10-08T11:46:43Z".to_string()),
+            ..Default::default()
+        };
+        assert!(!live.is_recent("2026-10-08T11:52:55Z"));
+    }
+
+    #[test]
+    fn is_recent_is_false_with_no_updated_at_at_all() {
+        let live = AgentLive::default();
+        assert!(!live.is_recent("2026-10-08T11:52:55Z"));
+    }
+
+    #[test]
+    fn a_non_object_meta_live_value_parses_as_none() {
+        assert_eq!(AgentLive::from_value(&Value::Null), None);
+        assert_eq!(AgentLive::from_value(&json!([1, 2])), None);
+    }
 
     /// Table-driven: every branch of `run_status` (DESIGN.md §2.1
     /// rule 7), the function that labels a

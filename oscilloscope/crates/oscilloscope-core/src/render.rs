@@ -509,7 +509,7 @@ pub fn build(
     // which events confirm `Running` for a path `flat` has never even
     // heard of) can see them at all, so the running-prompt count reads
     // `rows`, not `flat` alone.
-    let token_bar = build_token_bar(&rows, &flat, plan);
+    let token_bar = build_token_bar(&rows, &flat, plan, now);
 
     RenderState {
         header,
@@ -880,11 +880,18 @@ fn flatten_state_tree(
 /// while they run on `cof`, so an `agent` tool there is counted from
 /// `plan` instead: a leaf's own `provider` string, recorded by
 /// `PlanTree` from the compiled `ToolOp` itself.
-fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> TokenBar {
+fn build_token_bar(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    now: &str,
+) -> TokenBar {
     let mut estimated_input = 0u64;
     let mut estimated_input_is_lower_bound = false;
     let mut prompts_running = 0u64;
     let mut agents_running = 0u64;
+    let mut counted_agent_paths: std::collections::BTreeSet<&str> =
+        std::collections::BTreeSet::new();
     for row in rows {
         if row.status.kind != StatusKind::Running {
             continue;
@@ -913,6 +920,7 @@ fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanT
                 });
             if provider.is_some_and(|p| p.trim().eq_ignore_ascii_case("agent")) {
                 agents_running += 1;
+                counted_agent_paths.insert(row.path.as_str());
             }
             continue;
         }
@@ -925,6 +933,27 @@ fn build_token_bar(rows: &[Row], flat: &BTreeMap<String, NodeMeta>, plan: &PlanT
                 estimated_input += estimated_prompt_tokens(prompt_sent);
             }
             _ => estimated_input_is_lower_bound = true,
+        }
+    }
+    // Issue #637's heartbeat rule: a node with `meta.live` whose
+    // `updated_at` is within 5 seconds of `now` counts as running
+    // even with no `--events` to confirm it -- this reads `flat`
+    // alone, no `rows`/`--events` involved at all, so it also catches
+    // a step `rows` doesn't yet classify as `Running` for some other
+    // reason. Never double-counts a path the loop above already
+    // counted; never counts a node whose own `meta.live` has gone
+    // stale (an interrupted run's own leftover, DESIGN.md), since a
+    // stale summary's `updated_at` has stopped moving and so is never
+    // within 5 seconds of a `now` sampled well afterwards.
+    for (path, node) in flat {
+        if counted_agent_paths.contains(path.as_str()) {
+            continue;
+        }
+        if node.completed_at.is_some() {
+            continue;
+        }
+        if node.live.as_ref().is_some_and(|live| live.is_recent(now)) {
+            agents_running += 1;
         }
     }
     TokenBar {
@@ -4687,6 +4716,57 @@ mod tests {
         );
         assert_eq!(rendered.token_bar.agents_running, 1);
         assert_eq!(rendered.token_bar.prompts_running, 1);
+    }
+
+    /// Issue #637: a node with a fresh `meta.live` heartbeat counts
+    /// as an agent in flight purely from `flat`, with no `provider`
+    /// field and no `--events` confirmation of its own at all.
+    #[test]
+    fn a_fresh_meta_live_heartbeat_counts_as_an_agent_in_flight_with_no_provider_or_events() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "agent1": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "live": {"updated_at": "2026-10-08T11:52:54Z"}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:52:55Z",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.agents_running, 1);
+    }
+
+    /// An interrupted run's own leftover `meta.live` (DESIGN.md) must
+    /// never count as an agent in flight once its own heartbeat has
+    /// gone stale, even though the node itself still has no
+    /// `completed_at`.
+    #[test]
+    fn a_stale_meta_live_heartbeat_does_not_count_as_an_agent_in_flight() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "agent1": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "live": {"updated_at": "2026-10-08T11:46:50Z"}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:52:55Z",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.agents_running, 0);
     }
 
     fn named_loop_with_one_prompt_program() -> electricity_bytecode::Program {

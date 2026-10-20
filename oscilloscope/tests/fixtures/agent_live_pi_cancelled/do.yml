@@ -1,0 +1,9 @@
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: pi
+      prompt: "Fix the bug."
+      tools: [read, bash, edit]
+      transcript: top_agent_transcript.jsonl

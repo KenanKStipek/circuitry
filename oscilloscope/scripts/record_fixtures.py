@@ -53,6 +53,22 @@ class Case:
     doc: str
     replies: str | None = None
     signals: list[SignalStep] = field(default_factory=list)
+    #: Merged into the recording config's own `runtime` key (issue
+    #: #637's agent-live cases: `plugins.agent.pi.binary`/
+    #: `claude_code.binary`, pointed at a fake CLI). `None` for every
+    #: other case, which keeps the plain scripted-adapter config.
+    extra_runtime: dict | None = None
+    #: What `config.fixture.json` actually gets, as a pre-built dict,
+    #: instead of a copy of the real config this case ran with --
+    #: only the agent-live cases set this, so the fake CLI's own
+    #: absolute path (real on the recording machine, meaningless and
+    #: potentially private anywhere else) is never committed; every
+    #: other case keeps copying its real config unchanged.
+    config_for_commit: dict | None = None
+    #: Overrides `HARD_TIMEOUT_S` for one case -- the agent-live cases
+    #: run a real (fake) CLI with real `sleep`s in it, several seconds
+    #: slower than every other case's scripted, instant replies.
+    timeout_s: float | None = None
 
 
 CASES: list[Case] = [
@@ -530,6 +546,132 @@ prime.thank:
     ),
 ]
 
+# Issue #637's own fixtures: a real `cof` run against the reference
+# fake CLIs under `tests/agent_live_fakes/` (streamed slowly with real
+# `time.sleep`s, so a poll mid-run genuinely catches `meta.live` and
+# the transcript partway through, DESIGN.md's "record ... from a cof
+# run with the fake CLIs"). `electricity` refuses the `agent` provider
+# outright, so these only ever record against `cof`.
+FAKE_PI_BINARY = str(Path(__file__).resolve().parent.parent / "tests" / "agent_live_fakes" / "fake_pi.py")
+FAKE_CLAUDE_BINARY = str(
+    Path(__file__).resolve().parent.parent / "tests" / "agent_live_fakes" / "fake_claude.py"
+)
+# Committed in place of the real, machine-local path above (K2's own
+# rule, applied here deliberately rather than relying on `scrub`'s
+# safety net: a path under this repository's own worktree still
+# starts with `/Users/<name>/...` on the recording machine, which
+# `scrub`'s `/Users/` pattern only strips the username segment from,
+# leaving the rest of the local checkout's own path -- not a secret,
+# but not reproducible either, and this reads better as a committed
+# fixture than a half-scrubbed one would).
+AGENT_LIVE_CASES: list[Case] = [
+    Case(
+        name="agent_live_pi",
+        timeout_s=20.0,
+        doc="""\
+interface:
+  inputs:
+    items: {type: array, default: ["only"]}
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: pi
+      prompt: "Fix the bug."
+      tools: [read, bash, edit]
+      transcript: top_agent_transcript.jsonl
+  - type: loop
+    name: fan
+    flow: tree
+    each:
+      in: input.items
+      as: item
+    body:
+      - name: tree_agent
+        type: tool
+        provider: agent
+        params:
+          engine: pi
+          prompt: "Pass {{item}}."
+          tools: [read, bash, edit]
+          transcript: tree_agent_transcript.jsonl
+""",
+        extra_runtime={"plugins": {"agent": {"pi": {"binary": FAKE_PI_BINARY}}}},
+        config_for_commit={
+            "default_adapter": "scripted",
+            "default_model": "scripted-model",
+            "runtime": {
+                "adapters": {"scripted": {}},
+                "plugins": {
+                    "agent": {"pi": {"binary": "oscilloscope/tests/agent_live_fakes/fake_pi.py"}}
+                },
+            },
+        },
+    ),
+    Case(
+        name="agent_live_claude_code",
+        timeout_s=15.0,
+        doc="""\
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: claude_code
+      prompt: "Fix the bug."
+      transcript: top_agent_transcript.jsonl
+""",
+        extra_runtime={"plugins": {"agent": {"claude_code": {"binary": FAKE_CLAUDE_BINARY}}}},
+        config_for_commit={
+            "default_adapter": "scripted",
+            "default_model": "scripted-model",
+            "runtime": {
+                "adapters": {"scripted": {}},
+                "plugins": {
+                    "agent": {
+                        "claude_code": {
+                            "binary": "oscilloscope/tests/agent_live_fakes/fake_claude.py"
+                        }
+                    }
+                },
+            },
+        },
+    ),
+    # Issue #637's acceptance item 2: SIGINT lands mid tool call,
+    # during `fake_pi.py`'s own first (2.5s) sleep, the same shape
+    # `/tmp/orch-probes/agent-live/cancel_state.py` confirmed cof
+    # itself leaves `meta.live` in place for, no `completed_at` --
+    # the fixture a watcher reads an interrupted run's own agent from.
+    Case(
+        name="agent_live_pi_cancelled",
+        timeout_s=10.0,
+        doc="""\
+effects:
+  - name: top_agent
+    type: tool
+    provider: agent
+    params:
+      engine: pi
+      prompt: "Fix the bug."
+      tools: [read, bash, edit]
+      transcript: top_agent_transcript.jsonl
+""",
+        extra_runtime={"plugins": {"agent": {"pi": {"binary": FAKE_PI_BINARY}}}},
+        config_for_commit={
+            "default_adapter": "scripted",
+            "default_model": "scripted-model",
+            "runtime": {
+                "adapters": {"scripted": {}},
+                "plugins": {
+                    "agent": {"pi": {"binary": "oscilloscope/tests/agent_live_fakes/fake_pi.py"}}
+                },
+            },
+        },
+        signals=[SignalStep(after_s=1.0, sig=signal.SIGINT)],
+    ),
+]
+
 
 def record_one(
     case: Case,
@@ -571,6 +713,8 @@ def record_one(
             replies_path = work / "replies.yaml"
             replies_path.write_text(case.replies, encoding="utf-8")
             config["runtime"]["adapters"]["scripted"]["replies_file"] = "replies.yaml"
+        if case.extra_runtime is not None:
+            config["runtime"].update(case.extra_runtime)
         config_path = work / "config.json"
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
@@ -628,7 +772,7 @@ def record_one(
         snapshots: list[dict] = []
         last_fingerprint: tuple[float, int] | None = None
         pending_signals = sorted(case.signals, key=lambda s: s.after_s)
-        deadline = start + HARD_TIMEOUT_S
+        deadline = start + (case.timeout_s if case.timeout_s is not None else HARD_TIMEOUT_S)
 
         while True:
             elapsed = time.monotonic() - start
@@ -778,19 +922,42 @@ def write_fixture(
     # Named `config.fixture.json`, not `config.json`: the repository's
     # own `.gitignore` blanket-ignores `config.json` everywhere, to
     # keep a real local config from ever being committed by accident.
-    shutil.copy(config_path, out_dir / "config.fixture.json")
+    # An agent-live case substitutes `case.config_for_commit` instead
+    # of copying the real config it ran with: that config's own
+    # `pi.binary`/`claude_code.binary` is this recording machine's
+    # real, absolute path to the fake CLI, meaningless (and
+    # potentially a real username) anywhere else.
+    if case.config_for_commit is not None:
+        (out_dir / "config.fixture.json").write_text(
+            json.dumps(case.config_for_commit, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    else:
+        shutil.copy(config_path, out_dir / "config.fixture.json")
     if case.replies is not None:
         (out_dir / "replies.yaml").write_text(case.replies, encoding="utf-8")
+    # An agent-live case's own `transcript` param names a file
+    # relative to `work` (the run's own cwd) -- copy it alongside the
+    # rest of the fixture when the run actually wrote one.
+    for transcript_path in sorted(work.glob("*.jsonl")):
+        shutil.copy(transcript_path, out_dir / transcript_path.name)
 
     snapshots_text = "\n".join(json.dumps(s, sort_keys=True) for s in snapshots) + ("\n" if snapshots else "")
-    snapshots_text = scrub(snapshots_text, work, scratch_path, home)
+    # The agent-live cases' own fake CLI lives at a stable, real path
+    # under this checkout (never under `work`/`scratch_path`/`home`),
+    # so it needs its own scrub entry -- `meta.live`/`meta.raw` never
+    # carry it, but `runtime.effective_settings` does, as the
+    # resolved `pi.binary`/`claude_code.binary` config value.
+    fakes_dir = Path(FAKE_PI_BINARY).parent
+    snapshots_text = scrub(snapshots_text, work, scratch_path, home, fakes_dir)
     (out_dir / "snapshots.jsonl").write_text(snapshots_text, encoding="utf-8")
 
     if events_text:
-        (out_dir / "events.jsonl").write_text(scrub(events_text, work, scratch_path, home), encoding="utf-8")
+        (out_dir / "events.jsonl").write_text(
+            scrub(events_text, work, scratch_path, home, fakes_dir), encoding="utf-8"
+        )
 
-    stdout_text = scrub(stdout.decode("utf-8", errors="replace"), work, scratch_path, home)
-    stderr_text = scrub(stderr.decode("utf-8", errors="replace"), work, scratch_path, home)
+    stdout_text = scrub(stdout.decode("utf-8", errors="replace"), work, scratch_path, home, fakes_dir)
+    stderr_text = scrub(stderr.decode("utf-8", errors="replace"), work, scratch_path, home, fakes_dir)
     (out_dir / "stdout.txt").write_text(stdout_text, encoding="utf-8")
     (out_dir / "stderr.txt").write_text(stderr_text, encoding="utf-8")
 
@@ -842,6 +1009,15 @@ def main() -> int:
         print("record_fixtures.py: 'cof' not found on PATH", file=sys.stderr)
         return 1
 
+    # `--agent-live-only`: re-record just AGENT_LIVE_CASES (issue
+    # #637), leaving every other committed fixture untouched -- the
+    # fake CLIs' own real `sleep`s make these cases the slowest ones
+    # to re-record by a wide margin.
+    if "--agent-live-only" in sys.argv:
+        for case in AGENT_LIVE_CASES:
+            record_one(case, cof_bin, engine="cof")
+        return check_no_leaked_paths()
+
     # `--parity-only`: re-record just PARITY_CASES (issue #431's lane
     # E2), leaving every other committed fixture untouched -- each
     # snapshot's own `t` is real elapsed time, never reproducible, so
@@ -884,6 +1060,14 @@ def main() -> int:
                     f"skipping the electricity half of {case.name}",
                     file=sys.stderr,
                 )
+
+    # AGENT_LIVE_CASES (issue #637): `cof` only, same reasoning as
+    # `PARITY_CASES`' own electricity half -- electricity refuses the
+    # `agent` provider outright, so there is no electricity half to
+    # attempt at all.
+    if "--parity-only" not in sys.argv:
+        for case in AGENT_LIVE_CASES:
+            record_one(case, cof_bin, engine="cof")
 
     return check_no_leaked_paths()
 

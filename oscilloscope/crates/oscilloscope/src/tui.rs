@@ -358,6 +358,7 @@ fn draw_overview(
     frame: &mut Frame,
     area: Rect,
     overview: &oscilloscope_core::screens::Overview,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) {
     if area.height == 0 {
@@ -378,7 +379,14 @@ fn draw_overview(
     draw_phase_strip(frame, sections[0], &overview.phase_strip, ctx, stacked);
 
     if stacked {
-        draw_now_pane(frame, sections[1], &overview.now_pane, ctx, true);
+        draw_now_pane(
+            frame,
+            sections[1],
+            &overview.now_pane,
+            transcript_view,
+            ctx,
+            true,
+        );
         draw_cards_summary_line(frame, sections[2], overview, ctx);
         return;
     }
@@ -394,7 +402,14 @@ fn draw_overview(
         ])
         .split(rest);
 
-    draw_now_pane(frame, rows[0], &overview.now_pane, ctx, false);
+    draw_now_pane(
+        frame,
+        rows[0],
+        &overview.now_pane,
+        transcript_view,
+        ctx,
+        false,
+    );
     draw_cards(frame, rows[1], overview, ctx);
 }
 
@@ -500,6 +515,7 @@ fn draw_now_pane(
     frame: &mut Frame,
     area: Rect,
     pane: &oscilloscope_core::screens::NowPane,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     stacked: bool,
 ) {
@@ -511,8 +527,7 @@ fn draw_now_pane(
         .iter()
         .map(|l| Line::from(l.clone()))
         .collect();
-    let focus =
-        Paragraph::new(focus_lines(&pane.focus, ctx)).block(Block::default().borders(Borders::ALL));
+    let focus_raw = focus_lines(&pane.focus, transcript_view, ctx);
     let log =
         Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
 
@@ -527,6 +542,15 @@ fn draw_now_pane(
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(focus_height), Constraint::Min(0)])
             .split(area);
+        // Truncated to this pane's own real inner width
+        // (the border either side) with an ellipsis, same as every
+        // other pane here -- without it, a line a touch too long for
+        // a small terminal is simply cut off by the widget itself,
+        // silently dropping whatever character landed on the edge
+        // (a live summary's own `turn 14` reading back as `turn 1`).
+        let focus_width = rows[0].width.saturating_sub(2) as usize;
+        let focus = Paragraph::new(truncate_lines(focus_raw, focus_width))
+            .block(Block::default().borders(Borders::ALL));
         frame.render_widget(focus, rows[0]);
         frame.render_widget(log, rows[1]);
         return;
@@ -536,6 +560,9 @@ fn draw_now_pane(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(left_width), Constraint::Min(0)])
         .split(area);
+    let focus_width = cols[1].width.saturating_sub(2) as usize;
+    let focus = Paragraph::new(truncate_lines(focus_raw, focus_width))
+        .block(Block::default().borders(Borders::ALL));
     frame.render_widget(log, cols[0]);
     frame.render_widget(focus, cols[1]);
 }
@@ -543,7 +570,11 @@ fn draw_now_pane(
 /// The now pane's own right side (issue #626): the step follow
 /// selects, or, with nothing running, the last finished step, or,
 /// once the run has ended, its outcome and totals.
-fn focus_lines(focus: &oscilloscope_core::screens::NowFocus, ctx: &DrawCtx) -> Vec<Line<'static>> {
+fn focus_lines(
+    focus: &oscilloscope_core::screens::NowFocus,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::NowFocus;
     match focus {
         NowFocus::None => vec![Line::from("nothing has run yet")],
@@ -578,16 +609,231 @@ fn focus_lines(focus: &oscilloscope_core::screens::NowFocus, ctx: &DrawCtx) -> V
             if let Some(cost) = summary.cost_usd {
                 lines.push(Line::from(format!("${cost:.2}")));
             }
+            // Issue #637: an agent session that never completed has
+            // no `NowFocus::Running`/`LastFinished` of its own left
+            // to be the overview's focus once the run has ended --
+            // named and shown here instead, with its own last-known
+            // live block, reusing exactly what a running or
+            // last-finished step's own focus already renders.
+            if let Some(agent) = &summary.stopped_agent {
+                lines.push(Line::from(""));
+                lines.extend(focus_step_lines(agent, None, transcript_view, ctx));
+            }
             lines
         }
-        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), ctx),
-        NowFocus::LastFinished(step) => focus_step_lines(step, None, ctx),
+        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), transcript_view, ctx),
+        NowFocus::LastFinished(step) => focus_step_lines(step, None, transcript_view, ctx),
     }
+}
+
+/// Categorises a tool name for [`agent_live_lines`]'s own compact
+/// activity strip (issue #637's `░read ▒edit █bash`) -- a substring
+/// match on the lower-cased name, so it reads both engines' own
+/// casing (pi's lowercase, Claude Code's `Read`/`Edit`/`Bash`) the
+/// same way, and still assigns *some* glyph to an MCP tool or any
+/// other name neither engine's own built-ins use.
+fn tool_glyph(tool: &str) -> char {
+    let lower = tool.to_ascii_lowercase();
+    if lower.contains("edit") || lower.contains("write") {
+        '▒'
+    } else if lower.contains("bash")
+        || lower.contains("run")
+        || lower.contains("shell")
+        || lower.contains("exec")
+    {
+        '█'
+    } else if lower.contains("read")
+        || lower.contains("grep")
+        || lower.contains("find")
+        || lower.contains("glob")
+        || lower.contains("ls")
+        || lower.contains("search")
+    {
+        '░'
+    } else {
+        '·'
+    }
+}
+
+/// A running agent's own live summary (`docs/plugins/agent.md`'s
+/// live-progress table, issue #637), the lines both the overview's
+/// now pane and Flow's selected pane show for it -- a figure the CLI
+/// doesn't report live (`tokens_received`/`cost_usd` on Claude Code)
+/// reads `—`, never `0`; a context window osi doesn't know yet omits
+/// the bar but still shows the token count on its own. The tool
+/// activity (the glyph strip, the clock-timed list) comes from
+/// `transcript_view` when it has any calls at all; with no transcript
+/// tailed yet (or a step whose engine never wrote one), it falls back
+/// to `live.tools`/`live.current_tool` -- names and counts only, no
+/// times or targets, exactly what those fields carry. `tests` reads
+/// only from the transcript either way (the engine doesn't publish
+/// it at all), independently of whether `files`/`+/−` has anything to
+/// show -- a session that has only run a test command, with no edit
+/// yet, still gets a `tests` line of its own.
+fn agent_live_lines(
+    live: &oscilloscope_core::model::AgentLive,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+    show_doing_header: bool,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::format::format_tokens;
+    let dim = Style::default().fg(ctx.theme.dim);
+    let mut lines = Vec::new();
+
+    let mut header = Vec::new();
+    if let Some(engine) = &live.engine {
+        header.push(engine.clone());
+    }
+    if let Some(model) = &live.model {
+        header.push(model.clone());
+    }
+    if let Some(turns) = live.turns {
+        header.push(format!("turn {turns}"));
+    }
+    if let Some(tool_calls) = live.tool_calls {
+        header.push(format!("{tool_calls} tools"));
+    }
+    if !header.is_empty() {
+        lines.push(Line::from(header.join(" · ")));
+    }
+
+    let sent = live
+        .tokens_sent
+        .map(format_tokens)
+        .unwrap_or_else(|| "—".to_string());
+    let received = live
+        .tokens_received
+        .map(format_tokens)
+        .unwrap_or_else(|| "—".to_string());
+    let cost = live
+        .cost_usd
+        .map(|c| format!("${c:.2}"))
+        .unwrap_or_else(|| "$—".to_string());
+    lines.push(Line::from(format!("↑{sent} ↓{received} · {cost}")));
+
+    // The tool activity comes right after the headline
+    // figures, before context/files/tests -- in Flow's own selected
+    // pane, nested under its own `doing:` header and a tighter height
+    // budget than the overview's now pane has, this is the one part
+    // of the summary that would otherwise be the first thing clipped
+    // off the bottom.
+    match transcript_view.filter(|v| !v.calls.is_empty()) {
+        Some(view) => {
+            let strip: String = view
+                .calls
+                .iter()
+                .rev()
+                .take(32)
+                .rev()
+                .map(|c| tool_glyph(&c.tool))
+                .collect();
+            lines.push(Line::styled(strip, dim));
+            if show_doing_header {
+                lines.push(Line::styled("doing:", dim));
+            }
+            for call in view.calls.iter().rev().take(3).rev() {
+                let clock = call
+                    .start_t
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                    .map(|c| format!("{c} "))
+                    .unwrap_or_default();
+                let mut text = format!("{clock}› {}", call.tool);
+                if let Some(target) = &call.target {
+                    text.push(' ');
+                    text.push_str(target);
+                }
+                match call.ok {
+                    Some(true) => text.push_str(" ✓"),
+                    Some(false) => text.push_str(" ✗"),
+                    None if call.stopped => text.push_str(" stopped"),
+                    None => text.push_str(" running"),
+                }
+                if call.lines_added.is_some() || call.lines_removed.is_some() {
+                    text.push_str(&format!(
+                        " +{} −{}",
+                        call.lines_added.unwrap_or(0),
+                        call.lines_removed.unwrap_or(0)
+                    ));
+                }
+                lines.push(Line::from(text));
+            }
+        }
+        None => {
+            // Issue #637: without a transcript to read calls from at
+            // all (not yet tailed, or an engine that never wrote
+            // one), the same activity is shown from `meta.live`'s own
+            // `tools`/`current_tool` instead -- names and counts
+            // only, since that's all either field carries.
+            if !live.tools.is_empty() {
+                let counts = live
+                    .tools
+                    .iter()
+                    .map(|(name, usage)| format!("{name} ×{}", usage.calls))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                if show_doing_header {
+                    lines.push(Line::styled("doing:", dim));
+                }
+                lines.push(Line::from(counts));
+            }
+            if let Some(current) = &live.current_tool {
+                lines.push(Line::from(format!("running: {}", current.name)));
+            }
+        }
+    }
+
+    if let Some(context_tokens) = live.context_tokens {
+        match live.context_window {
+            Some(window) => {
+                lines.push(Line::from(format!(
+                    "context {} / {}",
+                    format_tokens(context_tokens),
+                    format_tokens(window)
+                )));
+                lines.push(Line::styled(bar(context_tokens, window, 20), dim));
+            }
+            None => {
+                lines.push(Line::from(format!(
+                    "context {}",
+                    format_tokens(context_tokens)
+                )));
+            }
+        }
+    }
+
+    let mut activity = Vec::new();
+    if live.files_changed.is_some() || live.lines_added.is_some() || live.lines_removed.is_some() {
+        if let Some(files) = live.files_changed {
+            activity.push(format!("files {files}"));
+        }
+        if live.lines_added.is_some() || live.lines_removed.is_some() {
+            activity.push(format!(
+                "+{} −{}",
+                live.lines_added.unwrap_or(0),
+                live.lines_removed.unwrap_or(0)
+            ));
+        }
+    }
+    if let Some(tests) = transcript_view.and_then(|v| v.tests) {
+        use oscilloscope_core::transcript::TestOutcome;
+        activity.push(match tests {
+            TestOutcome::Running => "tests …".to_string(),
+            TestOutcome::Ok => "tests ✓".to_string(),
+            TestOutcome::Failed => "tests ✗".to_string(),
+        });
+    }
+    if !activity.is_empty() {
+        lines.push(Line::from(activity.join(" · ")));
+    }
+
+    lines
 }
 
 fn focus_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     more_running: Option<usize>,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
@@ -634,27 +880,34 @@ fn focus_step_lines(
                     lines.push(Line::from(command.clone()));
                 }
             }
+            // The note is a placeholder for the brief
+            // window before the first `meta.live` write while the
+            // step is actually running (`more_running.is_some()` is
+            // exactly `NowFocus::Running`'s own signal) -- a finished
+            // agent step reads the same as any other finished tool
+            // step here, nothing extra, since `live` is always `None`
+            // by then (`meta.live` is removed once the attempt ends).
             FocusDetail::Agent {
-                engine,
-                model,
-                note,
-                ..
-            } => {
-                let mut parts = Vec::new();
-                if let Some(engine) = engine {
-                    parts.push(engine.clone());
+                live, note, stale, ..
+            } => match live.as_deref() {
+                Some(live) => {
+                    // An interrupted run's own leftover `meta.live`
+                    // (`docs/plugins/agent.md`: "a watcher shows it
+                    // as stopped") -- the figures underneath are
+                    // still the last ones the session actually
+                    // reported, so they stay, with a marker that
+                    // they're no longer moving.
+                    if *stale {
+                        lines.push(Line::styled("stopped", Style::default().fg(ctx.theme.dim)));
+                    }
+                    lines.extend(agent_live_lines(live, transcript_view, ctx, true));
                 }
-                if let Some(model) = model {
-                    parts.push(model.clone());
-                }
-                if !parts.is_empty() {
-                    lines.push(Line::from(parts.join(" · ")));
-                }
-                lines.push(Line::from(Span::styled(
+                None if more_running.is_some() => lines.push(Line::from(Span::styled(
                     *note,
                     Style::default().fg(ctx.theme.dim),
-                )));
-            }
+                ))),
+                None => {}
+            },
             FocusDetail::Plain => {}
         }
         if let Some(more) = more_running {
@@ -946,6 +1199,20 @@ fn draw_cost_card(
             "top {path} {}",
             oscilloscope_core::format::format_tokens(*total)
         )));
+    }
+    // Issue #637: `card.tokens_sent`/`tokens_received` above never
+    // include a session that never completed (`runtime.last_run.
+    // totals` doesn't have one) -- its last-known figures are shown
+    // here instead, marked as stopped rather than folded into the
+    // card's own running total.
+    if let Some((label, sent, received)) = &card.stopped_agent {
+        let sent = sent
+            .map(oscilloscope_core::format::format_tokens)
+            .unwrap_or_else(|| "—".to_string());
+        let received = received
+            .map(oscilloscope_core::format::format_tokens)
+            .unwrap_or_else(|| "—".to_string());
+        lines.push(Line::from(format!("stopped {label} ↑{sent} ↓{received}")));
     }
     let in_flight_style = with_highlight(Style::default(), ctx.highlight("tokenbar"));
     lines.push(Line::styled(card.in_flight.clone(), in_flight_style));
@@ -1241,6 +1508,61 @@ fn draw_state(
     frame.render_widget(paragraph, area);
 }
 
+/// Issue #637's Cost section: "the per-turn strip comes from `turn_
+/// tokens`" -- the last `width` values, oldest first, each scaled to
+/// one of eight block heights relative to the largest value in that
+/// same window (never the whole session's own history), so a single
+/// unusually large turn doesn't flatten every other bar in sight.
+fn turn_tokens_sparkline(values: &[u64], width: usize) -> String {
+    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    if values.is_empty() || width == 0 {
+        return String::new();
+    }
+    let slice = if values.len() > width {
+        &values[values.len() - width..]
+    } else {
+        values
+    };
+    let max = slice.iter().copied().max().unwrap_or(0);
+    slice
+        .iter()
+        .map(|&v| {
+            if max == 0 {
+                LEVELS[0]
+            } else {
+                let idx = ((v as f64 / max as f64) * (LEVELS.len() - 1) as f64).round() as usize;
+                LEVELS[idx.min(LEVELS.len() - 1)]
+            }
+        })
+        .collect()
+}
+
+/// A running agent tile's own second line (issue #637's Cost
+/// section): the per-turn strip, and, when there's room left after
+/// it, the cache bar -- `tokens_cached_in`'s own share of the tile's
+/// `total` (its live `tokens_sent`, the one figure a live tile is
+/// ever sized from). `None` for a tile that isn't a live agent at
+/// all, or one with neither figure to show.
+fn live_turn_line(cell: &oscilloscope_core::treemap::TreemapCell, width: usize) -> Option<String> {
+    let live_turns = cell.live_turns.as_ref()?;
+    let spark = turn_tokens_sparkline(&live_turns.turn_tokens, width.min(12));
+    let cache = live_turns.tokens_cached_in.map(|cached| {
+        let pct = if cell.total > 0 {
+            (cached as f64 / cell.total as f64 * 100.0).round() as u64
+        } else {
+            0
+        };
+        format!("cache {pct}%")
+    });
+    let text = match (spark.is_empty(), cache) {
+        (false, Some(cache)) => format!("{spark} {cache}"),
+        (false, None) => spark,
+        (true, Some(cache)) => cache,
+        (true, None) => return None,
+    };
+    Some(truncate_label(&text, width))
+}
+
 /// A bar of filled block characters, `value`'s own share of `max`
 /// (issue #527's "scaled to the larger of the two") — `max == 0`
 /// draws an empty bar rather than dividing by zero. Shared by the
@@ -1406,7 +1728,16 @@ fn draw_cost_treemap(
                 _ => format_measure_value(cell.total, screen.measure),
             }
         };
-        let labelled = format!("{} {value_text}", cell.label);
+        // Issue #637: a running agent's own tile, sized from its
+        // live `tokens_sent`, is labelled `live` instead of a bare
+        // number -- the one thing `cell.total > 0` alone can no
+        // longer tell apart from a container that already has a
+        // real, finished child of its own.
+        let labelled = if cell.live {
+            format!("{} {value_text} live", cell.label)
+        } else {
+            format!("{} {value_text}", cell.label)
+        };
         if cell.has_children {
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -1436,7 +1767,16 @@ fn draw_cost_treemap(
                 } else {
                     text_style
                 };
-                let paragraph = Paragraph::new(Line::styled(label, text_style));
+                let mut tile_lines = vec![Line::styled(label, text_style)];
+                // Issue #637: the per-turn strip and the cache bar,
+                // when the tile actually has a second row to draw
+                // them on -- never at the cost of the label itself.
+                if rect.height >= 2 {
+                    if let Some(extra) = live_turn_line(cell, rect.width as usize) {
+                        tile_lines.push(Line::styled(extra, text_style));
+                    }
+                }
+                let paragraph = Paragraph::new(tile_lines);
                 frame.render_widget(paragraph, rect);
             }
         }
@@ -1978,6 +2318,7 @@ pub fn draw(
     overview: Option<&oscilloscope_core::screens::Overview>,
     cost_screen: Option<&oscilloscope_core::screens::CostScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     cost_layout: &mut CostLayoutCache,
 ) {
     let area = frame.area();
@@ -2021,7 +2362,7 @@ pub fn draw(
     match app.screen {
         oscilloscope_core::screens::Screen::Overview => {
             if let Some(overview) = overview {
-                draw_overview(frame, body, overview, ctx);
+                draw_overview(frame, body, overview, transcript_view, ctx);
             }
         }
         oscilloscope_core::screens::Screen::Cost => {
@@ -2040,6 +2381,7 @@ pub fn draw(
                     log_lines,
                     log_total,
                     app,
+                    transcript_view,
                     ctx,
                 );
             }
@@ -2608,12 +2950,14 @@ fn draw_flow_footer(
 /// reuses the overview's own `focus_step_lines`, a decision reads its
 /// own condition/branch/answer instead, and `s` swaps the whole pane
 /// for today's state tree (#610).
+#[allow(clippy::too_many_arguments)]
 fn draw_flow_selected_pane(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::FlowScreen,
     state_visible: &[&StateRow],
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) {
     if app.flow_selected_shows_state {
@@ -2623,7 +2967,7 @@ fn draw_flow_selected_pane(
     let lines = if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected {
-        flow_selected_step_lines(step, ctx)
+        flow_selected_step_lines(step, transcript_view, ctx)
     } else {
         vec![Line::from("nothing selected")]
     };
@@ -2657,6 +3001,7 @@ fn draw_flow_selected_pane(
 /// here unchanged.
 fn flow_selected_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
@@ -2681,7 +3026,7 @@ fn flow_selected_step_lines(
     let asked = match &step.detail {
         FocusDetail::Prompt { snippet, .. } => snippet.clone(),
         FocusDetail::Tool { command } => command.clone(),
-        FocusDetail::Agent { command, .. } => command.clone(),
+        FocusDetail::Agent { asked, .. } => asked.clone(),
         FocusDetail::Plain => None,
     };
     if let Some(asked) = asked {
@@ -2714,22 +3059,16 @@ fn flow_selected_step_lines(
             };
             doing.push(Line::from(text));
         }
+        // `live.is_some()` without `running` is an agent node whose
+        // own run has already ended (cancelled, failed or aborted,
+        // issue #637): `meta.live` is left behind with no
+        // `completed_at`, and `stale` (computed from `now` the
+        // instant this step was built) is always `true` by then, so
+        // this never reads as running -- only `stopped`, with
+        // whatever figures the session last reported.
         FocusDetail::Agent {
-            engine,
-            model,
-            note,
-            ..
-        } if running => {
-            let mut parts = Vec::new();
-            if let Some(engine) = engine {
-                parts.push(engine.clone());
-            }
-            if let Some(model) = model {
-                parts.push(model.clone());
-            }
-            if !parts.is_empty() {
-                doing.push(Line::from(parts.join(" · ")));
-            }
+            live, note, stale, ..
+        } if running || live.is_some() => {
             if let (Some(since), Some(elapsed)) = (
                 step.since_ts
                     .as_deref()
@@ -2741,7 +3080,19 @@ fn flow_selected_step_lines(
                     oscilloscope_core::format::format_duration(elapsed)
                 )));
             }
-            doing.push(Line::styled(*note, dim));
+            match live.as_deref() {
+                Some(live) => {
+                    if *stale {
+                        doing.push(Line::styled("stopped", dim));
+                    }
+                    // `false`: Flow's own `doing:` header below
+                    // already covers this content -- `agent_live_
+                    // lines` must not print a second one.
+                    doing.extend(agent_live_lines(live, transcript_view, ctx, false));
+                }
+                None if running => doing.push(Line::styled(*note, dim)),
+                None => {}
+            }
         }
         _ => {}
     }
@@ -2760,7 +3111,33 @@ fn flow_selected_step_lines(
                     }
                 }
             }
-            FocusDetail::Agent { .. } | FocusDetail::Tool { .. } | FocusDetail::Plain => {
+            FocusDetail::Agent {
+                raw_transcript,
+                raw_files_changed,
+                raw_turns,
+                ..
+            } => {
+                if let Some(value) = &step.value {
+                    if !value.is_empty() {
+                        produced.push(Line::from(value.clone()));
+                    }
+                }
+                // Issue #637: "produced: meta.raw.transcript,
+                // files_changed, the tokens and turns" -- the tokens
+                // line below is the same `step.tokens` every other
+                // finished tool step's own produced block already
+                // shows.
+                if let Some(transcript) = raw_transcript {
+                    produced.push(Line::styled(transcript.clone(), dim));
+                }
+                if let Some(files) = raw_files_changed {
+                    produced.push(Line::from(format!("files {files}")));
+                }
+                if let Some(turns) = raw_turns {
+                    produced.push(Line::from(format!("turns {turns}")));
+                }
+            }
+            FocusDetail::Tool { .. } | FocusDetail::Plain => {
                 if let Some(value) = &step.value {
                     if !value.is_empty() {
                         produced.push(Line::from(value.clone()));
@@ -2911,6 +3288,7 @@ fn draw_flow_screen(
     log_lines: &[String],
     log_total: u64,
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
 ) {
     let visible = visible_rows(&state.rows, app);
@@ -2949,7 +3327,15 @@ fn draw_flow_screen(
                 Constraint::Min(columns[1].height - selected_rows),
             ])
             .split(columns[1]);
-        draw_flow_selected_pane(frame, right[0], screen, &state_visible, app, ctx);
+        draw_flow_selected_pane(
+            frame,
+            right[0],
+            screen,
+            &state_visible,
+            app,
+            transcript_view,
+            ctx,
+        );
         draw_flow_story_pane(frame, right[1], screen, log_lines, log_total, app, ctx);
     } else if two_pane {
         app.story_viewport = 0;
@@ -2975,7 +3361,15 @@ fn draw_flow_screen(
         if app.flow_story_shows_log {
             draw_log(frame, columns[1], log_lines, log_total, ctx);
         } else {
-            draw_flow_selected_pane(frame, columns[1], screen, &state_visible, app, ctx);
+            draw_flow_selected_pane(
+                frame,
+                columns[1],
+                screen,
+                &state_visible,
+                app,
+                transcript_view,
+                ctx,
+            );
         }
     } else {
         app.story_viewport = 0;
@@ -2987,7 +3381,15 @@ fn draw_flow_screen(
                 Constraint::Min(body.height - selected_rows),
             ])
             .split(body);
-        draw_flow_selected_pane(frame, parts[0], screen, &state_visible, app, ctx);
+        draw_flow_selected_pane(
+            frame,
+            parts[0],
+            screen,
+            &state_visible,
+            app,
+            transcript_view,
+            ctx,
+        );
         draw_flow_pane(
             frame,
             parts[1],
@@ -3324,6 +3726,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -3417,6 +3820,7 @@ mod golden_tests {
                     Some(&overview),
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -3429,6 +3833,274 @@ mod golden_tests {
             "a": {"value": "ok\n", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "provider": "shell", "exit_code": 0}},
             "b": {"value": null, "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": null, "provider": "shell"}}
         }})
+    }
+
+    /// Issue #637: a single top-level `agent` tool step, still
+    /// running, with a realistic `meta.live` (every field the live-
+    /// progress table documents, including a figure Claude Code
+    /// never reports live -- `tokens_received`/`cost_usd` stay
+    /// `null`, never `0`, DESIGN.md).
+    fn agent_running_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": null},
+            "fix": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                "params_rendered": {"engine": "claude_code", "prompt": "Fix the bug.\nSee the issue for details."},
+                "live": {
+                    "engine": "claude_code", "model": "sonnet", "session_id": "s1",
+                    "transcript": "/tmp/fix-transcript.jsonl",
+                    "attempt": 1, "phase": "turn",
+                    "started_at": "2026-01-01T11:46:43Z", "updated_at": "2026-01-01T11:52:54Z",
+                    "turns": 14, "tool_calls": 31,
+                    "tools": {"bash": {"calls": 20, "ms": 120000}, "read": {"calls": 11, "ms": 5000}},
+                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"},
+                    "tokens_sent": 2100000, "tokens_received": null, "cost_usd": null,
+                    "tokens_cached_in": 1800000, "tokens_cache_write": 50000,
+                    "context_tokens": 142000, "context_window": 200000,
+                    "turn_tokens": [100000, 142000],
+                    "files_changed": 3, "lines_added": 12, "lines_removed": 3
+                }
+            }}
+        }})
+    }
+
+    /// [`agent_running_state`], finished: no `meta.live` left at all
+    /// (removed once the attempt ends), the same generic
+    /// `tokens_sent`/`tokens_received`/`cost_usd`/`value` fields
+    /// every other finished tool step carries.
+    fn agent_finished_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:52:55Z"},
+            "fix": {"value": "Done. All tests pass.", "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:52:55Z", "provider": "agent",
+                "params_rendered": {"engine": "claude_code", "prompt": "Fix the bug.\nSee the issue for details."},
+                "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
+                "raw": {"engine": "claude_code", "turns": 14, "tool_calls": 31, "transcript": "/tmp/fix-transcript.jsonl",
+                    "files_changed": 3, "lines_added": 12, "lines_removed": 3}
+            }}
+        }})
+    }
+
+    /// [`agent_finished_state`], with `prime` itself left running
+    /// (`completed_at: null`) -- the overview's own goldens for a
+    /// finished agent step want `NowFocus::LastFinished` (a real
+    /// finished step, nothing else running), not `NowFocus::Ended`
+    /// (the whole run having ended is a different state entirely,
+    /// already covered by every other finished-run golden here).
+    fn agent_finished_but_run_still_going_state() -> Value {
+        let mut state = agent_finished_state();
+        state["prime"]["meta"]["completed_at"] = Value::Null;
+        state
+    }
+
+    /// Issue #637's acceptance item 2: the whole run has ended --
+    /// SIGINT lands mid the agent's first tool call, same shape
+    /// `oscilloscope/tests/fixtures/agent_live_pi_cancelled` recorded
+    /// from a real `cof` run (`cancel_state.py`) -- `prime` itself
+    /// carries DESIGN.md §2.1 rule 7's own "Interrupted" error, but
+    /// `fix`'s own `meta.live` is still there, with no `completed_at`
+    /// of its own: `NowFocus::Ended` with no step of its own to focus
+    /// on otherwise.
+    fn agent_cancelled_state() -> Value {
+        json!({
+            "runtime": {"last_run": {"completed_at": "2026-01-01T11:46:54Z"}},
+            "prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
+                "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+                "fix": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "params_rendered": {"engine": "pi", "prompt": "Fix the bug.\nSee the issue for details."},
+                    "live": {
+                        "engine": "pi", "model": null, "session_id": "s1",
+                        "transcript": "/tmp/fix-transcript.jsonl",
+                        "attempt": 1, "phase": "turn",
+                        "started_at": "2026-01-01T11:46:43Z", "updated_at": "2026-01-01T11:46:50Z",
+                        "turns": 1, "tool_calls": 1,
+                        "tools": {"bash": {"calls": 1, "ms": 0}},
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"},
+                        "tokens_sent": 2100, "tokens_received": 40, "cost_usd": 0.012,
+                        "tokens_cached_in": 800, "tokens_cache_write": 100,
+                        "context_tokens": 2100, "context_window": null,
+                        "turn_tokens": [2100],
+                        "files_changed": null, "lines_added": null, "lines_removed": null
+                    }
+                }}
+            }
+        })
+    }
+
+    /// The transcript lines `agent_running_state`'s own `fix` step
+    /// would have written by the time it reached `meta.live.turns ==
+    /// 14` -- enough for the now pane / selected pane's own `doing:`
+    /// lines and `tests` word to have something real to read.
+    fn agent_running_transcript() -> oscilloscope_core::transcript::TranscriptView {
+        let lines = vec![
+            json!({"t": "2026-01-01T11:47:05Z", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
+            json!({"t": "2026-01-01T11:47:06Z", "type": "tool_end", "id": 1, "ok": true, "ms": 20}),
+            json!({"t": "2026-01-01T11:49:30Z", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k timeout"}),
+            json!({"t": "2026-01-01T11:49:41Z", "type": "tool_end", "id": 2, "ok": false, "ms": 11000}),
+            json!({"t": "2026-01-01T11:51:15Z", "type": "tool_start", "id": 3, "tool": "edit", "target": "src/adapters/ollama.rs"}),
+            json!({"t": "2026-01-01T11:51:16Z", "type": "tool_end", "id": 3, "ok": true, "ms": 10, "lines_added": 12, "lines_removed": 3}),
+            json!({"t": "2026-01-01T11:51:40Z", "type": "tool_start", "id": 4, "tool": "bash", "target": "pytest -k timeout"}),
+            json!({"t": "2026-01-01T11:52:21Z", "type": "tool_end", "id": 4, "ok": true, "ms": 41000}),
+            json!({"t": "2026-01-01T11:52:30Z", "type": "tool_start", "id": 5, "tool": "bash", "target": "pytest -q tests/adapters"}),
+        ];
+        oscilloscope_core::transcript::build_transcript_view(&lines)
+    }
+
+    /// [`overview_snapshot_at`], with a specific transcript view
+    /// attached the way `main.rs`'s own `tail_focused_transcript`
+    /// would feed `draw` -- issue #637's own now-pane goldens for a
+    /// running agent need its `doing:`/`tests` lines to come from
+    /// somewhere real.
+    fn overview_agent_snapshot_at(
+        width: u16,
+        height: u16,
+        state: &Value,
+        transcript: Option<&oscilloscope_core::transcript::TranscriptView>,
+        process: ProcessState,
+    ) -> String {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(state),
+            process,
+            372.0,
+            "2026-01-01T11:52:55Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let overview = oscilloscope_core::screens::build_overview(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(state),
+            &rendered.token_bar,
+            &[],
+            None,
+            "2026-01-01T11:52:55Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Overview;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T11:52:55Z",
+                    Some(&overview),
+                    None,
+                    None,
+                    transcript,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// [`snapshot_at`], with a specific transcript view attached --
+    /// issue #637's own Flow selected-pane goldens for a running
+    /// agent.
+    fn flow_agent_snapshot_at(
+        width: u16,
+        height: u16,
+        state: &Value,
+        transcript: Option<&oscilloscope_core::transcript::TranscriptView>,
+        process: ProcessState,
+    ) -> String {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(state),
+            process,
+            372.0,
+            "2026-01-01T11:52:55Z",
+            &[],
+        );
+        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &oscilloscope_core::model::flatten_state(state),
+            &plan,
+            &model,
+            Some(state),
+            &[],
+            Some("prime.fix"),
+            &test_zone(),
+            "2026-01-01T11:52:55Z",
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some("prime.fix".to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    "2026-01-01T11:52:55Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    transcript,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
     }
 
     fn overview_finished_state() -> Value {
@@ -3600,6 +4272,147 @@ mod golden_tests {
         let state = overview_finished_state();
         let process = ProcessState::exited(false);
         let text = overview_snapshot_at(60, 18, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_running_agent_at_120x40() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text =
+            overview_agent_snapshot_at(120, 40, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_running_agent_at_80x24() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text =
+            overview_agent_snapshot_at(80, 24, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #637: an interrupted run's own leftover `meta.live` (no
+    /// `completed_at`, a heartbeat long gone stale) reads as
+    /// `stopped` in the now pane, not as a live running summary --
+    /// the last figures the session actually reported are still
+    /// shown underneath, just marked as no longer moving.
+    #[test]
+    fn overview_now_pane_shows_an_interrupted_agents_leftover_as_stopped() {
+        let mut state = agent_running_state();
+        state["prime"]["fix"]["meta"]["live"]["updated_at"] =
+            Value::String("2026-01-01T11:46:50Z".to_string());
+        let text = overview_agent_snapshot_at(120, 40, &state, None, ProcessState::Running);
+        assert!(text.contains("stopped"), "{text}");
+        assert!(
+            text.contains("2.1 Mt"),
+            "the last known figures must still show:\n{text}"
+        );
+    }
+
+    #[test]
+    fn overview_now_pane_finished_agent_at_120x40() {
+        let state = agent_finished_but_run_still_going_state();
+        let text = overview_agent_snapshot_at(120, 40, &state, None, ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_finished_agent_at_80x24() {
+        let state = agent_finished_but_run_still_going_state();
+        let text = overview_agent_snapshot_at(80, 24, &state, None, ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #637's acceptance item 2: once the whole run has ended
+    /// (not just this one step's own heartbeat gone stale while the
+    /// run keeps going, `overview_now_pane_shows_an_interrupted_
+    /// agents_leftover_as_stopped` above), the now pane's own
+    /// `NowFocus::Ended` names the stopped agent and still shows its
+    /// last-known live block.
+    #[test]
+    fn overview_now_pane_cancelled_agent_at_120x40() {
+        let state = agent_cancelled_state();
+        let text = overview_agent_snapshot_at(120, 40, &state, None, ProcessState::exited(true));
+        assert!(text.contains("stopped"), "{text}");
+        assert!(
+            text.contains("fix"),
+            "the stopped agent must be named:\n{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn overview_now_pane_cancelled_agent_at_80x24() {
+        let state = agent_cancelled_state();
+        let text = overview_agent_snapshot_at(80, 24, &state, None, ProcessState::exited(true));
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_running_agent_at_120x40() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text =
+            flow_agent_snapshot_at(120, 40, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_shows_an_interrupted_agents_leftover_as_stopped() {
+        let mut state = agent_running_state();
+        state["prime"]["fix"]["meta"]["live"]["updated_at"] =
+            Value::String("2026-01-01T11:46:50Z".to_string());
+        let text = flow_agent_snapshot_at(120, 40, &state, None, ProcessState::Running);
+        assert!(text.contains("stopped"), "{text}");
+    }
+
+    #[test]
+    fn flow_selected_pane_running_agent_at_80x24() {
+        let state = agent_running_state();
+        let transcript = agent_running_transcript();
+        let text = flow_agent_snapshot_at(80, 24, &state, Some(&transcript), ProcessState::Running);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_finished_agent_at_120x40() {
+        let state = agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = flow_agent_snapshot_at(120, 40, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_finished_agent_at_80x24() {
+        let state = agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = flow_agent_snapshot_at(80, 24, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #637's acceptance item 2: the run has ended, but `fix`
+    /// is still selected -- its own `FocusedStep` never came from
+    /// `NowFocus` at all here (Flow's own selection, issue #635), so
+    /// this exercises `flow_selected_step_lines`'s own guard
+    /// directly: `fix`'s `RowStatus::kind` reads `Cancelled`, never
+    /// `Running`, and must still show `stopped` with its last-known
+    /// figures rather than nothing at all.
+    #[test]
+    fn flow_selected_pane_cancelled_agent_at_120x40() {
+        let state = agent_cancelled_state();
+        let process = ProcessState::exited(true);
+        let text = flow_agent_snapshot_at(120, 40, &state, None, process);
+        assert!(text.contains("stopped"), "{text}");
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn flow_selected_pane_cancelled_agent_at_80x24() {
+        let state = agent_cancelled_state();
+        let process = ProcessState::exited(true);
+        let text = flow_agent_snapshot_at(80, 24, &state, None, process);
         insta::assert_snapshot!(text);
     }
 
@@ -3810,6 +4623,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -3864,6 +4678,79 @@ mod golden_tests {
             Some(&state),
             ProcessState::Running,
         );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #637: a running agent's own tile, sized and labelled
+    /// from `meta.live.tokens_sent` -- `tokens when done` never
+    /// appears for it, unlike every other running store.
+    fn cost_agent_running_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+            "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                "provider": "agent", "live": {
+                    "tokens_sent": 2100000,
+                    "turn_tokens": [400000, 900000, 600000, 2100000],
+                    "tokens_cached_in": 1800000
+                }}}
+        }})
+    }
+
+    fn cost_agent_finished_state() -> Value {
+        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "t"},
+            "fix": {"value": "done", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "t",
+                "provider": "agent", "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10}}
+        }})
+    }
+
+    #[test]
+    fn cost_tile_running_agent_at_120x40() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_running_state();
+        let text = cost_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_tile_running_agent_at_80x24() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_running_state();
+        let text = cost_snapshot_at(
+            80,
+            24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_tile_finished_agent_at_120x40() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cost_tile_finished_agent_at_80x24() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = cost_agent_finished_state();
+        let process = ProcessState::exited(false);
+        let text = cost_snapshot_at(80, 24, &plan, &mut model, Some(&state), process);
         insta::assert_snapshot!(text);
     }
 
@@ -4082,6 +4969,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -4237,6 +5125,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4305,6 +5194,7 @@ mod golden_tests {
                     None,
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4367,6 +5257,7 @@ mod golden_tests {
                     &test_ctx,
                     0,
                     "2026-01-01T00:00:00Z",
+                    None,
                     None,
                     None,
                     None,
@@ -4450,6 +5341,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -4734,6 +5626,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5255,6 +6148,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5416,6 +6310,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5444,6 +6339,23 @@ mod golden_tests {
     /// that measurement.
     #[test]
     fn drawing_a_2000_node_state_stays_well_under_the_redraw_interval() {
+        // Issue #637: `n0` is a running agent whose transcript is a
+        // real file on disk, so the Flow pane's own selection below
+        // exercises transcript tailing too, not only the 2,000-node
+        // redraw itself -- the one other thing this same budget must
+        // still cover.
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            concat!(
+                r#"{"t": "t0", "type": "turn", "label": "turn", "session_id": "s1"}"#, "\n",
+                r#"{"t": "t0", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}"#, "\n",
+                r#"{"t": "t0", "type": "tool_end", "id": 1, "ok": true, "ms": 5}"#, "\n",
+            ),
+        )
+        .unwrap();
+
         let mut prime = serde_json::Map::new();
         prime.insert("value".to_string(), Value::Null);
         let mut prime_meta = serde_json::Map::new();
@@ -5452,11 +6364,25 @@ mod golden_tests {
         for i in 0..2000 {
             let mut meta = serde_json::Map::new();
             meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
-            meta.insert(
-                "completed_at".to_string(),
-                Value::String(format!("t{}", i + 1)),
-            );
-            meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            if i == 0 {
+                meta.insert("completed_at".to_string(), Value::Null);
+                meta.insert("provider".to_string(), Value::String("agent".to_string()));
+                meta.insert(
+                    "live".to_string(),
+                    serde_json::json!({
+                        "engine": "pi", "model": "sonnet", "turns": 1, "tool_calls": 1,
+                        "transcript": transcript_path.to_string_lossy(),
+                        "started_at": "t0", "updated_at": "t2001",
+                        "tokens_sent": 100
+                    }),
+                );
+            } else {
+                meta.insert(
+                    "completed_at".to_string(),
+                    Value::String(format!("t{}", i + 1)),
+                );
+                meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            }
             // Issue #632: also token-bearing by the Cost screen's own
             // rule (`adapter` present), so this same 2,000-node state
             // doubles as that screen's own timing coverage below --
@@ -5580,9 +6506,23 @@ mod golden_tests {
             &model,
             Some(&state),
             &story_2000,
-            Some("n0"),
+            Some("prime.n0"),
             &test_zone(),
             "t2001",
+        );
+        // Issue #637: the step on screen (`n0`, Flow's own selection
+        // here) gets its transcript tailed every frame -- timed
+        // together with everything else above, so a real 64 KiB-
+        // bounded read is part of this same budget, not a cost the
+        // 2,000-node measurement never actually pays.
+        let mut transcript_cache = crate::TranscriptTailCache::default();
+        let transcript_view =
+            crate::tail_focused_transcript(&app, None, Some(&flow_screen), &mut transcript_cache);
+        assert!(
+            transcript_view
+                .as_ref()
+                .is_some_and(|v| !v.calls.is_empty()),
+            "n0's own transcript must actually have been tailed"
         );
         terminal
             .draw(|f| {
@@ -5600,6 +6540,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    transcript_view.as_ref(),
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -5646,6 +6587,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:00:00Z",
                     Some(&overview),
+                    None,
                     None,
                     None,
                     &mut CostLayoutCache::default(),
@@ -5705,6 +6647,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -5736,6 +6679,7 @@ mod golden_tests {
                     "2026-01-01T00:00:00Z",
                     None,
                     Some(&cost_screen),
+                    None,
                     None,
                     &mut cost_layout,
                 )
@@ -5834,6 +6778,7 @@ mod golden_tests {
                     0,
                     "2026-01-01T00:00:00Z",
                     Some(&overview),
+                    None,
                     None,
                     None,
                     &mut CostLayoutCache::default(),
@@ -6024,6 +6969,8 @@ mod golden_tests {
                 total: 0,
                 weight: 900_000,
                 status: Some(StatusKind::Aborted),
+                live: false,
+                live_turns: None,
                 children: Vec::new(),
             },
         ];
@@ -6330,6 +7277,7 @@ mod golden_tests {
                     None,
                     Some(&cost_screen),
                     None,
+                    None,
                     &mut cost_layout,
                 )
             })
@@ -6631,6 +7579,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -6867,6 +7816,7 @@ mod golden_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7156,6 +8106,7 @@ mod highlight_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7196,6 +8147,7 @@ mod highlight_tests {
                     None,
                     None,
                     Some(&flow_screen),
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7244,6 +8196,7 @@ mod highlight_tests {
                         &ctx,
                         0,
                         "2026-01-01T00:00:00Z",
+                        None,
                         None,
                         None,
                         None,
@@ -7302,6 +8255,7 @@ mod highlight_tests {
                     None,
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7352,6 +8306,7 @@ mod highlight_tests {
                     None,
                     None,
                     None,
+                    None,
                     &mut CostLayoutCache::default(),
                 )
             })
@@ -7392,6 +8347,7 @@ mod highlight_tests {
                     &ctx,
                     0,
                     "2026-01-01T00:00:00Z",
+                    None,
                     None,
                     None,
                     None,

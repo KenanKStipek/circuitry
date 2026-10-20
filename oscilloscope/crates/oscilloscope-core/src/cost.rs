@@ -162,12 +162,25 @@ pub fn largest_stores(
         .unwrap_or_else(|| {
             // Mid-run, before `runtime.last_run.totals` exists: the
             // same `_total`-first fallback `render::build_header`
-            // itself uses, so the footer's own "run totals" agree
-            // with the header's `↑`/`↓` the whole time, not only
-            // once the run has ended.
+            // itself uses, plus the same running-agent live boost
+            // the rows above already carry -- without it, a running
+            // agent's own row could show more sent/received tokens
+            // than this total did, which reads as the table
+            // disagreeing with its own footer.
             let (sent, received, cost) =
                 flat.values().fold((0u64, 0u64, 0.0f64), |(s, r, c), node| {
                     let (ns, nr) = node_tokens(&node.meta);
+                    let (ns, nr) = if node.completed_at.is_none() {
+                        match &node.live {
+                            Some(live) => (
+                                live.tokens_sent.map_or(ns, |v| ns.max(v)),
+                                live.tokens_received.map_or(nr, |v| nr.max(v)),
+                            ),
+                            None => (ns, nr),
+                        }
+                    } else {
+                        (ns, nr)
+                    };
                     let nc = node
                         .meta
                         .get("cost_usd")
@@ -210,6 +223,27 @@ fn flatten_leaves_into(
         if node.children.is_empty() {
             if let Some(n) = flat.get(&node.path) {
                 let (tokens_sent, tokens_received) = node_tokens(&n.meta);
+                // Issue #637: a running agent's own row sizes from
+                // its live `tokens_sent`/`tokens_received` too, the
+                // same figure its treemap tile already does for
+                // `tokens_sent` (`treemap::leaf_node_for_measure`) --
+                // without this the table kept reading `0 t`/`tokens
+                // when done` for exactly the tile that no longer
+                // does, and (pi, which reports both live) a row whose
+                // own `↓` never agreed with what it had actually sent
+                // and received by the same moment.
+                let (tokens_sent, tokens_received) = if n.completed_at.is_none() {
+                    match &n.live {
+                        Some(live) => (
+                            live.tokens_sent.map_or(tokens_sent, |s| tokens_sent.max(s)),
+                            live.tokens_received
+                                .map_or(tokens_received, |r| tokens_received.max(r)),
+                        ),
+                        None => (tokens_sent, tokens_received),
+                    }
+                } else {
+                    (tokens_sent, tokens_received)
+                };
                 let cost_usd = n.meta.get("cost_usd").and_then(Value::as_f64);
                 // A `while: mode: model` loop's own "check" leaf
                 // (`treemap::build_node_for_measure`) shares its path
