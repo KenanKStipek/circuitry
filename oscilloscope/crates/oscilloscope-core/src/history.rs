@@ -809,16 +809,64 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
 /// [`compute_eta`]'s own input: everything about the *current* run it
 /// needs beyond [`DocumentStats`] -- all in seconds, offset from the
 /// run's own start, same as [`StepRecord::start_s`]/`end_s`.
-pub struct EtaInput<'a> {
+pub struct EtaInput {
     pub now_offset_s: f64,
     /// Every step that has finished so far, by its own display key
     /// and its own `end_s` -- the most recent one with per-step
     /// stats of its own is the anchor (issue #649).
-    pub finished_steps: &'a [(String, f64)],
+    pub finished_steps: Vec<(String, f64)>,
     /// The currently running step, by display key, and its own busy
     /// time elapsed so far -- `None` when nothing is running (between
     /// steps, or the run has ended).
-    pub running_step: Option<(&'a str, f64)>,
+    pub running_step: Option<(String, f64)>,
+}
+
+/// Builds [`EtaInput`] straight from a live (or just-finished) state
+/// snapshot -- the one call site a redraw loop needs, so it never has
+/// to walk `flatten_state` itself just for this. `run_start_ts` is the
+/// same anchor [`Header::run_start_ts`](crate::render::Header::run_start_ts)
+/// already resolves; `now_offset_s` is the header's own `elapsed_s`.
+/// The running step picked is whichever running leaf started most
+/// recently -- the same "innermost" tie-break the overview's now pane
+/// uses for which running step to focus.
+pub fn eta_input_from_state(
+    state: &Value,
+    plan: &PlanTree,
+    run_start_ts: &str,
+    now_offset_s: f64,
+) -> EtaInput {
+    let flat = crate::model::flatten_state(state);
+    let mut finished_steps = Vec::new();
+    let mut running: Option<(String, f64)> = None;
+    for (path, node) in &flat {
+        let Some(key) = display_key(path, plan) else {
+            continue;
+        };
+        if node.is_running() {
+            let Some(start_s) = node
+                .created_at
+                .as_deref()
+                .and_then(|ca| duration_seconds(run_start_ts, ca))
+            else {
+                continue;
+            };
+            let elapsed = (now_offset_s - start_s).max(0.0);
+            if running.as_ref().is_none_or(|(_, e)| elapsed < *e) {
+                running = Some((key, elapsed));
+            }
+        } else if let Some(end_s) = node
+            .completed_at
+            .as_deref()
+            .and_then(|ca| duration_seconds(run_start_ts, ca))
+        {
+            finished_steps.push((key, end_s));
+        }
+    }
+    EtaInput {
+        now_offset_s,
+        finished_steps,
+        running_step: running,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -860,7 +908,7 @@ pub fn compute_eta(stats: &DocumentStats, input: &EtaInput) -> EtaOutput {
         }
         None => whole_run.p50_s - input.now_offset_s,
     };
-    if let Some((key, elapsed_busy)) = input.running_step {
+    if let Some((key, elapsed_busy)) = &input.running_step {
         if let Some(step_stats) = stats.per_step.get(key) {
             if let Some(busy_p50) = step_stats.busy_p50_s {
                 let left = (busy_p50 - elapsed_busy).max(0.0);
@@ -1026,7 +1074,7 @@ mod tests {
             &stats,
             &EtaInput {
                 now_offset_s: 10.0,
-                finished_steps: &[],
+                finished_steps: vec![],
                 running_step: None,
             },
         );
@@ -1047,7 +1095,7 @@ mod tests {
             &stats,
             &EtaInput {
                 now_offset_s: 30.0,
-                finished_steps: &[("plan".to_string(), 25.0)],
+                finished_steps: vec![("plan".to_string(), 25.0)],
                 running_step: None,
             },
         );
@@ -1070,8 +1118,8 @@ mod tests {
             &stats,
             &EtaInput {
                 now_offset_s: 95.0,
-                finished_steps: &[],
-                running_step: Some(("slow", 10.0)),
+                finished_steps: vec![],
+                running_step: Some(("slow".to_string(), 10.0)),
             },
         );
         // Anchor-less estimate would be p50(100) - 95 = 5s, but
@@ -1096,7 +1144,7 @@ mod tests {
             &stats,
             &EtaInput {
                 now_offset_s: p90 + 1.0,
-                finished_steps: &[],
+                finished_steps: vec![],
                 running_step: None,
             },
         );
@@ -1115,7 +1163,7 @@ mod tests {
             &stats,
             &EtaInput {
                 now_offset_s: 10.0,
-                finished_steps: &[],
+                finished_steps: vec![],
                 running_step: None,
             },
         );
@@ -1195,6 +1243,64 @@ mod tests {
         let records = read_records(&history_dir, "/doc.yml");
         let ids: Vec<_> = records.iter().map(|r| r.run_id.clone()).collect();
         assert_eq!(ids, vec!["r1", "r2"]);
+    }
+
+    #[test]
+    fn build_record_never_carries_a_values_prompt_or_error_text_marker() {
+        const MARKER: &str = "super-secret-marker-xyz";
+        let state = serde_json::json!({
+            "runtime": {
+                "last_run": {
+                    "run_id": "r1",
+                    "document_hash": "h1",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z",
+                    "totals": {"effects_run": 1, "tokens_sent": 1, "tokens_received": 1},
+                },
+            },
+            "prime": {
+                "value": MARKER,
+                "meta": {
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z",
+                    "error": null,
+                },
+                "ask": {
+                    "value": MARKER,
+                    "meta": {
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "completed_at": "2026-01-01T00:00:30Z",
+                        "error": null,
+                        "prompt_sent": MARKER,
+                        "command": MARKER,
+                        "tool_target": MARKER,
+                    },
+                },
+                "flaky": {
+                    "value": null,
+                    "meta": {
+                        "created_at": "2026-01-01T00:00:30Z",
+                        "completed_at": "2026-01-01T00:00:45Z",
+                        "error": MARKER,
+                    },
+                },
+                "tell": {
+                    "value": null,
+                    "meta": {
+                        "created_at": "2026-01-01T00:00:45Z",
+                        "completed_at": "2026-01-01T00:01:00Z",
+                        "error": null,
+                        "report": {"message": MARKER, "data": {"x": MARKER}},
+                    },
+                },
+            },
+        });
+        let mut model = RunModel::new();
+        model.observe(&state, &PlanTree::empty(), crate::model::ProcessState::exited(false));
+        let record = build_record("/doc.yml", Some("cof"), &state, &model, &PlanTree::empty())
+            .expect("a completed, hashed, non-dry run is recorded");
+        let serialized = serde_json::to_string(&record).unwrap();
+        assert!(!serialized.contains(MARKER), "history line leaked a marker: {serialized}");
     }
 
     #[test]
