@@ -1260,7 +1260,12 @@ interval, and nothing here is built at all for a screen not shown.
   flight" already trust for exactly this case. With nothing
   running, the last finished row (by `completed_at`); once the run has
   ended (`header.status != Running`), the outcome, start/end and
-  totals instead.
+  totals, plus (issue #637) the run's own stopped agent if it has
+  one -- a `meta.live` node left behind by an interruption, with no
+  `completed_at` of its own, since an ended run otherwise has no
+  step left to focus on at all. It is named, with its last-known
+  live block shown the same way a running or last-finished step's
+  own already is, never as running.
 - **Time card:** the run's own start/end, elapsed, ETA, a bar of the
   phase strip's own durations (drawn as blocks scaled to the longest
   one, `tui.rs`'s own `draw_time_card`) and its slowest *finished*
@@ -1286,7 +1291,12 @@ interval, and nothing here is built at all for a screen not shown.
   equal spans across the run so far; the highest-token leaf
   (`cost::top_store`, the same leaf-scan rule §6.3b's own
   largest-stores table ranks first, so the two can't disagree about
-  which store is the run's biggest); and `render::token_bar_in_
+  which store is the run's biggest); once the run has ended, the
+  run's own stopped agent's last-known tokens (issue #637), as
+  `stopped <label>` with its sent/received figures -- `runtime.
+  last_run.totals` (the figures above) never includes a session that
+  never completed, so its last report lives only in its own
+  `meta.live`; and `render::token_bar_in_
   flight_line`'s own text (shared with the Cost screen's own data,
   so the two can't disagree about what's running either).
 
