@@ -2612,6 +2612,7 @@ fn run_tui(
                     overview.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
+                    time_screen.as_ref(),
                     transcript_view.as_ref(),
                     &mut cost_layout,
                 );
@@ -3831,6 +3832,7 @@ fn run_tui_watch(
                     overview.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
+                    time_screen.as_ref(),
                     transcript_view.as_ref(),
                     &mut cost_layout,
                 );
