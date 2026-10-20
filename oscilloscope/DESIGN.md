@@ -1295,7 +1295,22 @@ interval, and nothing here is built at all for a screen not shown.
   `completed_at` of its own, since an ended run otherwise has no
   step left to focus on at all. It is named, with its last-known
   live block shown the same way a running or last-finished step's
-  own already is, never as running.
+  own already is, never as running. Its own `since`/elapsed line
+  (issue #647) freezes at the run's own end (`header.run_end_ts`,
+  passed into `screens::build_focused_step` as `run_ended_at`) rather
+  than ticking against osi's wall clock at render time -- the session
+  ended with the run, however long ago that now is; `stale` itself
+  (`AgentLive::is_recent`) stays keyed on the real wall clock,
+  unaffected, since a leftover `meta.live` reads as stale forever
+  once the run has ended, no matter when it's actually viewed. The
+  same leftover's last tool (`meta.live.current_tool`) is labelled
+  `last: <tool>`, never `running: <tool>` -- it is the last thing the
+  session was doing, not something still running, now that the
+  session itself has stopped. While a session genuinely is still
+  running, that same line instead reads `running: <tool> · <elapsed>`,
+  the tool's own time from `current_tool.started_at` to `now`
+  (`FocusDetail::Agent::current_tool_elapsed_s`) -- separate from
+  `FocusedStep::elapsed_s`, the session's own total.
 - **Time card:** the run's own start/end, elapsed, ETA, a bar of the
   phase strip's own durations (drawn as blocks scaled to the longest
   one, `tui.rs`'s own `draw_time_card`) and its slowest *finished*

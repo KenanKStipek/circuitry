@@ -661,6 +661,8 @@ fn agent_live_lines(
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     show_doing_header: bool,
+    stale: bool,
+    current_tool_elapsed_s: Option<f64>,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::format::format_tokens;
     let dim = Style::default().fg(ctx.theme.dim);
@@ -733,7 +735,19 @@ fn agent_live_lines(
                     Some(true) => text.push_str(" ✓"),
                     Some(false) => text.push_str(" ✗"),
                     None if call.stopped => text.push_str(" stopped"),
-                    None => text.push_str(" running"),
+                    // Issue #647: the session's own elapsed is shown
+                    // next to `since`, but a running call's own time
+                    // wasn't shown anywhere -- `current_tool_elapsed_s`
+                    // is this same call's own time, read from `meta.
+                    // live.current_tool` (the transcript has no
+                    // elapsed of its own to read, only a start time).
+                    None => match current_tool_elapsed_s {
+                        Some(elapsed) => text.push_str(&format!(
+                            " running {}",
+                            oscilloscope_core::format::format_duration(elapsed)
+                        )),
+                        None => text.push_str(" running"),
+                    },
                 }
                 if call.lines_added.is_some() || call.lines_removed.is_some() {
                     text.push_str(&format!(
@@ -764,7 +778,22 @@ fn agent_live_lines(
                 lines.push(Line::from(counts));
             }
             if let Some(current) = &live.current_tool {
-                lines.push(Line::from(format!("running: {}", current.name)));
+                // Issue #647: a stopped agent's last tool was never
+                // finished, so it never actually matched the running
+                // label in the first place -- it is the last thing
+                // the session was doing, not something still running.
+                if stale {
+                    lines.push(Line::from(format!("last: {}", current.name)));
+                } else {
+                    match current_tool_elapsed_s {
+                        Some(elapsed) => lines.push(Line::from(format!(
+                            "running: {} · {}",
+                            current.name,
+                            oscilloscope_core::format::format_duration(elapsed)
+                        ))),
+                        None => lines.push(Line::from(format!("running: {}", current.name))),
+                    }
+                }
             }
         }
     }
@@ -874,7 +903,11 @@ fn focus_step_lines(
             // step here, nothing extra, since `live` is always `None`
             // by then (`meta.live` is removed once the attempt ends).
             FocusDetail::Agent {
-                live, note, stale, ..
+                live,
+                note,
+                stale,
+                current_tool_elapsed_s,
+                ..
             } => match live.as_deref() {
                 Some(live) => {
                     // An interrupted run's own leftover `meta.live`
@@ -886,7 +919,14 @@ fn focus_step_lines(
                     if *stale {
                         lines.push(Line::styled("stopped", Style::default().fg(ctx.theme.dim)));
                     }
-                    lines.extend(agent_live_lines(live, transcript_view, ctx, true));
+                    lines.extend(agent_live_lines(
+                        live,
+                        transcript_view,
+                        ctx,
+                        true,
+                        *stale,
+                        *current_tool_elapsed_s,
+                    ));
                 }
                 None if more_running.is_some() => lines.push(Line::from(Span::styled(
                     *note,
@@ -3178,7 +3218,11 @@ fn flow_selected_step_lines(
         // this never reads as running -- only `stopped`, with
         // whatever figures the session last reported.
         FocusDetail::Agent {
-            live, note, stale, ..
+            live,
+            note,
+            stale,
+            current_tool_elapsed_s,
+            ..
         } if running || live.is_some() => {
             if let (Some(since), Some(elapsed)) = (
                 step.since_ts
@@ -3199,7 +3243,14 @@ fn flow_selected_step_lines(
                     // `false`: Flow's own `doing:` header below
                     // already covers this content -- `agent_live_
                     // lines` must not print a second one.
-                    doing.extend(agent_live_lines(live, transcript_view, ctx, false));
+                    doing.extend(agent_live_lines(
+                        live,
+                        transcript_view,
+                        ctx,
+                        false,
+                        *stale,
+                        *current_tool_elapsed_s,
+                    ));
                 }
                 None if running => doing.push(Line::styled(*note, dim)),
                 None => {}
@@ -6312,6 +6363,69 @@ mod golden_tests {
         oscilloscope_core::transcript::build_transcript_view(&lines, false)
     }
 
+    /// Issue #647: with no transcript tailed yet, a running tool's
+    /// own elapsed shows right next to `running:`, from `meta.live.
+    /// current_tool.started_at` -- not just the session's own total.
+    #[test]
+    fn agent_live_lines_shows_the_running_tools_own_elapsed() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let live = oscilloscope_core::model::AgentLive::from_value(&json!({
+            "engine": "pi",
+            "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"}
+        }))
+        .unwrap();
+        let lines = agent_live_lines(&live, None, &ctx, true, false, Some(24.0));
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("running: bash · 24.0s"), "{text}");
+    }
+
+    /// Issue #647: once stale (the session has stopped), the last
+    /// tool it ran is labelled `last:`, never `running:` -- it never
+    /// finished, but it is not running any more either.
+    #[test]
+    fn agent_live_lines_labels_a_stale_current_tool_as_last_not_running() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let live = oscilloscope_core::model::AgentLive::from_value(&json!({
+            "engine": "pi",
+            "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+        }))
+        .unwrap();
+        let lines = agent_live_lines(&live, None, &ctx, true, true, None);
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("last: bash"), "{text}");
+        assert!(!text.contains("running:"), "{text}");
+    }
+
     /// [`overview_snapshot_at`], with a specific transcript view
     /// attached the way `main.rs`'s own `tail_focused_transcript`
     /// would feed `draw` -- issue #637's own now-pane goldens for a
@@ -8468,7 +8582,7 @@ mod golden_tests {
         let mut model = RunModel::new();
         let long_prompt = "summarize the quarterly report and call out every risk factor you can find in the appendix tables, in plain prose, no bullet points";
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "prompt_sent": long_prompt, "tokens_sent_total": 120, "tokens_received_total": 340}},
+            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "prompt_sent": long_prompt, "prompt_chars": 131, "tokens_sent_total": 120, "tokens_received_total": 340}},
             "b": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}}
         }});
         let text = snapshot_full_layout(
@@ -8494,7 +8608,7 @@ mod golden_tests {
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted",
-                "prompt_sent": "summarize the quarterly report", "tokens_sent_total": 42}}
+                "prompt_sent": "summarize the quarterly report", "prompt_chars": 30, "tokens_sent_total": 42}}
         }});
         let text = snapshot_full_layout(
             &plan,

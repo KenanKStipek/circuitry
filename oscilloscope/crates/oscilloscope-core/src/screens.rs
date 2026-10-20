@@ -443,6 +443,11 @@ pub enum FocusDetail {
         /// step was built with, so a front end never needs its own
         /// wall clock to tell a stale summary from a live one.
         stale: bool,
+        /// How long `live.current_tool` has been running, from its
+        /// own `started_at` to `now` (issue #647) -- `None` while
+        /// `stale` (nothing is actually running any more to time) or
+        /// with no `current_tool`/unparsable `started_at` at all.
+        current_tool_elapsed_s: Option<f64>,
         note: &'static str,
         /// `meta.raw.transcript`, set once the session has finished
         /// (`meta.raw` only exists then) -- `None` while running, same
@@ -733,6 +738,7 @@ fn build_focused_step(
     model: &RunModel,
     state: Option<&Value>,
     now: &str,
+    run_ended_at: Option<&str>,
 ) -> FocusedStep {
     let node = node_for(row, flat);
     // Issue #631: a step known only from `--events` (a tree-loop
@@ -748,24 +754,38 @@ fn build_focused_step(
     // (`completed_at` - `created_at`), never `now - created_at`: once
     // the whole run has ended, `now` is wall-clock time at render,
     // long past the run's own end, which would otherwise inflate a
-    // finished step's duration by however long it's been since.
+    // finished step's duration by however long it's been since. A
+    // step that never got its own `completed_at` at all (an
+    // interrupted session's leftover, issue #647) falls back to
+    // `run_ended_at` instead of `now` when the caller has it (the
+    // run's own end, not osi's wall clock) -- the session ended with
+    // the run, so its own elapsed stops right there too.
     let elapsed_s =
         since_ts
             .as_deref()
             .and_then(|start| match node.and_then(|n| n.completed_at.as_deref()) {
                 Some(end) => duration_seconds(start, end),
-                None => duration_seconds(start, now),
+                None => duration_seconds(start, run_ended_at.unwrap_or(now)),
             });
     let details = details_for(&row.path, plan, model, state);
     let agent = is_agent_row(row, flat, plan);
     let detail = if agent {
         let live = node.and_then(|n| n.live.clone()).map(Box::new);
         let stale = live.as_deref().is_some_and(|l| !l.is_recent(now));
+        // Issue #647: only while the session is actually running is
+        // its current tool call actually running too -- once stale,
+        // `current_tool` is whatever was last in flight when the
+        // session was interrupted, not something still ticking.
+        let current_tool_elapsed_s = (!stale)
+            .then(|| live.as_deref().and_then(|l| l.current_tool.as_ref()))
+            .flatten()
+            .and_then(|t| duration_seconds(&t.started_at, now));
         let raw = node.map(|n| agent_raw_summary(&n.meta)).unwrap_or_default();
         FocusDetail::Agent {
             asked: node.and_then(|n| agent_asked_text(&n.meta)),
             live,
             stale,
+            current_tool_elapsed_s,
             note: AGENT_LIVE_DATA_NOTE,
             raw_transcript: raw.transcript,
             raw_files_changed: raw.files_changed,
@@ -844,8 +864,25 @@ fn build_now_pane(
     let log_lines: Vec<String> = log.iter().rev().take(LOG_TAIL).rev().cloned().collect();
 
     let focus = if !matches!(header.status, RunStatus::Running) {
-        let stopped_agent = stopped_agent_row(rows, flat, plan)
-            .map(|row| build_focused_step(row, flat, plan, model, state, now));
+        // Issue #647: a stopped agent's own session ended with the
+        // run, so its "since" line must stop ticking at the run's
+        // end, not keep counting against osi's own wall clock --
+        // `run_ended_at` freezes only `elapsed_s`'s own fallback,
+        // never `stale` (`AgentLive::is_recent`), which must stay
+        // keyed on the real wall clock: a leftover `meta.live` is
+        // stale forever once the run has ended, no matter how long
+        // ago that was by the time it's actually viewed.
+        let stopped_agent = stopped_agent_row(rows, flat, plan).map(|row| {
+            build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+            )
+        });
         NowFocus::Ended(EndedSummary {
             outcome: header.status,
             start_ts: header.run_start_ts.clone(),
@@ -892,7 +929,7 @@ fn build_now_pane(
             .and_then(|p| running.iter().find(|r| r.path == p).copied())
             .or_else(|| running.iter().max_by_key(|r| r.depth).copied());
         if let Some(target) = target {
-            let mut step = build_focused_step(target, flat, plan, model, state, now);
+            let mut step = build_focused_step(target, flat, plan, model, state, now, None);
             if let Some(usual) = crate::history::display_key(&target.path, plan)
                 .and_then(|key| header.history_step_usual.get(&key))
             {
@@ -910,9 +947,9 @@ fn build_now_pane(
                         .unwrap_or_default()
                 });
             match last_finished {
-                Some(row) => {
-                    NowFocus::LastFinished(build_focused_step(row, flat, plan, model, state, now))
-                }
+                Some(row) => NowFocus::LastFinished(build_focused_step(
+                    row, flat, plan, model, state, now, None,
+                )),
                 None => NowFocus::None,
             }
         }
@@ -1397,7 +1434,7 @@ pub fn build_flow_screen(
             }
             _ => {
                 if let Some(row) = rows.iter().find(|r| r.path == path) {
-                    selected = Some(build_focused_step(row, flat, plan, model, state, now));
+                    selected = Some(build_focused_step(row, flat, plan, model, state, now, None));
                 }
             }
         }
@@ -1754,7 +1791,7 @@ pub fn build_time_screen(
 
     let selected = selected_path
         .and_then(|path| rows.iter().find(|r| r.path == path))
-        .map(|row| build_focused_step(row, flat, plan, model, state, now));
+        .map(|row| build_focused_step(row, flat, plan, model, state, now, None));
     let zoom_extra = selected_path
         .and_then(|path| build_time_zoom_extra(path, &display_rows, plan, header, now_s));
 
@@ -2486,6 +2523,191 @@ mod tests {
         }
     }
 
+    /// Issue #647: a stopped agent's own "since" line must stop
+    /// ticking at the run's end -- rendering `osi show`'s own now
+    /// pane days after a cancelled run still reads the same elapsed
+    /// it would have right when the run ended, never osi's own wall
+    /// clock at render time.
+    #[test]
+    fn a_stopped_agents_elapsed_freezes_at_the_runs_end_not_osis_wall_clock() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
+                "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+            "fix": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                "live": {
+                    "engine": "pi", "updated_at": "2026-01-01T11:46:50Z",
+                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+                }
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let statuses = model.observe(&state, &plan, ProcessState::exited(true));
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-01-01T11:52:55Z",
+            &model,
+            None,
+        );
+        let mut header = base_header();
+        header.status = RunStatus::Cancelled;
+        header.run_end_ts = Some("2026-01-01T11:46:54Z".to_string());
+
+        let elapsed_at = |now: &str| {
+            let pane = build_now_pane(
+                &rows,
+                &flat,
+                &plan,
+                &model,
+                Some(&state),
+                &header,
+                &[],
+                None,
+                now,
+            );
+            match pane.focus {
+                NowFocus::Ended(summary) => summary
+                    .stopped_agent
+                    .expect("a leftover meta.live names a stopped agent")
+                    .elapsed_s
+                    .expect("since_ts is known"),
+                other => panic!("expected Ended, got {other:?}"),
+            }
+        };
+        let soon = elapsed_at("2026-01-01T11:46:55Z");
+        let long_after = elapsed_at("2026-02-01T00:00:00Z");
+        assert!((soon - 11.0).abs() < 1e-9); // 11:46:43 -> 11:46:54
+        assert_eq!(
+            soon, long_after,
+            "a stopped agent's own elapsed must not tick with osi's wall clock"
+        );
+    }
+
+    /// Issue #647: `running: <tool>` must not survive past the
+    /// session itself stopping -- `current_tool_elapsed_s` is `None`
+    /// once stale, which is what tells `agent_live_lines` to show
+    /// `last: <tool>` instead.
+    #[test]
+    fn a_stale_leftover_current_tool_gets_no_elapsed() {
+        let plan = PlanTree::empty();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fix": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "updated_at": "2026-01-01T11:46:50Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+                    }
+                }}
+            }}),
+        );
+        let row = Row {
+            path: "prime.fix".to_string(),
+            depth: 0,
+            label: "fix".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        let model = RunModel::new();
+        // Long after the heartbeat -- `is_recent` reads this leftover
+        // as stale, the same as a stopped run viewed much later.
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-01-01T12:00:00Z",
+            None,
+        );
+        match step.detail {
+            FocusDetail::Agent {
+                stale,
+                current_tool_elapsed_s,
+                ..
+            } => {
+                assert!(stale);
+                assert_eq!(current_tool_elapsed_s, None);
+            }
+            other => panic!("expected Agent, got {other:?}"),
+        }
+    }
+
+    /// Issue #647: a running tool call's own elapsed time, read from
+    /// `meta.live.current_tool.started_at` -- separate from the
+    /// session's own total (`FocusedStep::elapsed_s`), which is
+    /// `since_ts` to `now` regardless of which tool is running.
+    #[test]
+    fn a_live_current_tools_own_elapsed_is_computed_from_its_started_at() {
+        let plan = PlanTree::empty();
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fix": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "updated_at": "2026-01-01T11:52:54Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"}
+                    }
+                }}
+            }}),
+        );
+        let row = Row {
+            path: "prime.fix".to_string(),
+            depth: 0,
+            label: "fix".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        let model = RunModel::new();
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-01-01T11:52:54Z",
+            None,
+        );
+        match step.detail {
+            FocusDetail::Agent {
+                stale,
+                current_tool_elapsed_s,
+                ..
+            } => {
+                assert!(!stale);
+                assert!((current_tool_elapsed_s.unwrap() - 24.0).abs() < 1e-9);
+            }
+            other => panic!("expected Agent, got {other:?}"),
+        }
+    }
+
     /// Issue #635: selecting a decision row on the Flow screen gives
     /// the selected pane the condition/branch detail instead of an
     /// ordinary `FocusedStep` -- `check` is a named `if` here, so it
@@ -3099,7 +3321,15 @@ mod tests {
             }}),
         );
         let row = agent_row("prime.agent1");
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:55Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: Some(live),
@@ -3134,7 +3364,15 @@ mod tests {
             }}),
         );
         let row = agent_row("prime.agent1");
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:55Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: Some(live),
@@ -3178,7 +3416,15 @@ mod tests {
             skip_reason: None,
             retrying: false,
         };
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:56Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:56Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: None,
@@ -3241,7 +3487,15 @@ mod tests {
             }}),
         );
         let row = agent_row("prime.agent1");
-        let step = build_focused_step(&row, &flat, &plan, &model, None, "2026-10-08T11:52:55Z");
+        let step = build_focused_step(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            "2026-10-08T11:52:55Z",
+            None,
+        );
         match step.detail {
             FocusDetail::Agent {
                 live: Some(live), ..
