@@ -2027,7 +2027,7 @@ async fn a_refused_tree_pass_stops_dispatch_but_still_merges() {
 }
 
 // ---------------------------------------------------------------------
-// Issue #501's review (P0): an `if` with two or more branch
+// An `if` with two or more branch
 // steps inside a loop body must still see the enclosing scope -- the
 // loop's own `item`, an earlier sibling step's write, an outer root
 // key, and (named chain flow) `prime.<loop>.prev` -- from its second
@@ -2552,7 +2552,7 @@ async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_encl
 }
 
 // ---------------------------------------------------------------------
-// Issue #501's second review (P0, confirmed at runtime): a named loop's
+// A named loop's
 // `with_prev_overlay` must hide the current pass's own `iter_<idx>`
 // only when it's genuinely new -- a *reused* real loop node (a named
 // loop inside an unnamed outer loop, or `--state`-resumed persisted

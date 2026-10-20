@@ -669,9 +669,9 @@ pub async fn execute_tool<R: ParamsCtx>(
         // provider's own HTTP-family status/cause classification would
         // otherwise say -- unlike an HTTP status, a failed `expect:`
         // carries no classification of its own, and the motivating case
-        // (a flaky image-generation result) is exactly "try again"
-        // (review P2-8 on PR #454's second review). Set only in the two
-        // `expect` branches below, never the dispatch-failure branch
+        // (a flaky image-generation result) is exactly "try again".
+        // Set only in the two `expect` branches below, never the
+        // dispatch-failure branch
         // above them.
         let mut expect_failed = false;
         // `core/tool.py`'s own `timeout_unresolved` (issue #564): a
@@ -1181,8 +1181,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             // M0-H; lane E's own HTTP-family tool is what first makes
             // *retryable* ever come back `false` here for a dispatch
             // failure -- never for a failed `expect:`, which is always
-            // retryable regardless of provider (review P2-8 on PR
-            // #454's second review, `expect_failed` above).
+            // retryable regardless of provider (`expect_failed` above).
             let retryable = !timeout_unresolved
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
@@ -2261,7 +2260,7 @@ mod tests {
         }
     }
 
-    /// A tool's own model `expect:` must
+    /// A tool's own model `expect:` (#513) must
     /// dispatch with [`resolve_timeout_seconds`]'s own result (this
     /// tool's `timeout_ms: 5000` resolves to 5s) -- never `run_ctx.
     /// adapter_timeout_seconds` (120 here), which is only for `if`/

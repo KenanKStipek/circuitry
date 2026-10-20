@@ -35,7 +35,7 @@ fn is_http_family_provider(provider: &str) -> bool {
 /// this crate can build today) always retries, exactly as every M0-H
 /// `json` failure already did.
 ///
-/// *is_expect_failure* (review P2-8 on PR #454's second review) is
+/// *is_expect_failure* is
 /// `core/tool.py:838-840`'s own override: a failed `expect:` (raised
 /// or not) is *always* retryable, regardless of what *provider*/
 /// *status_code*/*cause* would otherwise say -- unlike an HTTP status,
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn an_expect_failure_always_retries_even_for_an_http_family_tool() {
-        // Review P2-8 on PR #454's second review: `core/tool.py:838-840`'s
+        // `core/tool.py:838-840`'s
         // own `retryable = True` on any failed `expect:` overrides even
         // an HTTP-family provider's own non-retryable status/cause --
         // 400 alone would never retry (the test above pins that), but a

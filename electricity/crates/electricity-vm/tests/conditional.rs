@@ -805,8 +805,7 @@ async fn a_branch_effect_shadowing_an_enclosing_name_wins_inside_the_branch() {
 #[tokio::test]
 async fn an_unnamed_ifs_branch_sees_an_earlier_steps_write_through_the_enclosing_dynamics_qualified_path()
  {
-    // PR #440's review of issue #431, probe A on the P0 case: an unnamed
-    // `if` nested inside an ordinary `dynamic` (`d`) writes its own
+    // An unnamed `if` nested inside an ordinary `dynamic` (`d`) writes its own
     // first branch step (`first`) directly into `d`'s own node -- the
     // *second* step's condition reads that write back through the
     // fully-qualified `prime.d.first.value` path, which must resolve

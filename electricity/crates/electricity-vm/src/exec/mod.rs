@@ -309,8 +309,8 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
         // `message` grows the label prefix, and `py_class` becomes
         // `RuntimeError` (PR #454: #442's own tree
         // text needs the error to survive a chain/tree wrap as a typed
-        // `Raised`, not collapse to a bare `VmError::Message`; review
-        // P2-1 on the second review: `core/dynamic.py`'s own `raise
+        // `Raised`, not collapse to a bare `VmError::Message`;
+        // `core/dynamic.py`'s own `raise
         // RuntimeError(...) from e` means the *wrapping* exception is
         // always a `RuntimeError`, never `e`'s own class -- `cause_class`
         // remembers *e*'s own `py_class` for `VmError::displayed_class`'s
@@ -370,7 +370,7 @@ pub(crate) fn execute_op<'a>(
     token: &'a CancellationToken,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
-        // Review P2-4 on PR #454's second review: wired now (`core/
+        // Wired now (`core/
         // dynamic.py::DynamicRuntime._execute_effect`'s own single
         // `is_enabled` check, before dispatching to any effect type,
         // leaf or container -- disabling a container disables its
@@ -745,8 +745,8 @@ mod wrap_effect_error_tests {
         // `VmError::Message` -- a nested `dynamic`'s own error-collection
         // point (`execute_chain`/`execute_tree`, both of which call this
         // function) is exactly where #442's tree text would otherwise
-        // lose the real exception class entirely. Review P2-1 on the
-        // second review: `core/dynamic.py`'s own `raise RuntimeError(...)
+        // lose the real exception class entirely.
+        // `core/dynamic.py`'s own `raise RuntimeError(...)
         // from e` means the *wrapping* exception's own class is always
         // `RuntimeError`, never `e`'s class -- that survives one level
         // in as `cause_class` instead, for `VmError::displayed_class`.
@@ -774,8 +774,7 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn displayed_class_is_the_tools_own_class_before_any_wrap() {
-        // Review P2-1 on the second review's own first probe: a direct
-        // tool failure, never wrapped, displays its own real class --
+        // A direct tool failure, never wrapped, displays its own real class --
         // Python's `err.__cause__ or err` with `__cause__` still `None`.
         let raised = VmError::Raised {
             py_class: PyExc::ValueError,
@@ -788,8 +787,7 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn displayed_class_is_runtime_error_for_a_doubly_wrapped_chain_failure() {
-        // Review P2-1 on the second review's own second probe: a nested
-        // chain failure (two container wraps deep) displays
+        // A nested chain failure (two container wraps deep) displays
         // `RuntimeError` -- the *inner* wrap's own class, one level in
         // from the outer wrap, never the original leaf failure's class
         // two levels down (`err.__cause__ or err` peels exactly one

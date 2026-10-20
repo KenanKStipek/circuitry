@@ -1082,7 +1082,6 @@ mod tests {
         }
     }
 
-    /// Issue #501's third review (P1 -- "the watermark has no test"):
     /// `peek`/`snapshot`/`Node::flat_entries` must all agree a
     /// watermarked overlay hides a key its own `fallback` gains *after*
     /// the watermark was taken.

@@ -175,8 +175,8 @@ pub trait Adapter {
     }
 
     /// Whether this adapter accepts image inputs at all -- lane R's own
-    /// `image_asset_warnings` (`runtime_shim.py:1610-1640`, review
-    /// PR #454) warns once per run when a prompt attaches
+    /// `image_asset_warnings` (`runtime_shim.py:1610-1640`) warns once
+    /// per run when a prompt attaches
     /// an image to an adapter that can't use it. `false` for every
     /// adapter that doesn't override this -- the common case; only a
     /// handful of Python adapters accept images at all.

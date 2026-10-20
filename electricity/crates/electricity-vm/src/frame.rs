@@ -68,8 +68,7 @@ pub struct Frame {
     /// per level, extended by [`Frame::push_use`], for lane I's own
     /// cycle detection (M1 gate seam round 2, item S6). A path-`use`'s
     /// own identity is its resolved absolute path, verbatim; an inline
-    /// `use`'s own identity (review P2-7 on PR #454's second review,
-    /// documenting `core/use.py::_load_child_orch`'s own exact form)
+    /// `use`'s own identity (documenting `core/use.py::_load_child_orch`'s own exact form)
     /// is `format!("inline:{:016x}", ...)`-shaped but not literally
     /// that macro call -- `"inline:"` plus the first 16 **hex
     /// characters** (not bytes) of the SHA-256 hex digest of the
@@ -163,9 +162,8 @@ impl Frame {
     /// frame's own [`Frame::pass_indices`] has no entry for yet --
     /// every real caller resolves a loop's own body path through
     /// [`Frame::with_pass`] before ever asking this frame for one of
-    /// its paths, so that can only mean a caller bug (review P2-7 on
-    /// PR #454's second review: this used to fall back to *path*
-    /// silently, placeholder segment and all, which would have
+    /// its paths, so that can only mean a caller bug (this used to
+    /// fall back to *path* silently, placeholder segment and all, which would have
     /// shipped a malformed `--events` path instead of catching the
     /// bug that produced it). The `debug_assert!` below catches that
     /// in every debug build (every test in this workspace included);
@@ -388,7 +386,7 @@ mod tests {
     #[should_panic(expected = "no pass index resolved yet")]
     #[cfg(debug_assertions)]
     fn effect_path_with_no_pass_index_resolved_yet_panics_in_debug() {
-        // Review P2-7 on PR #454's second review: a caller asking for a
+        // A caller asking for a
         // loop body's own path before `Frame::with_pass` has resolved
         // that pass is a caller bug, not a legitimate path shape -- the
         // `debug_assert!` catches it here rather than silently handing

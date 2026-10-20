@@ -641,8 +641,7 @@ async fn finally_also_runs_after_a_successful_body() {
 
 #[tokio::test]
 async fn a_signal_during_an_otherwise_successful_finally_is_reported_as_interrupted() {
-    // PR #440's review of issue #431 (P2, ruling:
-    // take the suggested fix): `finally:` runs on a fresh, never-
+    // `finally:` runs on a fresh, never-
     // cancelled token, so a signal that lands *during* it (after a
     // successful body) would otherwise go unnoticed by this dynamic's
     // own `meta.error` -- Python's own main thread still gets a real
@@ -1196,8 +1195,8 @@ async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finall
 
 #[tokio::test]
 async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after_the_merge() {
-    // PR #440's second review (P2): nothing exercised
-    // `RunObserver::write()` at all -- `core/dynamic.py`'s own
+    // Nothing exercised `RunObserver::write()` at all --
+    // `core/dynamic.py`'s own
     // `store.on_write` call sites are a chain's own per-step `finally:`
     // (`_execute_chain`), a tree branch's own per-branch `finally:`
     // (`_execute_branch`), and the tree merge loop's own trailing call.
@@ -1251,8 +1250,7 @@ async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after
 
 #[tokio::test]
 async fn a_disabled_op_writes_a_skip_node_instead_of_dispatching() {
-    // Review P2-4 on PR #454's second review, finished by issue #518
-    // (lane J2): `execute_op` reads `Op::enabled` before dispatching
+    // `execute_op` reads `Op::enabled` before dispatching
     // any effect type -- unreachable for any document this build
     // compiles on its own (every compiled `Op` has `enabled: true`;
     // only a profile's own effect override can ever produce `false`),
