@@ -208,8 +208,8 @@ impl EventLog {
     /// Returns the id this call was assigned -- the one
     /// [`EventLog::on_complete`] must be given back, so the matching
     /// `end` line still reports it even when another call at the same
-    /// path starts (or finishes) in between (review finding 3 on PR
-    /// #454). `0` when this log is already disabled: a caller still
+    /// path starts (or finishes) in between (PR #454). `0` when
+    /// this log is already disabled: a caller still
     /// holding a token from a now-disabled log hits [`EventLog::on_complete`]'s
     /// own early return before that token is ever looked up again.
     pub fn on_start(&self, path: &str) -> u64 {
@@ -247,7 +247,7 @@ impl EventLog {
     /// have become) its `meta.error`, `None` on success. *id* is the
     /// value the matching [`EventLog::on_start`] call returned --
     /// removed from *path*'s own stack by that exact id, not by popping
-    /// whatever happens to be on top (review finding 3 on PR #454: a
+    /// whatever happens to be on top (PR #454: a
     /// bare `Vec::pop` pairs the wrong start with the wrong end once
     /// two calls at the same path overlap, e.g. an unnamed `flow: tree`
     /// loop's own concurrent passes). A completion with no matching
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn two_overlapping_calls_on_the_same_path_each_end_pairs_with_its_own_start() {
-        // Review finding 3 on PR #454's own probe: start A, start B
+        // PR #454's own probe: start A, start B
         // (both on the same path -- an unnamed `flow: tree` loop's own
         // concurrent passes, once lane H lands, share exactly this
         // shape), then end A, then end B. A bare `Vec::pop` would hand
