@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use crate::history::StepStats;
 use crate::model::{NodeMeta, RowStatus, RunModel, StatusKind};
 use crate::observe::duration_seconds;
-use crate::plan::{PlanEntryKind, PlanTree};
+use crate::plan::PlanTree;
 use crate::render::{Header, LoopProgress, Row, RowKind};
 use crate::transcript::{ToolCall, ToolKind};
 
@@ -315,24 +315,25 @@ fn loop_is_expandable(
     }
     // Not a `RowKind::Loop` row at all -- it might still *be* an
     // unnamed loop's own body: that loop writes no path segment of
-    // its own, so its own `PlanEntryKind::Loop` sits at this leaf's
-    // own *parent* path (the control node's own effective path,
-    // identical to its enclosing scope's), not at the leaf's.
-    let Some((parent, _)) = path.rsplit_once('.') else {
-        return false;
-    };
-    let is_unnamed_loop_body = plan.match_path(parent).is_some_and(|m| {
-        m.entries
-            .iter()
-            .any(|e| matches!(e.kind, PlanEntryKind::Loop { named: false, .. }))
-    });
-    if !is_unnamed_loop_body {
+    // its own, so its leaf shares the loop's own row. Checking the
+    // leaf's own path against `is_unnamed_loop_body_path` (not its
+    // parent's entries) is what keeps a sibling such as `prime.a`,
+    // which sits next to the loop at the same parent path but isn't
+    // part of its body, from expanding too.
+    if !plan.is_unnamed_loop_body_path(path) {
         return false;
     }
     // Without `--events`, successive passes reuse the same path with
-    // no id to tell them apart (DESIGN.md: "they can't be told
-    // apart, and the loop stays one row").
-    model.has_events() && model.step_intervals().iter().any(|i| i.path == path)
+    // no id to tell them apart (DESIGN.md: "they can't be told apart,
+    // and the loop stays one row"); a single pass so far has nothing
+    // to expand into either.
+    model.has_events()
+        && model
+            .step_intervals()
+            .iter()
+            .filter(|i| i.path == path)
+            .count()
+            > 1
 }
 
 /// Builds the timeline's own rows (DESIGN.md: "the same folded rows

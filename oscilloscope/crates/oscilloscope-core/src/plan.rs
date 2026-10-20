@@ -3,7 +3,7 @@
 //! pattern matching against state and event paths, `use` grafting, and
 //! the fallback for a document that fails to compile.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use electricity_bytecode::{
@@ -367,6 +367,13 @@ pub struct PlanTree {
     /// #635) — empty with no plan at all, same as every other field
     /// here.
     unnamed_if_decisions: Vec<UnnamedIfDecision>,
+    /// Every display path an unnamed loop's own body directly
+    /// contributes (issue #650's Time screen: only a leaf here, never
+    /// a sibling at the same parent path, can expand into one row per
+    /// pass) — the same flattening `collect_branch_paths` gives a
+    /// named `if`'s branch, applied to every transparent loop's body
+    /// found while walking a chain.
+    unnamed_loop_body_paths: HashSet<String>,
 }
 
 impl PlanTree {
@@ -380,6 +387,7 @@ impl PlanTree {
             earlier_siblings: HashMap::new(),
             branch_alternates: HashMap::new(),
             unnamed_if_decisions: Vec::new(),
+            unnamed_loop_body_paths: HashSet::new(),
         }
     }
 
@@ -437,6 +445,14 @@ impl PlanTree {
         &self.unnamed_if_decisions
     }
 
+    /// Whether `path` is a leaf an unnamed loop's own body directly
+    /// contributes (issue #650's Time screen) — `false` for a sibling
+    /// at the same parent path that merely happens to sit next to
+    /// one, since this checks the leaf's own path, not its parent's.
+    pub fn is_unnamed_loop_body_path(&self, path: &str) -> bool {
+        self.unnamed_loop_body_paths.contains(path)
+    }
+
     pub fn from_program(program: &Program) -> Self {
         Self::from_program_with_options(program, None, &indexmap::IndexMap::new())
     }
@@ -489,6 +505,7 @@ impl PlanTree {
         let mut earlier_siblings = HashMap::new();
         let mut branch_alternates = HashMap::new();
         let mut unnamed_if_decisions = Vec::new();
+        let mut unnamed_loop_body_paths = HashSet::new();
         let mut ctx = WalkCtx {
             base_dir: base_dir.as_deref(),
             cycle_guard: &mut cycle_guard,
@@ -498,6 +515,7 @@ impl PlanTree {
             earlier_siblings: &mut earlier_siblings,
             branch_alternates: &mut branch_alternates,
             unnamed_if_decisions: &mut unnamed_if_decisions,
+            unnamed_loop_body_paths: &mut unnamed_loop_body_paths,
             loader,
         };
         walk_op(&program.root, None, None, &mut trie, &mut ctx);
@@ -510,6 +528,7 @@ impl PlanTree {
             earlier_siblings,
             branch_alternates,
             unnamed_if_decisions,
+            unnamed_loop_body_paths,
         }
     }
 
@@ -602,6 +621,7 @@ struct WalkCtx<'a> {
     earlier_siblings: &'a mut HashMap<String, Vec<String>>,
     branch_alternates: &'a mut HashMap<String, Vec<String>>,
     unnamed_if_decisions: &'a mut Vec<UnnamedIfDecision>,
+    unnamed_loop_body_paths: &'a mut HashSet<String>,
     loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
 }
 
@@ -1072,6 +1092,8 @@ fn walk_block(
                     }
                 }
                 NodeKind::Control(Region::Loop { body, .. }) => {
+                    ctx.unnamed_loop_body_paths
+                        .extend(collect_branch_paths(body, graft));
                     walk_transparent_branch(body, graft, earlier, trie, ctx);
                 }
                 _ => unreachable!("is_transparent only matches an unnamed If/Loop control"),
@@ -1152,6 +1174,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             earlier_siblings: ctx.earlier_siblings,
             branch_alternates: ctx.branch_alternates,
             unnamed_if_decisions: ctx.unnamed_if_decisions,
+            unnamed_loop_body_paths: ctx.unnamed_loop_body_paths,
             loader: ctx.loader,
         };
         if let NodeKind::Control(region) = &child_program.root.kind {
