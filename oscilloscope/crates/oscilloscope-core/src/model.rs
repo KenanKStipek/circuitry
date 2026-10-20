@@ -643,7 +643,68 @@ pub struct RunModel {
     /// filtering a report's state node out of the tree falls back to
     /// this set instead of `PlanTree::is_report_path`.
     report_event_paths: BTreeSet<String>,
+    /// `run_start`'s own `engine` field (issue #649's history record),
+    /// when `--events` carried one -- both engines always write it,
+    /// but a stream from an older build might not.
+    run_start_engine: Option<String>,
+    /// Set the first time any `--events` line arrives at all (issue
+    /// #649): while true, [`RunModel::step_intervals`] is fed only by
+    /// id-paired `start`/`end` events (`Event::Start`/`Event::End`),
+    /// not by state's own `created_at`/`completed_at` -- the two
+    /// sources would otherwise double-count the very same pass once
+    /// state eventually catches up with it.
+    has_events: bool,
+    /// `Event::Start`'s own `ts`, by `id` -- `started_at` alone keeps
+    /// only the latest start *per path*, which can't tell two
+    /// concurrently open ids at the same (unnamed-loop) path apart.
+    start_ts_by_id: BTreeMap<i64, String>,
+    /// Every concrete path that has had at least one id-paired
+    /// `start`/`end` pair observed via events -- `observe`'s own
+    /// state-based interval capture (`push_state_interval`) skips
+    /// any path in this set, since events already cover it exactly.
+    paths_with_id_events: BTreeSet<String>,
+    /// One entry per effect instance that has run to completion,
+    /// however it was observed (issue #649's history record: "a
+    /// bounded log of intervals, keyed by event id"). Deduplicated so
+    /// a redraw that re-observes the same finished state twice (the
+    /// TUI calls `observe` on every tick) never pushes the same pass
+    /// in again -- `recorded_state_intervals` for the state-sourced
+    /// half, `id` uniqueness for the events-sourced half.
+    step_intervals: Vec<StepInterval>,
+    /// `(path, created_at)` pairs already turned into a
+    /// `step_intervals` entry by `observe`'s own state-based capture
+    /// -- the dedup key for that half of the log.
+    recorded_state_intervals: BTreeSet<(String, String)>,
+    /// Once [`MAX_STEP_INTERVALS`] entries have been logged, further
+    /// passes are only counted here, by path -- their own timing is
+    /// lost, so they contribute to a step's `passes` count but not to
+    /// its `busy_s` (DESIGN.md's bound is meant for a run with far
+    /// more passes than any real document's history needs; the Time
+    /// screen, issue #650, is the first thing expected to approach
+    /// it).
+    overflowed_pass_counts: BTreeMap<String, u32>,
 }
+
+/// One effect instance's own start/end, as observed either from
+/// events (exact) or from state's own `created_at`/`completed_at`
+/// (best effort) -- [`RunModel::step_intervals`]'s own entry shape,
+/// and issue #649 history record's per-step input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepInterval {
+    pub path: String,
+    pub start_ts: String,
+    pub end_ts: String,
+    pub ok: bool,
+    /// `None` for an events-sourced interval (DESIGN.md: events carry
+    /// no token/cost figures at all) -- state-sourced intervals
+    /// always have a number here, `0` when the node reported none.
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub cost_usd: Option<f64>,
+}
+
+/// [`RunModel::step_intervals`]'s own bound (issue #649).
+const MAX_STEP_INTERVALS: usize = 50_000;
 
 /// One `report` event, as last seen (#610). `ts`/`level`/`message`
 /// are the header status line and the details pane's own fields;
@@ -679,12 +740,20 @@ impl RunModel {
             latest_report: None,
             reports_by_path: BTreeMap::new(),
             report_event_paths: BTreeSet::new(),
+            run_start_engine: None,
+            has_events: false,
+            start_ts_by_id: BTreeMap::new(),
+            paths_with_id_events: BTreeSet::new(),
+            step_intervals: Vec::new(),
+            recorded_state_intervals: BTreeSet::new(),
+            overflowed_pass_counts: BTreeMap::new(),
         }
     }
 
     /// Feeds one parsed `--events` line in (DESIGN.md §2.1's "With
     /// events (exact)" table, §3's ordering/abort rules).
     pub fn observe_event(&mut self, event: &Event) {
+        self.has_events = true;
         match event {
             Event::Dispatch {
                 path,
@@ -700,9 +769,15 @@ impl RunModel {
                     },
                 );
             }
-            Event::RunStart { ts, run_id, pid } => {
+            Event::RunStart {
+                ts,
+                run_id,
+                pid,
+                engine,
+            } => {
                 self.run_start = Some((run_id.clone(), *pid));
                 self.run_start_ts = Some(ts.clone());
+                self.run_start_engine = engine.clone();
             }
             Event::Start { ts, id, path } => {
                 self.started_at.insert(path.clone(), ts.clone());
@@ -717,6 +792,7 @@ impl RunModel {
                 match id {
                     Some(id) => {
                         self.open_by_id.insert(*id, path.clone());
+                        self.start_ts_by_id.insert(*id, ts.clone());
                     }
                     None => {
                         *self.open_unid.entry(path.clone()).or_insert(0) += 1;
@@ -736,6 +812,18 @@ impl RunModel {
                 match id {
                     Some(id) => {
                         self.open_by_id.remove(id);
+                        if let Some(start_ts) = self.start_ts_by_id.remove(id) {
+                            self.paths_with_id_events.insert(path.clone());
+                            self.push_step_interval(StepInterval {
+                                path: path.clone(),
+                                start_ts,
+                                end_ts: ts.clone(),
+                                ok: *ok,
+                                tokens_sent: None,
+                                tokens_received: None,
+                                cost_usd: None,
+                            });
+                        }
                     }
                     None => {
                         // An `end` with `id: null` can still name a
@@ -1006,6 +1094,71 @@ impl RunModel {
             .map(|ms| ms as f64 / 1000.0)
     }
 
+    /// Pushes an events-sourced interval (an id-paired `start`/`end`).
+    fn push_step_interval(&mut self, interval: StepInterval) {
+        if self.step_intervals.len() >= MAX_STEP_INTERVALS {
+            *self
+                .overflowed_pass_counts
+                .entry(interval.path.clone())
+                .or_insert(0) += 1;
+            return;
+        }
+        self.step_intervals.push(interval);
+    }
+
+    /// Pushes a state-sourced interval (`observe`'s own "just finished"
+    /// hook) -- a no-op when `path` already has id-paired event
+    /// coverage, or this exact `(path, created_at)` pass was already
+    /// recorded on an earlier redraw.
+    fn push_state_interval(
+        &mut self,
+        path: &str,
+        created_at: &str,
+        completed_at: &str,
+        node: &NodeMeta,
+    ) {
+        if self.paths_with_id_events.contains(path) {
+            return;
+        }
+        let key = (path.to_string(), created_at.to_string());
+        if self.recorded_state_intervals.contains(&key) {
+            return;
+        }
+        self.recorded_state_intervals.insert(key);
+        let (tokens_sent, tokens_received) = node_tokens(&node.meta);
+        self.push_step_interval(StepInterval {
+            path: path.to_string(),
+            start_ts: created_at.to_string(),
+            end_ts: completed_at.to_string(),
+            ok: node.is_ok(),
+            tokens_sent: Some(tokens_sent),
+            tokens_received: Some(tokens_received),
+            cost_usd: node.meta.get("cost_usd").and_then(Value::as_f64),
+        });
+    }
+
+    /// Every interval logged so far (issue #649's history record) --
+    /// at most [`MAX_STEP_INTERVALS`]; [`RunModel::overflowed_pass_counts`]
+    /// (private, folded into the record by the caller) covers the rest,
+    /// by path, with no timing.
+    pub fn step_intervals(&self) -> &[StepInterval] {
+        &self.step_intervals
+    }
+
+    /// A path's own passes dropped past [`MAX_STEP_INTERVALS`] -- added
+    /// to [`RunModel::step_intervals`]'s own count for that path when a
+    /// caller builds a history record, since neither alone is the true
+    /// total.
+    pub fn overflowed_passes(&self, path: &str) -> u32 {
+        self.overflowed_pass_counts.get(path).copied().unwrap_or(0)
+    }
+
+    /// `run_start`'s own `engine` field (issue #649), when `--events`
+    /// carried one.
+    pub fn run_start_engine(&self) -> Option<&str> {
+        self.run_start_engine.as_deref()
+    }
+
     /// Recomputes every row's status from one snapshot, the plan, and
     /// the process's current state. Rows for plan paths with no node in
     /// `state` are still produced; `use: inline`/reflector-generated
@@ -1071,6 +1224,18 @@ impl RunModel {
                     }
                 } else {
                     self.last_failed_created_at.remove(path);
+                }
+                // Issue #649's history record: a path whose own pass
+                // has no id-paired event (no `--events` at all, or an
+                // unnamed `start`/`end`) gets its interval from state
+                // alone, captured right here, exactly once per
+                // `created_at` -- the only moment a reused (unnamed-
+                // loop) path's finished pass is still visible before
+                // the next one overwrites it.
+                if let (Some(created_at), Some(completed_at)) =
+                    (&node.created_at, &node.completed_at)
+                {
+                    self.push_state_interval(path, created_at, completed_at, node);
                 }
             }
 
@@ -2455,6 +2620,7 @@ mod tests {
             ts: "t0".to_string(),
             run_id: "abc".to_string(),
             pid: Some(4242),
+            engine: None,
         });
         assert_eq!(model.run_start_pid(), Some(4242));
         assert_eq!(model.run_start_id(), Some("abc"));

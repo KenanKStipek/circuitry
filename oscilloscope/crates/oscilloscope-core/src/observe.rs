@@ -251,6 +251,12 @@ pub enum Event {
         /// has no child handle of its own to `wait` on (#424 review
         /// F4).
         pid: Option<i32>,
+        /// `cof`/`electricity`'s own label (`"cof"`/`"electricity"`),
+        /// when the line carries one -- both engines always write it,
+        /// but a stream from an older build might not. History
+        /// (issue #649) records `null` rather than guessing when it's
+        /// absent.
+        engine: Option<String>,
     },
     /// Sent once by a tree loop or tree dynamic before its branches
     /// start. `branches` is the true total (an `each` loop's item
@@ -322,6 +328,10 @@ pub fn parse_event(value: &Value) -> Option<Event> {
             ts,
             run_id: value.get("run_id")?.as_str()?.to_string(),
             pid: value.get("pid").and_then(Value::as_i64).map(|p| p as i32),
+            engine: value
+                .get("engine")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }),
         "dispatch" => Some(Event::Dispatch {
             ts,

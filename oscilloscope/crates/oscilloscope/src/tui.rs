@@ -5478,6 +5478,7 @@ mod golden_tests {
             ts: "2026-01-01T11:04:00Z".to_string(),
             run_id: "run-abc123".to_string(),
             pid: Some(1),
+            engine: None,
         });
         model.observe_event(&Event::Report {
             ts: "2026-01-01T11:04:58Z".to_string(),

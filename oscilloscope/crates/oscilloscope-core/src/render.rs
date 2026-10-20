@@ -2768,6 +2768,7 @@ mod tests {
             ts: "2026-01-01T11:04:58Z".to_string(),
             run_id: "r1".to_string(),
             pid: Some(1234),
+            engine: None,
         });
         model.observe_event(&Event::RunEnd {
             ts: "2026-01-01T11:31:10Z".to_string(),
@@ -2820,6 +2821,7 @@ mod tests {
             ts: "2026-01-01T11:04:58Z".to_string(),
             run_id: "r1".to_string(),
             pid: Some(1234),
+            engine: None,
         });
         let state_json = json!({
             "prime": {"value": null, "meta": {"created_at": "2026-01-01T11:04:58Z", "completed_at": null},
@@ -4125,6 +4127,7 @@ mod tests {
             ts: "t0".to_string(),
             run_id: "run-xyz".to_string(),
             pid: Some(1),
+            engine: None,
         });
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
         let details = details_for("prime", &plan, &model, Some(&state_json));
