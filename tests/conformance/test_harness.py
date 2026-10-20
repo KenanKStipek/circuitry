@@ -485,7 +485,7 @@ def test_load_case_rejects_non_bool_sort_http_requests(tmp_path: Path) -> None:
 
 
 def test_load_case_rejects_also_pretty_with_mock_http_fixture(tmp_path: Path) -> None:
-    """PR #455 review finding P2-4: the --pretty re-run gets neither a
+    """PR #455's review: the --pretty re-run gets neither a
     fresh mock server nor a fresh leftover-replies path, and runs after the
     server has already stopped."""
     case_dir = _write_case(
@@ -501,7 +501,7 @@ def test_load_case_rejects_also_pretty_with_mock_http_fixture(tmp_path: Path) ->
 
 
 def test_load_case_rejects_known_divergence_with_also_pretty(tmp_path: Path) -> None:
-    """PR #455 review finding P2-4: the --pretty comparison never applies
+    """PR #455's review: the --pretty comparison never applies
     the known_divergence override."""
     case_dir = _write_case(
         tmp_path,
@@ -550,7 +550,7 @@ def test_load_case_rejects_electricity_preview_ok_without_electricity_in_engines
 
 
 def test_case_redaction_replacements_only_redacts_host_port_forms(tmp_path: Path) -> None:
-    """PR #455 review finding P2-3: a bare port-number replacement could
+    """PR #455's review: a bare port-number replacement could
     also corrupt a run id/UUID or a compact timestamp that happens to
     contain the same digits as a substring. `case_redaction_replacements`
     only ever redacts the port inside an actual `host:port` form."""
@@ -688,7 +688,7 @@ def test_unused_scripted_reply_fails_the_case(tmp_path: Path) -> None:
 
 
 def test_a_prompt_under_a_false_if_still_reports_its_unused_reply(tmp_path: Path) -> None:
-    """PR #455 review finding 1's "missed failures" case: a `provider:
+    """PR #455's review, "missed failures" case: a `provider:
     scripted` prompt sitting under an `if` that never takes that branch at
     run time is still walked statically by preflight (`cli.runtime_shim.
     preflight` checks every adapter reference in the document, regardless

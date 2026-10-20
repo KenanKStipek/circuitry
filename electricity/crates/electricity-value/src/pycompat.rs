@@ -64,7 +64,7 @@ pub enum PyExc {
     TimeoutError,
     UnicodeDecodeError,
     /// `int(float("inf"))`/`int(float("nan"))`'s own exception class
-    /// (review finding 5 on PR #454) -- CPython raises this, not
+    /// (PR #454) -- CPython raises this, not
     /// `ValueError`, for a non-finite float.
     OverflowError,
     /// `core/use.py`'s own cycle-detection raise (M1 lane I, issue
@@ -187,7 +187,7 @@ impl PyExc {
 
 impl PyExc {
     /// `True` for every variant that is a `ValueError` subclass in
-    /// Python (issue #513 review finding 1): `core/use.py`'s own
+    /// Python (issue #513's review): `core/use.py`'s own
     /// `except (ValueError, RecursionError)` split decides
     /// not-retried this way, via `isinstance`, so every subclass
     /// counts, not just the bare class. `RecursionError` itself is a
@@ -1123,7 +1123,7 @@ mod tests {
     fn py_int_reports_cpythons_own_text_for_a_bad_string() {
         let err = py_int(&Value::Str("x".to_string())).unwrap_err();
         // CPython's own `repr('x')` is single-quoted, not Rust's
-        // double-quoted `{:?}` (review finding 5 on PR #454).
+        // double-quoted `{:?}` (PR #454).
         assert_eq!(err.message, "invalid literal for int() with base 10: 'x'");
         assert_eq!(err.py_class, PyExc::ValueError);
     }
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[test]
     fn round6_rounds_odd_multiples_of_one_over_128_half_to_even() {
-        // Review finding 7 on PR #454: a 6-digit tie only happens at an
+        // A 6-digit tie only happens at an
         // odd multiple of 1/128 -- `generate_round6_corpus.py`'s own
         // random draws essentially never hit one, so the half-even
         // claim went untested without cases picked specifically to land

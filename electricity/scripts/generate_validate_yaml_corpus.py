@@ -140,7 +140,7 @@ def succeeding_case(
     assert outcome["value_ok"] is expect_ok, f"{name}: value['ok'] mismatch: {outcome}"
     # The generator asserts its own expected texts directly (never only via
     # the Rust replay's comparison, per DESIGN.md's own L2 standard,
-    # reviewed as missing on PR #524's finding 3): an `exact` tag's own
+    # reviewed as missing on PR #524): an `exact` tag's own
     # *text* must equal the real plugin's own output, word for word, not
     # just a hand-typed guess that happens to look right.
     assert len(errors_tagged) == len(outcome["errors"]), (
@@ -512,7 +512,7 @@ def build_cases() -> list[dict[str, Any]]:
     # Python sorts by `str(err)` and electricity sorts by `(location,
     # message)` -- the kept order (and, under a low `max_errors`, the kept
     # *subset*) can differ even though the error set itself agrees
-    # (DESIGN.md's own Hazards section; review finding 3 on PR #524).
+    # (DESIGN.md's own Hazards section; PR #524's review).
     outcome = run({"yaml": _SCHEMA_ERRORS_MULTI})
     assert not outcome["raised"] and len(outcome["errors"]) == 2
     cases.append(
@@ -603,8 +603,8 @@ def build_cases() -> list[dict[str, Any]]:
             }
         )
 
-    # --- `_as_bool` string forms for `compile` too (review finding 3 on
-    # PR #524: only `strip_fences` was covered) -- `_DUPLICATE_SIBLING_NAMES`
+    # --- `_as_bool` string forms for `compile` too (PR #524's review:
+    # only `strip_fences` was covered) -- `_DUPLICATE_SIBLING_NAMES`
     # only fails under compile, so a truthy/falsy form flips `ok` the same
     # way `strip_fences`'s own loop does for a fence-free/fenced document.
     for form, expected_bool in [
@@ -680,8 +680,8 @@ def build_cases() -> list[dict[str, Any]]:
         ("dict", {"a": 1}),
         ("bytes", b"effects: []"),
         # Settled 6 singles out `date`/`datetime` for `type(x).__name__`
-        # (never `datetime.date`/`datetime.datetime`) -- review finding 3
-        # on PR #524: these two were missing from this loop.
+        # (never `datetime.date`/`datetime.datetime`) -- PR #524's
+        # review: these two were missing from this loop.
         ("date", datetime.date(2024, 1, 1)),
         # Deliberately naive (no `tzinfo`) -- `yaml.dump`'s own implicit
         # timestamp resolver produces a naive `datetime.datetime` just the
