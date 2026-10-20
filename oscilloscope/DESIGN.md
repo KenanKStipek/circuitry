@@ -1876,6 +1876,13 @@ this one pane): a container's direct children, or a prompt/tool's
 own p50/p90 marks -- both built only for the selected row, since
 neither has anywhere else to be read from.
 
+- The pane's own border title names the selected step (`zoom ·
+  fan › pass 1 of 3 › leaf`), cut from the *left* (with a leading
+  `…`) when it overflows, since the step's own name at the end is
+  the identifying part -- the one thing the timeline itself can't
+  show once a loop collapses its own passes out of it. A step under
+  a loop gets that loop's own label prepended, whether the loop is
+  collapsed or expanded.
 - Every kind's own pane leads with one axis line -- start and end
   (or `now` while still running) as clock times, plus the duration,
   e.g. `03:23:52 → 03:23:57 · 5.0s`. The label column to the left of

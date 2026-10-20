@@ -4431,6 +4431,48 @@ fn zoom_axis_line(
     ))
 }
 
+/// The selected step's own nearest ancestor loop row's plain label
+/// (never the `⟲ N/total` suffix, added only at draw time) -- the
+/// loop row stays in `screen.rows` whether it's collapsed or
+/// expanded, so this answers the same whichever the loop is;
+/// `max_by_key` on path length picks the closest ancestor when more
+/// than one loop wraps the selection.
+fn time_zoom_ancestor_loop_label<'a>(
+    screen: &'a oscilloscope_core::screens::TimeScreen,
+    path: &str,
+) -> Option<&'a str> {
+    screen
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            oscilloscope_core::screens::TimeDisplayRow::Row(tr)
+                if tr.kind == oscilloscope_core::render::RowKind::Loop
+                    && path.starts_with(&format!("{}.", tr.path)) =>
+            {
+                Some(tr)
+            }
+            _ => None,
+        })
+        .max_by_key(|tr| tr.path.len())
+        .map(|tr| tr.label.as_str())
+}
+
+/// A title too long for `max`, cut from the *left* with a leading
+/// `…` -- unlike [`truncate_label`], the zoom pane's own title ends
+/// in the selected step's own name (`fan › pass 1 of 3 › leaf`), the
+/// most specific and identifying part, so losing characters from the
+/// front keeps it visible instead of the outer, already-less-useful
+/// context.
+fn truncate_title_from_left(label: &str, max: usize) -> String {
+    let count = label.chars().count();
+    if count <= max {
+        label.to_string()
+    } else {
+        let skip = count - max.saturating_sub(1);
+        format!("…{}", label.chars().skip(skip).collect::<String>())
+    }
+}
+
 fn draw_time_zoom_pane(
     frame: &mut Frame,
     area: Rect,
@@ -4719,8 +4761,19 @@ fn draw_time_zoom_pane(
     app.time_zoom_viewport = area.height.saturating_sub(2) as usize;
     app.time_zoom_scroll = app.time_zoom_scroll.min(max_scroll);
     let visible_lines: Vec<Line<'static>> = lines.into_iter().skip(app.time_zoom_scroll).collect();
+    let title = match &screen.selected {
+        Some(step) => {
+            let breadcrumb = match time_zoom_ancestor_loop_label(screen, &step.path) {
+                Some(loop_label) => format!("{loop_label} › {}", step.breadcrumb),
+                None => step.breadcrumb.clone(),
+            };
+            let budget = (area.width as usize).saturating_sub(" zoom ·  ".chars().count() + 2);
+            format!(" zoom · {} ", truncate_title_from_left(&breadcrumb, budget))
+        }
+        None => " zoom ".to_string(),
+    };
     frame.render_widget(
-        Paragraph::new(visible_lines).block(Block::default().borders(Borders::ALL).title(" zoom ")),
+        Paragraph::new(visible_lines).block(Block::default().borders(Borders::ALL).title(title)),
         area,
     );
 }
@@ -10351,6 +10404,33 @@ mod golden_tests {
         assert!(
             text.contains('⟲'),
             "a collapsed loop row shows its own progress:\n{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Follow picking a running leaf inside a collapsed loop (the
+    /// leaf's own breadcrumb row never appears in the timeline
+    /// itself) must still name it in the zoom title -- the loop's
+    /// own label, then the leaf's own breadcrumb.
+    #[test]
+    fn time_zoom_title_names_a_running_leaf_under_a_collapsed_loop() {
+        let plan = each_loop_plan_for_tui();
+        let mut model = RunModel::new();
+        let state = each_loop_state();
+        let text = time_snapshot_at(
+            100,
+            30,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            Some("prime.items.iter_1.nap"),
+            &Default::default(),
+            false,
+        );
+        assert!(
+            text.contains("zoom · items › pass 2 of 2 › nap"),
+            "the zoom title must name the selected leaf and its loop:\n{text}"
         );
         insta::assert_snapshot!(text);
     }
