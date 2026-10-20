@@ -116,9 +116,9 @@ pub struct AxisSpan {
 /// end (DESIGN.md: "plus a small margin") -- large enough that the
 /// now line never sits flush against the pane's own right edge, but
 /// proportional to the span itself so a young run's bars aren't
-/// squeezed into a narrow strip on the left (issue #650's probes: a
-/// fixed 30s floor put a 10s-old run's now line a quarter of the way
-/// across the axis).
+/// squeezed into a narrow strip on the left -- a fixed 30s floor
+/// would put a 10s-old run's now line a quarter of the way across
+/// the axis.
 fn axis_margin_s(elapsed_s: f64) -> f64 {
     (elapsed_s * 0.1).max(2.0)
 }
@@ -161,10 +161,11 @@ pub fn axis_span(header: &Header, now: &str) -> AxisSpan {
     // top of the usual proportional one double-counted the same gap,
     // crowding a run with an active loop ETA back toward the left
     // exactly the way a fixed, too-large margin once did for every
-    // run (#650's probes: a chain loop a couple of seconds into its
-    // own first pass, little elapsed but already 3s from its own
-    // ETA, failed the same 60%-or-more check the plain margin fix
-    // was for). Only the shortfall below the usual margin is added.
+    // run -- a chain loop a couple of seconds into its own first
+    // pass, little elapsed but already 3s from its own ETA, would
+    // otherwise still fail the same 60%-or-more check the plain
+    // margin fix was for. Only the shortfall below the usual margin
+    // is added.
     // `.max(1e-3)`, not `.max(0.0)`: the axis's own end must always
     // sit strictly past `later_ts`, even when the ETA already leaves
     // ample room on its own, since a margin of literally zero would
@@ -1190,10 +1191,10 @@ mod tests {
         assert!(!span.show_now);
     }
 
-    /// Issue #650's probe: 10s into a run with no history or loop
-    /// ETA at all, `now` must sit well past the axis's own midpoint
-    /// -- the old fixed 30s floor (`max(5% of elapsed, 30s)`) put it
-    /// at a quarter of the way across instead.
+    /// 10s into a run with no history or loop ETA at all, `now` must
+    /// sit well past the axis's own midpoint -- a fixed 30s floor
+    /// (`max(5% of elapsed, 30s)`) would put it at a quarter of the
+    /// way across instead.
     #[test]
     fn axis_margin_is_proportional_not_a_fixed_30s_floor() {
         let mut header = header_with(Some("2026-01-01T00:00:00Z"), None);
@@ -1562,9 +1563,9 @@ mod tests {
         assert_eq!(heights[5], 1);
     }
 
-    /// Issue #650's probe: a purely sequential run (no step overlaps
-    /// another) must read 1 everywhere it runs at all, never 2 at the
-    /// instant one step ends and the next begins.
+    /// A purely sequential run (no step overlaps another) must read
+    /// 1 everywhere it runs at all, never 2 at the instant one step
+    /// ends and the next begins.
     #[test]
     fn in_flight_heights_back_to_back_intervals_never_double_count() {
         let intervals = vec![(0.0, 20.0), (20.0, 40.0), (40.0, 60.0)];
@@ -1572,9 +1573,9 @@ mod tests {
         assert_eq!(heights, vec![1, 1, 1, 1, 1, 1]);
     }
 
-    /// Issue #650's probe: three intervals overlap at once, and a
-    /// fourth starts exactly where they end -- the true max is 3, not
-    /// 4 (the old touch-counting rule's answer).
+    /// Three intervals overlap at once, and a fourth starts exactly
+    /// where they end -- the true max is 3, not 4 (a touch-counting
+    /// rule's answer instead).
     #[test]
     fn in_flight_heights_true_max_overlap_is_3_not_4() {
         let intervals = vec![(0.0, 30.0), (0.0, 30.0), (0.0, 30.0), (30.0, 60.0)];
@@ -1638,9 +1639,9 @@ mod tests {
         );
     }
 
-    /// Issue #650's probe: a quick step's own noise (a few
-    /// milliseconds either way) must never read `\u25b2`/`\u25bc` --
-    /// a difference under a second is always `\u2248`.
+    /// A quick step's own noise (a few milliseconds either way)
+    /// must never read `▲`/`▼` -- a difference under a second is
+    /// always `≈`.
     #[test]
     fn vs_usual_mark_under_a_second_of_difference_is_always_usual() {
         let stats = StepStats {
@@ -1780,10 +1781,10 @@ mod tests {
         assert!((pct - 66.67).abs() < 0.1);
     }
 
-    /// Issue #650's probe: the footer must count the call in
-    /// progress's own elapsed time, not just already-finished calls
-    /// -- otherwise it reads `bash 0.0s` for seconds while the very
-    /// first call of a run is still going.
+    /// The footer must count the call in progress's own elapsed
+    /// time, not just already-finished calls -- otherwise it reads
+    /// `bash 0.0s` for seconds while the very first call of a run is
+    /// still going.
     #[test]
     fn zoom_agent_footer_folds_the_running_calls_own_elapsed_time_in() {
         let tools = BTreeMap::new();

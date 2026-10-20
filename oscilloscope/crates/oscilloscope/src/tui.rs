@@ -4307,9 +4307,9 @@ fn draw_time_strips(
     // left border (1), then its label padded to `label_width`, then
     // one space. This pane has no border of its own, so its gutter
     // needs that same two-space width between the label and the bar,
-    // not one, to actually land on the same column (issue #650's
-    // probes: every live frame had the strips sitting one column to
-    // the left of the bars with only one). Each label is also
+    // not one, to actually land on the same column -- with only one,
+    // every live frame had the strips sitting one column to the left
+    // of the bars. Each label is also
     // truncated to `label_width`, not just padded -- `{:<width$}`
     // never cuts a longer string down, so a label that overflowed
     // used to shift everything after it right by however much it
@@ -4353,10 +4353,10 @@ const TIME_ZOOM_AGENT_BAND_LABELS: [&str; 5] = ["think", "read", "edit", "bash",
 /// The zoom pane's own label column width: sized to the longest
 /// label it will actually draw (the agent's own band names, or a
 /// container's children, whichever this selection calls for), up to
-/// a third of the pane's own width -- a fixed 8 columns used to
-/// leave every pass of a loop reading a truncated `✓ pass…` (issue
-/// #650's probes). `0` for a selection with no padded label column
-/// at all (a step's own bar, or nothing selected).
+/// a third of the pane's own width -- a fixed 8 columns would leave
+/// every pass of a loop reading a truncated `✓ pass…` instead. `0`
+/// for a selection with no padded label column at all (a step's own
+/// bar, or nothing selected).
 fn time_zoom_label_width(
     screen: &oscilloscope_core::screens::TimeScreen,
     pane_width: u16,
@@ -4957,8 +4957,8 @@ fn draw_time_screen(
     // Below three_pane's own threshold, neither the zoom nor the vs-
     // usual pane is drawn at all -- the timeline and its strips take
     // the whole body rather than reserving a golden-ratio minor
-    // section underneath that stays blank (issue #650's probes: 9
-    // rows left empty at 80x24).
+    // section underneath that would otherwise stay blank (9 rows
+    // left empty at 80x24).
     let timeline_rows = if three_pane {
         oscilloscope_core::layout::golden_major_section(body.height)
     } else {
@@ -10173,10 +10173,10 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Issue #650's probe: the now line must sit at the exact same
-    /// column in every timeline row and every strip, with and
-    /// without `--events` (the strips' own gutter used to leave out
-    /// the timeline box's left border, landing one column short).
+    /// The now line must sit at the exact same column in every
+    /// timeline row and every strip, with and without `--events` --
+    /// the strips' own gutter must not leave out the timeline box's
+    /// left border, which would land it one column short.
     #[test]
     fn time_strip_and_row_now_columns_always_match() {
         for use_events in [false, true] {
