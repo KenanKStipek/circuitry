@@ -1402,6 +1402,270 @@ pub fn build_flow_screen(
     }
 }
 
+/// A loop row's own pass rows, spliced into [`TimeScreen::rows`]
+/// right after it when its path is in `expanded_loops` (DESIGN.md:
+/// "`⏎` on a loop row expands it into one row per pass") -- `label`
+/// already carries [`crate::time::LoopPassRow::label`]'s own prefix
+/// (`pass 1`/`#1`), since a pass row has no real tree path of its
+/// own to show a breadcrumb for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeLoopPassRow {
+    pub label: String,
+    pub status: RowStatus,
+    pub start_s: Option<f64>,
+    pub duration_s: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimeDisplayRow {
+    Row(crate::time::TimeRow),
+    Pass(TimeLoopPassRow),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeStrips {
+    pub events: crate::time::EventsPerMinuteStrip,
+    pub decisions: Vec<f64>,
+    pub in_flight: Vec<u64>,
+    pub in_flight_max: u64,
+    pub queued: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeVsUsualRow {
+    pub label: String,
+    pub now_s: f64,
+    pub running: bool,
+    pub p50_s: f64,
+    pub mark: crate::time::VsUsualMark,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TimeVsUsualPane {
+    pub rows: Vec<TimeVsUsualRow>,
+    pub earlier_versions: bool,
+    /// `Some((count, threshold))` below the run-count threshold
+    /// (DESIGN.md: "`history: 1 of 3 runs of this version`") --
+    /// `rows` is always empty in this case.
+    pub too_few_runs: Option<(usize, usize)>,
+    pub finish_ts: Option<String>,
+    pub usual_low_ts: Option<String>,
+    pub usual_high_ts: Option<String>,
+    pub from_runs: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeScreen {
+    pub rows: Vec<TimeDisplayRow>,
+    pub axis: crate::time::AxisSpan,
+    /// `now`'s own run-relative offset, for the now line -- `None`
+    /// exactly when `axis.show_now` is `false` or the run has no
+    /// start yet.
+    pub now_s: Option<f64>,
+    pub planned: Option<crate::time::GhostBar>,
+    pub strips: TimeStrips,
+    pub selected: Option<FocusedStep>,
+    pub vs_usual: TimeVsUsualPane,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_time_screen(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    header: &crate::render::Header,
+    state: Option<&Value>,
+    story_lines: &[crate::diff::LogLine],
+    selected_path: Option<&str>,
+    expanded_loops: &std::collections::BTreeSet<String>,
+    now: &str,
+) -> TimeScreen {
+    let time_rows =
+        crate::time::build_time_rows(rows, flat, model, plan, header, &header.history_step_usual);
+    let axis = crate::time::axis_span(header, now);
+    let run_start_ts = header.run_start_ts.clone();
+    let now_s = if axis.show_now {
+        run_start_ts
+            .as_deref()
+            .and_then(|start| duration_seconds(start, now))
+    } else {
+        None
+    };
+    let planned = now_s
+        .and_then(|offset| crate::time::planned_ghost_bar(offset, header.history_eta_remaining_s));
+
+    let mut display_rows = Vec::with_capacity(time_rows.len());
+    for row in time_rows {
+        let expand =
+            row.kind == RowKind::Loop && row.loop_expandable && expanded_loops.contains(&row.path);
+        let path = row.path.clone();
+        display_rows.push(TimeDisplayRow::Row(row));
+        if expand {
+            if let Some(run_start_ts) = run_start_ts.as_deref() {
+                for pass in crate::time::expand_loop(&path, flat, model, run_start_ts, now) {
+                    display_rows.push(TimeDisplayRow::Pass(TimeLoopPassRow {
+                        label: pass.label,
+                        status: pass.status,
+                        start_s: pass.start_s,
+                        duration_s: pass.duration_s,
+                    }));
+                }
+            }
+        }
+    }
+
+    let strips = run_start_ts.as_deref().map_or_else(
+        || TimeStrips {
+            events: Default::default(),
+            decisions: Vec::new(),
+            in_flight: Vec::new(),
+            in_flight_max: 0,
+            queued: crate::time::queued_now(flat),
+        },
+        |run_start_ts| {
+            let axis_start_s = 0.0;
+            let axis_end_s = duration_seconds(run_start_ts, &axis.end_ts).unwrap_or(0.0);
+            let width = 60usize;
+            let events = crate::time::events_per_minute_strip(
+                axis_start_s,
+                axis_end_s,
+                width,
+                model,
+                run_start_ts,
+            );
+            let decisions = crate::time::decision_points(story_lines, run_start_ts);
+            let intervals: Vec<(f64, f64)> = rows
+                .iter()
+                .filter_map(|r| {
+                    let start = row_run_relative_start(r, flat, model, run_start_ts)?;
+                    let end = if r.status.kind == StatusKind::Running {
+                        duration_seconds(run_start_ts, now).unwrap_or(start)
+                    } else {
+                        start + r.duration_s.unwrap_or(0.0)
+                    };
+                    Some((start, end))
+                })
+                .collect();
+            let in_flight =
+                crate::time::in_flight_heights(axis_start_s, axis_end_s, width, &intervals);
+            let in_flight_max = in_flight.iter().copied().max().unwrap_or(0);
+            TimeStrips {
+                events,
+                decisions,
+                in_flight,
+                in_flight_max,
+                queued: crate::time::queued_now(flat),
+            }
+        },
+    );
+
+    let selected = selected_path
+        .and_then(|path| rows.iter().find(|r| r.path == path))
+        .map(|row| build_focused_step(row, flat, plan, model, state, now));
+
+    let vs_usual = build_vs_usual_pane(rows, flat, plan, model, header, now);
+
+    TimeScreen {
+        rows: display_rows,
+        axis,
+        now_s,
+        planned,
+        strips,
+        selected,
+        vs_usual,
+    }
+}
+
+fn row_run_relative_start(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    model: &RunModel,
+    run_start_ts: &str,
+) -> Option<f64> {
+    let start_ts = flat
+        .get(&row.path)
+        .and_then(|n| n.created_at.as_deref())
+        .or_else(|| model.event_started_at(&row.path))?;
+    duration_seconds(run_start_ts, start_ts)
+}
+
+fn build_vs_usual_pane(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    header: &crate::render::Header,
+    now: &str,
+) -> TimeVsUsualPane {
+    if let Some(too_few) = crate::time::vs_usual_too_few_runs(header) {
+        return TimeVsUsualPane {
+            too_few_runs: Some(too_few),
+            earlier_versions: crate::time::vs_usual_is_earlier_versions(header),
+            ..Default::default()
+        };
+    }
+    let earlier_versions = crate::time::vs_usual_is_earlier_versions(header);
+    if header.run_start_ts.is_none() {
+        return TimeVsUsualPane {
+            earlier_versions,
+            ..Default::default()
+        };
+    }
+    let mut vs_rows = Vec::new();
+    for row in rows {
+        let Some(key) = crate::history::display_key(&row.path, plan) else {
+            continue;
+        };
+        let Some(stats) = header.history_step_usual.get(&key) else {
+            continue;
+        };
+        let Some(p50) = stats.busy_p50_s else {
+            continue;
+        };
+        let running = row.status.kind == StatusKind::Running;
+        let now_s = if running {
+            let start_ts = flat
+                .get(&row.path)
+                .and_then(|n| n.created_at.as_deref())
+                .or_else(|| model.event_started_at(&row.path));
+            match start_ts.and_then(|s| duration_seconds(s, now)) {
+                Some(s) => s,
+                None => continue,
+            }
+        } else {
+            match row.duration_s {
+                Some(s) => s,
+                None => continue,
+            }
+        };
+        let Some(mark) = crate::time::vs_usual_mark(now_s, stats) else {
+            continue;
+        };
+        vs_rows.push(TimeVsUsualRow {
+            label: row.label.clone(),
+            now_s,
+            running,
+            p50_s: p50,
+            mark,
+        });
+    }
+    let finish_ts = if earlier_versions {
+        None
+    } else {
+        header.history_eta_ts.clone()
+    };
+    TimeVsUsualPane {
+        rows: vs_rows,
+        earlier_versions,
+        too_few_runs: None,
+        finish_ts,
+        usual_low_ts: header.history_eta_low_ts.clone(),
+        usual_high_ts: header.history_eta_high_ts.clone(),
+        from_runs: header.history_same_hash_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2764,5 +3028,181 @@ mod tests {
             }
             other => panic!("expected a populated Agent detail, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_time_screen_shows_a_running_rows_bar_and_the_now_line() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"}},
+            "b": {"value": null, "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": null}}
+        }});
+        let rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            30.0,
+            "2026-01-01T00:00:30Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat_from(state.clone()),
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:30Z",
+        );
+        assert!(screen.axis.show_now);
+        assert_eq!(screen.now_s, Some(30.0));
+        let running = screen
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                TimeDisplayRow::Row(row) if row.path == "prime.b" => Some(row),
+                _ => None,
+            })
+            .expect("row b is in the timeline");
+        assert_eq!(running.start_s, Some(10.0));
+        assert_eq!(running.status.kind, StatusKind::Running);
+    }
+
+    fn each_loop_plan() -> PlanTree {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, NodeKind, OnError, Op, Program, Region, ToolOp,
+        };
+        let root_path = EffectPath::root();
+        let loop_path = root_path.push_name("items");
+        let pass0 = loop_path.push_pass(electricity_bytecode::LoopId(0));
+        let tool = Op {
+            path: pass0.push_name("nap"),
+            name: Some("nap".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: electricity_bytecode::ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+                prompt_file: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path.clone(),
+                    name: Some("items".to_string()),
+                    kind: NodeKind::Control(Region::Loop {
+                        name: Some("items".to_string()),
+                        spec: electricity_bytecode::LoopSpec::Each {
+                            in_path: "prime.xs".to_string(),
+                            as_name: "x".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool],
+                            overlay: true,
+                        }),
+                        flow: electricity_bytecode::LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    #[test]
+    fn build_time_screen_expands_a_loop_row_when_asked() {
+        let plan = each_loop_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "items": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+                "iter_0": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z"}},
+                "iter_1": {"value": null, "meta": {"created_at": "2026-01-01T00:00:05Z", "completed_at": null}}
+            }
+        }});
+        let rendered = crate::render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            10.0,
+            "2026-01-01T00:00:10Z",
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = flat_from(state.clone());
+        let mut expanded = std::collections::BTreeSet::new();
+        expanded.insert("prime.items".to_string());
+        let screen = build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &expanded,
+            "2026-01-01T00:00:10Z",
+        );
+        let passes: Vec<&TimeLoopPassRow> = screen
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                TimeDisplayRow::Pass(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0].label, "pass 1");
+        assert_eq!(passes[1].label, "pass 2");
     }
 }
