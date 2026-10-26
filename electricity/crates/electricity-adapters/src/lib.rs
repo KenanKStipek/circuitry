@@ -75,13 +75,6 @@ pub fn build_registry() -> AdapterRegistry {
     // conflict here as small as possible.
     registry.register("claude_code", Box::new(claude_code::build_claude_code));
     registry.register("pi", Box::new(pi::build_pi));
-    // ...and the two bases an alias (`runtime.adapters.<alias>.adapter`)
-    // may name.
-    registry.register_alias_base(
-        "claude_code",
-        Box::new(claude_code::build_claude_code_named),
-    );
-    registry.register_alias_base("pi", Box::new(pi::build_pi_named));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
     // `replicate`/`watsonx` last. Issue #515 ports `cyberdiner`
@@ -89,7 +82,10 @@ pub fn build_registry() -> AdapterRegistry {
     // above, so the unbuildable set is now `litellm` alone
     // (`host_claude`'s own builder always fails, deliberately -- see
     // this file's own module doc comment -- so it is never part of
-    // that set).
+    // that set). Every registered builder here can also be an alias's
+    // target (#656), through the one shared `(name, cfg)` signature
+    // `AdapterRegistry::build_alias` calls directly -- no separate
+    // alias-base registration.
     registry.register("ollama", Box::new(ollama::build_ollama));
     registry.register("openai", Box::new(openai::build_openai));
     registry.register("anthropic", Box::new(anthropic::build_anthropic));

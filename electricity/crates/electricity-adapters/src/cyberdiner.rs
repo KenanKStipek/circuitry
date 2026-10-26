@@ -146,6 +146,7 @@ fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
 /// does, but only when *model* is blank -- Python's own `or` never
 /// evaluates the right side at all when the left is already truthy).
 fn resolve_tier(
+    name: &str,
     model: &str,
     default_tier: &Value,
     valid_tiers: &[String],
@@ -163,9 +164,10 @@ fn resolve_tier(
     };
     if tier.is_empty() {
         return Err(AdapterError {
-            message: "cyberdiner: no tier resolved. Pin `model:` in the orchestration or set \
-                      runtime.adapters.cyberdiner.default_tier."
-                .to_string(),
+            message: format!(
+                "{name}: no tier resolved. Pin `model:` in the orchestration or set \
+                 runtime.adapters.{name}.default_tier."
+            ),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::ValueError,
         });
@@ -174,7 +176,7 @@ fn resolve_tier(
         let valid = valid_tiers.join(", ");
         return Err(AdapterError {
             message: format!(
-                "cyberdiner: unknown tier {}. Configured runtime.adapters.cyberdiner.valid_tiers: {valid}.",
+                "{name}: unknown tier {}. Configured runtime.adapters.{name}.valid_tiers: {valid}.",
                 Value::Str(tier).py_repr()
             ),
             retry: RetryInfo::not_retryable(),
@@ -564,6 +566,8 @@ pub struct CyberdinerAdapter {
     /// OpenAiAdapter::base_url`'s own doc comment:
     /// `.rstrip("/")`'d in `generate()`/`check()` themselves, after
     /// the same earlier checks Python runs first.
+    /// `cyberdiner`, or an alias's own name (#656).
+    pub name: String,
     pub expo_url: Value,
     /// Raw -- `cfg.get("token") or ""`. Never itself a source of a
     /// non-string failure: Python's own
@@ -597,26 +601,28 @@ impl CyberdinerAdapter {
     ) -> Result<GenerateResult, AdapterError> {
         if !value_is_truthy(&self.expo_url) {
             return Err(AdapterError {
-                message: "cyberdiner: expo_url not configured. Set \
-                          runtime.adapters.cyberdiner.expo_url to your CyberDiner expo \
-                          deployment's root URL."
-                    .to_string(),
+                message: format!(
+                    "{}: expo_url not configured. Set runtime.adapters.{}.expo_url to your \
+                     CyberDiner expo deployment's root URL.",
+                    self.name, self.name
+                ),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
         }
         if !value_is_truthy(&self.token) {
             return Err(AdapterError {
-                message: "cyberdiner: token not configured. Set \
-                          runtime.adapters.cyberdiner.token to a CyberDiner API key (ck_...), \
-                          minted via expo's api_keys routes or the web app."
-                    .to_string(),
+                message: format!(
+                    "{}: token not configured. Set runtime.adapters.{}.token to a CyberDiner \
+                     API key (ck_...), minted via expo's api_keys routes or the web app.",
+                    self.name, self.name
+                ),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
         }
 
-        let tier = resolve_tier(model, &self.default_tier, &self.valid_tiers)?;
+        let tier = resolve_tier(&self.name, model, &self.default_tier, &self.valid_tiers)?;
         let base = rstrip_base_url(&self.expo_url)?;
         let token = self.token.py_str();
         let req_timeout = Duration::from_secs_f64(
@@ -750,11 +756,7 @@ impl CyberdinerAdapter {
             tokens_sent: None,
             tokens_received: as_int(job.get(&Value::Str("tokensProcessed".to_string()))),
             finish_reason: None,
-            warnings: crate::ignored_options_warning(
-                "cyberdiner",
-                &GenerateOptions::default(),
-                &[],
-            ),
+            warnings: crate::ignored_options_warning(&self.name, &GenerateOptions::default(), &[]),
             cost_usd: None,
         })
     }
@@ -784,7 +786,7 @@ fn semaphore_cancelled_error() -> AdapterError {
 #[async_trait::async_trait(?Send)]
 impl Adapter for CyberdinerAdapter {
     fn name(&self) -> &str {
-        "cyberdiner"
+        &self.name
     }
 
     async fn generate(
@@ -814,7 +816,7 @@ impl Adapter for CyberdinerAdapter {
             .await?;
         // A job carries only a prompt and a tier -- everything else in
         // `options` is ignored, the same as Python's own `generate()`.
-        result.warnings = crate::ignored_options_warning("cyberdiner", options, &[]);
+        result.warnings = crate::ignored_options_warning(&self.name, options, &[]);
         Ok(result)
     }
 
@@ -831,11 +833,16 @@ impl Adapter for CyberdinerAdapter {
     async fn check(&self) -> CheckResult {
         let mut missing = Vec::new();
         if !value_is_truthy(&self.token) {
-            missing.push("env:CYBERDINER token (runtime.adapters.cyberdiner.token)".to_string());
+            missing.push(format!(
+                "env:CYBERDINER token (runtime.adapters.{}.token)",
+                self.name
+            ));
         }
         if !value_is_truthy(&self.expo_url) {
-            missing
-                .push("env:CYBERDINER expo_url (runtime.adapters.cyberdiner.expo_url)".to_string());
+            missing.push(format!(
+                "env:CYBERDINER expo_url (runtime.adapters.{}.expo_url)",
+                self.name
+            ));
             return CheckResult {
                 ok: false,
                 missing,
@@ -928,7 +935,7 @@ fn new_semaphore(max_in_flight: i64) -> Option<tokio::sync::Semaphore> {
 }
 
 /// `adapters/factory.py::_build_cyberdiner`.
-pub fn build_cyberdiner(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_cyberdiner(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     // `raw_valid_tiers = cfg.get("valid_tiers") or ()`; `if
     // isinstance(raw_valid_tiers, str): raw_valid_tiers = (raw_valid_tiers,)`
     // -- a configured string wraps as a single
@@ -956,6 +963,7 @@ pub fn build_cyberdiner(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     };
     let max_in_flight = cfg_int_or(cfg, "max_in_flight", 0)?;
     Ok(Box::new(CyberdinerAdapter {
+        name: name.to_string(),
         expo_url: cfg_value_or(cfg, "expo_url", ""),
         token: cfg_value_or(cfg, "token", ""),
         default_tier: cfg_value_or(cfg, "default_tier", "cheap"),
@@ -1009,6 +1017,7 @@ mod tests {
 
     fn adapter(base_url: &str) -> CyberdinerAdapter {
         CyberdinerAdapter {
+            name: "cyberdiner".to_string(),
             expo_url: Value::Str(base_url.to_string()),
             token: Value::Str("ck_test_token".to_string()),
             default_tier: Value::Str("cheap".to_string()),
@@ -1230,6 +1239,7 @@ mod tests {
         let token = CancellationToken::new();
         let path = EffectPath::root();
         let no_url = CyberdinerAdapter {
+            name: "cyberdiner".to_string(),
             expo_url: Value::Str(String::new()),
             token: Value::Str("ck_x".to_string()),
             default_tier: Value::Str("cheap".to_string()),
@@ -1250,6 +1260,7 @@ mod tests {
         assert!(err.message.contains("expo_url not configured"));
 
         let no_token = CyberdinerAdapter {
+            name: "cyberdiner".to_string(),
             expo_url: Value::Str("https://expo.example.test".to_string()),
             token: Value::Str(String::new()),
             default_tier: Value::Str("cheap".to_string()),
@@ -1295,22 +1306,22 @@ mod tests {
     #[test]
     fn resolve_tier_falls_back_to_default_tier_when_model_is_blank() {
         assert_eq!(
-            resolve_tier("", &Value::Str("cheap".to_string()), &[]).unwrap(),
+            resolve_tier("cyberdiner", "", &Value::Str("cheap".to_string()), &[]).unwrap(),
             "cheap"
         );
         assert_eq!(
-            resolve_tier("  ", &Value::Str("cheap".to_string()), &[]).unwrap(),
+            resolve_tier("cyberdiner", "  ", &Value::Str("cheap".to_string()), &[]).unwrap(),
             "cheap"
         );
         assert_eq!(
-            resolve_tier("good", &Value::Str("cheap".to_string()), &[]).unwrap(),
+            resolve_tier("cyberdiner", "good", &Value::Str("cheap".to_string()), &[]).unwrap(),
             "good"
         );
     }
 
     #[test]
     fn resolve_tier_raises_when_nothing_resolves() {
-        let err = resolve_tier("", &Value::Str(String::new()), &[]).unwrap_err();
+        let err = resolve_tier("cyberdiner", "", &Value::Str(String::new()), &[]).unwrap_err();
         assert_eq!(err.py_class, PyExc::ValueError);
         assert!(err.message.contains("no tier resolved"));
     }
@@ -1319,10 +1330,22 @@ mod tests {
     fn resolve_tier_validates_against_a_configured_allowlist() {
         let valid = vec!["good".to_string(), "fast".to_string()];
         assert_eq!(
-            resolve_tier("good", &Value::Str("cheap".to_string()), &valid).unwrap(),
+            resolve_tier(
+                "cyberdiner",
+                "good",
+                &Value::Str("cheap".to_string()),
+                &valid
+            )
+            .unwrap(),
             "good"
         );
-        let err = resolve_tier("bogus", &Value::Str("cheap".to_string()), &valid).unwrap_err();
+        let err = resolve_tier(
+            "cyberdiner",
+            "bogus",
+            &Value::Str("cheap".to_string()),
+            &valid,
+        )
+        .unwrap_err();
         assert_eq!(err.py_class, PyExc::ValueError);
         assert!(err.message.contains("unknown tier 'bogus'"));
         assert!(err.message.contains("good, fast"));
@@ -1373,6 +1396,7 @@ mod tests {
     #[tokio::test]
     async fn check_reports_missing_token_and_expo_url() {
         let a = CyberdinerAdapter {
+            name: "cyberdiner".to_string(),
             expo_url: Value::Str(String::new()),
             token: Value::Str(String::new()),
             default_tier: Value::Str("cheap".to_string()),
@@ -1418,6 +1442,7 @@ mod tests {
         // `.rstrip("/")` call at all, so it propagates uncaught for
         // `call_check`'s own fold.
         let a = CyberdinerAdapter {
+            name: "cyberdiner".to_string(),
             expo_url: Value::from(5i64),
             token: Value::Str("ck_x".to_string()),
             default_tier: Value::Str("cheap".to_string()),
@@ -1439,7 +1464,7 @@ mod tests {
 
     #[test]
     fn build_cyberdiner_defaults_poll_interval_and_timeout() {
-        let adapter = build_cyberdiner(&Value::None).unwrap();
+        let adapter = build_cyberdiner("cyberdiner", &Value::None).unwrap();
         assert_eq!(adapter.name(), "cyberdiner");
     }
 
@@ -1450,7 +1475,7 @@ mod tests {
             Value::Str("valid_tiers".to_string()),
             Value::Str("good".to_string()),
         );
-        let adapter = build_cyberdiner(&Value::Dict(cfg)).unwrap();
+        let adapter = build_cyberdiner("cyberdiner", &Value::Dict(cfg)).unwrap();
         assert_eq!(adapter.list_models(), vec!["good".to_string()]);
     }
 
@@ -1467,7 +1492,7 @@ mod tests {
         );
         // Built successfully -- `int(250.9)`/`int(45.9)` truncate rather
         // than raising, matching Python's own `int()` builtin.
-        build_cyberdiner(&Value::Dict(cfg)).unwrap();
+        build_cyberdiner("cyberdiner", &Value::Dict(cfg)).unwrap();
     }
 
     #[test]
@@ -1477,7 +1502,7 @@ mod tests {
             Value::Str("timeout_seconds".to_string()),
             Value::Str("x".to_string()),
         );
-        let err = match build_cyberdiner(&Value::Dict(cfg)) {
+        let err = match build_cyberdiner("cyberdiner", &Value::Dict(cfg)) {
             Err(err) => err,
             Ok(_) => panic!("expected build_cyberdiner to fail"),
         };

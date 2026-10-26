@@ -184,7 +184,9 @@ fn registry_with_scripted() -> AdapterRegistry {
     let mut adapters = AdapterRegistry::new();
     adapters.register(
         "scripted",
-        Box::new(|_cfg| Ok(Box::new(FakeAdapter::new("scripted", Vec::new())) as Box<dyn Adapter>)),
+        Box::new(|_name, _cfg| {
+            Ok(Box::new(FakeAdapter::new("scripted", Vec::new())) as Box<dyn Adapter>)
+        }),
     );
     adapters
 }
@@ -1568,7 +1570,7 @@ async fn a_routed_model_becomes_the_fallback_chains_default_model() {
     let mut adapters = registry_with_scripted();
     adapters.register(
         "ollama",
-        Box::new(|_cfg| {
+        Box::new(|_name, _cfg| {
             Ok(
                 Box::new(FakeAdapter::new("ollama", vec![FakeAdapter::text("done")]))
                     as Box<dyn Adapter>,

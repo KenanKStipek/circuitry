@@ -108,14 +108,10 @@ fn build(name: &str, cfg: &Value) -> Result<PiAdapter, AdapterError> {
     })
 }
 
-/// `adapters/factory.py::_build_pi`.
-pub fn build_pi(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    build_pi_named("pi", cfg)
-}
-
-/// `adapters/factory.py::_build_pi` under *name*: an alias's own name,
-/// which is also what it reports as its `meta.adapter`.
-pub fn build_pi_named(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+/// `adapters/factory.py::_build_pi`, under *name*: `"pi"` for its own
+/// registration, an alias's own name otherwise -- also what it
+/// reports as its `meta.adapter`.
+pub fn build_pi(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(build(name, cfg)?))
 }
 

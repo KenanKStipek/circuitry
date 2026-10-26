@@ -182,7 +182,7 @@ async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
         Value::Str("replies_file".to_string()),
         Value::Str(case.filename.clone()),
     );
-    let adapter = electricity_adapters::scripted::build_scripted(&Value::Dict(cfg))
+    let adapter = electricity_adapters::scripted::build_scripted("scripted", &Value::Dict(cfg))
         .expect("build_scripted never fails");
     let previous_cwd = std::env::current_dir().unwrap();
     std::env::set_current_dir(&dir.0).unwrap();
@@ -362,10 +362,11 @@ async fn scripted_corpus_matches_circuitrys_own_adapter() {
         }
     }
 
-    let host_claude_err = match electricity_adapters::host_claude::build_host_claude(&Value::None) {
-        Err(err) => err,
-        Ok(_) => panic!("build_host_claude always fails"),
-    };
+    let host_claude_err =
+        match electricity_adapters::host_claude::build_host_claude("host_claude", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("build_host_claude always fails"),
+        };
     if host_claude_err.message != data.host_claude_message {
         failures.push(format!(
             "host_claude message mismatch: got {:?}, want {:?}",
