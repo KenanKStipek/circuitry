@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "No `outputs:` and no `record_children`: an `fs` counter forces the child to fail its first attempt and succeed its second. The node no longer carries the first attempt's own step (`gate.first_only`) once the second attempt succeeds, and both `meta.attempts` entries' `value` is `null` -- full-namespace mode never maps one.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

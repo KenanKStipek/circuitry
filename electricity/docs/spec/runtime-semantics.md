@@ -312,7 +312,8 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   inline (bool), resolved_path, validation_errors, child_errors,
   inputs (redacted-free copy of rendered child inputs), orchestration_sha256,
   library_ref? (pin, ref: children only), expect?, retries_used?,
-  finally_error?`.
+  attempts? (present exactly when retries_used is; one entry per attempt,
+  oldest first -- see "Retries" below), finally_error?`.
 - **loop** (named only — unnamed loops write no node of their own, see §2.4):
   `mode ("each"|model/cel string for while), each_in_path?, each_as?,
   max_iterations?, min_iterations, labels, completed_passes[], failed_passes?,
@@ -1183,6 +1184,27 @@ attempt, never reset by a later attempt; `retries_used` is set on both a
 successful and a failed outcome, absent (not `0`) when the first attempt is
 also the last. Ported in `electricity-vm::exec::use_` (M1 lane I, #469,
 merged in #472), the rule included.
+
+**`meta.attempts`** (issue #659): present exactly when `meta.retries_used`
+is, with `retries_used + 1` entries, oldest first. Each entry: `created_at`,
+`completed_at`, `value` (what that attempt mapped, `null` in full-namespace
+mode or when the child failed), `error` (`null` or the text `meta.error`
+would show), `child_errors`, `expect`, and `children` only with
+`runtime.state.record_children` (that attempt's own child effects, in the
+same shape the complete record keeps). The last entry repeats the node's
+own fields. Written and published as each attempt ends, before the backoff
+wait, so `--live-state`, and the `use`'s own `expect`/`inputs`, can read the
+attempts before the current one — including a self-reference,
+`inputs: {earlier: {from: prime.<name>.meta.attempts}}` (`null` on the
+first attempt). Each retry starts from a clean node: from the second
+attempt on, the previous attempt's child effects are removed from under the
+node first (kept in its own `attempts` entry when `record_children` is on),
+so the final node never mixes an earlier attempt's step with the deciding
+one's, in either `record_children` or full-namespace mode. Reset at the
+start of every pass, same as `expect`/`retries_used`. A `--resume`d,
+unfinished retried `use` lists only the resumed run's attempts, as
+`retries_used` counts them. Ported in `electricity-vm::exec::use_` the same
+way.
 
 **Confirmed live node** (full-namespace mode):
 ```json

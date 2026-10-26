@@ -1,0 +1,41 @@
+name: use-attempts-full-namespace
+effects:
+  - type: use
+    name: theme
+    inline: |
+      effects:
+        - type: tool
+          name: bump
+          provider: fs
+          params: {mode: append, path: "scratch/counter.txt", content: x}
+        - type: tool
+          name: tally
+          provider: fs
+          params: {mode: read, path: "scratch/counter.txt"}
+        - type: if
+          name: gate
+          if: {mode: cel, expr: "state.prime.tally.value == 'x'"}
+          then:
+            - type: tool
+              name: first_only
+              provider: json
+              params: {mode: stringify, input: first-only}
+        - type: if
+          name: ready
+          if: {mode: cel, expr: "state.prime.tally.value == 'xx'"}
+          then:
+            - type: tool
+              name: ok_marker
+              provider: json
+              params: {mode: stringify, input: ok}
+          else:
+            - type: tool
+              name: force_retry
+              provider: json
+              params: {mode: parse, input: "not json"}
+    retries: {max_attempts: 2, backoff_ms: 0}
+finally:
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}
