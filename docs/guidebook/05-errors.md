@@ -177,6 +177,8 @@ prime.<name>.meta.retries_used        # present after any retry, win or lose
 prime.<name>.meta.tokens_sent_total   # every attempt's cost this execution made —
 prime.<name>.meta.tokens_received_total # failed, retried and fallen-back-from alike
 prime.<container>.meta.error          # "investigate.cause: …" — a breadcrumb into the child
+prime.<name>.meta.http_status         # a prompt only, from the attempt that ended it
+prime.<name>.meta.error_code          # the provider's own code; both absent when unknown
 ```
 
 A container that fails closes its own node with `value: false` and a `meta.error` that names the failing child's path (`context.search: …`), in `chain` and `tree` flow alike. The child's own node keeps its `meta.error` too, so from the root down you can follow the errors to the leaf. `inspect_divergence_paths(state)` in the SDK does the walk for you and returns every errored node in path order.
@@ -206,6 +208,14 @@ The agent looks for related issues with `gh`, which needs a login and the networ
 When `gh` fails, `plan` reads "Related issues, if any: " and carries on. The model gets less; the run gets a plan; the state file says the lookup failed and why. That is the pattern: put `skip` on the effects whose absence downstream can tolerate, leave `fail` on the ones it cannot, and write the downstream templates so that an empty interpolation reads as "none" rather than as a broken sentence.
 
 The other half of the pattern is *not* to reach for `on_error` when what you want is a decision. If the missing related issues should change what happens next — a different planning prompt, say — that is an [`if`](06-if.md). Remember the CEL rule from [Shadow state](03-state.md): an expression that reads a null or missing path is false as a whole. So test positively for the value you need — `size(state.prime.related.value) > 0` — and let the missing case fall to `else`. To branch on the failure itself, test the error: `state.prime.related.meta.error != null` is true when the lookup failed, and false when it succeeded, because a null `error` makes the whole expression false. Do not write `state.prime.related.value == null`: it reads a null path, so it is false even after the skip.
+
+A prompt's failure can be more specific than "it failed": `meta.error_code` carries the provider's own code (a content-policy refusal, a context-length overflow, ...) when it reported one. It is absent on success and whenever the provider gave no code, so guard with `has()` the same way you would for any other possibly-missing path:
+
+```yaml
+if: {mode: cel, expr: "has(state.prime.line.meta.error_code) && state.prime.line.meta.error_code == 'guardrail_violation'"}
+```
+
+Without the `has()` guard, a success or a code-less failure would read the second half of the `&&` off a missing path and the whole expression would simply be false — usually what you want, but `has()` makes that explicit instead of relying on it.
 
 ## Validation is the first error handler
 

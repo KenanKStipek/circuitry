@@ -704,6 +704,11 @@ stripped; `finish_reason = choices[0].finish_reason` if a string. Token usage fr
 `raw["usage"]["prompt_tokens"]`/`["completion_tokens"]`, only kept if they're already `int`
 (no coercion from numeric strings).
 
+A failed response's own `error_code` (issue #660, §3.10): `error.code` when that is a
+non-empty string, else `error.type` — an OpenAI-shaped 5xx body commonly carries `code: null`
+with a `type`, so the fallback matters in practice, not just for symmetry with `anthropic`
+below (whose bodies carry only `type`, never `code`, at all).
+
 **Providers in this family and their env var names** (`adapters/factory.py` `_build_*`
 functions, `api_key_env=` in each adapter file):
 
@@ -860,12 +865,36 @@ the run. `build_adapter("host_claude", ...)` always raises in the reference impl
 should register the name in its adapter registry only to produce the same clear "not buildable
 from config" error, not implement a working transport.
 
-### 3.10 Retry classification and `Retry-After`
+### 3.10 Retry classification, `Retry-After`, and the provider's own error code
 
 `src/circuitry/adapters/_retry.py`. `RetryInfo{retryable: bool, status: int | None,
 retry_after: str | None}` (`:72-87`). `_status_is_retryable` (`:63-64`): `status == 429 or
 status == 408 or 500 <= status <= 599` — every other 4xx (400/401/403/404/422) is **not**
 retryable.
+
+Issue #660: `AdapterCallError` also carries `error_code: str | None`, set at the same raise
+site, independently of `retry_info` (a 4xx the status already marks non-retryable can still
+carry a code, and the two are read by different callers). `curl_support.parse_error_code(stdout)`
+reads it: the body's `error.code` when that is a non-empty string, else `error.type` when that
+is a non-empty string; `None` for an integer code (it only duplicates the HTTP status), a flat
+`{"error": "<text>"}` body, or no JSON body at all. `curl_error_code(stdout, secrets)` masks
+*secrets* first, the same credential values `curl_failure_message` masks, before parsing —
+electricity's own port is `curl_text::parse_error_code`/`curl_error_code`, byte-identical rules,
+replayed against the same corpus (`generate_adapter_corpus.py`'s `parse_error_code_cases`).
+On `RetryInfo` in electricity's own Rust port (not a separate field on `AdapterError`, since
+`RetryInfo` already has fourteen construction sites against `AdapterError`'s ~150) —
+`classify_curl_outcome_with_error_code(outcome, secrets)` wraps `classify_curl_outcome` with
+this same masked read. Every curl-shelling adapter in both languages calls it at its own raise
+site with its own request's credential values as *secrets*; `ollama` (no credential) and
+`cyberdiner`/the IAM-token exchange's own flat bodies pass none, or the generic rule still never
+finds a code there regardless. `litellm` (cof only; electricity has no builder for it) reads the
+raised exception's own `code` attribute, else `type`, each only when a non-empty string — its
+exception hierarchy mirrors the OpenAI SDK's, which carries both. The scripted adapter's error
+replies take an optional `code` (`scripted-replies.md` §4.2).
+
+`core/prompt.py`'s retry loop reads `error_code`/`status` into `meta.error_code`/
+`meta.http_status` — see `runtime-semantics.md`'s own prompt `meta` section for the exact
+placement and absence rules; this section is only the adapter-level classification.
 
 `AdapterCallError(RuntimeError)` (`:137-151`) carries a `retry_info: RetryInfo` set at raise
 time by adapters that can classify their own failure. For the reference implementation's

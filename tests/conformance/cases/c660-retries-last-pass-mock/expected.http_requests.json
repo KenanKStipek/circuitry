@@ -1,0 +1,74 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "63"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"p1\"}]}"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "63"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"p1\"}]}"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "63"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"p2\"}]}"
+  }
+]

@@ -146,9 +146,16 @@ class AdapterCallError(RuntimeError):
     reads the stdlib exception it wrapped (see ``classify_exception``).
     """
 
-    def __init__(self, message: str, *, retry_info: RetryInfo = NOT_RETRYABLE) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_info: RetryInfo = NOT_RETRYABLE,
+        error_code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.retry_info = retry_info
+        self.error_code = error_code
 
 
 def _classify_cause_chain(exc: BaseException) -> RetryInfo:
@@ -247,3 +254,16 @@ def next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms:
             return min(RETRY_BACKOFF_CAP_MS, int(retry_after_seconds * 1000))
     ceiling = min(RETRY_BACKOFF_CAP_MS, base_ms * (2**attempt_index))
     return int(random.uniform(0, ceiling))
+
+
+def failure_fields(exc: BaseException) -> dict[str, object]:
+    """``error_code``/``http_status`` for a failed adapter call, only the
+    ones known for this exception."""
+    fields: dict[str, object] = {}
+    code = exc.error_code if isinstance(exc, AdapterCallError) else None
+    if code:
+        fields["error_code"] = code
+    status = classify_exception(exc).status
+    if status is not None:
+        fields["http_status"] = status
+    return fields

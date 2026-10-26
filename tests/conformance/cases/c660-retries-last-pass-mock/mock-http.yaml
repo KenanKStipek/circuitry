@@ -1,0 +1,27 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 503
+    reason: Service Unavailable
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"type": "overloaded_error"}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 503
+    reason: Service Unavailable
+    headers:
+      Content-Type: application/json
+    body: '{"error": "upstream failure"}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 400
+    reason: Bad Request
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"code": "invalid_request"}}'

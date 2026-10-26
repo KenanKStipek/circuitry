@@ -262,6 +262,12 @@ struct AttemptEntry {
     error: Option<String>,
     tokens_sent: Option<i64>,
     tokens_received: Option<i64>,
+    /// Issue #660: only ever set on the generate-error branch (never
+    /// the build-error or decode/schema-failure branches), after
+    /// `tokens_received`, before `raw_reply` -- an entry never has
+    /// both these and `raw_reply`.
+    error_code: Option<String>,
+    http_status: Option<u16>,
     raw_reply: Option<String>,
 }
 
@@ -283,6 +289,12 @@ impl AttemptEntry {
             key("tokens_received"),
             self.tokens_received.map(Value::from).unwrap_or(Value::None),
         );
+        if let Some(error_code) = self.error_code {
+            dict.insert(key("error_code"), Value::Str(error_code));
+        }
+        if let Some(http_status) = self.http_status {
+            dict.insert(key("http_status"), Value::from(i64::from(http_status)));
+        }
         if let Some(raw_reply) = self.raw_reply {
             dict.insert(key("raw_reply"), Value::Str(raw_reply));
         }
@@ -504,6 +516,8 @@ async fn generate_with_fallbacks(
                             error: Some(redact_str(&err.message)),
                             tokens_sent: None,
                             tokens_received: None,
+                            error_code: err.retry.error_code.clone(),
+                            http_status: err.retry.status,
                             raw_reply: None,
                         }
                         .into_value(),
@@ -558,6 +572,8 @@ async fn generate_with_fallbacks(
                         error: Some(redact_str(&err.message)),
                         tokens_sent: None,
                         tokens_received: None,
+                        error_code: err.retry.error_code.clone(),
+                        http_status: err.retry.status,
                         raw_reply: None,
                     }
                     .into_value(),
@@ -580,6 +596,8 @@ async fn generate_with_fallbacks(
                                 error: None,
                                 tokens_sent: result.tokens_sent,
                                 tokens_received: result.tokens_received,
+                                error_code: None,
+                                http_status: None,
                                 raw_reply: None,
                             }
                             .into_value(),
@@ -603,6 +621,8 @@ async fn generate_with_fallbacks(
                                 error: Some(redact_str(&message)),
                                 tokens_sent: result.tokens_sent,
                                 tokens_received: result.tokens_received,
+                                error_code: None,
+                                http_status: None,
                                 raw_reply: Some(cap_reply_text(&result.text)),
                             }
                             .into_value(),
@@ -687,6 +707,18 @@ fn finish_failure(
     py_class: electricity_tools::PyExc,
     cause: electricity_tools::ErrorCause,
 ) -> Result<(), VmError> {
+    // Issue #660: the top-level fields come from the attempt whose
+    // error ended the effect -- the last entry of this pass's own
+    // chain, read before it moves into the `fallback_attempts` list.
+    // Absent whenever that entry carries none (an empty chain -- a
+    // decomposition/limiter/timeout-resolve failure that never
+    // reached an attempt -- included).
+    let final_fields = attempts_meta.last().and_then(Value::as_dict).map(|dict| {
+        (
+            dict.get(&key("error_code")).cloned(),
+            dict.get(&key("http_status")).cloned(),
+        )
+    });
     set_leaf(
         store,
         meta_node,
@@ -696,6 +728,14 @@ fn finish_failure(
     set_leaf(store, meta_node, "fallback_recovered", Value::Bool(false));
     let redacted = redact_str(&message);
     set_leaf(store, meta_node, "error", Value::Str(redacted.clone()));
+    if let Some((error_code, http_status)) = final_fields {
+        if let Some(error_code) = error_code {
+            set_leaf(store, meta_node, "error_code", error_code);
+        }
+        if let Some(http_status) = http_status {
+            set_leaf(store, meta_node, "http_status", http_status);
+        }
+    }
     set_leaf(store, meta_node, "completed_at", now_iso());
     if attempt_index > 0 {
         set_leaf(
@@ -783,6 +823,8 @@ pub(crate) async fn execute_prompt(
             let RenderFailure { message, py_class } = failure;
             set_leaf(store, &meta_node, "created_at", now_iso());
             set_leaf(store, &meta_node, "error", Value::Str(redact_str(&message)));
+            pop_leaf(&meta_node, "error_code");
+            pop_leaf(&meta_node, "http_status");
             set_leaf(store, &meta_node, "completed_at", now_iso());
             set_leaf(store, &effect_node, "value", Value::None);
             let effect_path = frame.effect_path(&op.path);
@@ -894,6 +936,8 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
     pop_leaf(&meta_node, "template_files");
+    pop_leaf(&meta_node, "error_code");
+    pop_leaf(&meta_node, "http_status");
     set_leaf(store, &meta_node, "waiting_for", Value::None);
     if !template_files.is_empty() {
         set_leaf(

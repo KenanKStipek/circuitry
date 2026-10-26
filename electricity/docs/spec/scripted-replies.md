@@ -115,6 +115,7 @@ there, with a message Python has no equivalent of, rather than a silent truncati
     kind: rate_limited   # required
     status: 429          # optional; each kind has its own default (below)
     message: "slow down"  # optional; default is a generated message naming the path
+    code: rate_limit_exceeded  # optional; a real adapter's own error.code/error.type (issue #660)
 ```
 
 `kind` is one of a fixed set, each mapping onto the same retryable/not-retryable
@@ -149,6 +150,14 @@ The generated default `message` (when a reply omits one) is the literal string
 up verbatim in the run's own `meta.error`/`fallback_attempts[].error` state, which a
 conformance case compares byte-for-byte (`electricity/DESIGN.md`'s normalization rules),
 so an explicit `message` is pinned text; omit it only when the case doesn't assert on it.
+
+`code` (optional, issue #660) stands in for a real adapter's own extracted error code
+(`error.code`, else `error.type` — §3.10 of `tools-adapters-plugins.md`): a non-empty
+string when given, checked at load time the same way `status` is; omitted (or `null`)
+leaves the reply's own `error_code` absent, same as a real provider body with neither
+field. It reaches `meta.error_code`/`fallback_attempts[].error_code` exactly like a real
+adapter's own code would — nothing about how those two fields are populated or placed
+is specific to this adapter.
 
 ## 5. What is not in scope here
 

@@ -1,0 +1,36 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 400
+    reason: Bad Request
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"code": "guardrail_violation", "message": "nope"}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 503
+    reason: Service Unavailable
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"type": "server_error", "code": null}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 400
+    reason: Bad Request
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"code": "context_length_exceeded", "message": "too long"}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "recovered"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}'

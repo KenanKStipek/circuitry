@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 400
+    reason: Bad Request
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"code": "guardrail_violation", "message": "content policy violation"}}'

@@ -1,6 +1,6 @@
-{"v":1,"seq":0,"ts":"2026-10-12T09:29:43.221Z","ev":"run_start","run_id":"a05b2de7-e91b-454e-b650-edc064bdd737","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":87530}
-{"v":1,"seq":1,"ts":"2026-10-12T09:29:43.231Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-10-12T09:29:43.233Z","ev":"start","id":1,"path":"prime.greeting"}
-{"v":1,"seq":3,"ts":"2026-10-12T09:29:43.315Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":82,"error":"All adapter attempts failed: [{'adapter': 'ollama', 'model': 'm', 'status': 'failed', 'error': 'ollama request failed (curl exit 22) model=\\'m\\' url=http://127.0.0.1:<MOCK_PORT>/api/generate: model \"m\" not found, try pulling it first Try `ollama pull m` first.', 'tokens_sent': None, 'tokens_received': None}]"}
-{"v":1,"seq":4,"ts":"2026-10-12T09:29:43.315Z","ev":"end","id":0,"path":"prime","ok":true,"ms":84}
-{"v":1,"seq":5,"ts":"2026-10-12T09:29:43.315Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-10-26T22:01:46.986Z","ev":"run_start","run_id":"aa057717-a0e9-4b49-982a-055f3c807727","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":79524}
+{"v":1,"seq":1,"ts":"2026-10-26T22:01:46.990Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-26T22:01:46.991Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-26T22:01:47.035Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":44,"error":"All adapter attempts failed: [{'adapter': 'ollama', 'model': 'm', 'status': 'failed', 'error': 'ollama request failed (curl exit 22) model=\\'m\\' url=http://127.0.0.1:<MOCK_PORT>/api/generate: model \"m\" not found, try pulling it first Try `ollama pull m` first.', 'tokens_sent': None, 'tokens_received': None, 'http_status': 404}]"}
+{"v":1,"seq":4,"ts":"2026-10-26T22:01:47.035Z","ev":"end","id":0,"path":"prime","ok":true,"ms":46}
+{"v":1,"seq":5,"ts":"2026-10-26T22:01:47.036Z","ev":"run_end","ok":true}
