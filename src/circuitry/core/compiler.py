@@ -262,7 +262,12 @@ def _compile_expect(
                 f"{effect_type} effect at '{effect_path}': 'expect' must not be "
                 "an empty string."
             )
-        validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+        validate_cel_expr(
+            expr,
+            effect_path=effect_path,
+            extra_names=loop_names,
+            roots=frozenset({"state", "value", "meta"}),
+        )
         validate_cel_syntax(expr, effect_path=effect_path, label="expect CEL expression")
         return ExpectDef(mode="cel", expr=expr)
     if isinstance(raw, dict):
@@ -276,7 +281,12 @@ def _compile_expect(
                     "requires a non-empty 'expr' field."
                 )
             expr = expr.strip()
-            validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+            validate_cel_expr(
+                expr,
+                effect_path=effect_path,
+                extra_names=loop_names,
+                roots=frozenset({"state", "value", "meta"}),
+            )
             validate_cel_syntax(expr, effect_path=effect_path, label="expect CEL expression")
             return ExpectDef(mode="cel", expr=expr)
         template = raw.get("template")

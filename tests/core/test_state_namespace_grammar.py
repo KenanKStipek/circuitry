@@ -136,9 +136,11 @@ def test_validate_cel_expr_rejects_state_dot_unknown_key() -> None:
         validate_cel_expr("state.topic == 'x'", effect_path="prime.gate")
 
 
-def test_validate_cel_expr_ignores_identifiers_that_are_not_state_dot() -> None:
-    # `item.name` is a within-loop binding, not a `state.` reference — no error.
-    validate_cel_expr("item.name == 'x' && 1 == 1", effect_path="prime.gate")
+def test_validate_cel_expr_rejects_a_bare_name_with_no_such_binding() -> None:
+    # Without an enclosing loop declaring `item`, the bare name is now a
+    # hard error (#658) rather than silently ignored.
+    with pytest.raises(ValueError, match="'item' is not defined"):
+        validate_cel_expr("item.name == 'x' && 1 == 1", effect_path="prime.gate")
 
 
 def test_validate_cel_expr_rejects_loop_binding_without_extra_names() -> None:
@@ -162,6 +164,128 @@ def test_validate_cel_expr_rejects_name_outside_the_extra_names_allow_list() -> 
         validate_cel_expr(
             "state.other == 'x'", effect_path="prime.gate", extra_names=frozenset({"item"})
         )
+
+
+# ── validate_cel_expr: the bare-name check (#658) ────────────────────────
+
+
+def test_bare_name_loop_binding_message() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validate_cel_expr(
+            "unit.text == 'a'",
+            effect_path="prime.effects[0].body[0]",
+            extra_names=frozenset({"unit", "iter"}),
+        )
+    assert str(excinfo.value) == (
+        "CEL expression at 'prime.effects[0].body[0]': 'unit' is a loop "
+        "binding: in CEL, write 'state.unit'."
+    )
+
+
+def test_bare_name_namespace_message() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validate_cel_expr("input.x == 1", effect_path="prime.effects[0]")
+    assert str(excinfo.value) == (
+        "CEL expression at 'prime.effects[0]': 'input' is a state namespace: "
+        "in CEL, write 'state.input'."
+    )
+
+
+def test_bare_name_undefined_message() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validate_cel_expr("stat.input.x == 1", effect_path="prime.effects[0]")
+    assert str(excinfo.value) == (
+        "CEL expression at 'prime.effects[0]': 'stat' is not defined "
+        "('state' is the only root). Write 'state.input.stat' for "
+        "caller-supplied values or 'state.prime.stat' for effect outputs."
+    )
+
+
+def test_bare_name_undefined_message_lists_loop_bindings_in_scope() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validate_cel_expr(
+            "stat == 1",
+            effect_path="prime.effects[0]",
+            extra_names=frozenset({"iter", "unit"}),
+        )
+    assert str(excinfo.value).endswith(
+        "Names bound by an enclosing loop here: iter, unit."
+    )
+
+
+def test_bare_name_undefined_message_in_expect_lists_all_three_roots() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validate_cel_expr(
+            "stat == 1",
+            effect_path="prime.effects[0]",
+            roots=frozenset({"state", "value", "meta"}),
+        )
+    assert "('state', 'value' and 'meta' are the only roots)" in str(excinfo.value)
+
+
+def test_type_names_are_always_allowed_bare() -> None:
+    validate_cel_expr(
+        "type(1) == int && bool(1) == true", effect_path="prime.gate"
+    )
+
+
+def test_value_and_meta_allowed_only_with_the_expect_roots() -> None:
+    validate_cel_expr(
+        "has(value.x) && meta.error == null",
+        effect_path="prime.effects[0]",
+        roots=frozenset({"state", "value", "meta"}),
+    )
+    with pytest.raises(ValueError, match="'value' is not defined"):
+        validate_cel_expr("has(value.x)", effect_path="prime.effects[0]")
+
+
+def test_size_timestamp_and_protobuf_type_are_flagged() -> None:
+    with pytest.raises(ValueError, match="'size' is not defined"):
+        validate_cel_expr("size == 1", effect_path="prime.gate")
+    with pytest.raises(ValueError, match="'timestamp' is not defined"):
+        validate_cel_expr("timestamp == 1", effect_path="prime.gate")
+    # cel-python itself resolves the whole `google.protobuf.*` annotation
+    # tree, including this one, as bare identifiers; cof's own root model
+    # does not, so the chain's root name is the one reported.
+    with pytest.raises(ValueError, match="'google' is not defined"):
+        validate_cel_expr(
+            "google.protobuf.Int32Value == 1", effect_path="prime.gate"
+        )
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "state.input.items.all(v, v > 0)",
+        "state.input.items.exists(v, v > 0)",
+        "state.input.items.exists_one(v, v > 0)",
+        "state.input.items.filter(v, v > 0)",
+        "state.input.items.map(v, v * 2)",
+        "state.input.items.all(v, state.input.rows.exists(v, v > 0))",
+    ],
+)
+def test_macro_variables_of_every_two_arg_macro_are_bound(expr: str) -> None:
+    validate_cel_expr(expr, effect_path="prime.gate")
+
+
+def test_reduce_binds_nothing_and_is_rejected() -> None:
+    with pytest.raises(ValueError, match="'r' is not defined"):
+        validate_cel_expr(
+            "[0, 1].reduce(r, i, 0, r + i) == 1", effect_path="prime.gate"
+        )
+
+
+def test_a_macro_variable_named_like_a_loop_binding_is_allowed() -> None:
+    validate_cel_expr(
+        "state.input.items.all(unit, unit > 0)",
+        effect_path="prime.gate",
+        extra_names=frozenset({"unit"}),
+    )
+
+
+def test_first_free_name_in_source_order_is_reported() -> None:
+    with pytest.raises(ValueError, match="'unit' is not defined"):
+        validate_cel_expr("unit == 1 && stat == 2", effect_path="prime.gate")
 
 
 # ── declared_input_names / validate_bare_input_refs ──────────────────────

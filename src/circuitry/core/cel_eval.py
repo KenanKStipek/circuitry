@@ -24,21 +24,31 @@ down the ``else`` branch.
 a disabled node, an effect that has not run yet, a dry run with no
 outputs — makes the whole expression ``False`` by rule, matching the
 framework's absent-reads-empty convention (a template referencing a
-disabled node renders empty; a CEL condition on one is false). That is
-decided structurally, by resolving the paths the parse tree actually
-reads before evaluating, and it is logged at warning level naming the
-path — not swallowed from an exception, which is what hides real defects.
+disabled node renders empty; a CEL condition on one is false). That rule
+follows evaluation rather than preceding it: each unguarded ``state.``
+read is decided, against the run state, only when evaluation actually
+reaches it, and the rule applies only if the whole expression's result
+turns out to be that one read. ``has()``, the ternary ``?:``, ``&&``/
+``||`` and the ``all``/``exists`` macros guard a read exactly the way CEL
+defines those constructs — an untaken ternary branch, the short-circuited
+side of ``&&``/``||``, or an ``exists`` element that already matched
+never triggers the rule. When it does apply, it is logged at warning
+level naming the path — not swallowed from an exception, which is what
+hides real defects. An expression whose unset read does not decide the
+result reports whatever other error it has instead of quietly being
+``False``.
 
 Two escape hatches from that rule:
 
-* A path that appears as an argument to ``has()`` anywhere in the
-  expression is **guarded** and exempt — that is what ``has()`` is for.
+* ``has(state.prime.x.value)`` is true exactly when that read would
+  evaluate without error — unaffected by this rule either way.
   ``has(state.prime.x.value) && state.prime.x.value > 1`` evaluates
   properly instead of collapsing to ``False``.
 * ``strict: true`` on the conditional (or the loop's ``while``) turns an
-  unresolved path back into a :class:`CelEvaluationError`. An order-exit
-  rule like ``state.prime.tick.value.price <= state.input.stop_price``
-  must never take the no-exit branch because a field went missing.
+  unresolved read back into a :class:`CelEvaluationError`, but only for a
+  read that decides the result. An order-exit rule like
+  ``state.prime.tick.value.price <= state.input.stop_price`` must never
+  take the no-exit branch because a field went missing.
 
 The same parser backs :func:`validate_cel_syntax`, which the compiler
 calls for every ``mode: cel`` expression so ``cof check`` rejects a bad
@@ -52,15 +62,23 @@ from __future__ import annotations
 import datetime
 import logging
 import math
+import operator
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from functools import reduce as functools_reduce
+from typing import Any, cast
 
 import celpy
 import lark
 from celpy import celtypes
-from celpy.evaluation import CELEvalError, base_functions
+from celpy.evaluation import (
+    CELEvalError,
+    CELSyntaxError,
+    Evaluator,
+    NameContainer,
+    base_functions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +118,304 @@ class CelEvaluationError(CelError, RuntimeError):
 #: the expression reads is unset and the caller is not strict.
 _UNSET_STATE = object()
 
+#: ``_StateEvaluator``'s marks, shared and empty, for a site with no
+#: unset-path rule (``expect:``) — every ``member_dot`` just evaluates
+#: normally, with the same correct ``?:``/``&&``/``||``/macro behaviour.
+_NO_MARKS: dict[int, str] = {}
+
+
+class _UnsetRead(CELEvalError):
+    """Stands in for one unguarded ``state.`` read while it is unset.
+
+    Raised by :class:`_StateEvaluator`'s ``member_dot`` in place of
+    evaluating the chain, so the surrounding expression decides — via the
+    ordinary CEL rules for ``has()``, ``?:``, ``&&``/``||`` and
+    ``all``/``exists`` — whether this read ends up deciding the result.
+    Only then does :func:`_evaluate_in_state` apply the absent-state rule,
+    naming :attr:`path`.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"unset state path {path!r}", KeyError, (path,))
+        self.path = path
+
+
+def _error_text(exc: CELEvalError) -> str:
+    """*exc* in Circuitry's own words, never cel-python's activation repr.
+
+    cel-python words an undeclared identifier, function or method as
+    ``"undeclared reference to '<name>' (in activation '<repr>')"``, with
+    the name recoverable from ``exc.args[2][0]`` regardless of which of
+    the three raised it. The activation repr holds the whole
+    ``google.protobuf`` annotation tree, every registered function, and —
+    for :func:`evaluate_cel_expect` — the converted run state, so it is
+    never included. Every other evaluation failure keeps cel-python's own
+    message.
+    """
+    args = exc.args
+    if (
+        args
+        and isinstance(args[0], str)
+        and args[0].startswith("undeclared reference to ")
+        and len(args) > 2
+        and isinstance(args[2], tuple)
+        and args[2]
+    ):
+        return f"undeclared reference to {args[2][0]!r}"
+    return str(exc)
+
+
+class _StateEvaluator(Evaluator):
+    """Evaluates CEL the way :mod:`cel_eval` needs, not the way cel-python does.
+
+    Every method below replaces its base-class counterpart's body outright
+    (never a ``super()`` call, never a shared helper called per tree
+    level): cel-python's nesting limit is Python's own recursion limit, the
+    CEL golden corpus pins where that limit falls for each shape, and one
+    extra frame per level moves it. ``marks`` is ``id(node) -> path`` for
+    the ``member_dot`` occurrences this one evaluation found unset —
+    computed once, before evaluating, by :func:`_mark_unset`; it is shared
+    unchanged with every :meth:`sub_evaluator` this evaluator builds for a
+    macro body, so a mark inside ``all``/``exists``/``map``/``filter``
+    still fires. The cached parse tree itself is shared and read-only.
+    """
+
+    def __init__(self, ast: lark.Tree, activation: Any, marks: dict[int, str]) -> None:
+        super().__init__(ast, activation)
+        self._marks = marks
+
+    def sub_evaluator(self, ast: lark.Tree) -> _StateEvaluator:
+        return _StateEvaluator(ast, self.activation, self._marks)
+
+    def member_dot(self, tree: lark.Tree) -> Any:
+        path = self._marks.get(id(tree))
+        if path is not None:
+            return _UnsetRead(path)
+        member_tree, property_name_token = cast(
+            "tuple[lark.Tree, lark.Token]", tree.children
+        )
+        member = self.visit(member_tree)
+        property_name = property_name_token.value
+        if isinstance(member, CELEvalError):
+            return member
+        if isinstance(member, NameContainer):
+            if property_name in member:
+                return member[property_name].value
+            err = f"No {property_name!r} in bindings {sorted(member.keys())}"
+            return CELEvalError(err, KeyError, None, tree=tree)
+        if isinstance(member, celtypes.MessageType):
+            return member.get(property_name)
+        if isinstance(member, celtypes.MapType):
+            try:
+                return member[property_name]
+            except KeyError:
+                err = f"no such member in mapping: {property_name!r}"
+                return CELEvalError(err, KeyError, None, tree=tree)
+        err = (
+            f"{member!r} with type: '{type(member)}' does not support field "
+            "selection"
+        )
+        return CELEvalError(err, TypeError, None, tree=tree)
+
+    def expr(self, tree: lark.Tree) -> Any:
+        if len(tree.children) == 1:
+            values = self.visit_children(tree)
+            return values[0]
+        if len(tree.children) == 3:
+            cond_value = self.visit(tree.children[0])
+            if isinstance(cond_value, CELEvalError):
+                return cond_value
+            if isinstance(cond_value, celtypes.BoolType):
+                return self.visit(tree.children[1] if cond_value else tree.children[2])
+            func = self.activation.resolve_function("_?_:_")
+            left: Any = celtypes.BoolType(False)
+            right: Any = celtypes.BoolType(False)
+            try:
+                if cond_value:
+                    left = self.visit(tree.children[1])
+                else:
+                    right = self.visit(tree.children[2])
+                return func(cond_value, left, right)
+            except TypeError as ex:
+                err = (
+                    f"found no matching overload for _?_:_ applied to "
+                    f"'({type(cond_value)}, {type(left)}, {type(right)})'"
+                )
+                value = CELEvalError(err, ex.__class__, ex.args, tree=tree)
+                value.__cause__ = ex
+                return value
+        raise CELSyntaxError(
+            f"{tree.data} {tree.children}: bad expr node",
+            line=tree.meta.line,
+            column=tree.meta.column,
+        )
+
+    def conditionalor(self, tree: lark.Tree) -> Any:
+        if len(tree.children) == 1:
+            values = self.visit_children(tree)
+            return values[0]
+        if len(tree.children) == 2:
+            # Both sides are visited unconditionally, exactly like the base
+            # method's own ``visit_children(tree)`` call (never two direct
+            # ``self.visit()`` calls here, which would shed the frames that
+            # call goes through and move the nesting-depth boundary this
+            # left-recursive grammar rule shares with every other left
+            # operand). cel-python turns every relevant failure (an unset
+            # read, a bad operand) into a value rather than raising, so
+            # visiting the side that does not end up deciding has no
+            # observable effect beyond the one real short-circuiting buys:
+            # not raising on a *catastrophic* failure (nesting) there — the
+            # same limit the base method already has.
+            left, right = self.visit_children(tree)
+            if isinstance(left, celtypes.BoolType) and bool(left):
+                return left
+            if isinstance(right, celtypes.BoolType) and bool(right):
+                return right
+            if isinstance(right, CELEvalError):
+                return right
+            if isinstance(left, CELEvalError):
+                return left
+            if isinstance(left, celtypes.BoolType) and isinstance(
+                right, celtypes.BoolType
+            ):
+                return celtypes.BoolType(bool(left) or bool(right))
+            err = (
+                f"found no matching overload for _||_ applied to "
+                f"'({type(left)}, {type(right)})'"
+            )
+            return CELEvalError(err, TypeError, None, tree=tree)
+        raise CELSyntaxError(
+            f"{tree.data} {tree.children}: bad conditionalor node",
+            line=tree.meta.line,
+            column=tree.meta.column,
+        )
+
+    def conditionaland(self, tree: lark.Tree) -> Any:
+        if len(tree.children) == 1:
+            values = self.visit_children(tree)
+            return values[0]
+        if len(tree.children) == 2:
+            # See conditionalor's comment: both sides visited unconditionally.
+            left, right = self.visit_children(tree)
+            if isinstance(left, celtypes.BoolType) and not bool(left):
+                return left
+            if isinstance(right, celtypes.BoolType) and not bool(right):
+                return right
+            if isinstance(right, CELEvalError):
+                return right
+            if isinstance(left, CELEvalError):
+                return left
+            if isinstance(left, celtypes.BoolType) and isinstance(
+                right, celtypes.BoolType
+            ):
+                return celtypes.BoolType(bool(left) and bool(right))
+            err = (
+                f"found no matching overload for _&&_ applied to "
+                f"'({type(left)}, {type(right)})'"
+            )
+            return CELEvalError(err, TypeError, None, tree=tree)
+        raise CELSyntaxError(
+            f"{tree.data} {tree.children}: bad conditionaland node",
+            line=tree.meta.line,
+            column=tree.meta.column,
+        )
+
+    def mapinits(self, tree: lark.Tree) -> Any:
+        # ``visit_children`` (not a per-child ``self.visit()`` loop), to
+        # match the base method's own frame count per nesting level — see
+        # conditionalor's comment.
+        values = self.visit_children(tree)
+        for value in values:
+            if isinstance(value, CELEvalError):
+                return value
+        result = celtypes.MapType()
+        for key, value in zip(values[0::2], values[1::2], strict=True):
+            if key in result:
+                raise ValueError(f"Duplicate key {key!r}")
+            result[cast(Any, key)] = cast(Any, value)
+        return result
+
+    def member_dot_arg(self, tree: lark.Tree) -> Any:
+        member_tree, method_name_token = cast(
+            "tuple[lark.Tree, lark.Token]", tree.children[:2]
+        )
+        if method_name_token.value in {
+            "map",
+            "filter",
+            "all",
+            "exists",
+            "exists_one",
+            "reduce",
+            "min",
+        }:
+            member_list = self.visit(member_tree)
+            if isinstance(member_list, CELEvalError):
+                return member_list
+            name = method_name_token.value
+            if name == "map":
+                sub_expr = self.build_macro_eval(tree)
+                return celtypes.ListType(map(sub_expr, member_list))
+            if name == "filter":
+                sub_expr = self.build_macro_eval(tree)
+                return celtypes.ListType(filter(sub_expr, member_list))
+            if name in ("all", "exists"):
+                sub_expr = self.build_ss_macro_eval(tree)
+                decisive = name == "exists"
+                last_error: Any = None
+                for item in member_list:
+                    value = sub_expr(item)
+                    if isinstance(value, celtypes.BoolType) and bool(value) == decisive:
+                        return celtypes.BoolType(decisive)
+                    if isinstance(value, CELEvalError):
+                        last_error = value
+                    elif not isinstance(value, celtypes.BoolType):
+                        last_error = CELEvalError(
+                            "no such overload", TypeError, None, tree=tree
+                        )
+                if last_error is not None:
+                    return last_error
+                return celtypes.BoolType(not decisive)
+            if name == "exists_one":
+                sub_expr = self.build_macro_eval(tree)
+                count = sum(1 for value in member_list if bool(sub_expr(value)))
+                return celtypes.BoolType(count == 1)
+            if name == "reduce":
+                reduce_expr, init_expr_tree = self.build_reduce_macro_eval(tree)
+                initial_value = self.visit(init_expr_tree)
+                return functools_reduce(reduce_expr, member_list, initial_value)
+            # name == "min"
+            try:
+                return min(member_list)
+            except ValueError as ex:
+                err = (
+                    "Attempt to reduce an empty sequence or a sequence with a "
+                    "None value"
+                )
+                return CELEvalError(err, ex.__class__, ex.args, tree=tree)
+        if len(tree.children) == 2:
+            member, ident = self.visit_children(tree)
+            return self.method_eval(member, cast(lark.Token, ident))
+        member, ident, expr_iter = self.visit_children(tree)
+        return self.method_eval(
+            member, cast(lark.Token, ident), cast(Any, expr_iter)
+        )
+
+
+def _mark_unset(
+    occurrences: tuple[tuple[Any, str], ...], ctx: Mapping[str, Any]
+) -> dict[int, str]:
+    """``id(node) -> path`` for every occurrence in *occurrences* that *ctx* lacks.
+
+    Runs once per evaluation, not once per tree level — unlike
+    :class:`_StateEvaluator`'s methods, this has no nesting-depth budget to
+    respect.
+    """
+    return {
+        id(node): path
+        for node, path in occurrences
+        if _first_unresolved([path], ctx) is not None
+    }
+
 
 def _evaluate_in_state(
     expr: str, ctx: dict[str, Any], *, strict: bool, unset_outcome: str
@@ -132,26 +448,31 @@ def _evaluate_in_state(
             f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
         ) from exc
 
-    unresolved = _first_unresolved(compiled.read_paths, ctx)
-    if unresolved is not None:
+    marks = _mark_unset(compiled.occurrences, ctx)
+    activation = compiled.runner.new_activation()
+    evaluator = _StateEvaluator(compiled.runner.ast, activation, marks)
+    try:
+        result = evaluator.evaluate({"state": compiled.context(ctx)})
+    except _UnsetRead as exc:
         if strict:
             raise CelEvaluationError(
                 f"CEL expression {expr!r} reads unset state path "
-                f"{unresolved!r} and is marked strict.",
+                f"{exc.path!r} and is marked strict.",
                 expression=expr,
-            )
+            ) from exc
         logger.warning(
             "CEL expression %r reads unset state path %r; %s",
             expr,
-            unresolved,
+            exc.path,
             unset_outcome,
         )
         return _UNSET_STATE
-
-    try:
-        result = compiled.runner.evaluate({"state": compiled.context(ctx)})
-        if isinstance(result, CELEvalError):
-            raise result
+    except CELEvalError as exc:
+        text = _error_text(exc)
+        logger.error("CEL evaluation failed for expr %r: %s", expr, text)
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {text}", expression=expr
+        ) from exc
     except Exception as exc:
         logger.error("CEL evaluation failed for expr %r: %s", expr, exc)
         raise CelEvaluationError(
@@ -244,10 +565,15 @@ def evaluate_cel_expect(
         "meta": _to_cel(dict(meta)),
         "state": _to_cel(state),
     }
+    activation = compiled.runner.new_activation()
+    evaluator = _StateEvaluator(compiled.runner.ast, activation, _NO_MARKS)
     try:
-        result = compiled.runner.evaluate(bindings)
-        if isinstance(result, CELEvalError):
-            raise result
+        result = evaluator.evaluate(bindings)
+    except CELEvalError as exc:
+        text = _error_text(exc)
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {text}", expression=expr
+        ) from exc
     except Exception as exc:
         raise CelEvaluationError(
             f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
@@ -309,19 +635,61 @@ def state_paths(expr: str) -> tuple[str, ...]:
     return tuple(path for path, _guarded in _compile(expr).paths)
 
 
-def unresolved_state_path(expr: str, ctx: Mapping[str, Any]) -> str | None:
-    """The first unguarded ``state.`` path in *expr* that *ctx* does not supply.
+def free_identifiers(expr: str) -> tuple[str, ...]:
+    """Every free identifier *expr* reads, in source order.
 
-    A path is unresolved when a segment is missing, when traversal hits
-    something that is not a mapping, or when it lands on ``None`` — a
-    disabled node writes ``{"value": None}``, and reading through it is
-    the same "nothing there" as a key that was never written.
+    A macro variable — the exactly-two-argument form of ``all``,
+    ``exists``, ``exists_one``, ``map`` and ``filter`` — is bound only in
+    the macro's own body (its last argument), not in its target or in any
+    other argument. Nested macros accumulate: an inner variable shadows a
+    same-named outer one. Nothing else binds a name — not cel-python's
+    ``reduce``, not a three-argument ``map``, not a call to a method named
+    ``existsOne`` (an ordinary, undeclared method, not a macro).
 
-    Returns ``None`` when every path resolves. Paths guarded by ``has()``
-    are skipped; the expression is expected to handle their absence
-    itself.
+    A property name after ``.`` and a function or method name are never
+    identifiers here; a message-construction type name (``Msg{f: 1}``) is,
+    because it is read the same way any other bare name is.
+
+    Raises :class:`CelValidationError` if *expr* does not parse.
     """
-    return _first_unresolved(_compile(expr).read_paths, ctx)
+    out: list[str] = []
+    _walk_free_identifiers(_compile(expr).runner.ast, frozenset(), out)
+    return tuple(out)
+
+
+#: The exactly-two-argument macros whose first argument names the variable
+#: bound in their second (and only other) argument.
+_BINDING_MACROS = frozenset({"all", "exists", "exists_one", "filter", "map"})
+
+
+def _walk_free_identifiers(
+    node: Any, bound: frozenset[str], out: list[str]
+) -> None:
+    if not isinstance(node, lark.Tree):
+        return
+    data = str(node.data)
+    if data == "ident":
+        name = str(node.children[0])
+        if name not in bound:
+            out.append(name)
+        return
+    if data == "member_dot_arg":
+        member_tree = node.children[0]
+        method_name = str(node.children[1])
+        exprlist = node.children[2] if len(node.children) > 2 else None
+        _walk_free_identifiers(member_tree, bound, out)
+        args = list(exprlist.children) if exprlist is not None else []
+        if method_name in _BINDING_MACROS and len(args) == 2:
+            var_idents = list(args[0].find_data("ident"))
+            if var_idents:
+                bound = bound | {str(var_idents[0].children[0])}
+            _walk_free_identifiers(args[1], bound, out)
+            return
+        for arg in args:
+            _walk_free_identifiers(arg, bound, out)
+        return
+    for child in node.children:
+        _walk_free_identifiers(child, bound, out)
 
 
 # ---------------------------------------------------------------------------
@@ -336,19 +704,13 @@ class _Compiled:
     runner: celpy.Runner
     #: ``(dotted path, guarded by has())`` for every ``state.`` read.
     paths: tuple[tuple[str, bool], ...]
+    #: ``(member_dot node, dotted path)`` for every unguarded ``state.``
+    #: read occurrence — every occurrence counts, even one whose path also
+    #: appears, elsewhere, as a ``has()`` argument.
+    occurrences: tuple[tuple[Any, str], ...]
     #: True when the expression names ``state`` other than as the root of a
     #: dotted read (``size(state)``), so :func:`_project` cannot narrow it.
     reads_whole_state: bool
-
-    @property
-    def read_paths(self) -> tuple[str, ...]:
-        """Paths subject to the absent-state rule — the unguarded ones."""
-        guarded = {path for path, is_guard in self.paths if is_guard}
-        return tuple(
-            path
-            for path, is_guard in self.paths
-            if not is_guard and path not in guarded
-        )
 
     def context(self, ctx: Mapping[str, Any]) -> Any:
         """*ctx* as CEL values, narrowed to what this expression reads.
@@ -434,12 +796,46 @@ def _spec_ne(left: Any, right: Any) -> Any:
 _BASE_EQ = base_functions["_==_"]
 _BASE_NE = base_functions["_!=_"]
 
+
+def _propagate_first_error(op: Any) -> Any:
+    """Wrap a binary operator so a ``CELEvalError`` operand wins outright.
+
+    Without this, ``err + 1`` or ``l[err]`` would reach the real operator,
+    which raises a Python ``TypeError`` the tree-level handler turns into
+    a generic "no such overload" error — discarding whichever error
+    (``_UnsetRead`` or any other) was actually in play. The left operand
+    is checked first, matching left-to-right evaluation order.
+    """
+
+    def wrapped(left: Any, right: Any) -> Any:
+        if isinstance(left, CELEvalError):
+            return left
+        if isinstance(right, CELEvalError):
+            return right
+        return op(left, right)
+
+    return wrapped
+
+
 #: CEL's heterogeneous equality (cel-spec #103): comparing values of
 #: different runtime types yields false rather than an error, while
 #: int/uint/double are one numeric family and do compare. celpy raises a
 #: no-such-overload error for both cases, so the two operators are
 #: overridden here rather than left to surface as evaluation failures.
-_FUNCTIONS: dict[str, Any] = {"_==_": _spec_eq, "_!=_": _spec_ne}
+#:
+#: ``_+_``/``_-_``/``_*_``/``_/_``/``_%_``/``_[_]`` are overridden so a
+#: ``CELEvalError`` operand (an unset read, or any other) is the result
+#: outright, rather than becoming celpy's own "no such overload" error.
+_FUNCTIONS: dict[str, Any] = {
+    "_==_": _spec_eq,
+    "_!=_": _spec_ne,
+    "_+_": _propagate_first_error(operator.add),
+    "_-_": _propagate_first_error(operator.sub),
+    "_*_": _propagate_first_error(operator.mul),
+    "_/_": _propagate_first_error(operator.truediv),
+    "_%_": _propagate_first_error(operator.mod),
+    "_[_]": _propagate_first_error(operator.getitem),
+}
 
 _ENV = celpy.Environment()
 
@@ -459,11 +855,15 @@ def _compile(expr: str) -> _Compiled:
             tree = _ENV.compile(expr)
         except Exception as exc:
             raise CelValidationError(str(exc).strip(), expression=expr) from exc
-        paths = tuple(_collect_state_paths(tree))
+        found = _collect_state_paths(tree)
+        paths = tuple((path, guarded) for _node, path, guarded in found)
         compiled = _Compiled(
             runner=_ENV.program(tree, functions=_FUNCTIONS),
             paths=paths,
-            reads_whole_state=_count_state_idents(tree) != len(paths),
+            occurrences=tuple(
+                (node, path) for node, path, guarded in found if not guarded
+            ),
+            reads_whole_state=_count_state_idents(tree) != len(found),
         )
         if len(_CACHE) >= _CACHE_MAX_ENTRIES:
             _CACHE.clear()
@@ -511,8 +911,9 @@ def _dotted_chain(node: Any) -> list[str] | None:
 
 def _collect_state_paths(
     node: Any, *, guarded: bool = False
-) -> list[tuple[str, bool]]:
-    """Every ``state.`` path under *node*, flagged when it guards a ``has()``.
+) -> list[tuple[Any, str, bool]]:
+    """Every ``state.`` read occurrence under *node*: node, dotted path, and
+    whether it guards a ``has()``.
 
     Walks top-down and stops at the longest dotted chain, so
     ``state.a.b.c`` is reported once rather than once per prefix.
@@ -525,20 +926,22 @@ def _collect_state_paths(
         segments = _dotted_chain(node)
         if segments is not None:
             return (
-                [(".".join(segments), guarded)] if segments[0] == "state" else []
+                [(node, ".".join(segments), guarded)]
+                if segments[0] == "state"
+                else []
             )
 
     if data == "ident_arg" and node.children and str(node.children[0]) == "has":
         return [
-            path
+            occurrence
             for child in node.children[1:]
-            for path in _collect_state_paths(child, guarded=True)
+            for occurrence in _collect_state_paths(child, guarded=True)
         ]
 
     return [
-        path
+        occurrence
         for child in node.children
-        for path in _collect_state_paths(child, guarded=guarded)
+        for occurrence in _collect_state_paths(child, guarded=guarded)
     ]
 
 
