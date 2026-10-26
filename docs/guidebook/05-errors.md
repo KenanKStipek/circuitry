@@ -171,7 +171,8 @@ If port 8000 is already held by something the plugin did not start, `start_web` 
 prime.<name>.value                    # null after a skip
 prime.<name>.meta.error               # the message
 prime.<name>.meta.fallback_attempts   # [{adapter, model, status, error, tokens_sent,
-                                       #   tokens_received, raw_reply?}, …]
+                                       #   tokens_received, error_code?, http_status?,
+                                       #   raw_reply?}, …]
 prime.<name>.meta.fallback_recovered  # true when a fallback answered
 prime.<name>.meta.retries_used        # present after any retry, win or lose
 prime.<name>.meta.tokens_sent_total   # every attempt's cost this execution made —

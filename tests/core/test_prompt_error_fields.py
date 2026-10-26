@@ -269,6 +269,77 @@ def test_fields_absent_on_a_decode_failure() -> None:
     assert "http_status" not in meta
 
 
+def test_error_code_that_looks_like_a_secret_is_redacted() -> None:
+    """`error_code` goes through the run's own redaction, same as `error`
+    text -- a provider that echoes a credential back as its own error code
+    must not leak it into state."""
+    secret_code = "sk-" + "a" * 24
+    root = compile_orchestration(orch=_single_prompt_orch(on_error="continue"), root_name="prime")
+    adapter = ScriptedFailAdapter(
+        failures=[
+            AdapterCallError(
+                "bad request",
+                retry_info=RetryInfo(retryable=False, status=400),
+                error_code=secret_code,
+            )
+        ]
+    )
+    store = Store({})
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    assert store.get("prime.task.meta.error_code") == "***REDACTED***"
+    attempts = store.get("prime.task.meta.fallback_attempts")
+    assert attempts[-1]["error_code"] == "***REDACTED***"
+    error_text = store.get("prime.task.meta.error")
+    assert secret_code not in error_text
+    assert "***REDACTED***" in error_text
+
+
+def test_fields_absent_when_a_later_pass_fails_before_any_attempt() -> None:
+    """A retry pass can end the effect with an error that never reached an
+    attempt at all -- a `timeout_ms: {from: ...}` lookup failing, say. The
+    top-level fields must come from nothing in that case, not from a
+    *prior* pass's attempt that happened to carry them."""
+    import circuitry.core.prompt as prompt_mod
+
+    root = compile_orchestration(
+        orch=_single_prompt_orch(on_error="continue", max_attempts=2), root_name="prime"
+    )
+    adapter = ScriptedFailAdapter(
+        failures=[
+            AdapterCallError(
+                "temporarily unavailable",
+                retry_info=RetryInfo(retryable=True, status=503),
+                error_code="server_error",
+            )
+        ]
+    )
+
+    original_resolve = prompt_mod.resolve_timeout_ms
+    resolve_calls = {"n": 0}
+
+    def flaky_resolve(timeout_ms, ctx, *, effect_label):
+        resolve_calls["n"] += 1
+        if resolve_calls["n"] == 2:
+            raise ValueError("timeout_ms reference vanished")
+        return original_resolve(timeout_ms, ctx, effect_label=effect_label)
+
+    import pytest
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(prompt_mod, "resolve_timeout_ms", flaky_resolve)
+    try:
+        store = Store({})
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+    finally:
+        monkeypatch.undo()
+
+    meta = store.get("prime.task.meta")
+    assert "error_code" not in meta
+    assert "http_status" not in meta
+    assert "timeout_ms reference vanished" in meta["error"]
+
+
 def test_fields_reset_on_a_reused_node() -> None:
     """An unnamed loop's second pass must not keep the first pass's fields
     when the second pass's own failure (or success) carries none (#260's
@@ -313,3 +384,65 @@ def test_fields_reset_on_a_reused_node() -> None:
     assert "error_code" not in node["meta"]
     assert "http_status" not in node["meta"]
     assert node["value"] == "ok"
+
+
+def test_fields_popped_on_a_render_failure_after_a_prior_passs_provider_error() -> None:
+    """A later pass's template-render failure must not keep a prior pass's
+    provider error_code/http_status sitting on the reused node -- the same
+    rule `test_fields_reset_on_a_reused_node` pins for the normal dispatch
+    path, extended to the render-failure branch (prompt.py's own `except`
+    around `_render_messages`/`_read_dispatch_files`)."""
+    import circuitry.core.prompt as prompt_mod
+
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "prompt",
+                        "name": "step",
+                        "template": "{{item}}",
+                        "on_error": "continue",
+                    }
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+
+    @dataclass
+    class FailingAdapter:
+        name: str = "failing"
+
+        def generate(self, *, model: str, prompt: str, timeout_seconds: int = 120):
+            raise AdapterCallError(
+                "pass 0 failure",
+                retry_info=RetryInfo(retryable=False, status=400),
+                error_code="bad_request",
+            )
+
+    original_render = prompt_mod.PromptRuntime._render_messages
+    render_calls = {"n": 0}
+
+    def flaky_render(self, ctx, file_texts=None):
+        render_calls["n"] += 1
+        if render_calls["n"] == 2:
+            raise RuntimeError("boom")
+        return original_render(self, ctx, file_texts)
+
+    import pytest
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(prompt_mod.PromptRuntime, "_render_messages", flaky_render)
+    try:
+        state = {"input": {"items": ["a", "b"]}}
+        DynamicRuntime(root, adapter=FailingAdapter(), model="m").execute(store=Store(state))
+    finally:
+        monkeypatch.undo()
+
+    node = state["prime"]["step"]
+    assert "error_code" not in node["meta"]
+    assert "http_status" not in node["meta"]
+    assert "boom" in node["meta"]["error"]

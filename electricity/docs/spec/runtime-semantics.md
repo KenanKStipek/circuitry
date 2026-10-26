@@ -926,8 +926,7 @@ them, its own `error_code`/`http_status` (issue #660) right after
 carries that instead, never these). The top-level `meta.error_code`/
 `meta.http_status` mirror whichever is the *last* entry of the final pass's
 own chain -- absent on success, a decode/schema failure, a missing key, a
-timeout/connection failure and an allowlist denial, same as `meta.error`'s
-absence there would suggest.
+timeout/connection failure and an allowlist denial.
 
 **`meta` fields written before vs. after dispatch**: everything *except*
 `value`, `tokens_sent`/`tokens_received` (the winning attempt's own, not the

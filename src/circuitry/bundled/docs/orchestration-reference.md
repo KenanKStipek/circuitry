@@ -154,7 +154,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `deterministic: true` seed | `options.seed: 0` | `openai` only: `seed: 0` | — |
 | `messages` | `/api/chat` turns | `messages` turns | `system` field + turns |
 | image assets | base64 `images` (local files only) | `image_url` parts (`data:` URL for a local file) | `image` blocks (base64 or `url`) |
-| a failed response's `meta.error_code` | never (flat `{"error": "..."}` body) | the body's `error.code`, else `error.type`, each only when a non-empty string | `error.type` (no `code` field at all) |
+| a failed response's `meta.error_code` | none for Ollama's flat `{"error": "..."}` body | the body's `error.code`, else `error.type`, each only when a non-empty string | `error.type` (no `code` field at all) |
 
 A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `pi`, `claude_code`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
 

@@ -886,8 +886,9 @@ On `RetryInfo` in electricity's own Rust port (not a separate field on `AdapterE
 `classify_curl_outcome_with_error_code(outcome, secrets)` wraps `classify_curl_outcome` with
 this same masked read. Every curl-shelling adapter in both languages calls it at its own raise
 site with its own request's credential values as *secrets*; `ollama` (no credential) and
-`cyberdiner`/the IAM-token exchange's own flat bodies pass none, or the generic rule still never
-finds a code there regardless. `litellm` (cof only; electricity has no builder for it) reads the
+`cyberdiner` (out of scope for issue #660; no call at all) pass none. The watsonx IAM-token
+exchange calls it with its own api key as *secrets*, same as every other curl-shelling adapter.
+`litellm` (cof only; electricity has no builder for it) reads the
 raised exception's own `code` attribute, else `type`, each only when a non-empty string — its
 exception hierarchy mirrors the OpenAI SDK's, which carries both. The scripted adapter's error
 replies take an optional `code` (`scripted-replies.md` §4.2).

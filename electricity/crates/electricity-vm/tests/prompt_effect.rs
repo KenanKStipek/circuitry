@@ -2358,3 +2358,117 @@ async fn error_code_and_http_status_are_reset_on_a_reused_node() {
     assert_eq!(get(&meta, "http_status"), None);
     assert_eq!(get(&meta, "error"), Some(&Value::None));
 }
+
+#[tokio::test]
+async fn error_code_and_http_status_are_popped_on_a_render_failure_after_a_prior_passs_provider_error()
+ {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![Err(AdapterError {
+            message: "pass 0 failure".to_string(),
+            retry: RetryInfo {
+                retryable: false,
+                status: Some(400),
+                retry_after: None,
+                error_code: Some("bad_request".to_string()),
+            },
+            py_class: PyExc::AdapterCallError,
+        })],
+    ));
+    ctx.default_adapter = default;
+    let adapters = registry_with_scripted();
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let leaf = prompt_leaf(
+        root_path().push_name("ask"),
+        "ask",
+        template_prompt("{{input.x.0}}"),
+        OnError::Continue,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf.clone()]);
+
+    electricity_vm::execute_root(
+        &program(root.clone()),
+        &store,
+        &input_ctx(&[("x", Value::List(vec![Value::Str("ok".to_string())]))]),
+        &ctx,
+        &RecordingObserver::new(),
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let meta_after_pass_0 = ask_meta(&store);
+    assert_eq!(
+        get(&meta_after_pass_0, "error_code"),
+        Some(&Value::Str("bad_request".to_string()))
+    );
+    assert_eq!(
+        get(&meta_after_pass_0, "http_status"),
+        Some(&Value::from(400i64))
+    );
+
+    // `x` an int this time: `{{input.x.0}}` can't subscript it, the same
+    // way `subscripted_int_prompt`'s `{{n.0}}` fails against `n: 5`.
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &input_ctx(&[("x", Value::from(5i64))]),
+        &ctx,
+        &RecordingObserver::new(),
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "error_code"), None);
+    assert_eq!(get(&meta, "http_status"), None);
+    assert!(!get(&meta, "error").unwrap().as_str().unwrap().is_empty());
+}
+
+/// Issue #660: `error_code` goes through the run's own redaction, same as
+/// `error` text -- a provider that echoes a credential back as its own
+/// error code must not leak it into state, at any of the three places it
+/// appears (`meta.error_code`, `fallback_attempts[]`, `meta.error`'s text).
+#[tokio::test]
+async fn error_code_that_looks_like_a_secret_is_redacted() {
+    let secret_code = format!("sk-{}", "a".repeat(24));
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![Err(AdapterError {
+            message: "bad request".to_string(),
+            retry: RetryInfo {
+                retryable: false,
+                status: Some(400),
+                retry_after: None,
+                error_code: Some(secret_code.clone()),
+            },
+            py_class: PyExc::AdapterCallError,
+        })],
+    ));
+    let adapters = registry_with_scripted();
+    let op = template_prompt("hi");
+    let (store, _observer, result) = run_prompt(op, OnError::Continue, default, &adapters).await;
+    result.unwrap();
+
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "error_code"),
+        Some(&Value::Str("***REDACTED***".to_string()))
+    );
+    let attempts = get(&meta, "fallback_attempts").unwrap().as_list().unwrap();
+    let last = as_dict(attempts.last().unwrap());
+    assert_eq!(
+        get(last, "error_code"),
+        Some(&Value::Str("***REDACTED***".to_string()))
+    );
+    let error_text = get(&meta, "error").unwrap().as_str().unwrap();
+    assert!(!error_text.contains(&secret_code));
+    assert!(error_text.contains("***REDACTED***"));
+}

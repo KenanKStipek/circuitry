@@ -110,14 +110,28 @@ def test_replicate_adapter_call_error_carries_error_code(
     assert exc.value.error_code == "rate_limit_exceeded"
 
 
-def test_watsonx_generate_adapter_call_error_carries_error_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("WATSONX_API_KEY", "k")
-    monkeypatch.setenv("WATSONX_PROJECT_ID", "p")
+@pytest.fixture
+def _clean_watsonx_token_cache() -> Any:
+    """Cleared before and after every test, including one that raises before
+    its own trailing `clear()` would otherwise run -- a leaked cached token
+    would let a later, unrelated test skip the IAM exchange it means to
+    exercise."""
     from circuitry.adapters import watsonx as watsonx_mod
 
     watsonx_mod._TOKEN_CACHE.clear()
+    try:
+        yield watsonx_mod
+    finally:
+        watsonx_mod._TOKEN_CACHE.clear()
+
+
+def test_watsonx_generate_adapter_call_error_carries_error_code(
+    monkeypatch: pytest.MonkeyPatch, _clean_watsonx_token_cache: Any
+) -> None:
+    monkeypatch.setenv("WATSONX_API_KEY", "k")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "p")
+    watsonx_mod = _clean_watsonx_token_cache
+
     watsonx_mod._TOKEN_CACHE["k"] = ("cached-token", 9_999_999_999.0)
 
     monkeypatch.setattr(
@@ -127,17 +141,15 @@ def test_watsonx_generate_adapter_call_error_carries_error_code(
     with pytest.raises(AdapterCallError) as exc:
         watsonx_mod.WatsonXAdapter().generate(model="m", prompt="x")
     assert exc.value.error_code == "invalid_input"
-    watsonx_mod._TOKEN_CACHE.clear()
 
 
 def test_watsonx_iam_exchange_adapter_call_error_carries_error_code(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, _clean_watsonx_token_cache: Any
 ) -> None:
     monkeypatch.setenv("WATSONX_API_KEY", "k")
     monkeypatch.setenv("WATSONX_PROJECT_ID", "p")
-    from circuitry.adapters import watsonx as watsonx_mod
+    watsonx_mod = _clean_watsonx_token_cache
 
-    watsonx_mod._TOKEN_CACHE.clear()
     monkeypatch.setattr(
         "subprocess.Popen",
         _fake_popen(22, json.dumps({"errorCode": "BXNIM0415E"}), "HTTP 400"),
