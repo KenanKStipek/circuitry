@@ -62,8 +62,8 @@ class DatabricksAdapter:
         cfg = self._cfg()
         if not cfg.base_url:
             raise RuntimeError(
-                "databricks: workspace host not configured. Set DATABRICKS_HOST "
-                "or runtime.adapters.databricks.base_url to your workspace URL."
+                f"{self.name}: workspace host not configured. Set DATABRICKS_HOST "
+                f"or runtime.adapters.{self.name}.base_url to your workspace URL."
             )
         return chat_completion(
             cfg=cfg,

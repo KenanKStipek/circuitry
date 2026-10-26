@@ -70,14 +70,12 @@ class AzureOpenAIAdapter:
         cfg = self._cfg()
         if not cfg.base_url:
             raise RuntimeError(
-                "azure-openai: endpoint not configured. Set "
-                "AZURE_OPENAI_ENDPOINT or runtime.adapters.azure-openai.endpoint."
+                f"{self.name}: endpoint not configured. Set "
+                f"AZURE_OPENAI_ENDPOINT or runtime.adapters.{self.name}.endpoint."
             )
         api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
         if not api_key:
-            raise RuntimeError(
-                "azure-openai: AZURE_OPENAI_API_KEY not set."
-            )
+            raise RuntimeError(f"{self.name}: AZURE_OPENAI_API_KEY not set.")
         return chat_completion(
             cfg=cfg,
             model=model,
