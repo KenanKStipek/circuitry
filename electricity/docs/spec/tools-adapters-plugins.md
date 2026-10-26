@@ -1038,39 +1038,81 @@ plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>
 on PATH. Install one of them...`, `subprocess_tool.rs::check_binary`), since there is exactly
 one binary name here, never a candidate list.
 
-**`env` and aliases** (issue #579, `adapters/factory.py::_env_pairs`/`_build_alias`,
-`electricity-adapters::config::env_pairs`, `electricity_vm::adapter::AdapterRegistry::build`). The
-child's environment, in order: the caller's, minus `PARENT_SESSION_ENV`, minus `unset_env`, then
-`env` applied last (`electricity_tools::process::RunOpts::env_set`, set after `env_remove`), so a
-variable in both `unset_env` and `env` gets the `env` value. Values must be strings; a leading
-`~/` becomes the home directory (`os.path.expanduser`, `$HOME` else the password database),
-nothing else is expanded. A `runtime.adapters.<name>` entry that sets `adapter` is an **alias**:
-`adapter` must name `claude_code` or `pi` (normalized like any adapter name), every other key is
-that base's own setting, and the alias is built by the base's own builder from *those keys only*
-(never the base's own entry, never another alias's) and reports the alias name as `name()`, so
-`meta.adapter`, the ignored-options warning and `check()`'s own message name it. An alias is selected by name wherever a provider token
-or `adapter:` names an adapter, including `<alias>:<model>`. Every error is a `ValueError` naming
-the alias and never showing an `env` value:
+**`env`.** The child's environment, in order: the caller's, minus `PARENT_SESSION_ENV`, minus
+`unset_env`, then `env` applied last (`electricity_tools::process::RunOpts::env_set`, set after
+`env_remove`), so a variable in both `unset_env` and `env` gets the `env` value. Values must be
+strings; a leading `~/` becomes the home directory (`os.path.expanduser`, `$HOME` else the
+password database), nothing else is expanded. Every `env` value is replaced by `***REDACTED***`
+(names stay) in `electricity-redaction::redact` for any `adapters` mapping, so
+`runtime.effective_settings` never holds one, and `Debug` shows names only. `claude_code`/`pi`
+can also be an alias's own target — see §3.14.
 
-- `runtime.adapters.<alias>.adapter must be claude_code or pi, got <repr>` (an unknown base, any
-  other adapter, a non-string; `, which is itself an alias` is appended when the base is a name
-  that is not in Circuitry's registry and whose own entry sets `adapter`);
+### 3.14 Adapter aliases
+
+`adapters/factory.py::_build_alias`/`alias_config_errors`, `electricity_vm::adapter::
+AdapterRegistry::build_alias`/`alias_target` (issue #656; #579 scoped this to `claude_code`/`pi`
+alone). A `runtime.adapters.<name>` entry that sets `adapter` is an alias of the target it
+names, built from *that entry's own keys only* (never the target's own `runtime.adapters.<target>`
+entry, never another alias's), reporting the alias's own name as `name()` — `meta.adapter`,
+`fallback_attempts[].adapter`, the ignored-options warning, `check()`'s own message, the preflight
+label (`adapter:<alias>`), and `effective_settings.sources["adapters.<alias>.timeout_seconds"]`
+all name the alias, not the target. A hint naming a config key names the alias's own block
+(`runtime.adapters.<alias>.base_url`, not the target's); the wire-protocol label in a request
+failure (`"OpenAI-compatible request failed …"`) stays the target's. An alias is selected by
+name wherever a provider token or `adapter:` names an adapter, including `<alias>:<model>`.
+
+**The target** can be any adapter in Circuitry's own registry except `host_claude` (normalized
+like any adapter name: `.strip().lower()`), supplied at run time by `circuitry-mcp`, never built
+from config. An alias uses its target's own credential (an alias of `groq` reads
+`GROQ_API_KEY`); a keyless target needs none. Every error is a `ValueError` naming the alias and
+never showing an `env` value:
+
+- `runtime.adapters.<alias>.adapter must name a built-in adapter, got <repr>` (an unknown target,
+  or a non-string; `, which is itself an alias` is appended when the target is a name that is not
+  in Circuitry's registry and whose own entry sets `adapter`);
+- `runtime.adapters.<alias>.adapter cannot be 'host_claude': it is supplied at run time by
+  circuitry-mcp, never built from config`;
 - `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a
   name of its own` (a name in Circuitry's full registry, whether or not this build can build it);
-- `runtime.adapters.<alias>.env must be a mapping of variable names to strings, got <type>`;
-- `runtime.adapters.<alias>.env has an invalid variable name <repr>: a name matches
-  [A-Za-z_][A-Za-z0-9_]*`;
-- `runtime.adapters.<alias>.env.<NAME> must be a string, got <type>`.
+- for a CLI target: `runtime.adapters.<alias>.env must be a mapping of variable names to
+  strings, got <type>`; `runtime.adapters.<alias>.env has an invalid variable name <repr>: a name
+  matches [A-Za-z_][A-Za-z0-9_]*`; `runtime.adapters.<alias>.env.<NAME> must be a string, got
+  <type>`; `unset_env`/`extra_args` errors name the alias too.
 
-`unset_env`/`extra_args` errors name the alias too. Preflight builds adapters from *config*'s
-`runtime` plus the aliases the run's own merged runtime defines (`with_document_aliases`: a
-trusted document's alias is found, nothing else of its `runtime:` is), and a failing alias is
-soft or hard like any known adapter only when it builds (`is_known_adapter`). Every `env` value
-is replaced by `***REDACTED***` (names stay) in `electricity-redaction::redact` for any
-`adapters` mapping, so `runtime.effective_settings` never holds one, and `Debug` shows names only.
-Ported with five `c579-*` conformance cases (two `claude_code` aliases, a `pi` alias and both
-bases in one run through fakes that report a plain `ALIAS_PROBE` variable, a default-adapter alias,
-every config error's exact text, and an alias's missing binary hard and soft).
+**Validated up front.** `electricity::lib`'s own run wiring builds every alias in the merged
+runtime (config plus a by-path document's) right after `pre_input_checks`, before preflight or
+any effect dispatches, whether or not the document uses it — a litellm-target alias is skipped
+(below), so a defined but unused one is fine. Any error fails the run with `Invalid adapter
+aliases:` plus one `  - ` line per broken alias, in name order, identical text to `cof`'s.
+Preflight builds adapters from *config*'s `runtime` plus the aliases the run's own merged runtime
+defines (`with_document_aliases` in `cof`), and a failing alias is soft or hard like any known
+adapter only when it builds (`is_known_adapter`).
+
+**`litellm` stays unbuildable.** `AdapterRegistry::build`'s own registry has no `litellm`
+builder, so a direct `provider: litellm` already refuses with the preview marker
+(`unbuildable_known_adapter`/`profile_provider_unbuildable`/the default-adapter path, each in
+`electricity::lib`) or, dispatched mid-run, `is_unbuildable` in `exec/prompt.rs`. Each of those
+now resolves an alias to its target first (`adapter::alias_target`), so a *used* alias of
+`litellm` gets the identical refusal, naming `litellm`, not the alias; a *defined but unused* one
+never reaches the check at all.
+
+**Strict allowlist.** `electricity-config::effective_settings_with_profile` applies the same rule
+`cli/effective_settings.py::_strip_disallowed_adapter_retargets` does: with `enabled_adapters`
+set, a document's own `runtime.adapters.<name>.adapter` key is dropped before the merge, with the
+warning `runtime.adapters.<name>.adapter from <document> ignored: with enabled_adapters set, only
+config defines adapter aliases` — every document electricity runs is trusted (§3.13's own doc
+comment doesn't apply here; this file's module doc comment does), so without this rule a trusted
+document could point an allowlisted alias at an adapter the allowlist doesn't list. Other keys in
+the same block (a `base_url` override, say) still apply.
+
+Ported with `c656-*` conformance cases: an alias of any adapter in one run (several
+OpenAI-compatible endpoints plus a keyless-credential one, through the mock HTTP server), every
+config error's exact text in one run used by nothing, a keyless alias's preflight soft
+classification, and the strict-allowlist rule ignoring a document's retarget while a `base_url`
+override still applies. `c579-cli-alias-config-errors` is replaced by `c656-alias-config-errors`
+(its own `{"adapter": "openai"}` entry is valid now); the other four original `c579-*` alias
+cases (two `claude_code` aliases, a `pi` alias and both bases in one run, a default-adapter
+alias, an alias's missing binary hard and soft) are unchanged.
 
 **Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
 failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt

@@ -2395,9 +2395,11 @@ the command lines, `--json-schema` wrapping, reading the reply, retries, and `me
 cited there from the reference's own `adapters/claude_code.py`/`adapters/pi.py`, not repeated
 here.
 
-Both also run as *aliases* (issue #579): a `runtime.adapters.<alias>` entry that sets `adapter: claude_code|pi`,
-with its own settings and an `env` set in that child's environment after the removals. Resolution is
-`AdapterRegistry::build`'s; the rules and error texts are tools-adapters-plugins §3.13's.
+Both also run as *aliases* (issue #579), with an `env` set in that child's environment after the
+removals. Aliasing itself is general now (issue #656): any adapter except `host_claude` can be an
+alias's target, not only `claude_code`/`pi`. Resolution is `AdapterRegistry::build`/
+`build_alias`'s; the rules, the up-front validation, `litellm`'s permanent refusal through an
+alias, and the error texts are tools-adapters-plugins §3.14's.
 
 ---
 
