@@ -234,7 +234,7 @@ def validate_cel_expr(
     macro's body) are always legal bare; every other free name is a hard
     error, naming the first such name in source order.
     """
-    from .cel_eval import CelError, free_identifiers, state_paths
+    from .cel_eval import _MAX_EXPR_LENGTH, CelError, free_identifiers, state_paths
 
     try:
         paths = state_paths(expr or "")
@@ -256,6 +256,13 @@ def validate_cel_expr(
                 )
             )
 
+    # An over-long expression is left to validate_cel_syntax's own
+    # length error, the same way a parse failure is left alone above:
+    # free_identifiers has no length cap of its own (matching
+    # state_paths), so without this an expression that happens to
+    # contain a bare name would report that instead of being too long.
+    if len(expr or "") > _MAX_EXPR_LENGTH:
+        return
     try:
         names = free_identifiers(expr or "")
     except CelError:

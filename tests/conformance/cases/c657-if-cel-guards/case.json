@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #657",
+  "description": "An `if` condition's unset-path rule follows evaluation: `has()` and the ternary guard the read they actually protect, so a guarded deeper read and an untaken branch both take `then` instead of being forced `false`, while a guard that names the exact path read still works as before.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "a={\"q\": 1}"]
+}

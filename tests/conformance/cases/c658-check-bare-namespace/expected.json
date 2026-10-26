@@ -1,0 +1,3 @@
+{
+  "error": "CEL expression at 'prime.effects[0]': 'input' is a state namespace: in CEL, write 'state.input'."
+}

@@ -196,10 +196,55 @@ fn loop_bindings_desc(loop_names: &BTreeSet<String>) -> String {
 /// alone here (`core/cel_eval.py::validate_cel_syntax` reports that
 /// separately, with the parser's own message). Ports
 /// `core/state_ns.py::validate_cel_expr`.
+/// CEL's own type names -- always legal bare, in every expression.
+const TYPE_NAMES: [&str; 10] = [
+    "bool",
+    "bytes",
+    "double",
+    "int",
+    "list",
+    "map",
+    "null_type",
+    "string",
+    "type",
+    "uint",
+];
+
+/// Display order for a `roots` set in the "is not defined" message
+/// ("'state', 'value' and 'meta' are the only roots", never
+/// alphabetical).
+const ROOT_ORDER: [&str; 3] = ["state", "value", "meta"];
+
+fn format_roots(roots: &BTreeSet<String>) -> String {
+    let quoted: Vec<String> = ROOT_ORDER
+        .iter()
+        .filter(|root| roots.contains(**root))
+        .map(|root| format!("'{root}'"))
+        .collect();
+    match quoted.len() {
+        1 => format!("{} is the only root", quoted[0]),
+        _ => format!(
+            "{} and {} are the only roots",
+            quoted[..quoted.len() - 1].join(", "),
+            quoted[quoted.len() - 1]
+        ),
+    }
+}
+
+/// Hard-errors on `state.<key>` where `<key>` is not a namespace, or on
+/// a bare (free) name CEL cannot resolve. Ports
+/// `core/state_ns.py::validate_cel_expr`.
+///
+/// `roots` is every bare name this CEL site itself binds -- `state`
+/// everywhere, plus `value` and `meta` for `expect:`. Beyond those,
+/// CEL's own type names and a macro variable (inside its own macro's
+/// body) are always legal bare; every other free name is a hard error,
+/// naming the first such name in source order.
 pub(crate) fn validate_cel_expr(
     expr: &str,
     effect_path: &str,
     extra_names: &BTreeSet<String>,
+    roots: &BTreeSet<String>,
 ) -> Result<(), CompileError> {
     let paths = match electricity_cel::state_paths(expr) {
         Ok(paths) => paths,
@@ -208,14 +253,7 @@ pub(crate) fn validate_cel_expr(
     for path in paths {
         let key = path.split('.').nth(1).unwrap_or("");
         if !is_namespace(key) && !extra_names.contains(key) {
-            let extra_desc = if extra_names.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " Names bound by an enclosing loop here: {}.",
-                    extra_names.iter().cloned().collect::<Vec<_>>().join(", ")
-                )
-            };
+            let extra_desc = loop_bindings_suffix(extra_names);
             return Err(CompileError(format!(
                 "CEL expression at '{effect_path}': 'state.{key}' does not \
                  name a state namespace ('state' binds to the state root). \
@@ -224,7 +262,55 @@ pub(crate) fn validate_cel_expr(
             )));
         }
     }
+
+    // An over-long expression is left to validate_cel_syntax's own
+    // length error, the same way a parse failure is left alone above:
+    // free_identifiers has no length cap of its own (matching
+    // state_paths), so without this an expression that happens to
+    // contain a bare name would report that instead of being too long.
+    if expr.chars().count() > electricity_cel::MAX_EXPR_LENGTH {
+        return Ok(());
+    }
+    let names = match electricity_cel::free_identifiers(expr) {
+        Ok(names) => names,
+        Err(_) => return Ok(()),
+    };
+    for name in names {
+        if roots.contains(&name) || TYPE_NAMES.contains(&name.as_str()) {
+            continue;
+        }
+        if extra_names.contains(&name) {
+            return Err(CompileError(format!(
+                "CEL expression at '{effect_path}': '{name}' is a loop binding: \
+                 in CEL, write 'state.{name}'."
+            )));
+        }
+        if is_namespace(&name) {
+            return Err(CompileError(format!(
+                "CEL expression at '{effect_path}': '{name}' is a state namespace: \
+                 in CEL, write 'state.{name}'."
+            )));
+        }
+        let extra_desc = loop_bindings_suffix(extra_names);
+        return Err(CompileError(format!(
+            "CEL expression at '{effect_path}': '{name}' is not defined ({}). \
+             Write 'state.input.{name}' for caller-supplied values or \
+             'state.prime.{name}' for effect outputs.{extra_desc}",
+            format_roots(roots)
+        )));
+    }
     Ok(())
+}
+
+fn loop_bindings_suffix(extra_names: &BTreeSet<String>) -> String {
+    if extra_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Names bound by an enclosing loop here: {}.",
+            extra_names.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+    }
 }
 
 /// Compile-time check for a single `mode: cel` expression -- ports
@@ -459,6 +545,14 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
+    fn state_only() -> BTreeSet<String> {
+        names(&["state"])
+    }
+
+    fn expect_roots() -> BTreeSet<String> {
+        names(&["state", "value", "meta"])
+    }
+
     #[test]
     fn reference_path_accepts_a_namespace_root() {
         assert!(validate_reference_path("input.x", "label", "p", &BTreeSet::new()).is_ok());
@@ -521,17 +615,22 @@ mod tests {
 
     #[test]
     fn cel_expr_accepts_namespace_paths() {
-        assert!(validate_cel_expr("state.input.x == 1", "p", &BTreeSet::new()).is_ok());
+        assert!(
+            validate_cel_expr("state.input.x == 1", "p", &BTreeSet::new(), &state_only()).is_ok()
+        );
     }
 
     #[test]
     fn cel_expr_accepts_loop_binding() {
-        assert!(validate_cel_expr("state.item.x == 1", "p", &names(&["item"])).is_ok());
+        assert!(
+            validate_cel_expr("state.item.x == 1", "p", &names(&["item"]), &state_only()).is_ok()
+        );
     }
 
     #[test]
     fn cel_expr_rejects_non_namespace_key() {
-        let err = validate_cel_expr("state.bogus.x == 1", "p", &BTreeSet::new()).unwrap_err();
+        let err = validate_cel_expr("state.bogus.x == 1", "p", &BTreeSet::new(), &state_only())
+            .unwrap_err();
         assert!(
             err.0
                 .contains("'state.bogus' does not name a state namespace")
@@ -540,7 +639,158 @@ mod tests {
 
     #[test]
     fn cel_expr_swallows_a_parse_failure() {
-        assert!(validate_cel_expr("state.a ==", "p", &BTreeSet::new()).is_ok());
+        assert!(validate_cel_expr("state.a ==", "p", &BTreeSet::new(), &state_only()).is_ok());
+    }
+
+    #[test]
+    fn cel_expr_rejects_a_bare_loop_binding() {
+        let err = validate_cel_expr(
+            "unit.text == 'a'",
+            "prime.effects[0].body[0]",
+            &names(&["unit", "iter"]),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.0,
+            "CEL expression at 'prime.effects[0].body[0]': 'unit' is a loop \
+             binding: in CEL, write 'state.unit'."
+        );
+    }
+
+    #[test]
+    fn cel_expr_rejects_a_bare_namespace() {
+        let err = validate_cel_expr(
+            "input.x == 1",
+            "prime.effects[0]",
+            &BTreeSet::new(),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.0,
+            "CEL expression at 'prime.effects[0]': 'input' is a state namespace: \
+             in CEL, write 'state.input'."
+        );
+    }
+
+    #[test]
+    fn cel_expr_rejects_an_undefined_bare_name() {
+        let err = validate_cel_expr(
+            "stat.input.x == 1",
+            "prime.effects[0]",
+            &BTreeSet::new(),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.0,
+            "CEL expression at 'prime.effects[0]': 'stat' is not defined ('state' \
+             is the only root). Write 'state.input.stat' for caller-supplied \
+             values or 'state.prime.stat' for effect outputs."
+        );
+    }
+
+    #[test]
+    fn cel_expr_undefined_name_message_lists_loop_bindings_in_scope() {
+        let err = validate_cel_expr(
+            "stat == 1",
+            "prime.effects[0]",
+            &names(&["iter", "unit"]),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert!(
+            err.0
+                .ends_with("Names bound by an enclosing loop here: iter, unit.")
+        );
+    }
+
+    #[test]
+    fn cel_expr_undefined_name_message_in_expect_lists_all_three_roots() {
+        let err = validate_cel_expr(
+            "stat == 1",
+            "prime.effects[0]",
+            &BTreeSet::new(),
+            &expect_roots(),
+        )
+        .unwrap_err();
+        assert!(
+            err.0
+                .contains("('state', 'value' and 'meta' are the only roots)")
+        );
+    }
+
+    #[test]
+    fn cel_expr_type_names_are_always_allowed_bare() {
+        assert!(
+            validate_cel_expr(
+                "type(1) == int && bool(1) == true",
+                "p",
+                &BTreeSet::new(),
+                &state_only(),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn cel_expr_value_and_meta_allowed_only_with_the_expect_roots() {
+        assert!(
+            validate_cel_expr(
+                "has(value.x) && meta.error == null",
+                "prime.effects[0]",
+                &BTreeSet::new(),
+                &expect_roots(),
+            )
+            .is_ok()
+        );
+        let err = validate_cel_expr(
+            "has(value.x)",
+            "prime.effects[0]",
+            &BTreeSet::new(),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("'value' is not defined"));
+    }
+
+    #[test]
+    fn cel_expr_macro_variables_are_bound() {
+        assert!(
+            validate_cel_expr(
+                "state.input.items.all(v, v > 0)",
+                "p",
+                &BTreeSet::new(),
+                &state_only(),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn cel_expr_a_macro_variable_named_like_a_loop_binding_is_allowed() {
+        assert!(
+            validate_cel_expr(
+                "state.input.items.all(unit, unit > 0)",
+                "p",
+                &names(&["unit"]),
+                &state_only(),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn cel_expr_first_free_name_in_source_order_is_reported() {
+        let err = validate_cel_expr(
+            "unit == 1 && stat == 2",
+            "p",
+            &BTreeSet::new(),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("'unit' is not defined"));
     }
 
     #[test]

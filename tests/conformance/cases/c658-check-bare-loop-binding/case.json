@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #658",
+  "description": "A loop binding read bare in CEL (`unit.text` instead of `state.unit.text`) is a `cof check` error, not a silent null or an unreadable run-time failure.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

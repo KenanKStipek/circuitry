@@ -6,12 +6,16 @@
 //! `DESIGN.md` §7.2) behind Circuitry's own strict/non-strict layer:
 //!
 //! - [`evaluate_condition`] — `if`/`while` CEL mode. Binds one root,
-//!   `state`. An unset `state.` path the expression reads makes the
-//!   whole expression `false` (logged, never silently swallowed),
-//!   decided *structurally* by walking the parse tree before evaluating
-//!   — not by catching a failure during evaluation. Two exemptions:
-//!   `has(...)` guards the one path it names, and `strict: true` turns
-//!   the same case back into an error.
+//!   `state`. An unset, unguarded `state.` read that decides the
+//!   expression's result makes the whole result `false` (logged, never
+//!   silently swallowed): each such read is marked, before evaluating,
+//!   with a call to a reserved marker function
+//!   ([`paths::mark_unset`]), so `has(...)`, `?:`, `&&`/`||` and
+//!   `all`/`exists` guard it the way `cel` already evaluates those
+//!   constructs, and the rule applies only if the whole result turns
+//!   out to be that marker's own error. `has(...)` always exempts the
+//!   path it names outright; `strict: true` turns a deciding unset read
+//!   back into an error.
 //! - [`evaluate_expect`] — tool/use `expect:` CEL. Binds three roots,
 //!   `value`, `meta` (this effect's own outcome, unprefixed) and `state`.
 //!   Gets none of the absent-path exemption above: an unresolved path
@@ -486,7 +490,39 @@ fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
 /// does.
 fn reserved_call_message(original: &cel::common::ast::IdedExpr) -> Option<String> {
     let name = paths::reserved_call_name(original)?;
-    Some(format!("Undeclared reference to '{name}'"))
+    Some(format!("undeclared reference to '{name}'"))
+}
+
+/// `message` in Circuitry's own words for *err*, lowercase
+/// (`core/cel_eval.py::_error_text`): an undeclared identifier,
+/// function or method (`ExecutionError::UndeclaredReference`, raised by
+/// `cel::Value::resolve` itself -- never a direct call to one of this
+/// crate's own reserved names, which [`reserved_call_message`] already
+/// catches earlier) becomes one line naming it, never `cel`'s own
+/// `Display`, which capitalizes "Undeclared". Every other failure keeps
+/// `cel`'s own text.
+fn evaluation_error_text(err: &cel::ExecutionError) -> String {
+    match err {
+        cel::ExecutionError::UndeclaredReference(name) => {
+            format!("undeclared reference to '{name}'")
+        }
+        other => other.to_string(),
+    }
+}
+
+/// The path [`paths::UNSET_MARKER_FN`] carries, if *err* is the marker
+/// error [`paths::mark_unset`]'s own replacement call raises when
+/// evaluation actually reaches it — `None` for every other failure,
+/// `cel`'s genuine evaluation errors included.
+fn unset_marker_path(err: &cel::ExecutionError) -> Option<&str> {
+    match err {
+        cel::ExecutionError::FunctionError { function, message }
+            if function == paths::UNSET_MARKER_FN =>
+        {
+            Some(message.as_str())
+        }
+        _ => None,
+    }
 }
 
 /// `core/cel_eval.py`'s `ValueError("overflow")` for a `Value::Int` too
@@ -574,29 +610,10 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     let program = compile(&env, expr)?;
 
     let collected = paths::collect_state_paths(program.expression());
-    if let Some(unresolved) = paths::first_unresolved(&collected.paths, state) {
-        if strict {
-            return Err(CelError::new(
-                expr,
-                format!(
-                    "CEL expression {} reads unset state path {} and is marked strict.",
-                    py_repr(expr),
-                    py_repr(unresolved)
-                ),
-            ));
-        }
-        log::warn!(
-            "CEL expression {} reads unset state path {}; condition is false",
-            py_repr(expr),
-            py_repr(unresolved)
-        );
-        return Ok(false);
-    }
 
-    // The four parity caps, checked only now: Circuitry's own
-    // evaluation (the thing that can raise this) never runs once the
-    // unset-path check above already decided the condition is `false`
-    // -- `check_stack_safety` above is a genuine
+    // The four parity caps, checked unconditionally now: Circuitry
+    // always evaluates (there is no pre-evaluation short-circuit left
+    // to order around) -- `check_stack_safety` above is a genuine
     // pre-compile concern instead, unaffected by this ordering. This
     // crate's own pre-check stands in for the real evaluator's own
     // recursion failure (the `cel` crate doesn't actually overflow at
@@ -624,12 +641,23 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
 
     let mut tree = program.expression().clone();
     paths::rewrite(&mut tree);
+    // Each unguarded `state.` occurrence that is unset against the state
+    // this evaluation actually uses becomes a call to
+    // `paths::UNSET_MARKER_FN`, carrying its own path -- decided per
+    // occurrence, after `rewrite`, rather than structurally over every
+    // path before evaluating at all (issue #657): `has(...)`, `?:`,
+    // `&&`/`||` and `all`/`exists` already guard a marked read exactly
+    // the way `cel`'s own evaluator (`objects.rs`) evaluates those
+    // constructs, so the absent-state rule below applies only if the
+    // whole expression's own result turns out to be the marker's error.
+    paths::mark_unset(&mut tree, &projected_state);
 
     let mut ctx = Context::with_env(Arc::clone(&env));
     ordering::register(&mut ctx);
     equality::register(&mut ctx);
     indexing::register(&mut ctx);
     macros::register(&mut ctx);
+    paths::register(&mut ctx);
     let converted_state = convert::to_cel(&projected_state).map_err(|e| {
         // `core/cel_eval.py::evaluate_cel`'s own `compiled.context(ctx)`
         // (which calls `_to_cel`, raising on a big int the expression
@@ -658,20 +686,42 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
             format!("CEL evaluation failed for {}: {message}", py_repr(expr)),
         ));
     }
-    let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
-        // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
-        // evaluation failed for expr %r: %s", expr, exc)` -- an `if`/
-        // `while` condition's genuine evaluation failure, not the
-        // absent-path-is-false case above (that one only ever warns).
-        // `evaluate_expect`'s own identical-looking error below never
-        // logs this: `core/cel_eval.py::evaluate_cel_expect` doesn't
-        // either.
-        log::error!("CEL evaluation failed for expr {}: {e}", py_repr(expr));
-        CelError::new(
-            expr,
-            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
-        )
-    })?;
+    let result = match cel::Value::resolve(&tree, &ctx) {
+        Ok(result) => result,
+        Err(e) => {
+            if let Some(path) = unset_marker_path(&e) {
+                if strict {
+                    return Err(CelError::new(
+                        expr,
+                        format!(
+                            "CEL expression {} reads unset state path {} and is marked strict.",
+                            py_repr(expr),
+                            py_repr(path)
+                        ),
+                    ));
+                }
+                log::warn!(
+                    "CEL expression {} reads unset state path {}; condition is false",
+                    py_repr(expr),
+                    py_repr(path)
+                );
+                return Ok(false);
+            }
+            // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
+            // evaluation failed for expr %r: %s", expr, exc)` -- an
+            // `if`/`while` condition's genuine evaluation failure, not
+            // the absent-state case above (that one only ever warns).
+            // `evaluate_expect`'s own identical-looking error below
+            // never logs this: `core/cel_eval.py::evaluate_cel_expect`
+            // doesn't either.
+            let text = evaluation_error_text(&e);
+            log::error!("CEL evaluation failed for expr {}: {text}", py_repr(expr));
+            return Err(CelError::new(
+                expr,
+                format!("CEL evaluation failed for {}: {text}", py_repr(expr)),
+            ));
+        }
+    };
     Ok(truthy(&result))
 }
 
@@ -736,9 +786,10 @@ pub fn evaluate_expect(
         ));
     }
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
+        let text = evaluation_error_text(&e);
         CelError::new(
             expr,
-            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
+            format!("CEL evaluation failed for {}: {text}", py_repr(expr)),
         )
     })?;
     Ok(truthy(&result))
@@ -902,6 +953,22 @@ pub fn state_paths(expr: &str) -> Result<Vec<String>, CelError> {
         .collect())
 }
 
+/// Every free identifier *expr* reads, in source order -- ported from
+/// `core/cel_eval.py`'s `free_identifiers`, the check-time input
+/// `electricity-compiler`'s own `state_ns::validate_cel_expr` uses the
+/// same way `core/state_ns.py`'s own version does.
+///
+/// # Errors
+///
+/// An expression that doesn't parse returns `Err`, the same way
+/// [`state_paths`] does.
+pub fn free_identifiers(expr: &str) -> Result<Vec<String>, CelError> {
+    check_stack_safety(expr)?;
+    let env = stdlib_env();
+    let program = compile(&env, expr)?;
+    Ok(paths::free_identifiers(program.expression()))
+}
+
 /// Every `state.`-rooted path *expr* reads (raw, `state.`-prefixed,
 /// [`state_paths`]'s own shape, guarded or not -- [`evaluate_condition`]'s
 /// own `project` call narrows by this same, unfiltered list, not just
@@ -1014,27 +1081,26 @@ mod tests {
     }
 
     #[test]
-    fn an_unset_path_past_a_parity_cap_is_still_false_not_a_nesting_error() {
-        // The four parity caps must run *after* the
-        // unset-path short-circuit, matching Circuitry's own order
-        // (compile, then unset path, then evaluate) -- `_compile`
-        // never fails for these shapes, only evaluation does, and
-        // Circuitry never reaches evaluation once the unset path has
-        // already decided the condition is `false`. `state.input.x` is
-        // never set here, and the chain is one past
+    fn an_unset_path_past_a_parity_cap_is_the_nesting_error_not_false() {
+        // Circuitry now always evaluates (issue #657): the four parity
+        // caps run unconditionally, before the unset-path rule ever
+        // gets a chance to decide the result, so a nesting failure past
+        // the cap wins over an unset read it might also contain.
+        // `state.input.x` is never set here, and the chain is one past
         // `MAX_CHAIN_NESTING_DEPTH`.
         let state = Value::Dict(Dict::new());
         let expr = format!("state.input.x{}", "+1".repeat(MAX_CHAIN_NESTING_DEPTH + 1));
-        assert_eq!(evaluate_condition(&expr, &state, false), Ok(false));
+        let err = evaluate_condition(&expr, &state, false).unwrap_err();
+        assert!(err.is_too_deeply_nested());
     }
 
     #[test]
-    fn an_unset_path_past_a_parity_cap_raises_circuitrys_own_strict_text_not_a_nesting_error() {
+    fn an_unset_path_past_a_parity_cap_is_the_nesting_error_even_under_strict() {
         let state = Value::Dict(Dict::new());
         let expr = format!("state.input.x{}", "+1".repeat(MAX_CHAIN_NESTING_DEPTH + 1));
         let err = evaluate_condition(&expr, &state, true).unwrap_err();
-        assert!(!err.is_too_deeply_nested());
-        assert!(err.to_string().contains("strict"));
+        assert!(err.is_too_deeply_nested());
+        assert!(!err.to_string().contains("strict"));
     }
 
     #[test]

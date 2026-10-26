@@ -56,9 +56,9 @@
 //! outright — so replacing `has` alone means not calling
 //! `Env::stdlib()` at all. [`env`] instead builds on
 //! `Env::default().with_stdlib()` (registers every standard *type* and
-//! *function*, no macros: see that method's own docs) and adds all six
+//! *function*, no macros: see that method's own docs) and adds five
 //! macros back one at a time — this module's own [`has_macro_expander`]
-//! for `has`, and, for the other five, unchanged copies of `cel`'s own
+//! for `has`, and, for the other four, unchanged copies of `cel`'s own
 //! expanders (`parser/macros.rs`, MIT-licensed; not exported for reuse,
 //! since they're `pub(crate)` there) rather than a reimplementation:
 //! [`all_macro_expander`], [`exists_macro_expander`],
@@ -66,7 +66,11 @@
 //! [`filter_macro_expander`] below build the exact same comprehension
 //! `cel`'s own would, so `all`/`exists`/`exists_one`/`map`/`filter`
 //! keep behaving exactly as `cel`'s own `Env::stdlib()` already made
-//! them.
+//! them. `existsOne` (camelCase), `cel`'s own alias for `exists_one`,
+//! is deliberately never registered: cel-python has no such macro, so
+//! cof treats a call to it as an ordinary, undeclared method, and this
+//! crate now matches that (#658) rather than binding a name cof never
+//! does.
 
 use cel::common::ast::{CallExpr, ComprehensionExpr, Expr, IdedExpr, ListExpr, operators};
 use cel::parser::{Macro, MacroExprHelper, ParseError};
@@ -88,9 +92,9 @@ pub fn is_has_guard(func_name: &str) -> bool {
 }
 
 /// The environment this crate compiles and evaluates every expression
-/// against: `cel`'s own standard types and functions, plus all six
-/// standard macros — five of them `cel`'s own, `has` replaced (module
-/// docs).
+/// against: `cel`'s own standard types and functions, plus five
+/// standard macros — four of them `cel`'s own, `has` replaced (module
+/// docs). `existsOne` is not one of them.
 pub fn env() -> Env {
     let mut env = Env::default().with_stdlib();
     env.add_macro(Macro::receiver(operators::ALL, 2, all_macro_expander))
@@ -103,8 +107,11 @@ pub fn env() -> Env {
         exists_one_macro_expander,
     ))
     .expect("name not already declared");
-    env.add_macro(Macro::receiver("existsOne", 2, exists_one_macro_expander))
-        .expect("name not already declared");
+    // `existsOne` (camelCase) is deliberately not registered: cel-python
+    // has no such macro, so cof treats a call to it as an ordinary,
+    // undeclared method. Registering it here would bind a name cof
+    // never does, letting an expression through `cof check` would then
+    // reject if it were ported back (#658).
     // Only the two-argument form of `map` is registered here: `cel`'s
     // own `map_macro_expander` below (unchanged) accepts a third
     // argument too (`target.map(x, predicate, transform)`), but
@@ -519,7 +526,10 @@ mod tests {
             eval("[1, 2, 3].exists_one(x, x > 2)"),
             Ok(Value::Bool(true))
         );
-        assert_eq!(eval("[1, 2, 3].existsOne(x, x > 2)"), Ok(Value::Bool(true)));
+        // `existsOne` (camelCase) is deliberately not a macro here
+        // (module docs): it falls through to an ordinary, undeclared
+        // method call, just like cof.
+        assert!(eval("[1, 2, 3].existsOne(x, x > 2)").is_err());
         assert_eq!(
             eval("[1, 2, 3].map(x, x * 2)"),
             Ok(Value::List(Arc::new(vec![

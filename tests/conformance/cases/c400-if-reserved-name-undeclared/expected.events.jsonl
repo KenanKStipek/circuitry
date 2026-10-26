@@ -1,10 +1,10 @@
-{"v":1,"seq":0,"ts":"2026-10-19T04:18:53.363Z","ev":"run_start","run_id":"5a1894e3-c610-440a-b9c6-7491c2914059","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":25462}
-{"v":1,"seq":1,"ts":"2026-10-19T04:18:53.370Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-10-19T04:18:53.370Z","ev":"start","id":1,"path":"prime.gate"}
-{"v":1,"seq":3,"ts":"2026-10-19T04:18:53.371Z","ev":"start","id":2,"path":"prime.gate.else_step"}
-{"v":1,"seq":4,"ts":"2026-10-19T04:18:53.371Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
-{"v":1,"seq":5,"ts":"2026-10-19T04:18:53.371Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":1,"error":"<THIRD_PARTY_TEXT>"}
-{"v":1,"seq":6,"ts":"2026-10-19T04:18:53.371Z","ev":"start","id":3,"path":"prime.marker"}
-{"v":1,"seq":7,"ts":"2026-10-19T04:18:53.371Z","ev":"end","id":3,"path":"prime.marker","ok":true,"ms":0}
-{"v":1,"seq":8,"ts":"2026-10-19T04:18:53.371Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
-{"v":1,"seq":9,"ts":"2026-10-19T04:18:53.371Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-10-26T23:31:00.766Z","ev":"run_start","run_id":"cb943567-4097-4910-8d20-0c3b79949bd5","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":18422}
+{"v":1,"seq":1,"ts":"2026-10-26T23:31:00.772Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-26T23:31:00.772Z","ev":"start","id":1,"path":"prime.gate"}
+{"v":1,"seq":3,"ts":"2026-10-26T23:31:00.775Z","ev":"start","id":2,"path":"prime.gate.else_step"}
+{"v":1,"seq":4,"ts":"2026-10-26T23:31:00.775Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-26T23:31:00.775Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":3,"error":"CEL evaluation failed for '__electricity_strict_eq(1)': undeclared reference to '__electricity_strict_eq'"}
+{"v":1,"seq":6,"ts":"2026-10-26T23:31:00.775Z","ev":"start","id":3,"path":"prime.marker"}
+{"v":1,"seq":7,"ts":"2026-10-26T23:31:00.775Z","ev":"end","id":3,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-26T23:31:00.775Z","ev":"end","id":0,"path":"prime","ok":true,"ms":4}
+{"v":1,"seq":9,"ts":"2026-10-26T23:31:00.776Z","ev":"run_end","ok":true}

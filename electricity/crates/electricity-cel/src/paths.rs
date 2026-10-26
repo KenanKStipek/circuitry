@@ -13,10 +13,21 @@
 //! time, and a genuinely malformed expression must still raise rather
 //! than silently resolve to "absent".
 
-use cel::common::ast::{EntryExpr, Expr, IdedExpr, operators};
+use cel::common::ast::{CallExpr, EntryExpr, Expr, IdedExpr, LiteralValue, operators};
+use cel::common::types::CelString;
 use electricity_value::{Dict, Value};
 
 use crate::{equality, indexing, macros, ordering};
+
+/// The function a marked, unset `state.` occurrence is rewritten into by
+/// [`mark_unset`] -- a reserved name ([`is_reserved_name`]) a user
+/// expression can never call directly, carrying the path as its one
+/// string-literal argument. [`crate::evaluate_condition`] recognizes the
+/// `ExecutionError::FunctionError` evaluating it raises and applies the
+/// absent-state rule with that path, only if the whole expression's own
+/// result turns out to be it -- never checked structurally, the way the
+/// pre-evaluation short-circuit this replaces used to be.
+pub const UNSET_MARKER_FN: &str = "__electricity_unset";
 
 /// Whether *func_name* names one of this crate's own internal
 /// registered functions -- [`equality`], [`ordering`] and [`indexing`]'s
@@ -212,6 +223,86 @@ fn walk(expr: &Expr, out: &mut Collected, guarded: bool) {
     }
 }
 
+/// Every free identifier *expr*'s macro-expanded parse tree reads, in
+/// source order -- ported from `core/cel_eval.py`'s `free_identifiers`,
+/// but over `cel`'s own tree shape rather than celpy's: `all`/`exists`/
+/// `exists_one`/`map`/`filter` are already [`Expr::Comprehension`] nodes
+/// by the time `cel`'s own parser hands back a compiled expression (its
+/// macro expansion runs at parse time, unlike celpy's, which keeps the
+/// unexpanded call shape for the evaluator itself to special-case) --
+/// `iter_var`/`iter_var2`/`accu_var` are bound only in `loop_cond`/
+/// `loop_step`/`result`, never in `iter_range`/`accu_init`, matching
+/// cel-spec's own comprehension semantics. A property name after `.`
+/// and a function or method name (`call.func_name`, never an `Ident`
+/// node) are never identifiers here; a message-construction type name
+/// (`Msg{f: 1}`, [`Expr::Struct`]'s own `type_name`) is, the same as
+/// `free_identifiers` in Python counts it.
+pub fn free_identifiers(expr: &IdedExpr) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_free_identifiers(&expr.expr, &std::collections::HashSet::new(), &mut out);
+    out
+}
+
+fn walk_free_identifiers(
+    expr: &Expr,
+    bound: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Ident(name) => {
+            if !bound.contains(name.as_str()) {
+                out.push(name.clone());
+            }
+        }
+        Expr::Select(select) => walk_free_identifiers(&select.operand.expr, bound, out),
+        Expr::Call(call) => {
+            if let Some(target) = &call.target {
+                walk_free_identifiers(&target.expr, bound, out);
+            }
+            for arg in &call.args {
+                walk_free_identifiers(&arg.expr, bound, out);
+            }
+        }
+        Expr::Comprehension(c) => {
+            walk_free_identifiers(&c.iter_range.expr, bound, out);
+            walk_free_identifiers(&c.accu_init.expr, bound, out);
+            let mut inner = bound.clone();
+            inner.insert(c.iter_var.clone());
+            if let Some(var2) = &c.iter_var2 {
+                inner.insert(var2.clone());
+            }
+            inner.insert(c.accu_var.clone());
+            walk_free_identifiers(&c.loop_cond.expr, &inner, out);
+            walk_free_identifiers(&c.loop_step.expr, &inner, out);
+            walk_free_identifiers(&c.result.expr, &inner, out);
+        }
+        Expr::List(list) => {
+            for item in &list.elements {
+                walk_free_identifiers(&item.expr, bound, out);
+            }
+        }
+        Expr::Map(map) => {
+            for entry in &map.entries {
+                if let EntryExpr::MapEntry(e) = &entry.expr {
+                    walk_free_identifiers(&e.key.expr, bound, out);
+                    walk_free_identifiers(&e.value.expr, bound, out);
+                }
+            }
+        }
+        Expr::Struct(s) => {
+            if !bound.contains(s.type_name.as_str()) {
+                out.push(s.type_name.clone());
+            }
+            for entry in &s.entries {
+                if let EntryExpr::StructField(f) = &entry.expr {
+                    walk_free_identifiers(&f.value.expr, bound, out);
+                }
+            }
+        }
+        Expr::Literal(_) | Expr::Unspecified => {}
+    }
+}
+
 /// Rewrites *node*'s parse tree in place so `cel` never has to evaluate
 /// a strict-type operator the way it natively would (DESIGN.md §7.2):
 /// every `_<_`/`_<=_`/`_>_`/`_>=_`/`_==_`/`_!=_`/`@in`/`_[_]` call
@@ -340,49 +431,143 @@ pub fn project(state: &Value, paths: &[StatePath]) -> Value {
     Value::Dict(root)
 }
 
-/// The paths in *paths* subject to the absent-state rule: a path guarded
-/// by `has(...)` *anywhere* it occurs in the expression is exempt
-/// everywhere it occurs, even where that same dotted chain is read again
-/// unguarded (`has(state.input.n) && state.input.n > 1`) — guardedness is
-/// a property of the path string, not of one occurrence of it, matching
-/// `core/cel_eval.py`'s `_Compiled.read_paths`.
-fn read_paths(paths: &[StatePath]) -> impl Iterator<Item = &str> {
-    let guarded: std::collections::HashSet<&str> = paths
-        .iter()
-        .filter(|p| p.guarded)
-        .map(|p| p.path.as_str())
-        .collect();
+/// Whether *path* (a dotted `state.`-rooted chain) resolves against
+/// *state*: every segment present, every intermediate a `Value::Dict`,
+/// and the final value not `Value::None` (a disabled node writes
+/// `{"value": None}`; reading through it is the same "nothing there" as
+/// a key never written).
+fn resolves(path: &str, state: &Value) -> bool {
+    let mut current = state;
+    for part in path.split('.').skip(1) {
+        let Value::Dict(dict) = current else {
+            return false;
+        };
+        let Some(next) = dict.get(&Value::Str(part.to_string())) else {
+            return false;
+        };
+        current = next;
+    }
+    !current.is_none()
+}
+
+/// The first unguarded path in *paths* that *state* does not supply, in
+/// the order *paths* lists them -- used only by this module's own tests
+/// now that [`evaluate_condition`](crate::evaluate_condition) decides
+/// per occurrence, via [`mark_unset`], rather than structurally over
+/// every path at once.
+#[cfg(test)]
+fn first_unresolved<'a>(paths: &'a [StatePath], state: &Value) -> Option<&'a str> {
     paths
         .iter()
-        .filter(move |p| !p.guarded && !guarded.contains(p.path.as_str()))
+        .find(|p| !p.guarded && !resolves(&p.path, state))
         .map(|p| p.path.as_str())
 }
 
-/// The first path `read_paths` yields that *state* does not supply: a
-/// missing segment, a segment that isn't a `Value::Dict`, or a path that
-/// resolves to `Value::None` (a disabled node writes `{"value": None}`;
-/// reading through it is the same "nothing there" as a key never
-/// written).
-pub fn first_unresolved<'a>(paths: &'a [StatePath], state: &Value) -> Option<&'a str> {
-    for path in read_paths(paths) {
-        let mut current = state;
-        let mut resolved = true;
-        for part in path.split('.').skip(1) {
-            let Value::Dict(dict) = current else {
-                resolved = false;
-                break;
-            };
-            let Some(next) = dict.get(&Value::Str(part.to_string())) else {
-                resolved = false;
-                break;
-            };
-            current = next;
+/// Replaces every unguarded `state.` occurrence in *node* whose path does
+/// not resolve against *state* with a call to [`UNSET_MARKER_FN`]
+/// carrying that path -- one occurrence counts even if the same dotted
+/// chain also occurs, elsewhere in the expression, as a `has()` argument
+/// (unlike [`first_unresolved`]'s *paths*, which only ever sees whichever
+/// occurrence [`collect_state_paths`] happened to keep): removing the
+/// "guarded anywhere" exemption is exactly what lets a guard protect only
+/// the read it actually guards (issue #657). Runs after
+/// [`rewrite`], on the same tree, so this crate's own
+/// `__electricity_strict_*`/`__electricity_python_index` substitutions
+/// are already in place and are themselves walked like any other call.
+pub fn mark_unset(node: &mut IdedExpr, state: &Value) {
+    mark(&mut node.expr, state, false);
+}
+
+/// Registers [`UNSET_MARKER_FN`] on *ctx*, the same way
+/// [`crate::equality::register`], [`crate::ordering::register`],
+/// [`crate::indexing::register`] and [`macros::register`] register
+/// their own functions. Only ever reached, once called, through a call
+/// [`mark_unset`] itself inserted -- a user expression can never name a
+/// reserved `__electricity_*` function directly ([`is_reserved_name`],
+/// checked earlier) -- so its one argument (the path, as written) is
+/// always exactly what the error needs to carry.
+pub fn register(ctx: &mut cel::Context) {
+    ctx.add_function(UNSET_MARKER_FN, unset_marker_fn)
+        .expect("name not already declared");
+}
+
+fn unset_marker_fn(ftx: &cel::FunctionContext) -> Result<cel::Value, cel::ExecutionError> {
+    let path = ftx
+        .args
+        .first()
+        .and_then(|arg| arg.as_ref().downcast_ref::<CelString>())
+        .map(|s| s.inner().to_string())
+        .unwrap_or_default();
+    Err(cel::ExecutionError::function_error(UNSET_MARKER_FN, path))
+}
+
+fn mark(expr: &mut Expr, state: &Value, guarded: bool) {
+    if let Expr::Select(_) = expr {
+        let chain = dotted_chain(expr).map(|segments| (segments[0] == "state", segments.join(".")));
+        match chain {
+            Some((true, path)) => {
+                if !guarded && !resolves(&path, state) {
+                    *expr = Expr::Call(CallExpr {
+                        func_name: UNSET_MARKER_FN.to_string(),
+                        target: None,
+                        args: vec![IdedExpr {
+                            id: 0,
+                            expr: Expr::Literal(LiteralValue::String(CelString::from(
+                                std::borrow::Cow::Owned(path),
+                            ))),
+                        }],
+                    });
+                }
+            }
+            Some((false, _)) => {}
+            None => {
+                if let Expr::Select(select) = expr {
+                    mark(&mut select.operand.expr, state, guarded);
+                }
+            }
         }
-        if !resolved || current.is_none() {
-            return Some(path);
-        }
+        return;
     }
-    None
+    match expr {
+        Expr::Call(call) => {
+            let guarded = guarded || macros::is_has_guard(&call.func_name);
+            if let Some(target) = &mut call.target {
+                mark(&mut target.expr, state, guarded);
+            }
+            for arg in &mut call.args {
+                mark(&mut arg.expr, state, guarded);
+            }
+        }
+        Expr::Comprehension(c) => {
+            mark(&mut c.iter_range.expr, state, guarded);
+            mark(&mut c.accu_init.expr, state, guarded);
+            mark(&mut c.loop_cond.expr, state, guarded);
+            mark(&mut c.loop_step.expr, state, guarded);
+            mark(&mut c.result.expr, state, guarded);
+        }
+        Expr::List(list) => {
+            for item in &mut list.elements {
+                mark(&mut item.expr, state, guarded);
+            }
+        }
+        Expr::Map(map) => {
+            for entry in &mut map.entries {
+                if let EntryExpr::MapEntry(e) = &mut entry.expr {
+                    mark(&mut e.key.expr, state, guarded);
+                    mark(&mut e.value.expr, state, guarded);
+                }
+            }
+        }
+        Expr::Struct(s) => {
+            for entry in &mut s.entries {
+                if let EntryExpr::StructField(f) = &mut entry.expr {
+                    mark(&mut f.value.expr, state, guarded);
+                }
+            }
+        }
+        Expr::Select(_) => unreachable!("handled above"),
+        Expr::Ident(_) | Expr::Literal(_) | Expr::Unspecified => {}
+    }
 }
 
 #[cfg(test)]
