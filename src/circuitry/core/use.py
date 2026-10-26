@@ -379,6 +379,56 @@ def _take_child_record(node: dict[str, Any]) -> dict[str, Any]:
     return {key: node.pop(key) for key in keys}
 
 
+def _child_record_copy(child_store: Store | None) -> dict[str, Any]:
+    """The child's effects as one attempt left them, in their saved form.
+
+    A copy, so nothing a later attempt does reaches it; a named loop's
+    ``last`` is written as its ``{"$ref": "iter_<N>"}`` reference, the form
+    saved state gives it.
+    """
+    from .saved_state import compact_last_aliases
+
+    if child_store is None:
+        return {}
+    child_prime = child_store.state.get(_CHILD_ROOT)
+    if not isinstance(child_prime, dict):
+        return {}
+    record = {
+        key: value for key, value in child_prime.items() if key not in ("value", "meta")
+    }
+    return compact_last_aliases(copy.deepcopy(record))
+
+
+def _attempt_entry(
+    *,
+    created_at: str | None,
+    completed_at: str | None,
+    value: Any,
+    error: str | None,
+    child_errors: list[dict[str, Any]] | None,
+    expect: Any,
+    children: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """One ``meta.attempts`` entry: what the node held when that attempt ended."""
+    entry: dict[str, Any] = {
+        "created_at": created_at,
+        "completed_at": completed_at,
+        "value": copy.deepcopy(value),
+        "error": error,
+        "child_errors": child_errors,
+        "expect": copy.deepcopy(expect),
+    }
+    if children is not None:
+        entry["children"] = children
+    return entry
+
+
+def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    """``meta.attempts``, always written as the last key of *meta*."""
+    meta.pop("attempts", None)
+    meta["attempts"] = list(attempts)
+
+
 _UNSAVEABLE = object()
 
 
@@ -960,6 +1010,7 @@ class UseRuntime:
         #: or reproduce this step.
         meta["inputs"] = None
         meta["orchestration_sha256"] = None
+        meta.pop("attempts", None)
 
         #: This effect's canonical dotted path — what child effects namespace
         #: under and where their live state is mirrored for observers.
@@ -975,6 +1026,7 @@ class UseRuntime:
         # even for a failure raised ahead of the loop (capability consent,
         # loading the child) -- `attempt_index > 0` is then correctly false.
         attempt_index = 0
+        attempts: list[dict[str, Any]] = []
 
         # The use effect announces itself the way every other effect does, so
         # the child effects forwarded below have a node to hang under. The
@@ -1049,11 +1101,17 @@ class UseRuntime:
                 t0 = time.monotonic()
                 child_store = None
                 node["value"] = None
+                if attempt_index > 0:
+                    # The previous attempt's child effects: kept in its
+                    # meta.attempts entry when record_children asks, never
+                    # left under the node for this attempt's to mix with.
+                    _take_child_record(node)
+                attempt_started_at = _now_iso()
                 # Set once, on this pass's first attempt only -- the start
                 # of a retried use's final attempt is not when it started
                 # (#421).
                 if attempt_index == 0:
-                    meta["created_at"] = _now_iso()
+                    meta["created_at"] = attempt_started_at
                 meta["completed_at"] = None
                 meta["error"] = None
                 meta["child_errors"] = None
@@ -1312,9 +1370,31 @@ class UseRuntime:
                 except Exception as e:
                     attempt_failure = e
 
+                attempt_child_errors: list[dict[str, Any]] | None = None
+                if child_store is not None:
+                    attempt_child_errors = (
+                        _collect_child_errors(child_store.state.get(_CHILD_ROOT)) or None
+                    )
+                attempts.append(
+                    _attempt_entry(
+                        created_at=attempt_started_at,
+                        completed_at=(
+                            meta["completed_at"] if attempt_failure is None else _now_iso()
+                        ),
+                        value=node["value"],
+                        error=None if attempt_failure is None else str(attempt_failure),
+                        child_errors=attempt_child_errors,
+                        expect=meta.get("expect"),
+                        children=(
+                            _child_record_copy(child_store) if record_children else None
+                        ),
+                    )
+                )
+
                 if attempt_failure is None:
                     if attempt_index > 0:
                         meta["retries_used"] = attempt_index
+                        _write_attempts(meta, attempts)
                     return
 
                 is_last_attempt = attempt_index >= max_attempts - 1
@@ -1333,6 +1413,10 @@ class UseRuntime:
                     raise attempt_failure
 
                 meta["error"] = str(attempt_failure)
+                # The finished attempts, readable (and on --live-state)
+                # before the next one starts.
+                _write_attempts(meta, attempts)
+                store.publish()
                 if self.verbose:
                     elapsed = time.monotonic() - t0
                     line = (
@@ -1355,6 +1439,8 @@ class UseRuntime:
             # not 0, when the first attempt is also the last.
             if attempt_index > 0:
                 meta["retries_used"] = attempt_index
+                attempts[-1]["completed_at"] = meta["completed_at"]
+                _write_attempts(meta, attempts)
 
             # Capture validation errors separately for introspection
             if "validation failed" in error_msg.lower():

@@ -352,6 +352,26 @@ fn materialize(
 // End-to-end `UseRuntime.execute` replay.
 // ---------------------------------------------------------------------
 
+/// The same fixture directory [`golden_corpus_end_to_end`] builds and
+/// passes to [`write_fixtures`] -- recomputed here, not threaded
+/// through, so [`case_use_op`] (which only takes a case *name*, to
+/// mirror `generate_use_corpus.py::case_use_op`'s own signature) can
+/// still point `record_children_clean_node`/`full_namespace_clean_node`'s
+/// own `counter:` input at a real path on disk.
+fn fixtures_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "electricity-use-corpus-test-{}",
+        std::process::id()
+    ))
+}
+
+/// *name*'s own fs counter file -- `generate_use_corpus.py`'s own
+/// `tmp / "counter_<name>.txt"`, one per case so two cases replayed in
+/// the same process never share a file.
+fn counter_path_for(name: &str) -> std::path::PathBuf {
+    fixtures_dir().join(format!("counter_{name}.txt"))
+}
+
 /// Mirrors `generate_use_corpus.py::_end_to_end_cases`'s own
 /// `write_child` calls, byte for byte -- see this file's own module
 /// doc comment.
@@ -397,6 +417,43 @@ fn write_fixtures(dir: &std::path::Path) {
          \x20\x20\x20\x20name: step\n\
          \x20\x20\x20\x20provider: json\n\
          \x20\x20\x20\x20params: {mode: stringify, input: ok}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("child_attempts_clean_node.yml"),
+        "interface:\n\
+         \x20\x20inputs:\n\
+         \x20\x20\x20\x20counter: {required: true}\n\
+         effects:\n\
+         \x20\x20- type: tool\n\
+         \x20\x20\x20\x20name: bump\n\
+         \x20\x20\x20\x20provider: fs\n\
+         \x20\x20\x20\x20params: {mode: append, path: '{{input.counter}}', content: x}\n\
+         \x20\x20- type: tool\n\
+         \x20\x20\x20\x20name: tally\n\
+         \x20\x20\x20\x20provider: fs\n\
+         \x20\x20\x20\x20params: {mode: read, path: '{{input.counter}}'}\n\
+         \x20\x20- type: if\n\
+         \x20\x20\x20\x20name: gate\n\
+         \x20\x20\x20\x20if: {mode: cel, expr: \"state.prime.tally.value == 'x'\"}\n\
+         \x20\x20\x20\x20then:\n\
+         \x20\x20\x20\x20\x20\x20- type: tool\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20name: stale\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20provider: json\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: stringify, input: stale}\n\
+         \x20\x20- type: if\n\
+         \x20\x20\x20\x20name: ready\n\
+         \x20\x20\x20\x20if: {mode: cel, expr: \"state.prime.tally.value == 'xx'\"}\n\
+         \x20\x20\x20\x20then:\n\
+         \x20\x20\x20\x20\x20\x20- type: tool\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20name: ok_marker\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20provider: json\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: stringify, input: ok}\n\
+         \x20\x20\x20\x20else:\n\
+         \x20\x20\x20\x20\x20\x20- type: tool\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20name: force_retry\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20provider: json\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: parse, input: 'not json'}\n",
     )
     .unwrap();
 }
@@ -575,13 +632,63 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             expect: None,
             description: None,
         },
+        "record_children_clean_node" => {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                Value::Str("counter".to_string()),
+                template(
+                    &counter_path_for("record_children_clean_node")
+                        .display()
+                        .to_string(),
+                ),
+            );
+            let mut outputs = IndexMap::new();
+            outputs.insert("tally".to_string(), "prime.tally.value".to_string());
+            UseOp {
+                parent_trusted: false,
+                source: UseSource::Path("child_attempts_clean_node.yml".to_string()),
+                inputs: Some(ParamNode::Map(inputs)),
+                outputs: Some(outputs),
+                validate: true,
+                retries: RetryPolicy {
+                    max_attempts: 2,
+                    backoff_ms: 0,
+                },
+                expect: None,
+                description: None,
+            }
+        }
+        "full_namespace_clean_node" => {
+            let mut inputs = IndexMap::new();
+            inputs.insert(
+                Value::Str("counter".to_string()),
+                template(
+                    &counter_path_for("full_namespace_clean_node")
+                        .display()
+                        .to_string(),
+                ),
+            );
+            UseOp {
+                parent_trusted: false,
+                source: UseSource::Path("child_attempts_clean_node.yml".to_string()),
+                inputs: Some(ParamNode::Map(inputs)),
+                outputs: None,
+                validate: true,
+                retries: RetryPolicy {
+                    max_attempts: 2,
+                    backoff_ms: 0,
+                },
+                expect: None,
+                description: None,
+            }
+        }
         other => panic!("unknown end-to-end corpus case {other:?}"),
     };
     (use_op, ctx)
 }
 
 fn runtime_config_for(name: &str) -> Value {
-    if name == "path_record_children" {
+    if name == "path_record_children" || name == "record_children_clean_node" {
         let mut state = Dict::new();
         state.insert(Value::Str("record_children".to_string()), Value::Bool(true));
         let mut root = Dict::new();
@@ -662,10 +769,7 @@ async fn golden_corpus_end_to_end() {
     let corpus = corpus();
     assert!(!corpus.end_to_end_cases.is_empty());
 
-    let tmp = std::env::temp_dir().join(format!(
-        "electricity-use-corpus-test-{}",
-        std::process::id()
-    ));
+    let tmp = fixtures_dir();
     std::fs::create_dir_all(&tmp).unwrap();
     write_fixtures(&tmp);
     let resolved_tmp = tmp.canonicalize().unwrap_or_else(|_| tmp.clone());
@@ -693,9 +797,9 @@ async fn golden_corpus_end_to_end() {
         };
 
         let store = Store::new();
-        let registry = electricity_tools::ToolRegistry::new();
-        let mut registry = registry;
+        let mut registry = electricity_tools::ToolRegistry::new();
         registry.register(Box::new(electricity_tools::json::JsonTool));
+        registry.register(Box::new(electricity_tools::fs::FsPlugin));
         let limiter = Limiter::new();
         let adapters = electricity_vm::adapter::AdapterRegistry::new();
         let complexity = electricity_config::ComplexitySettings::default();

@@ -317,6 +317,167 @@ async fn on_error_skip_absorbs_a_final_failure_and_clears_the_value() {
     assert!(matches!(get(meta, "error"), Some(Value::Str(_))));
 }
 
+/// `meta.attempts` (issue #659): one entry per attempt, oldest first,
+/// `attempts` always `meta`'s last key. The use effect's own `expect`
+/// reads `meta.attempts` off its own node (`has(meta.attempts)` is
+/// only true once an earlier attempt has already been written), so a
+/// fixed child needs no external counter to fail exactly twice before
+/// succeeding on the third attempt.
+#[tokio::test]
+async fn attempts_lists_every_attempt_oldest_first_and_is_metas_last_key() {
+    let inline_yaml = "\
+effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode: stringify, input: ok}\n";
+    let mut use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    use_op.retries = RetryPolicy {
+        max_attempts: 3,
+        backoff_ms: 0,
+    };
+    use_op.expect = Some(ExpectCondition::Cel {
+        expr: "has(meta.attempts) && size(meta.attempts) >= 2".to_string(),
+    });
+    let (store, _observer, result) = run_use(use_op, OnError::Fail, &Value::None).await;
+    result.expect("the third attempt must satisfy its own expect");
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let use_node = as_dict(get(prime, "step").unwrap());
+    let meta = as_dict(get(use_node, "meta").unwrap());
+
+    assert_eq!(meta.keys().last(), Some(&Value::from("attempts")));
+    assert_eq!(get(meta, "retries_used"), Some(&Value::from(2i64)));
+
+    let Some(Value::List(attempts)) = get(meta, "attempts") else {
+        panic!("expected meta.attempts to be a list");
+    };
+    assert_eq!(attempts.len(), 3);
+    for entry in &attempts[..2] {
+        let entry = as_dict(entry);
+        assert!(matches!(get(entry, "error"), Some(Value::Str(_))));
+        assert_eq!(
+            as_dict(get(entry, "expect").unwrap()).get(&Value::from("result")),
+            Some(&Value::Bool(false))
+        );
+    }
+    let last_entry = as_dict(&attempts[2]);
+    assert_eq!(get(last_entry, "error"), Some(&Value::None));
+    assert_eq!(get(last_entry, "value"), get(use_node, "value"));
+    assert_eq!(get(last_entry, "expect"), get(meta, "expect"));
+}
+
+/// Rule 5 (issue #659): each retry starts from a clean node. With
+/// `record_children`, a step the first attempt alone ran (gated on
+/// this use's own `{from: prime.step.meta.attempts}` self-reference,
+/// `null` only before any attempt has finished) is gone from the node
+/// once a later attempt succeeds, but still there in that first
+/// attempt's own `children` entry.
+#[tokio::test]
+async fn attempts_record_children_keeps_the_stale_step_only_in_its_own_entry() {
+    let inline_yaml = "\
+interface:\n  inputs:\n    earlier: {required: false, default: []}\n\
+effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode: stringify, input: ok}\n  - type: if\n    name: gate\n    if: {mode: cel, expr: \"size(state.input.earlier) == 0\"}\n    then:\n      - type: tool\n        name: stale\n        provider: json\n        params: {mode: stringify, input: stale}\n";
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        Value::Str("earlier".to_string()),
+        ParamNode::From {
+            path: "prime.step.meta.attempts".to_string(),
+            default: None,
+            as_json: false,
+        },
+    );
+    let mut outputs = IndexMap::new();
+    outputs.insert("first".to_string(), "prime.first.value".to_string());
+    let mut use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    use_op.inputs = Some(ParamNode::Map(inputs));
+    use_op.outputs = Some(outputs);
+    use_op.retries = RetryPolicy {
+        max_attempts: 2,
+        backoff_ms: 0,
+    };
+    use_op.expect = Some(ExpectCondition::Cel {
+        expr: "has(meta.attempts)".to_string(),
+    });
+
+    let mut state_cfg = Dict::new();
+    state_cfg.insert(Value::from("record_children"), Value::Bool(true));
+    let mut runtime = Dict::new();
+    runtime.insert(Value::from("state"), Value::Dict(state_cfg));
+    let runtime_config = Value::Dict(runtime);
+
+    let (store, _observer, result) = run_use(use_op, OnError::Fail, &runtime_config).await;
+    result.expect("the second attempt must succeed");
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let use_node = as_dict(get(prime, "step").unwrap());
+    // The clean-node fix: attempt 1's `gate.stale` never ran on attempt
+    // 2, and is no longer under the node once attempt 2 succeeds.
+    let gate = as_dict(get(use_node, "gate").unwrap());
+    assert!(get(gate, "stale").is_none());
+
+    let meta = as_dict(get(use_node, "meta").unwrap());
+    let Some(Value::List(attempts)) = get(meta, "attempts") else {
+        panic!("expected meta.attempts to be a list");
+    };
+    assert_eq!(attempts.len(), 2);
+    let first_children = as_dict(get(as_dict(&attempts[0]), "children").unwrap());
+    let first_gate = as_dict(get(first_children, "gate").unwrap());
+    assert!(get(first_gate, "stale").is_some());
+    let second_children = as_dict(get(as_dict(&attempts[1]), "children").unwrap());
+    let second_gate = as_dict(get(second_children, "gate").unwrap());
+    assert!(get(second_gate, "stale").is_none());
+}
+
+/// Rule 7 (issue #659): retries exhausted with `on_error: continue`
+/// clears the node's own `value`, but each entry keeps what that
+/// attempt itself mapped, as a record.
+#[tokio::test]
+async fn attempts_kept_on_continue_after_retries_exhausted() {
+    let inline_yaml = "\
+effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode: stringify, input: ok}\n";
+    let mut outputs = IndexMap::new();
+    outputs.insert("first".to_string(), "prime.first.value".to_string());
+    let mut use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    use_op.outputs = Some(outputs);
+    use_op.retries = RetryPolicy {
+        max_attempts: 2,
+        backoff_ms: 0,
+    };
+    use_op.expect = Some(ExpectCondition::Cel {
+        expr: "false".to_string(),
+    });
+    let (store, _observer, result) = run_use(use_op, OnError::Continue, &Value::None).await;
+    result.expect("on_error: continue must absorb the exhausted-retries failure");
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let use_node = as_dict(get(prime, "step").unwrap());
+    assert_eq!(get(use_node, "value"), Some(&Value::None));
+
+    let meta = as_dict(get(use_node, "meta").unwrap());
+    let Some(Value::List(attempts)) = get(meta, "attempts") else {
+        panic!("expected meta.attempts to be a list");
+    };
+    assert_eq!(attempts.len(), 2);
+    for entry in attempts {
+        let entry = as_dict(entry);
+        assert!(matches!(get(entry, "error"), Some(Value::Str(_))));
+        let value = as_dict(get(entry, "value").unwrap());
+        assert_eq!(get(value, "first"), Some(&Value::from("\"ok\"")));
+    }
+}
+
 #[tokio::test]
 async fn the_child_roots_own_pair_is_suppressed_and_every_other_hook_forwards_namespaced() {
     let use_op = base_use_op(path_source("tests/fixtures/use/child_basic.yml"));

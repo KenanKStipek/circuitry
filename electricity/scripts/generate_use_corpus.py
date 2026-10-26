@@ -370,6 +370,48 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
         "    provider: json\n"
         "    params: {mode: stringify, input: ok}\n",
     )
+    # #659: an fs counter that persists across attempts, external to
+    # ctx/state, decides both an `if` only the first attempt takes
+    # (`gate`, `stale`) and whether the child itself fails or succeeds
+    # (`ready`) -- so retries, and the stale step's own attempt, need
+    # no self-reference back into the use's own node.
+    write_child(
+        tmp,
+        "child_attempts_clean_node.yml",
+        "interface:\n"
+        "  inputs:\n"
+        "    counter: {required: true}\n"
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: bump\n"
+        "    provider: fs\n"
+        "    params: {mode: append, path: '{{input.counter}}', content: x}\n"
+        "  - type: tool\n"
+        "    name: tally\n"
+        "    provider: fs\n"
+        "    params: {mode: read, path: '{{input.counter}}'}\n"
+        "  - type: if\n"
+        "    name: gate\n"
+        "    if: {mode: cel, expr: \"state.prime.tally.value == 'x'\"}\n"
+        "    then:\n"
+        "      - type: tool\n"
+        "        name: stale\n"
+        "        provider: json\n"
+        "        params: {mode: stringify, input: stale}\n"
+        "  - type: if\n"
+        "    name: ready\n"
+        "    if: {mode: cel, expr: \"state.prime.tally.value == 'xx'\"}\n"
+        "    then:\n"
+        "      - type: tool\n"
+        "        name: ok_marker\n"
+        "        provider: json\n"
+        "        params: {mode: stringify, input: ok}\n"
+        "    else:\n"
+        "      - type: tool\n"
+        "        name: force_retry\n"
+        "        provider: json\n"
+        "        params: {mode: parse, input: 'not json'}\n",
+    )
 
     cases.append(
         run_use_case(
@@ -434,6 +476,30 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
                 "path": "child_always_fails_expect.yml",
                 "retries": RetryPolicyDef(max_attempts=2, backoff_ms=0),
                 "expect": ExpectDef(mode="cel", expr="false"),
+            },
+        )
+    )
+    cases.append(
+        run_use_case(
+            name="record_children_clean_node",
+            tmp=tmp,
+            defn_kwargs={
+                "path": "child_attempts_clean_node.yml",
+                "inputs": {"counter": str(tmp / "counter_record_children_clean_node.txt")},
+                "outputs": {"tally": "prime.tally.value"},
+                "retries": RetryPolicyDef(max_attempts=2, backoff_ms=0),
+            },
+            runtime_config={"state": {"record_children": True}},
+        )
+    )
+    cases.append(
+        run_use_case(
+            name="full_namespace_clean_node",
+            tmp=tmp,
+            defn_kwargs={
+                "path": "child_attempts_clean_node.yml",
+                "inputs": {"counter": str(tmp / "counter_full_namespace_clean_node.txt")},
+                "retries": RetryPolicyDef(max_attempts=2, backoff_ms=0),
             },
         )
     )
