@@ -1,0 +1,2 @@
+Warning: Applied host settings from orchestration.yml: runtime.adapters
+Warning: runtime.adapters.local_a.adapter from orchestration.yml ignored: with enabled_adapters set, only config defines adapter aliases

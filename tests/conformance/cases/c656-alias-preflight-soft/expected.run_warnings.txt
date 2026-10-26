@@ -1,0 +1,1 @@
+Warning: adapter 'groq_alt' unavailable; effects ['ask'] will skip (missing ['env:GROQ_API_KEY'])
