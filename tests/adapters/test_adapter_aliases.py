@@ -290,8 +290,8 @@ def test_a_documents_new_alias_is_ignored_when_enabled_adapters_is_set() -> None
     )
     assert "new_alias" not in (effective.runtime.get("adapters") or {})
     assert any(
-        "runtime.adapters.new_alias.adapter from doc.yml ignored: with "
-        "enabled_adapters set, only config defines adapter aliases" == w
+        w == "runtime.adapters.new_alias.adapter from doc.yml ignored: with "
+        "enabled_adapters set, only config defines adapter aliases"
         for w in effective.warnings
     )
 
