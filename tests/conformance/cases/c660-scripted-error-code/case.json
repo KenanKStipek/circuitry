@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #660",
+  "description": "p1's error reply carries an explicit code (bad_schema): meta.error_code/meta.http_status land on the failed prompt. p2's error reply (a timeout) carries none: both fields stay absent.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

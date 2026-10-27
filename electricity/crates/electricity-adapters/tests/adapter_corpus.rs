@@ -25,7 +25,7 @@
 //! needs to trust the committed file.
 
 use electricity_adapters::curl_text::{
-    classify_curl_outcome, curl_failure_message, parse_error_body,
+    classify_curl_outcome, curl_failure_message, parse_error_body, parse_error_code,
 };
 use electricity_adapters::transport::CurlOutcome;
 use electricity_adapters::{anthropic, ollama, openai, openai_compat, replicate};
@@ -209,6 +209,7 @@ fn retry_info_from_json(retry: &Value) -> RetryInfo {
         retryable: bool_val(get(retry, "retryable")),
         status: i64_opt(get(retry, "status")).map(|s| s as u16),
         retry_after: str_opt(get(retry, "retry_after")),
+        error_code: str_opt(get(retry, "error_code")),
     }
 }
 
@@ -283,6 +284,15 @@ fn parse_error_body_matches_circuitry() {
         let stdout = get(case, "stdout").as_str().unwrap();
         let expected = str_opt(get(case, "expected"));
         assert_eq!(parse_error_body(stdout), expected, "stdout={stdout:?}");
+    }
+}
+
+#[test]
+fn parse_error_code_matches_circuitry() {
+    for case in list(&corpus(), "parse_error_code_cases") {
+        let stdout = get(case, "stdout").as_str().unwrap();
+        let expected = str_opt(get(case, "expected"));
+        assert_eq!(parse_error_code(stdout), expected, "stdout={stdout:?}");
     }
 }
 

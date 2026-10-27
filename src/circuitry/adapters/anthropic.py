@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from ..curl_support import curl_failure_message, run_curl
+from ..curl_support import curl_error_code, curl_failure_message, run_curl
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ImageInput, last_user_index
@@ -161,6 +161,7 @@ class AnthropicAdapter:
                     secrets=[api_key],
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+                error_code=curl_error_code(proc.stdout, [api_key]),
             )
 
         try:

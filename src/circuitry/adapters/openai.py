@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from ..curl_support import curl_failure_message, run_curl
+from ..curl_support import curl_error_code, curl_failure_message, run_curl
 from ..preflight import CheckResult
 from ._openai_compat import chat_messages, parse_chat_response, sampling_fields
 from ._retry import AdapterCallError, classify_curl_exit
@@ -85,6 +85,7 @@ class OpenAIAdapter:
                     secrets=[api_key],
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+                error_code=curl_error_code(proc.stdout, [api_key]),
             )
 
         try:
