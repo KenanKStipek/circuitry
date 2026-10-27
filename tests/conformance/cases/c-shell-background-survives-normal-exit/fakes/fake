@@ -122,8 +122,14 @@ def main() -> int:
 
     if args.sleep:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        while True:
-            time.sleep(3600)
+        # Sleep until the engine's SIGKILL, as a hung command would, but never
+        # outlive the engine (#661): stop once orphaned (a parent pid of 1 means
+        # the engine died before this line ran), or after 120 s.
+        parent = os.getppid()
+        deadline = time.monotonic() + 120
+        while parent != 1 and os.getppid() == parent and time.monotonic() < deadline:
+            time.sleep(0.2)
+        return 124
 
     if args.cat:
         data = sys.stdin.buffer.read()
