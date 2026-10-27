@@ -1190,6 +1190,144 @@ mod tests {
     }
 
     #[test]
+    fn ternary_guard_reaches_the_untaken_branch_instead_of_the_rule() {
+        let present = dict(vec![("input", dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]))]);
+        let expr = "has(state.input.a.b) ? state.input.a.b.c : 'fallback'";
+        assert_eq!(
+            evaluate_condition(expr, &present, false),
+            Ok(true) // truthy('fallback')
+        );
+    }
+
+    #[test]
+    fn false_ternarys_untaken_branch_never_reads_the_unset_path() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "false ? state.input.x.y : 'fallback'";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(true));
+    }
+
+    #[test]
+    fn two_unset_reads_in_or_names_the_right_hand_one() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "state.input.x.y == 1 || state.input.z.w == 1";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(false));
+        assert_eq!(unset_path(expr, &empty, false), Ok(Some("state.input.z.w".to_string())));
+    }
+
+    #[test]
+    fn or_with_true_on_the_right_wins_over_the_errored_left() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "state.input.x.y == 1 || true";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(true));
+        assert_eq!(unset_path(expr, &empty, false), Ok(None));
+    }
+
+    #[test]
+    fn exists_deciding_element_wins_over_an_errored_one() {
+        let state = dict(vec![("input", dict(vec![("items", Value::List(vec![Value::from(1_i64), Value::from(2_i64)]))]))]);
+        let expr = "state.input.items.exists(i, i == 2 || state.input.z.y == 1)";
+        assert_eq!(evaluate_condition(expr, &state, false), Ok(true));
+        assert_eq!(unset_path(expr, &state, false), Ok(None));
+    }
+
+    #[test]
+    fn map_literal_with_an_unset_value_is_unchanged() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "{'k': state.input.missing}";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(false));
+        assert_eq!(unset_path(expr, &empty, false), Ok(Some("state.input.missing".to_string())));
+    }
+
+    #[test]
+    fn strict_ternary_guarded_read_does_not_raise() {
+        let present = dict(vec![("input", dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]))]);
+        let expr = "has(state.input.a.b) ? state.input.a.b.c == 1 : true";
+        assert_eq!(evaluate_condition(expr, &present, true), Ok(true));
+    }
+
+    #[test]
+    fn strict_false_and_short_circuit_does_not_raise() {
+        let empty = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_condition("false && state.input.z == 1", &empty, true),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn strict_deciding_or_with_true_does_not_raise() {
+        let state = dict(vec![("input", dict(vec![("force", Value::Bool(true))]))]);
+        let expr = "state.prime.tick.value.price <= 10 || state.input.force";
+        assert_eq!(evaluate_condition(expr, &state, true), Ok(true));
+    }
+
+    #[test]
+    fn free_identifiers_bare_namespace() {
+        assert_eq!(free_identifiers("input.x == 1").unwrap(), vec!["input".to_string()]);
+    }
+
+    #[test]
+    fn free_identifiers_type_names_and_two_arg_all_are_free_of_their_own_names() {
+        assert_eq!(
+            free_identifiers("type(1) == int && [1, 2].all(i, i > 0)").unwrap(),
+            vec!["int".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_reduce_binds_nothing() {
+        // `cel`'s own `reduce` macro is dropped entirely from this
+        // crate's registration (`macros::register`), so the compiled
+        // call is an undeclared `reduce`, a function name, never an
+        // identifier -- `r`/`i` inside it are, since nothing binds them.
+        assert_eq!(
+            free_identifiers("[0, 1, 2].reduce(r, i, 0, r + 2 * i + 1)").unwrap(),
+            vec!["r".to_string(), "i".to_string(), "r".to_string(), "i".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_three_argument_map_binds_nothing() {
+        assert_eq!(
+            free_identifiers("[1, 2, 3].map(i, i > 0, i * 2)").unwrap(),
+            vec!["i".to_string(), "i".to_string(), "i".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_nested_macros_accumulate_and_shadow() {
+        let expr = "state.input.rows.all(r, r.items.exists(r, r > 0))";
+        assert_eq!(free_identifiers(expr).unwrap(), vec!["state".to_string()]);
+    }
+
+    #[test]
+    fn free_identifiers_message_construction_type_name_counts() {
+        assert_eq!(free_identifiers("Msg{f: 1} == 1").unwrap(), vec!["Msg".to_string()]);
+    }
+
+    #[test]
+    fn free_identifiers_function_and_method_names_are_not_identifiers() {
+        assert_eq!(
+            free_identifiers("size(state.a) > 0 && state.a.startsWith('x')").unwrap(),
+            vec!["state".to_string(), "state".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_first_name_in_source_order() {
+        assert_eq!(
+            free_identifiers("unit == 1 && stat == 2").unwrap(),
+            vec!["unit".to_string(), "stat".to_string()]
+        );
+    }
+
+    #[test]
+    fn unset_path_is_none_for_an_ordinary_result() {
+        let state = dict(vec![("a", Value::from(1_i64))]);
+        assert_eq!(unset_path("state.a == 1", &state, false), Ok(None));
+    }
+
+    #[test]
     fn big_int_read_by_the_expression_raises() {
         let huge: num_bigint::BigInt = "100000000000000000000".parse().unwrap();
         let state = dict(vec![("n", Value::from(huge))]);
@@ -1318,6 +1456,46 @@ mod tests {
     fn unknown_function_raises() {
         let state = dict(vec![("a", Value::from(1_i64))]);
         assert!(evaluate_condition("nope(state.a)", &state, false).is_err());
+    }
+
+    #[test]
+    fn undeclared_identifier_is_one_line_in_evaluate_condition() {
+        let err = evaluate_condition("unit == 1", &Value::Dict(Dict::new()), false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for 'unit == 1': undeclared reference to 'unit'"
+        );
+    }
+
+    #[test]
+    fn undeclared_function_is_one_line_in_evaluate_condition() {
+        let err = evaluate_condition("nope(1) == 1", &Value::Dict(Dict::new()), false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'"
+        );
+    }
+
+    #[test]
+    fn undeclared_method_is_one_line_in_evaluate_condition() {
+        let err =
+            evaluate_condition("'a'.nope() == 1", &Value::Dict(Dict::new()), false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for \"'a'.nope() == 1\": undeclared reference to 'nope'"
+        );
+    }
+
+    #[test]
+    fn undeclared_reference_is_one_line_in_evaluate_expect() {
+        let value = Value::from(1_i64);
+        let meta = Value::Dict(Dict::new());
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_expect("nope(value)", &value, &meta, &state).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for 'nope(value)': undeclared reference to 'nope'"
+        );
     }
 
     #[test]

@@ -944,4 +944,86 @@ mod tests {
         }];
         assert_eq!(first_unresolved(&paths, &state), None);
     }
+
+    fn eval_marked(expr: &str, state: &Value) -> Result<cel::Value, cel::ExecutionError> {
+        let env = Arc::new(macros::env());
+        let program = env.compile(expr).unwrap();
+        let mut tree = program.expression().clone();
+        rewrite(&mut tree);
+        mark_unset(&mut tree, state);
+        let mut ctx = Context::with_env(Arc::clone(&env));
+        ordering::register(&mut ctx);
+        equality::register(&mut ctx);
+        indexing::register(&mut ctx);
+        macros::register(&mut ctx);
+        register(&mut ctx);
+        ctx.add_variable_from_value("state", crate::convert::to_cel(state).unwrap());
+        cel::Value::resolve(&tree, &ctx)
+    }
+
+    fn unset_marker_path(err: &cel::ExecutionError) -> Option<&str> {
+        match err {
+            cel::ExecutionError::FunctionError { function, message }
+                if function == UNSET_MARKER_FN =>
+            {
+                Some(message.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn mark_unset_marks_an_unguarded_occurrence() {
+        let state = Value::Dict(Dict::new());
+        let err = eval_marked("state.a.b == 1", &state).unwrap_err();
+        assert_eq!(unset_marker_path(&err), Some("state.a.b"));
+    }
+
+    #[test]
+    fn mark_unset_exempts_only_the_has_guarded_occurrence() {
+        let state = Value::Dict(Dict::new());
+        assert_eq!(
+            eval_marked("has(state.a.b)", &state).unwrap(),
+            cel::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn mark_unset_is_per_occurrence_not_per_path_string() {
+        // The exact string "state.a.b" occurs twice: inside has(),
+        // which structurally exempts only that one occurrence, and
+        // again on the right of `||`, reached because neither side of
+        // `&&` decided false -- that second occurrence must still be
+        // marked. Removing the old "guarded anywhere" exemption (a
+        // path string guarded once was exempt everywhere it recurred)
+        // is exactly what lets a guard protect only the read it
+        // actually guards (issue #657).
+        let state = Value::Dict(Dict::new());
+        let err = eval_marked("has(state.a.b) && true || state.a.b == 1", &state).unwrap_err();
+        assert_eq!(unset_marker_path(&err), Some("state.a.b"));
+    }
+
+    #[test]
+    fn mark_unset_leaves_a_resolved_path_untouched() {
+        let mut inner = Dict::new();
+        inner.insert(Value::Str("b".into()), Value::from(1_i64));
+        let mut outer = Dict::new();
+        outer.insert(Value::Str("a".into()), Value::Dict(inner));
+        let state = Value::Dict(outer);
+        assert_eq!(
+            eval_marked("state.a.b == 1", &state).unwrap(),
+            cel::Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn mark_unset_survives_a_rewritten_strict_operator() {
+        // `rewrite` substitutes `_<=_` for one of this crate's own
+        // `__electricity_strict_*` operators before `mark_unset` runs
+        // on the same tree -- the unguarded occurrence underneath that
+        // substitution must still be found and marked.
+        let state = Value::Dict(Dict::new());
+        let err = eval_marked("state.a.b <= 1", &state).unwrap_err();
+        assert_eq!(unset_marker_path(&err), Some("state.a.b"));
+    }
 }
