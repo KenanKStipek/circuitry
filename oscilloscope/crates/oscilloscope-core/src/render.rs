@@ -530,7 +530,7 @@ pub fn build(
     // time" chart needs these to attribute a long session's own
     // tokens to when they actually arrived, not just to its own
     // `completed_at`.
-    model.record_live_token_observations(&flat, now);
+    model.record_live_token_observations(&flat, now, crate::model::run_ended(state_ref));
     // Every path either side of a run has ever heard of (hoisted here,
     // issue/finding on `use` accounting): the header's own
     // planned/done counts need the identical view `build_rows`/

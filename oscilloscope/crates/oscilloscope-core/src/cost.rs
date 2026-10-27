@@ -400,16 +400,25 @@ fn is_agent_session(meta: &Value) -> bool {
 /// `meta.live` reading it saw, each at the instant osi observed it
 /// (not evenly, and not all dumped into one bucket at the session's
 /// own end) -- each sample's own increase over the one before it is
-/// counted at its own timestamp, and once the session completes, any
-/// difference between what was actually observed and the session's
-/// own final, authoritative token count (`node_tokens`) is counted
-/// at its own `completed_at`, so the chart's own total for the step
-/// always ends up exactly right. A session never observed running at
-/// all (opened already finished, or watched only after it ended, so
-/// `model` has no samples for it) instead spreads its own tokens
-/// evenly over its own span, `created_at` to `completed_at` --
-/// proportional to how much of each chart bucket that span actually
-/// overlaps.
+/// counted at its own timestamp, except the very first sample of a
+/// watch that started partway through the session, which is itself
+/// spread evenly from the session's own `created_at` rather than
+/// dumped whole at the moment osi happened to start watching. Once
+/// the session completes, any shortfall between what was actually
+/// observed and the session's own final, authoritative token count
+/// (`node_tokens`) is counted at its own `completed_at`, so the
+/// chart's own total for the step always ends up exactly right --
+/// `model` never lets an overshoot happen in the first place, by
+/// dropping an unnamed loop's earlier pass's own samples for a path
+/// the moment a later pass resets that path's running totals back to
+/// zero (`RunModel::record_live_token_observations`). A session
+/// never observed running at all (opened already finished, or
+/// watched only after it ended, so `model` has no samples for it)
+/// instead spreads its own tokens evenly over its own span,
+/// `created_at` to `completed_at` -- or, for an interrupted session's
+/// leftover `meta.live` with no `completed_at` of its own, to its own
+/// last heartbeat (`live.updated_at`) -- proportional to how much of
+/// each chart bucket that span actually overlaps.
 pub fn tokens_over_time_by_phase(
     run_start_ts: Option<&str>,
     now: &str,
@@ -458,11 +467,23 @@ pub fn tokens_over_time_by_phase(
         }
         let observations = model.agent_token_observations(path);
         if observations.is_empty() {
-            if let (Some(created), Some(completed)) = (&node.created_at, &node.completed_at) {
-                let total = {
-                    let (sent, received) = node_tokens(&node.meta);
-                    sent + received
-                };
+            // An interrupted session's leftover `meta.live` has no
+            // `completed_at` of its own -- its own last heartbeat
+            // (`live.updated_at`) stands in for one, and its own
+            // running totals stand in for `node_tokens` (which stays
+            // at zero until a node actually finishes).
+            let (completed_at, total) = if let Some(completed) = node.completed_at.as_deref() {
+                let (sent, received) = node_tokens(&node.meta);
+                (Some(completed), sent + received)
+            } else if let Some(live) = &node.live {
+                (
+                    live.updated_at.as_deref(),
+                    live.tokens_sent.unwrap_or(0) + live.tokens_received.unwrap_or(0),
+                )
+            } else {
+                (None, 0)
+            };
+            if let (Some(created), Some(completed)) = (&node.created_at, completed_at) {
                 if total > 0 {
                     spread_evenly(
                         &mut series[phase_idx].1,
@@ -479,10 +500,32 @@ pub fn tokens_over_time_by_phase(
         }
         let mut observed_total = 0u64;
         let mut prev = (0u64, 0u64);
-        for (ts, sent, received) in observations {
+        for (i, (ts, sent, received)) in observations.iter().enumerate() {
             let delta = sent.saturating_sub(prev.0) + received.saturating_sub(prev.1);
             if delta > 0 {
-                if let Some(instant) = crate::diff::parse_instant(ts) {
+                if i == 0 {
+                    // A watch that starts partway through a long
+                    // session sees its own already-accumulated
+                    // tokens on the very first observation --
+                    // spreading them over the time they actually
+                    // took (the session's own start to this first
+                    // observation), not dumping the whole lot into
+                    // one bucket at the moment osi happened to start
+                    // watching.
+                    if let Some(created_at) = node.created_at.as_deref() {
+                        spread_evenly(
+                            &mut series[phase_idx].1,
+                            created_at,
+                            ts,
+                            delta,
+                            start,
+                            span_ms,
+                            &bucket_for,
+                        );
+                    } else if let Some(instant) = crate::diff::parse_instant(ts) {
+                        series[phase_idx].1[bucket_for(instant)] += delta;
+                    }
+                } else if let Some(instant) = crate::diff::parse_instant(ts) {
                     series[phase_idx].1[bucket_for(instant)] += delta;
                 }
                 observed_total += delta;
@@ -851,7 +894,11 @@ mod tests {
     /// Issue #641, first case: while osi watches an agent session
     /// run, each observed increase in its own running tokens lands
     /// in the bucket for the moment it was actually observed, not
-    /// all dumped into one bucket at the session's own end -- and
+    /// all dumped into one bucket at the session's own end -- except
+    /// the very first observation, which is itself spread from the
+    /// session's own `created_at` (the watch here starts two minutes
+    /// into the session, so those first 30 tokens took those two
+    /// minutes, not the single instant they were observed at) -- and
     /// any difference between what was observed and the session's
     /// own final, authoritative total is reconciled into the bucket
     /// at its own `completed_at`.
@@ -876,6 +923,7 @@ mod tests {
                 }}),
             ),
             "2026-01-01T00:02:00Z",
+            false,
         );
         model.record_live_token_observations(
             &flatten_state(
@@ -887,6 +935,7 @@ mod tests {
                 }}),
             ),
             "2026-01-01T00:05:00Z",
+            false,
         );
         let series = tokens_over_time_by_phase(
             Some("2026-01-01T00:00:00Z"),
@@ -896,13 +945,128 @@ mod tests {
             &model,
         );
         let (_, buckets) = &series[0];
-        // 30 observed at minute 2, 40 more (70 total) observed at
-        // minute 5, then the final 30 (100 total, the state's own
-        // authoritative figure) reconciled at completion, minute 10.
-        assert_eq!(buckets[2], 30);
+        // The first 30 tokens, observed whole at minute 2, spread
+        // evenly back across minutes 0 and 1 instead; 40 more (70
+        // total) observed at minute 5 land there in full, since that
+        // is a real subsequent observation, not the first one; then
+        // the final 30 (100 total, the state's own authoritative
+        // figure) is reconciled at completion, minute 10.
+        assert_eq!(buckets[0], 15);
+        assert_eq!(buckets[1], 15);
+        assert_eq!(buckets[2], 0);
         assert_eq!(buckets[5], 40);
         assert_eq!(buckets[10], 30);
         assert_eq!(buckets.iter().sum::<u64>(), 100);
+    }
+
+    /// Issue #641: an unnamed loop rerunning the same agent path
+    /// starts that path's own running totals back at zero on each
+    /// pass -- the chart's total for the step must still equal only
+    /// what the final state actually remembers (the last pass's own
+    /// tokens), not every pass's tokens added together.
+    #[test]
+    fn tokens_over_time_by_phase_does_not_overshoot_on_a_rerun_path() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "loop": {"value": null, "meta": {"completed_at": null},
+                "agent": {"value": "done", "meta": {
+                    "created_at": "2026-01-01T00:05:00Z", "completed_at": "2026-01-01T00:08:00Z",
+                    "provider": "agent", "tokens_sent_total": 20, "tokens_received_total": 0
+                }}
+            }
+        }});
+        let flat = flatten_state(&state);
+        let phases = vec![("prime.loop".to_string(), "loop".to_string())];
+        let mut model = crate::model::RunModel::new();
+        // First pass through the loop, watched to its own end: 10
+        // tokens, which the rerun below must not add on top of.
+        model.record_live_token_observations(
+            &flatten_state(&json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "loop": {"value": null, "meta": {"completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 10, "tokens_received": 0}}}
+                }
+            }})),
+            "2026-01-01T00:02:00Z",
+            false,
+        );
+        // Second pass reruns the same path, resetting its own
+        // running totals back to zero before growing to the 20 the
+        // final state alone remembers.
+        model.record_live_token_observations(
+            &flatten_state(&json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "loop": {"value": null, "meta": {"completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T00:05:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 0, "tokens_received": 0}}}
+                }
+            }})),
+            "2026-01-01T00:05:30Z",
+            false,
+        );
+        model.record_live_token_observations(
+            &flatten_state(&json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "loop": {"value": null, "meta": {"completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T00:05:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 20, "tokens_received": 0}}}
+                }
+            }})),
+            "2026-01-01T00:07:00Z",
+            false,
+        );
+        let series = tokens_over_time_by_phase(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:24:00Z",
+            &flat,
+            &phases,
+            &model,
+        );
+        let (_, buckets) = &series[0];
+        assert_eq!(buckets[7], 20);
+        assert_eq!(
+            buckets.iter().sum::<u64>(),
+            20,
+            "the first pass's own 10 tokens must not survive the rerun"
+        );
+    }
+
+    /// Issue #641: an interrupted session's leftover `meta.live`,
+    /// first seen only once the run itself has already ended (osi
+    /// opened fresh afterwards), must spread over its own span --
+    /// `created_at` to its own last heartbeat -- the same as any
+    /// other session never observed running, not land as a single
+    /// observation at whatever `now` happens to be when osi opens it.
+    #[test]
+    fn tokens_over_time_by_phase_spreads_an_interrupted_sessions_leftover_live() {
+        let state = json!({"prime": {"value": null, "meta": {
+                "completed_at": "2026-01-01T00:04:30Z", "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+            "agent1": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null, "provider": "agent",
+                "live": {
+                    "updated_at": "2026-01-01T00:04:00Z", "tokens_sent": 40, "tokens_received": 0
+                }
+            }}
+        }});
+        let flat = flatten_state(&state);
+        let phases = vec![("prime.agent1".to_string(), "agent1".to_string())];
+        let mut model = crate::model::RunModel::new();
+        // A fresh model, as if osi had just opened this already-dead
+        // run: this path's live summary is seen for the very first
+        // time only once the run is already over.
+        model.record_live_token_observations(&flat, "2026-03-01T00:00:00Z", true);
+        assert!(model.agent_token_observations("prime.agent1").is_empty());
+        let series = tokens_over_time_by_phase(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:24:00Z",
+            &flat,
+            &phases,
+            &model,
+        );
+        let (_, buckets) = &series[0];
+        // A 4-minute session spread evenly, not dumped into one
+        // bucket at some unrelated `now` from opening history long
+        // after the run ended.
+        assert_eq!(&buckets[0..4], &[10, 10, 10, 10]);
+        assert_eq!(buckets.iter().sum::<u64>(), 40);
     }
 
     /// Issue #641, second case: an agent session never observed
