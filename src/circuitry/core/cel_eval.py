@@ -114,9 +114,6 @@ class CelEvaluationError(CelError, RuntimeError):
     """
 
 
-#: What :func:`_evaluate_in_state` returns when an unguarded ``state.`` path
-#: the expression reads is unset and the caller is not strict.
-_UNSET_STATE = object()
 
 #: ``_StateEvaluator``'s marks, shared and empty, for a site with no
 #: unset-path rule (``expect:``) — every ``member_dot`` just evaluates
@@ -448,11 +445,12 @@ def _evaluate_in_state(
     """*expr*'s CEL result with *ctx* bound as ``state``: what
     :func:`evaluate_cel` and :func:`evaluate_cel_value` share.
 
-    Returns :data:`_UNSET_STATE`, after a warning that names the path and
-    ends with *unset_outcome* (what the caller gives instead), when an
-    unguarded ``state.`` path the expression reads is unset, unless
-    *strict*. Raises :class:`CelEvaluationError` on an empty, over-long,
-    unparseable or failing expression, and on an unset path when *strict*.
+    Returns the :class:`_UnsetRead` it caught, after a warning that names
+    its path and ends with *unset_outcome* (what the caller gives
+    instead), when an unguarded ``state.`` path the expression reads is
+    unset, unless *strict*. Raises :class:`CelEvaluationError` on an
+    empty, over-long, unparseable or failing expression, and on an unset
+    path when *strict*.
     """
     if not expr or not expr.strip():
         raise CelEvaluationError(
@@ -491,7 +489,7 @@ def _evaluate_in_state(
             exc.path,
             unset_outcome,
         )
-        return _UNSET_STATE
+        return exc
     except CELEvalError as exc:
         text = _error_text(exc)
         logger.error("CEL evaluation failed for expr %r: %s", expr, text)
@@ -525,7 +523,19 @@ def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> boo
     unless the author says otherwise.
     """
     result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="condition is false")
-    return False if result is _UNSET_STATE else bool(result)
+    return False if isinstance(result, _UnsetRead) else bool(result)
+
+
+def unset_path(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> str | None:
+    """Which path, if any, the unset-path rule named for *expr* against *ctx*.
+
+    Not a public evaluator entry point -- it exists so the CEL golden
+    corpus can pin, across both engines, which path the rule names, not
+    only the resulting bool :func:`evaluate_cel` gives. Returns ``None``
+    when the rule didn't fire (an ordinary result, or *strict* raised).
+    """
+    result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="condition is false")
+    return result.path if isinstance(result, _UnsetRead) else None
 
 
 def evaluate_cel_value(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> Any:
@@ -542,7 +552,7 @@ def evaluate_cel_value(expr: str, ctx: dict[str, Any], *, strict: bool = False) 
     raises on, and for a result JSON cannot carry.
     """
     result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="value is null")
-    if result is _UNSET_STATE:
+    if isinstance(result, _UnsetRead):
         return None
     try:
         return cel_to_json(result)

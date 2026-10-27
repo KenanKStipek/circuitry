@@ -604,6 +604,43 @@ fn truthy(value: &cel::Value) -> bool {
 /// evaluates to `false` — that would be indistinguishable from a
 /// legitimately false condition.
 pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<bool, CelError> {
+    match evaluate_condition_inner(expr, state, strict)? {
+        ConditionOutcome::Value(value) => Ok(value),
+        ConditionOutcome::Unset(_) => Ok(false),
+    }
+}
+
+/// Which path, if any, the unset-path rule named for *expr* against
+/// *state* -- the same evaluation [`evaluate_condition`] runs, except it
+/// returns the marker's own path instead of collapsing it into `false`.
+/// Not part of the public evaluator API: exists so the CEL golden corpus
+/// can pin, across both engines, which path the rule names, not only
+/// the resulting bool.
+///
+/// # Errors
+///
+/// Every failure [`evaluate_condition`] raises on, raises here too.
+#[doc(hidden)]
+pub fn unset_path(expr: &str, state: &Value, strict: bool) -> Result<Option<String>, CelError> {
+    match evaluate_condition_inner(expr, state, strict)? {
+        ConditionOutcome::Value(_) => Ok(None),
+        ConditionOutcome::Unset(path) => Ok(Some(path)),
+    }
+}
+
+/// [`evaluate_condition`]'s own result, before the unset-path rule's
+/// path is collapsed into a plain `false` -- shared with [`unset_path`]
+/// so the rule's decision is computed once.
+enum ConditionOutcome {
+    Value(bool),
+    Unset(String),
+}
+
+fn evaluate_condition_inner(
+    expr: &str,
+    state: &Value,
+    strict: bool,
+) -> Result<ConditionOutcome, CelError> {
     check_length(expr)?;
     check_stack_safety(expr)?;
     let env = stdlib_env();
@@ -705,7 +742,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
                     py_repr(expr),
                     py_repr(path)
                 );
-                return Ok(false);
+                return Ok(ConditionOutcome::Unset(path.to_string()));
             }
             // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
             // evaluation failed for expr %r: %s", expr, exc)` -- an
@@ -722,7 +759,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
             ));
         }
     };
-    Ok(truthy(&result))
+    Ok(ConditionOutcome::Value(truthy(&result)))
 }
 
 /// Evaluates a tool/use `expect:` CEL expression and returns a bool.
