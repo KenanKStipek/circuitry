@@ -1643,11 +1643,26 @@ regardless of which underlying crate is used:
   what the error says. Issue #629 tracks changing that text (and, with it, removing this
   conversion).
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
-  **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
-  the parse tree for every dotted `state.` read before evaluating, and makes the whole expression
-  `False` if any such path is unresolved (with a warning naming the path). Two exemptions: any
-  path inside a `has(...)` call anywhere in the expression, and `strict: true` on the definition
-  (which turns the same condition back into a raised error).
+  **not** an evaluation error inside `if`/`while` CEL — but only if that read decides the whole
+  expression's result. Each unguarded `state.` occurrence is marked, against the state this
+  evaluation uses, right before evaluating (`paths::mark_unset`, after `paths::rewrite`), and the
+  expression is then evaluated under `cel`'s own rules for `has()`, `?:`, `&&`/`||` and
+  `all`/`exists` — unchanged, since those already match the intended semantics. Only if the whole
+  result turns out to be one of those marks does it become `False` (with a warning naming the
+  path); any other result, including the expression's own other errors, stands. `has(...)` always
+  exempts the one path it names; `strict: true` on the definition turns a *deciding* unresolved
+  read back into a raised error, never a guarded or short-circuited one.
+- **Undeclared references** (#658): an identifier, function or method `cel` cannot resolve
+  (`ExecutionError::UndeclaredReference`) is one line, lowercase, naming it
+  (`"undeclared reference to '<name>'"`) — never `cel`'s own capitalized `Display`. A direct call
+  to one of this crate's own reserved `__electricity_*` names (#400) is worded the same way.
+  `electricity-compiler`'s own `state_ns::validate_cel_expr` rejects any other bare name at compile
+  time (a state namespace or a loop binding spelled without `state.`, or anything else
+  undeclared), via `electricity_cel::free_identifiers`, which walks the macro-expanded AST —
+  `all`/`exists`/`exists_one`/`map`/`filter` are already `Expr::Comprehension` nodes by then, so a
+  macro's own bound variable needs no special-casing the way cof's unexpanded parse tree does.
+  `existsOne` (cel's camelCase alias) is not registered as a macro at all: cel-python has no such
+  macro, so cof treats a call to it as an ordinary, undeclared method, and electricity now matches.
 - **`expect:` gets none of the above exemption** (Quirk Q6, runtime-semantics §4.4/§9) —
   `evaluate_cel_expect`'s absent-path behavior is genuinely different from `evaluate_cel`'s: an
   unresolved path on `value`/`meta` raises, which the caller treats as "expectation failed," not

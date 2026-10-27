@@ -775,26 +775,43 @@ engine that reused Python's native `==` for CEL equality would diverge here.
 ### 4.4 Absent-path convention
 
 **Reading an unset path is not an expression error — it makes the whole
-expression `False`**, decided *structurally* (by walking the parse tree for
-every dotted `state.` read — `_collect_state_paths`, `core/cel_eval.py`, —
-then checking each against `ctx` *before* evaluating), not by catching an
-exception during evaluation. A `logger.warning` fires naming the unresolved
-path (confirmed: `"CEL expression %r reads unset state path %r; condition is
-false"`). Two escape hatches, both confirmed live:
+expression `False`, but only if that read decides the result.** The rule
+follows evaluation rather than preceding it: each unguarded `state.` read is
+marked, against `ctx`, immediately before evaluating (`_mark_unset`,
+`core/cel_eval.py`), and the expression is then evaluated under CEL's own
+rules for `has()`, the ternary `?:`, `&&`/`||` and the `all`/`exists` macros
+(a `celpy.evaluation.Evaluator` subclass, `_StateEvaluator`). Only if the
+whole expression's own result turns out to be one of those marks does the
+rule apply, naming its path; any other result — including one of the
+expression's *other* errors — stands. A `logger.warning` fires naming the
+unresolved path when the rule applies (confirmed: `"CEL expression %r reads
+unset state path %r; condition is false"`). Escape hatches, all confirmed
+live:
 
-- Any path appearing as an argument to `has()` **anywhere** in the
-  expression is exempt (`has(state.input.missing)` → `False`, no warning,
-  no effect on the rest of the expression).
+- `has(state.input.missing)` is `True` exactly when that read would
+  evaluate without error — unaffected by this rule either way.
   `has(state.x) && state.x > 1` evaluates properly instead of collapsing.
-- `strict: true` on the `if`/`while`/loop definition turns an unresolved path
-  back into a raised `CelEvaluationError` instead of a silent `False`
-  (confirmed: `strict=True` on `state.input.missing == null` raises
-  `"... reads unset state path 'state.input.missing' and is marked strict."`).
+- The ternary evaluates only the chosen branch: `has(state.x) ? state.x.y :
+  'fallback'` and `false ? state.x.y : 'fallback'` both give `'fallback'`
+  rather than being forced `null`/`False` by the untaken branch's own
+  unset read.
+- `&&`/`||` let a deciding operand win over an unset read on the other
+  side: `state.x == 1 || true` is `True`; when both sides are unset, the
+  warning names the right-hand path.
+- `all`/`exists` let a deciding element win over elements that errored.
+- `strict: true` on the `if`/`while`/loop definition turns a *deciding*
+  unresolved read back into a raised `CelEvaluationError` instead of a
+  silent `False` (confirmed: `strict=True` on `state.input.missing == null`
+  raises `"... reads unset state path 'state.input.missing' and is marked
+  strict."`); a guarded or short-circuited unset read never raises, strict
+  or not.
 
-A genuinely malformed/unparseable expression, an unknown function, or a real
-type error always raises `CelEvaluationError` — never silently `False`
-(deliberate: a typo in a condition must not quietly route every run down
-`else`).
+A genuinely malformed/unparseable expression, an unknown function or method,
+or a real type error always raises `CelEvaluationError` — never silently
+`False` (deliberate: a typo in a condition must not quietly route every run
+down `else`). An undeclared identifier, function or method is one line
+(`"undeclared reference to '<name>'"`), never a dump of cel-python's own
+activation repr.
 
 ### 4.5 Errors
 
