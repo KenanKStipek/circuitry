@@ -13,6 +13,12 @@ effects:
         provider: json
         params: {mode: stringify, input: {x: 1}}
   - type: tool
+    name: expect_gate
+    provider: json
+    params: {mode: stringify, input: {x: 1}}
+    expect: {mode: cel, expr: "nope(value)"}
+    on_error: continue
+  - type: tool
     name: marker
     provider: json
     params: {mode: stringify, input: {reached: true}}

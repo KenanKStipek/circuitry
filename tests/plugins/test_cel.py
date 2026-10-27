@@ -141,6 +141,38 @@ def test_a_has_guard_is_exempt_from_the_unset_path_rule() -> None:
     assert evaluate_cel_value(expr, {"prime": {}}, strict=True) == "fallback"
 
 
+def test_the_issues_three_guarded_expressions_give_fallback_with_no_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ctx = {"input": {"a": {"q": 1}}}
+    with caplog.at_level(logging.WARNING, logger="circuitry.core.cel_eval"):
+        assert (
+            evaluate_cel_value(
+                "has(state.input.a.b) ? state.input.a.b.c : 'fallback'", ctx
+            )
+            == "fallback"
+        )
+        assert (
+            evaluate_cel_value("false ? state.input.x.y : 'fallback'", ctx) == "fallback"
+        )
+        assert (
+            evaluate_cel_value(
+                "has(state.input.a.b.c) ? state.input.a.b.c : 'fallback'", ctx
+            )
+            == "fallback"
+        )
+    assert caplog.text == ""
+
+
+def test_an_undeclared_name_inside_a_map_literal_is_one_line() -> None:
+    with pytest.raises(CelEvaluationError) as excinfo:
+        evaluate_cel_value("{'first': unit.text}", {})
+    message = str(excinfo.value)
+    assert message == "CEL evaluation failed for \"{'first': unit.text}\": undeclared reference to 'unit'"
+    assert "Activation(" not in message
+    assert len(message) < 200
+
+
 def test_cel_is_a_registered_plugin_that_needs_no_capability() -> None:
     assert isinstance(build_plugin(plugin_name="cel", runtime={}), CelPlugin)
     assert capabilities_of("cel") == frozenset()
@@ -362,6 +394,27 @@ effects:
 """,
     )
     assert "'state.nothing' does not name a state namespace" in error
+
+
+def test_check_rejects_a_bare_name_read_outside_state(tmp_path: Path) -> None:
+    (error,) = _check_errors(
+        tmp_path,
+        """
+effects:
+  - type: loop
+    name: hands
+    each: {in: input.units, as: unit}
+    body:
+      - type: tool
+        name: plain
+        provider: cel
+        params: {expr: "{'first': unit.text}"}
+""",
+    )
+    assert error == (
+        "CEL expression at 'prime.effects[0].body[0]': 'unit' is a loop "
+        "binding: in CEL, write 'state.unit'."
+    )
 
 
 @pytest.mark.parametrize(
