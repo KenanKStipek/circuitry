@@ -904,6 +904,7 @@ fn offset_transition_between(
     up_to: chrono::DateTime<chrono::Utc>,
     zone: &dyn crate::format::ClockZone,
 ) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
     let after_offset = *zone.local(after).offset();
     let mut lo = after;
     let mut hi = up_to;
@@ -915,7 +916,20 @@ fn offset_transition_between(
             hi = mid;
         }
     }
-    hi
+    // A real transition always falls on a whole second, but the
+    // search above can still stop up to a second past it -- a tick
+    // interval that divides an hour never notices (its own next
+    // candidate already lands exactly on the transition), but one
+    // that doesn't (a 3-hour tick from local midnight, say) would
+    // otherwise rebuild its guess from a instant already a fraction
+    // of a second past the transition, round that up to the *next*
+    // candidate, and lose the one right at it. Truncating to whole
+    // seconds here is exactly what recovers it: `lo < T <= hi < T +
+    // 1s` for the real transition `T` makes `floor(hi) == T`.
+    chrono::Utc
+        .timestamp_opt(hi.timestamp(), 0)
+        .single()
+        .unwrap_or(hi)
 }
 
 /// The clock axis's own tick columns (DESIGN.md: "labelled ticks at
@@ -1885,6 +1899,38 @@ mod tests {
             at("06:00") - at("04:00"),
             2.0 * 3600.0,
             "back to a plain 2-hour cadence once past the change: {ticks:?}"
+        );
+    }
+
+    /// A 3-hour tick interval doesn't divide the hour the spring-
+    /// forward change itself falls on, so its own next candidate
+    /// after the gap (03:00 local) never lands exactly on the
+    /// transition the way a 1- or 2-hour tick's candidate always
+    /// does -- `offset_transition_between` must still resolve to the
+    /// transition itself, truncated to a whole second, or this tick
+    /// is lost entirely.
+    #[test]
+    fn next_round_local_time_a_3_hour_tick_does_not_lose_the_spring_forward_tick() {
+        let zone = SpringForwardZone;
+        let midnight = chrono::DateTime::parse_from_rfc3339("2026-03-08T05:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let first = next_round_local_time(midnight, 3.0 * 3600.0, &zone);
+        assert_eq!(
+            first, midnight,
+            "local midnight is already a round 3-hour mark"
+        );
+        let second = next_round_local_time(
+            first + chrono::Duration::milliseconds(1),
+            3.0 * 3600.0,
+            &zone,
+        );
+        let expected_0300_edt = chrono::DateTime::parse_from_rfc3339("2026-03-08T07:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            second, expected_0300_edt,
+            "03:00 EDT (right at the transition) must not be skipped in favour of 06:00"
         );
     }
 
