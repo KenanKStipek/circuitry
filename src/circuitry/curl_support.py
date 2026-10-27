@@ -123,6 +123,36 @@ def parse_error_body(stdout: str) -> str | None:
     return text[:200]
 
 
+def parse_error_code(stdout: str) -> str | None:
+    """The provider's own error code from a JSON error body.
+
+    ``error.code`` when that is a non-empty string, else ``error.type`` when
+    that is a non-empty string; ``None`` otherwise, including an integer
+    code (it duplicates the HTTP status) or a flat ``{"error": "<text>"}``
+    body.
+    """
+    text = (stdout or "").strip()
+    if not text:
+        return None
+    try:
+        parsed: Any = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if not isinstance(error, dict):
+        return None
+    for key in ("code", "type"):
+        value = error.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def curl_error_code(stdout: str, secrets: Iterable[str] = ()) -> str | None:
+    """:func:`parse_error_code` of *stdout*, with *secrets* masked first."""
+    return parse_error_code(_mask_secrets(stdout, [s for s in secrets if s]))
+
+
 def curl_failure_message(
     *,
     source: str,

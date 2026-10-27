@@ -217,18 +217,24 @@ def test_only_a_leading_tilde_slash_is_expanded(fake_home: Path) -> None:
     [
         (
             {"adapter": "nonesuch"},
-            "runtime.adapters.bad.adapter must be claude_code or pi, got 'nonesuch'",
+            "runtime.adapters.bad.adapter must name a built-in adapter, got 'nonesuch'",
         ),
         (
-            {"adapter": "openai"},
-            "runtime.adapters.bad.adapter must be claude_code or pi, got 'openai'",
+            {"adapter": 5},
+            "runtime.adapters.bad.adapter must name a built-in adapter, got 5",
         ),
-        ({"adapter": 5}, "runtime.adapters.bad.adapter must be claude_code or pi, got 5"),
         (
             {"adapter": "other"},
             (
-                "runtime.adapters.bad.adapter must be claude_code or pi, got 'other', "
+                "runtime.adapters.bad.adapter must name a built-in adapter, got 'other', "
                 "which is itself an alias"
+            ),
+        ),
+        (
+            {"adapter": "host_claude"},
+            (
+                "runtime.adapters.bad.adapter cannot be 'host_claude': it is supplied "
+                "at run time by circuitry-mcp, never built from config"
             ),
         ),
         (
@@ -288,12 +294,18 @@ def test_an_env_error_never_shows_the_value() -> None:
         assert MARKER not in str(excinfo.value)
 
 
-def test_a_bad_alias_fails_the_run_at_preflight_naming_it(tmp_path: Path) -> None:
+def test_a_bad_alias_fails_the_run_before_preflight_naming_it(tmp_path: Path) -> None:
+    # Every alias in the run's merged runtime is built up front (#656),
+    # before preflight ever walks the document's references — so this
+    # fails with the "Invalid adapter aliases:" block, not a preflight
+    # label, even though the document does reference the alias.
     runtime = _runtime(claude_alt={"adapter": "claude_code", "env": {"A": 1}})
     result = _run(_doc(tmp_path, [_prompt("a", "claude_alt")]), runtime)
     assert not result.ok
-    assert "adapter:claude_alt" in str(result.error)
-    assert "runtime.adapters.claude_alt.env.A must be a string, got int" in str(result.error)
+    assert str(result.error) == (
+        "Invalid adapter aliases:\n"
+        "  - runtime.adapters.claude_alt.env.A must be a string, got int"
+    )
 
 
 # ---------- check and doctor ----------
@@ -381,14 +393,15 @@ def test_doctor_reports_a_bad_alias_as_an_error_naming_it(
     monkeypatch.setenv("CIRCUITRY_ENABLED_PLUGINS", "")
     config = tmp_path / "config.json"
     config.write_text(
-        json.dumps({"runtime": _runtime(claude_alt={"adapter": "openai"})}), encoding="utf-8"
+        json.dumps({"runtime": _runtime(claude_alt={"adapter": "nonesuch"})}), encoding="utf-8"
     )
     result = runner.invoke(
         app, ["doctor", "--config", str(config)], env={"COLUMNS": "400"}
     )
     assert result.exit_code != 0
-    assert "runtime.adapters.claude_alt.adapter must be claude_code or pi, got 'openai'" in (
-        result.output
+    assert (
+        "runtime.adapters.claude_alt.adapter must name a built-in adapter, got 'nonesuch'"
+        in result.output
     )
 
 
@@ -471,14 +484,19 @@ def test_redact_replaces_an_env_that_is_not_a_mapping_whole() -> None:
 
 
 def test_a_malformed_env_is_not_saved_in_the_out_file(tmp_path: Path) -> None:
+    # The alias build fails before the first effect (#656), before
+    # `effective_settings` is ever embedded in state — so this just checks
+    # the marker never reaches the --out file or the error text.
     runtime = _runtime(a={"adapter": "pi", "env": f"A={MARKER}"})
     out = tmp_path / "o.json"
     result = _run(_doc(tmp_path, [_prompt("a", "a")]), runtime, out_path=out)
     assert not result.ok
     text = out.read_text(encoding="utf-8")
     assert MARKER not in text and MARKER not in str(result.error)
-    snapshot = json.loads(text)["runtime"]["effective_settings"]["runtime"]["adapters"]
-    assert snapshot["a"]["env"] == REDACTED
+    assert str(result.error) == (
+        "Invalid adapter aliases:\n"
+        "  - runtime.adapters.a.env must be a mapping of variable names to strings, got str"
+    )
 
 
 # ---------- trust ----------

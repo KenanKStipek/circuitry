@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #658",
+  "description": "A state namespace spelled bare in CEL (`input.x` instead of `state.input.x`) is a `cof check` error naming the specific fix.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

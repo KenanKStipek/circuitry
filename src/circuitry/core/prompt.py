@@ -15,6 +15,7 @@ from ..adapters import Adapter, build_adapter
 from ..adapters._retry import (
     RetryInfo,
     classify_exception,
+    failure_fields,
     next_backoff_delay_ms,
 )
 from ..adapters.base import (
@@ -502,6 +503,8 @@ class PromptRuntime:
         except Exception as e:
             meta["created_at"] = _now_iso()
             meta["error"] = redact(str(e))
+            meta.pop("error_code", None)
+            meta.pop("http_status", None)
             meta["completed_at"] = _now_iso()
             node["value"] = None
             store.fire_effect_start(self.defn.name, node)
@@ -561,7 +564,15 @@ class PromptRuntime:
         meta.pop("answer", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
-        for key in ("finish_reason", "warnings", "assets", "cost_usd", "template_files"):
+        for key in (
+            "finish_reason",
+            "warnings",
+            "assets",
+            "cost_usd",
+            "template_files",
+            "error_code",
+            "http_status",
+        ):
             meta.pop(key, None)
         meta["waiting_for"] = None
         if file_records:
@@ -635,6 +646,7 @@ class PromptRuntime:
         # inside the loop (0 if the failure happened before the loop ever
         # ran, e.g. decomposition or building the attempt chain).
         _attempt = 0
+        final_fields: dict[str, Any] = {}
         try:
             # Decomposition sits right at the dispatch seam: it either replaces
             # the model call entirely (the merged child result lands at this
@@ -846,6 +858,12 @@ class PromptRuntime:
                         # message, exactly as it propagated before this
                         # failure mode moved inside the fallback chain (#281).
                         raise generation_error
+                    if attempts_meta:
+                        final_fields = {
+                            key: attempts_meta[-1][key]
+                            for key in ("error_code", "http_status")
+                            if key in attempts_meta[-1]
+                        }
                     raise RuntimeError(
                         f"All adapter attempts failed: {attempts_meta}"
                     ) from generation_error
@@ -880,6 +898,7 @@ class PromptRuntime:
             meta["fallback_attempts"] = attempts_meta
             meta["fallback_recovered"] = False
             meta["error"] = redact(str(e))
+            meta.update(final_fields)
             meta["completed_at"] = _now_iso()
             # Same rule as the success path (#421): retries_used is set on
             # failure too, so a reader can time an effect's duration
@@ -1339,6 +1358,10 @@ class PromptRuntime:
                         "error": redact(str(e)),
                         "tokens_sent": None,
                         "tokens_received": None,
+                        **{
+                            key: redact(value)
+                            for key, value in failure_fields(e).items()
+                        },
                     }
                 )
                 continue

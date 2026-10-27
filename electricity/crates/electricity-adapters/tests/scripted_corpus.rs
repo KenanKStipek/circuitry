@@ -59,6 +59,7 @@ struct RetryCase {
     /// magnitude of an out-of-range value.
     status: Option<f64>,
     retry_after: Option<String>,
+    error_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -182,7 +183,7 @@ async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
         Value::Str("replies_file".to_string()),
         Value::Str(case.filename.clone()),
     );
-    let adapter = electricity_adapters::scripted::build_scripted(&Value::Dict(cfg))
+    let adapter = electricity_adapters::scripted::build_scripted("scripted", &Value::Dict(cfg))
         .expect("build_scripted never fails");
     let previous_cwd = std::env::current_dir().unwrap();
     std::env::set_current_dir(&dir.0).unwrap();
@@ -264,6 +265,7 @@ async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
                             if err.retry.retryable != want_retry.retryable
                                 || !status_matches
                                 || err.retry.retry_after != want_retry.retry_after
+                                || err.retry.error_code != want_retry.error_code
                             {
                                 failures.push(format!(
                                     "{}: generate({dotted}) retry mismatch: got {:?}",
@@ -362,10 +364,11 @@ async fn scripted_corpus_matches_circuitrys_own_adapter() {
         }
     }
 
-    let host_claude_err = match electricity_adapters::host_claude::build_host_claude(&Value::None) {
-        Err(err) => err,
-        Ok(_) => panic!("build_host_claude always fails"),
-    };
+    let host_claude_err =
+        match electricity_adapters::host_claude::build_host_claude("host_claude", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("build_host_claude always fails"),
+        };
     if host_claude_err.message != data.host_claude_message {
         failures.push(format!(
             "host_claude message mismatch: got {:?}, want {:?}",

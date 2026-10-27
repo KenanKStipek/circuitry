@@ -1175,7 +1175,10 @@ so its own input render already matched cof's live read for the same reason — 
 leaf, `core/use.py` (and `exec::use_`, before and after this lane) resets *both* `node["value"]`
 and every `meta` field at the start of *every* attempt, so a `use` effect's own self-reference never
 survives a retry on either engine — there's no retry-visible divergence for `use` to pin the way the
-tool case above does. Before this lane, `exec::use_::execute_use` still took one `live_ctx` snapshot
+tool case above does. `meta.attempts` (issue #659) is the one deliberate exception: it is written
+before the backoff wait, so a `use`'s own `inputs`/`expect` *can* read it mid-retry
+(`inputs: {earlier: {from: prime.<name>.meta.attempts}}`), on both engines. Pinned by
+`tests/conformance/cases/use-attempts-self-reference`. Before this lane, `exec::use_::execute_use` still took one `live_ctx` snapshot
 up front — not because it needed a full materialized value, simply because it hadn't been converted
 yet. A `use` effect inside a loop (the `each`/`while` body can contain one: `Supported::current`'s
 own `use_: true`) paid the same quadratic cost a tool leaf did. Fixed the same way: `execute_use`
@@ -1643,11 +1646,26 @@ regardless of which underlying crate is used:
   what the error says. Issue #629 tracks changing that text (and, with it, removing this
   conversion).
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
-  **not** an evaluation error inside `if`/`while` CEL — it is decided *structurally*, by walking
-  the parse tree for every dotted `state.` read before evaluating, and makes the whole expression
-  `False` if any such path is unresolved (with a warning naming the path). Two exemptions: any
-  path inside a `has(...)` call anywhere in the expression, and `strict: true` on the definition
-  (which turns the same condition back into a raised error).
+  **not** an evaluation error inside `if`/`while` CEL — but only if that read decides the whole
+  expression's result. Each unguarded `state.` occurrence is marked, against the state this
+  evaluation uses, right before evaluating (`paths::mark_unset`, after `paths::rewrite`), and the
+  expression is then evaluated under `cel`'s own rules for `has()`, `?:`, `&&`/`||` and
+  `all`/`exists` — unchanged, since those already match the intended semantics. Only if the whole
+  result turns out to be one of those marks does it become `False` (with a warning naming the
+  path); any other result, including the expression's own other errors, stands. `has(...)` always
+  exempts the one path it names; `strict: true` on the definition turns a *deciding* unresolved
+  read back into a raised error, never a guarded or short-circuited one.
+- **Undeclared references** (#658): an identifier, function or method `cel` cannot resolve
+  (`ExecutionError::UndeclaredReference`) is one line, lowercase, naming it
+  (`"undeclared reference to '<name>'"`) — never `cel`'s own capitalized `Display`. A direct call
+  to one of this crate's own reserved `__electricity_*` names (#400) is worded the same way.
+  `electricity-compiler`'s own `state_ns::validate_cel_expr` rejects any other bare name at compile
+  time (a state namespace or a loop binding spelled without `state.`, or anything else
+  undeclared), via `electricity_cel::free_identifiers`, which walks the macro-expanded AST —
+  `all`/`exists`/`exists_one`/`map`/`filter` are already `Expr::Comprehension` nodes by then, so a
+  macro's own bound variable needs no special-casing the way cof's unexpanded parse tree does.
+  `existsOne` (cel's camelCase alias) is not registered as a macro at all: cel-python has no such
+  macro, so cof treats a call to it as an ordinary, undeclared method, and electricity now matches.
 - **`expect:` gets none of the above exemption** (Quirk Q6, runtime-semantics §4.4/§9) —
   `evaluate_cel_expect`'s absent-path behavior is genuinely different from `evaluate_cel`'s: an
   unresolved path on `value`/`meta` raises, which the caller treats as "expectation failed," not
@@ -2217,6 +2235,15 @@ rule set, reproduced exactly (tools-adapters-plugins §1.4/§3.10, runtime-seman
   is **never** retried, regardless of `retries:` or `on_error` — retrying would just reproduce the
   same structural error (runtime-semantics §6.1).
 
+A failed prompt's adapter record keeps more than the retry classification itself (issue #660):
+`meta.error_code`/`meta.http_status`, from the attempt whose error ended the effect (the last
+entry of the final pass's own `fallback_attempts`), when that attempt's provider reported them
+— `error.code` else `error.type` for `error_code`, each only a non-empty string; absent, never
+`null`, on success, a decode/schema failure, a missing key, a connection failure, and an
+allowlist denial (tools-adapters-plugins §3.10, runtime-semantics's own prompt `meta` section).
+Each failed `fallback_attempts[]` entry carries its own copy, after `tokens_received`, never
+alongside a `raw_reply` entry.
+
 A provider's `Retry-After` response header, when present, **overrides** the computed
 exponential-backoff delay outright, still capped at 60s. Backoff without a header is full-jitter
 exponential. Per-adapter timeouts (`runtime.adapters.<name>.timeout_seconds`) are independent of
@@ -2395,9 +2422,11 @@ the command lines, `--json-schema` wrapping, reading the reply, retries, and `me
 cited there from the reference's own `adapters/claude_code.py`/`adapters/pi.py`, not repeated
 here.
 
-Both also run as *aliases* (issue #579): a `runtime.adapters.<alias>` entry that sets `adapter: claude_code|pi`,
-with its own settings and an `env` set in that child's environment after the removals. Resolution is
-`AdapterRegistry::build`'s; the rules and error texts are tools-adapters-plugins §3.13's.
+Both also run as *aliases* (issue #579), with an `env` set in that child's environment after the
+removals. Aliasing itself is general now (issue #656): any adapter except `host_claude` can be an
+alias's target, not only `claude_code`/`pi`. Resolution is `AdapterRegistry::build`/
+`build_alias`'s; the rules, the up-front validation, `litellm`'s permanent refusal through an
+alias, and the error texts are tools-adapters-plugins §3.14's.
 
 ---
 
@@ -2800,6 +2829,7 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 | — | **`runtime._decomposition_depth`/`runtime._use_call_stack`** (issue #522's binding settled questions): Circuitry re-derives both on every recursive decomposition call by reading them back out of `runtime_config` (`core/decompose.py:271-276`'s `_current_depth`, `:688`'s `_use_call_stack` cycle-guard list) — a config file that sets either key directly changes a `cof run` the same way a deeper recursion would (a non-zero starting depth, or a pre-seeded cycle-guard stack). electricity tracks both natively instead — `RunContext::decomposition_depth` and `Frame::use_call_stack()`, threaded through the Rust call stack, never read back out of the `Value` `runtime_config` dict at all. | **Ignore both keys when config-set** — electricity's own depth/stack tracking is the single source of truth; a config file naming either key has no effect on electricity's observable output, where it would change `cof run`'s. | Yes — a config file setting either key observably diverges; accepted because only Circuitry's own test suite is known to set them (same caller restriction as the `_decomposition_planner_path` row below), never a production document. |
 | — | **`runtime._decomposition_planner_path`** (issue #522's Settled question 9): an undocumented test hook (`core/decompose.py:75-78`) letting Circuitry's own test suite point the planner at a path other than the bundled `curation/agents/decompose.yml` — only Circuitry's own tests ever set it; `cof` honours an override (`core/decompose.py:356-370`'s `_planner_path`) if one is set. | **Not read at all** — electricity always runs the synced `PLANNER_YAML`, regardless of this key. | Yes — a config file setting this key makes `cof run` load a different planner document while electricity keeps running the bundled one; accepted because only Circuitry's own tests are known to set it, and they always run against `cof`, never `electricity`. |
 | — | **A WARNING line logged with `exc_info=True`** (issue #522's own PR comment): `cof run` writes the line's own text to stderr, then a full Python traceback on the lines after it, for every one of these sites — the two decomposition lines (`Decomposition planner failed for prompt %r`/`Decomposition child failed for prompt %r`), the reflector's own prime-template fallback (`core/reflector.py:342`), and the two complexity-scoring lines (`core/prompt.py:920-924`, `:984-988`). | **Print the WARNING line alone, no traceback** — `log::warn!` has no Python exception object to format one from in the first place; the conformance harness only ever compares the prefixed `WARNING:`-style line itself, never the traceback that follows it on a real `cof run`, so no case shows the difference. | No — accepted for every site in this set; a future WARNING line ported the same way inherits the same rule without a new row here. |
+| — | **An undeclared function/method call whose own argument is an unset `state.` read** (issue #657/#658): `nope(state.x)`/`state.x.nope()` with `x` unset. cof's evaluator (cel-python) resolves the function/method name before evaluating its arguments (`celpy.evaluation.Evaluator.method_eval`), so it always reports the undeclared reference. The `cel` crate resolves every argument first (`objects.rs::call_function`'s own `args?`), so an unset argument's own marker error wins instead — `False` plus the unset-path warning, naming `x`, not an undeclared-reference error. Only reachable when the call's own name genuinely isn't declared; `cof check`'s own free-name rule never looks at function/method names (by design — the two engines' function sets differ), so this can't be caught before run time on either side. | **Accept the gap, documented, not reproduced** — reordering the `cel` crate's own argument/name resolution would mean patching a pinned external dependency for one narrow edge case; short-circuiting itself is unaffected either way (`false && nope(state.x)` stays `false`, with no warning, on both engines, since neither side ever evaluates the call at all there). | No — a narrow, library-ordering difference between cel-python and the `cel` crate, not a design choice; revisit only if a production document's CEL actually calls an undeclared function/method on an unset argument. |
 
 ---
 

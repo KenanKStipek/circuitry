@@ -25,7 +25,7 @@
 //! needs to trust the committed file.
 
 use electricity_adapters::curl_text::{
-    classify_curl_outcome, curl_failure_message, parse_error_body,
+    classify_curl_outcome, curl_failure_message, parse_error_body, parse_error_code,
 };
 use electricity_adapters::transport::CurlOutcome;
 use electricity_adapters::{anthropic, ollama, openai, openai_compat, replicate};
@@ -209,6 +209,7 @@ fn retry_info_from_json(retry: &Value) -> RetryInfo {
         retryable: bool_val(get(retry, "retryable")),
         status: i64_opt(get(retry, "status")).map(|s| s as u16),
         retry_after: str_opt(get(retry, "retry_after")),
+        error_code: str_opt(get(retry, "error_code")),
     }
 }
 
@@ -287,6 +288,15 @@ fn parse_error_body_matches_circuitry() {
 }
 
 #[test]
+fn parse_error_code_matches_circuitry() {
+    for case in list(&corpus(), "parse_error_code_cases") {
+        let stdout = get(case, "stdout").as_str().unwrap();
+        let expected = str_opt(get(case, "expected"));
+        assert_eq!(parse_error_code(stdout), expected, "stdout={stdout:?}");
+    }
+}
+
+#[test]
 fn curl_failure_message_matches_circuitry() {
     for case in list(&corpus(), "curl_failure_message_cases") {
         let secrets: Vec<&str> = list(case, "secrets")
@@ -347,7 +357,8 @@ fn ollama_outcome_interpretation_matches_circuitry() {
         let timeout_seconds = u32_val(get(case, "timeout_seconds"));
         let base_url = get(case, "base_url").as_str().unwrap();
         let url = format!("{base_url}/api/generate");
-        let actual = ollama::interpret_outcome(&outcome, model, timeout_seconds, base_url, &url);
+        let actual =
+            ollama::interpret_outcome("ollama", &outcome, model, timeout_seconds, base_url, &url);
         let expected = expected_from_result(get(case, "result"));
         assert_matches_expected(actual, &expected, &format!("ollama outcome {case:?}"));
     }
@@ -540,6 +551,7 @@ fn replicate_outcome_interpretation_matches_circuitry() {
         let wait = i64_opt(get(case, "wait")).unwrap();
         let options = GenerateOptions::default();
         let actual = replicate::interpret_outcome(
+            "replicate",
             &outcome,
             model,
             "https://api.replicate.com/v1/models/meta/llama/predictions",

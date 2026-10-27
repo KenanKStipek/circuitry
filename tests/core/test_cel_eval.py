@@ -16,8 +16,10 @@ from circuitry.core.cel_eval import (
     CelEvaluationError,
     CelValidationError,
     evaluate_cel,
+    evaluate_cel_expect,
+    evaluate_cel_value,
+    free_identifiers,
     state_paths,
-    unresolved_state_path,
     validate_cel_syntax,
 )
 
@@ -171,11 +173,15 @@ class TestAbsentState:
             assert evaluate_cel("state.prime.typo.value == 1", {}) is False
         assert "state.prime.typo.value" in caplog.text
 
-    def test_string_literal_is_not_a_state_read(self):
+    def test_string_literal_is_not_a_state_read(self, caplog):
         # Masked before resolution, so a quoted 'state.b.c' cannot make the
-        # whole expression fall through to False.
-        assert unresolved_state_path("state.a == 'state.b.c'", {"a": 1}) is None
-        assert unresolved_state_path("state.b.c == 1", {"a": 1}) == "state.b.c"
+        # whole expression fall through to False via the absent-path rule.
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel("state.a == 'state.b.c'", {"a": 1}) is False
+        assert caplog.text == ""
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel("state.b.c == 1", {"a": 1}) is False
+        assert "state.b.c" in caplog.text
 
     def test_present_falsy_values_are_not_absent(self):
         ctx = {"a": {"n": 0, "s": "", "l": [], "b": False}}
@@ -314,11 +320,11 @@ class TestMacros:
         ctx = {"input": {"rows": [{"n": 1}, {"n": 5}]}}
         assert evaluate_cel("state.input.rows.exists(r, r.n > 4)", ctx) is True
 
-    def test_macro_variable_is_not_a_state_path(self):
+    def test_macro_variable_is_not_a_state_path(self, caplog):
         # `i` is macro-scoped; it must not be mistaken for an absent read.
-        assert unresolved_state_path(
-            "state.input.items.all(i, i > 0)", self.CTX
-        ) is None
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel("state.input.items.all(i, i > 0)", self.CTX) is True
+        assert caplog.text == ""
 
 
 class TestHasMacro:
@@ -607,3 +613,276 @@ class TestProjection:
     def test_state_used_as_a_value_still_sees_everything(self):
         ctx = {"input": {"n": 1}, "prime": {"x": {"value": 2}}}
         assert evaluate_cel("size(state) == 2", ctx) is True
+
+
+# ---------------------------------------------------------------------------
+# The unset-path rule follows evaluation (#657)
+# ---------------------------------------------------------------------------
+
+
+class TestUnsetPathFollowsEvaluation:
+    """Each row of the design's behaviour table, both plain and strict."""
+
+    CTX: ClassVar[dict] = {"input": {"a": {"q": 1}, "items": [1, 2]}}
+
+    def test_ternary_guarded_deeper_read_gives_fallback(self):
+        expr = "has(state.input.a.b) ? state.input.a.b.c : 'fallback'"
+        assert evaluate_cel_value(expr, self.CTX) == "fallback"
+
+    def test_ternary_untaken_branch_gives_fallback(self):
+        expr = "false ? state.input.x.y : 'fallback'"
+        assert evaluate_cel_value(expr, self.CTX) == "fallback"
+
+    def test_ternary_guarded_exact_read_gives_fallback(self):
+        expr = "has(state.input.a.b.c) ? state.input.a.b.c : 'fallback'"
+        assert evaluate_cel_value(expr, self.CTX) == "fallback"
+
+    def test_guarded_negation_or_reaches_other_branch(self, caplog):
+        expr = "!has(state.input.a.b) || state.input.a.b.c == 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_guarded_and_short_circuits_without_warning(self, caplog):
+        expr = "has(state.input.a.b) && state.input.a.b.c == 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is False
+        assert caplog.text == ""
+
+    def test_false_and_short_circuits_without_reading_the_right(self, caplog):
+        expr = "false && state.input.x.y == 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is False
+        assert caplog.text == ""
+
+    def test_or_with_true_on_the_right_wins_over_the_errored_left(self, caplog):
+        expr = "state.input.x.y == 1 || true"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_exists_deciding_element_wins_over_an_errored_one(self, caplog):
+        expr = "state.input.items.exists(i, i == 2 || state.input.z.y == 1)"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_plain_unset_read_is_unchanged(self):
+        assert evaluate_cel("state.input.a.b.c == 1", self.CTX) is False
+
+    def test_two_unset_reads_in_or_names_the_right_hand_one(self, caplog):
+        expr = "state.input.x.y == 1 || state.input.z.w == 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is False
+        assert len(caplog.records) == 1
+        assert "reads unset state path 'state.input.z.w'" in caplog.text
+
+    def test_map_literal_with_an_unset_value_gives_null(self):
+        assert evaluate_cel_value("{'k': state.input.missing}", self.CTX) is None
+
+    def test_disabled_node_after_has_gives_false_not_an_evaluation_error(self, caplog):
+        ctx = {"prime": {"x": {"value": None}}}
+        expr = "has(state.prime.x.value) && state.prime.x.value > 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, ctx) is False
+        assert "state.prime.x.value" in caplog.text
+
+    def test_an_unset_read_that_does_not_decide_reports_its_own_error(self):
+        expr = "(state.input.m.x == 1 || true) && 1/0 == 1"
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX)
+        assert "divide by zero" in str(excinfo.value)
+
+    def test_strict_ternary_guarded_read_does_not_raise(self):
+        expr = "has(state.input.a.b) ? state.input.a.b.c == 1 : true"
+        assert evaluate_cel(expr, self.CTX, strict=True) is True
+
+    def test_strict_false_and_short_circuit_does_not_raise(self):
+        assert evaluate_cel("false && state.input.z == 1", self.CTX, strict=True) is False
+
+    def test_strict_plain_unset_read_still_raises(self):
+        with pytest.raises(CelEvaluationError):
+            evaluate_cel("state.input.a.b.c == 1", self.CTX, strict=True)
+
+    def test_strict_deciding_or_with_true_does_not_raise(self):
+        expr = "state.prime.tick.value.price <= 10 || state.input.force"
+        ctx = {"input": {"force": True}}
+        assert evaluate_cel(expr, ctx, strict=True) is True
+
+    def test_true_or_with_an_errored_map_body_wins_without_a_warning(self, caplog):
+        expr = "true || [1].map(i, state.input.z.y).size() == 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_true_or_with_an_errored_filter_body_wins_without_a_warning(self, caplog):
+        expr = "true || state.input.items.filter(i, i > state.input.z.y).size() > 0"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_true_or_with_an_errored_exists_one_body_wins_without_a_warning(self, caplog):
+        expr = "true || state.input.items.exists_one(i, i == state.input.z.y)"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_guarded_filter_body_evaluates_properly(self):
+        expr = (
+            "!has(state.input.a.b) || "
+            "state.input.items.filter(i, i > state.input.a.b.min).size() > 0"
+        )
+        assert evaluate_cel(expr, self.CTX) is True
+
+
+class TestAllExistsDecisiveElement:
+    def test_all_false_element_wins_over_an_earlier_error(self, caplog):
+        ctx = {"input": {"items": [1, 2]}}
+        expr = "state.input.items.all(i, i == 1 && state.input.z.y == 1)"
+        # i=1: i == 1 is True, which doesn't decide "&&", so the errored
+        # right-hand side is the element's own result; i=2: i == 1 is
+        # False, which decides "&&" to False without reading the right
+        # side at all -- that decided False wins "all" over the earlier
+        # error, with no warning (the unset read never decided anything).
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, ctx) is False
+        assert caplog.text == ""
+
+    def test_all_vacuous_true_with_no_elements_errored(self):
+        assert evaluate_cel("state.input.empty.all(i, i > 0)", {"input": {"empty": []}}) is True
+
+    def test_exists_all_elements_error_propagates_the_last_errors(self, caplog):
+        ctx = {"input": {"items": [1, 2]}}
+        expr = "state.input.items.exists(i, state.input.z.y == i)"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, ctx) is False
+        assert "state.input.z.y" in caplog.text
+
+
+class TestNestingErrorWinsOverUnsetPath:
+    def test_unset_read_past_the_nesting_cap_is_the_nesting_error_not_false(self):
+        # cof's nesting limit is Python's recursion limit, so the depth at
+        # which evaluation fails depends on the interpreter (3.12 moved it).
+        # Find it rather than assume one: below it, the unset read gives the
+        # unset-path rule's False; at it, the failure is the nesting error,
+        # never that False, as it was when the rule ran before evaluation.
+        def expr(depth: int) -> str:
+            return "(" * depth + "state.input.missing" + ")" * depth + " == 1"
+
+        for depth in range(40, 141):
+            try:
+                result = evaluate_cel(expr(depth), {"input": {}})
+            except CelEvaluationError as exc:
+                assert "reads unset state path" not in str(exc)
+                return
+            assert result is False
+        pytest.fail("no depth up to 140 reached the nesting limit")
+
+
+# ---------------------------------------------------------------------------
+# Undeclared references: one line, never the activation (#658)
+# ---------------------------------------------------------------------------
+
+
+class TestUndeclaredReferenceIsOneLine:
+    def _assert_one_line(self, text: str, name: str) -> None:
+        assert "Activation(" not in text
+        assert len(text) < 200
+        assert f"undeclared reference to {name!r}" in text
+
+    def test_unknown_identifier(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("unit == 1", {})
+        self._assert_one_line(str(excinfo.value), "unit")
+
+    def test_unknown_function(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("nope(1) == 1", {})
+        self._assert_one_line(str(excinfo.value), "nope")
+
+    def test_unknown_method(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("'a'.nope() == 1", {})
+        self._assert_one_line(str(excinfo.value), "nope")
+
+    def test_unknown_name_inside_map_macro(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("[1, 2].map(i, unit.text)", {})
+        self._assert_one_line(str(excinfo.value), "unit")
+
+    def test_unknown_name_inside_map_literal(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("{'first': unit.text} == {'first': 'a'}", {})
+        self._assert_one_line(str(excinfo.value), "unit")
+
+    def test_in_expect(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel_expect("nope(value)", value=1, meta={}, state={})
+        self._assert_one_line(str(excinfo.value), "nope")
+
+
+# ---------------------------------------------------------------------------
+# free_identifiers (#658 check-time rule's input)
+# ---------------------------------------------------------------------------
+
+
+class TestFreeIdentifiers:
+    def test_bare_loop_binding(self):
+        assert free_identifiers("unit.text == 'a'") == ("unit",)
+
+    def test_bare_namespace(self):
+        assert free_identifiers("input.x == 1") == ("input",)
+
+    def test_undefined_name(self):
+        assert free_identifiers("stat.input.x == 1") == ("stat",)
+
+    def test_type_names_and_two_arg_all_are_free_of_their_own_names(self):
+        assert free_identifiers("type(1) == int && [1, 2].all(i, i > 0)") == ("int",)
+
+    def test_expect_bindings(self):
+        assert free_identifiers("has(value.x) && meta.error == null") == (
+            "value",
+            "meta",
+        )
+
+    def test_reduce_binds_nothing(self):
+        assert free_identifiers("[0, 1, 2].reduce(r, i, 0, r + 2 * i + 1)") == (
+            "r",
+            "i",
+            "r",
+            "i",
+        )
+
+    def test_three_argument_map_binds_nothing(self):
+        assert free_identifiers("[1, 2, 3].map(i, i > 0, i * 2)") == ("i", "i", "i")
+
+    def test_macro_variable_named_like_a_loop_binding_is_bound(self):
+        assert free_identifiers("state.input.items.all(unit, unit > 0)") == ("state",)
+
+    def test_nested_macros_accumulate_and_shadow(self):
+        expr = "state.input.rows.all(r, r.items.exists(r, r > 0))"
+        assert free_identifiers(expr) == ("state",)
+
+    def test_message_construction_type_name_counts(self):
+        assert free_identifiers("Msg{f: 1} == 1") == ("Msg",)
+
+    def test_function_and_method_names_are_not_identifiers(self):
+        assert free_identifiers("size(state.a) > 0 && state.a.startsWith('x')") == (
+            "state",
+            "state",
+        )
+
+    def test_first_name_in_source_order(self):
+        assert free_identifiers("unit == 1 && stat == 2") == ("unit", "stat")
+
+    def test_leading_dot_identifier_is_free(self):
+        assert free_identifiers(".unit.text == 1") == ("unit",)
+
+    def test_leading_dot_identifier_escapes_a_macro_variables_binding(self):
+        # `.v` explicitly asks CEL to skip local scoping (the leading
+        # dot) and resolve against the root package, so it is never
+        # exempt as the macro's own bound variable the bare `v` is.
+        assert free_identifiers("state.input.items.all(v, .v > 0)") == ("state", "v")
+
+    def test_leading_dot_function_call_is_not_an_identifier(self):
+        assert free_identifiers(".size(1) == 1") == ()

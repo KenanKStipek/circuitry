@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #658",
+  "description": "A loop binding read bare in a `cel` tool's expression is a `cof check` error, not a silent null or an unreadable run-time failure. electricity has no `cel` tool yet and refuses the document with the preview marker.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact",
+  "electricity_preview_ok": true,
+  "cli_args": ["-e", "units=[{\"text\": \"a\"}]"]
+}

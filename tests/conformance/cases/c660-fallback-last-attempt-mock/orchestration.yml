@@ -1,0 +1,13 @@
+name: c660-fallback-last-attempt-mock
+adapter: lmstudio
+model: m
+effects:
+  - type: prompt
+    name: p1
+    template: "p1"
+    provider_fallbacks: ["vllm:m2"]
+    on_error: continue
+  - type: prompt
+    name: p2
+    template: "p2"
+    provider_fallbacks: ["vllm:m2"]

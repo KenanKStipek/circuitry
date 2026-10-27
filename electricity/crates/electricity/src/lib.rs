@@ -414,26 +414,31 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
 fn profile_provider_unbuildable(
     op: &electricity_bytecode::Op,
     adapters: &electricity_vm::adapter::AdapterRegistry,
+    runtime_config: &Value,
 ) -> Option<String> {
     use electricity_bytecode::{LeafKind, NodeKind, Region};
 
     fn region_find(
         region: &Region,
         adapters: &electricity_vm::adapter::AdapterRegistry,
+        runtime_config: &Value,
     ) -> Option<String> {
         match region {
             Region::Block { ops, .. } => ops
                 .iter()
-                .find_map(|op| profile_provider_unbuildable(op, adapters)),
+                .find_map(|op| profile_provider_unbuildable(op, adapters, runtime_config)),
             Region::Parallel { branches, .. } => branches
                 .iter()
-                .find_map(|op| profile_provider_unbuildable(op, adapters)),
-            Region::TryFinally { body, finally } => {
-                region_find(body, adapters).or_else(|| region_find(finally, adapters))
-            }
-            Region::If { then_, else_, .. } => region_find(then_, adapters)
-                .or_else(|| else_.as_deref().and_then(|r| region_find(r, adapters))),
-            Region::Loop { body, .. } => region_find(body, adapters),
+                .find_map(|op| profile_provider_unbuildable(op, adapters, runtime_config)),
+            Region::TryFinally { body, finally } => region_find(body, adapters, runtime_config)
+                .or_else(|| region_find(finally, adapters, runtime_config)),
+            Region::If { then_, else_, .. } => region_find(then_, adapters, runtime_config)
+                .or_else(|| {
+                    else_
+                        .as_deref()
+                        .and_then(|r| region_find(r, adapters, runtime_config))
+                }),
+            Region::Loop { body, .. } => region_find(body, adapters, runtime_config),
         }
     }
 
@@ -447,19 +452,26 @@ fn profile_provider_unbuildable(
                 let adapter_name = electricity_config::provider_token_to_adapter(provider)?;
                 let normalized =
                     electricity_value::pycompat::py_strip(&adapter_name).to_lowercase();
+                // Resolved through its alias target first (#656): a
+                // profile override onto a used alias of `litellm`
+                // gets this refusal naming `litellm`, not the alias.
+                let resolved = electricity_vm::adapter::alias_target(&normalized, runtime_config)
+                    .unwrap_or(normalized);
                 let buildable = adapters.supported_names();
-                if electricity_vm::adapter_names::ADAPTER_NAMES.contains(&normalized.as_str())
-                    && !buildable.contains(&normalized)
+                if electricity_vm::adapter_names::ADAPTER_NAMES.contains(&resolved.as_str())
+                    && !buildable.contains(&resolved)
                 {
-                    Some(normalized)
+                    Some(resolved)
                 } else {
                     None
                 }
             }
-            LeafKind::Reflector(reflector) => region_find(&reflector.inner, adapters),
+            LeafKind::Reflector(reflector) => {
+                region_find(&reflector.inner, adapters, runtime_config)
+            }
             LeafKind::Tool(_) | LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Report(_) => None,
         },
-        NodeKind::Control(region) => region_find(region, adapters),
+        NodeKind::Control(region) => region_find(region, adapters, runtime_config),
     }
 }
 
@@ -1275,6 +1287,32 @@ pub async fn run_orchestration_with_config(
         fail!(err.to_string());
     }
 
+    // `electricity_adapters::build_registry()` -- moved up from its old
+    // position next to `RunContext`'s own construction (previously at
+    // the unbuildable-adapter refusals below): the up-front alias
+    // check right after this needs it before preflight ever runs.
+    let adapters = electricity_adapters::build_registry();
+
+    // Every alias in the merged runtime is validated up front here,
+    // whether or not any effect actually selects it (#656), identical
+    // text to `cof`'s. A litellm-target alias is skipped: litellm
+    // itself stays unbuildable in this engine, refused only when
+    // actually used (`is_unbuildable`/`unbuildable_known_adapter`/
+    // `profile_provider_unbuildable`, each resolved through its own
+    // alias target first), never merely for being defined.
+    let alias_check_runtime = effective.runtime.clone().unwrap_or(Value::None);
+    let alias_errors = adapters.alias_config_errors(&alias_check_runtime);
+    if !alias_errors.is_empty() {
+        fail!(format!(
+            "Invalid adapter aliases:\n{}",
+            alias_errors
+                .iter()
+                .map(|e| format!("  - {e}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
     // Profile routing pins and provider denials (issue #495, lane R):
     // run only when `profile.effects` is non-empty, after concurrency
     // and persistence validation (`pre_input_checks` bundles complexity,
@@ -1658,16 +1696,6 @@ pub async fn run_orchestration_with_config(
         "_noop".to_string()
     };
 
-    // `electricity_adapters::build_registry()` replaces a direct
-    // `AdapterRegistry::new()`
-    // call -- lane F1/F2's own PR only ever adds a builder line
-    // inside `build_registry()`'s own crate, never touches this file.
-    // Lane F1 (issue #478) has registered `scripted` and `host_claude`
-    // there; moved up from its old position (next to `RunContext`'s
-    // own construction) so preflight and the real adapter build below
-    // can both use it.
-    let adapters = electricity_adapters::build_registry();
-
     // Settled ruling 3 (issue #495): refuse the whole run, no state,
     // for any adapter name preflight would check (the document's own
     // top-level `adapter:`/prompt `provider:`) that Circuitry itself
@@ -1675,7 +1703,9 @@ pub async fn run_orchestration_with_config(
     // preflight failure. The config's own `default_adapter` is never
     // walked here (preflight never checks it either); that case is
     // [`preflight::PlaceholderAdapter`]'s own job, below.
-    if let Some(name) = preflight::unbuildable_known_adapter(&loaded.document, &adapters) {
+    if let Some(name) =
+        preflight::unbuildable_known_adapter(&loaded.document, &adapters, &runtime_config_value)
+    {
         return RunResult {
             ok: false,
             out_path: None,
@@ -1718,7 +1748,9 @@ pub async fn run_orchestration_with_config(
     // (`first_unsupported` above). Without this check,
     // `generate_with_fallbacks` would instead refuse the run partway
     // through, after any earlier effect had already run.
-    if let Some(name) = profile_provider_unbuildable(&program.root, &adapters) {
+    if let Some(name) =
+        profile_provider_unbuildable(&program.root, &adapters, &runtime_config_value)
+    {
         return RunResult {
             ok: false,
             out_path: None,
@@ -1820,6 +1852,13 @@ pub async fn run_orchestration_with_config(
             Ok(built) => Rc::from(built),
             Err(err) => {
                 let normalized = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
+                // Resolved through its alias target first (#656): a
+                // used alias of `litellm` as the run's default
+                // adapter gets this refusal naming `litellm`, not the
+                // alias.
+                let normalized =
+                    electricity_vm::adapter::alias_target(&normalized, &runtime_config_value)
+                        .unwrap_or(normalized);
                 let known_but_unbuildable = electricity_vm::adapter_names::ADAPTER_NAMES
                     .contains(&normalized.as_str())
                     && !adapters.supported_names().contains(&normalized);

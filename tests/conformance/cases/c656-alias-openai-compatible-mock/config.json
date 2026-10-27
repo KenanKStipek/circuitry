@@ -1,0 +1,15 @@
+{
+  "default_adapter": "local_a",
+  "runtime": {
+    "adapters": {
+      "lmstudio": {"base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/base/v1"},
+      "local_a": {
+        "adapter": "lmstudio",
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/a/v1",
+        "timeout_seconds": 30
+      },
+      "local_b": {"adapter": " LMStudio ", "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/b/v1"},
+      "groq_alt": {"adapter": "groq", "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/groq/v1"}
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "runtime": {
+    "adapters": {
+      "groq_alt": {"adapter": "groq"}
+    }
+  }
+}

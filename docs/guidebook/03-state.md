@@ -59,11 +59,13 @@ state.prime.assessment.value.severity == 'high' && size(state.prime.assessment.v
 
 This is real [CEL](https://github.com/google/cel-spec), evaluated by cel-python: comparisons, `&& || !`, the `?:` ternary, `has()`, the macros (`all`, `exists`, `exists_one`, `map`, `filter`), and the standard functions (`size()`, `int()`, `string()`, `matches()`, …). Equality is typed the way CEL specifies it, so `1 == true` is `false`. `cof check` parses every expression, so one that does not parse is an error before the run. `state` is the only binding; `cof run learn/cel_showcase` runs one branch per construct.
 
-One rule is Circuitry's own. **An expression that reads an unset path is `false` as a whole**, whatever the operator: a `state.` path that is missing or resolves through `null` makes the whole expression false, and the runtime logs a warning that names the path. So `state.prime.related.value != ""` is false after the related-issues lookup was skipped, and so is `state.prime.related.value == null`. Only `has()` is exempt: `has(state.input.labels)` asks whether the key is there. [If](06-if.md) covers `strict: true`, which makes an unset path an error.
+One rule is Circuitry's own. **A `state.` read that decides an expression's result, and is unset, makes that result `false`**: missing or resolving through `null` counts as unset, and the runtime logs a warning that names the path. So `state.prime.related.value != ""` is false after the related-issues lookup was skipped, and so is `state.prime.related.value == null`. The rule follows evaluation, not the raw text: `has()`, `?:`, `&&`/`||` and the `all`/`exists` macros guard a read the way CEL defines those constructs, so `has(state.prime.related.value) ? state.prime.related.value.id : 'none'` and `!has(state.prime.related.value) || state.prime.related.value.id != ''` both evaluate properly instead of collapsing to `false`. [If](06-if.md) covers `strict: true`, which makes a deciding unset read an error.
 
-## Three spellings that fail — and two that fail only at run time
+Also Circuitry's own: **CEL has exactly one bound root, `state`** (plus `value` and `meta` inside a tool/use `expect:`). Any other bare name — a state namespace spelled without `state.`, a loop binding spelled without `state.`, or anything else undeclared — is a hard error from `cof check`. CEL's own type names (`int`, `string`, `type`, …) and a macro's own bound variable, inside that macro's body, are the only other names a bare identifier may be.
 
-The compiler enforces the namespace rule wherever it can see the path. Three shapes are hard errors from `cof check`, each with the fix spelled out in the message:
+## Four spellings that fail — and one that fails only at run time
+
+The compiler enforces the namespace rule wherever it can see the path. Four shapes are hard errors from `cof check`, each with the fix spelled out in the message:
 
 ```yaml
 # ✗ each.in must be rooted at input. / prime. / runtime. (or at an enclosing loop's binding)
@@ -96,17 +98,8 @@ effects:
     template: "Is this issue a bug, a feature or a question? Issue: {{issue}}"
 ```
 
-Two more shapes are well-formed YAML that the compiler cannot flag. A template is free text and a missing reference is legal Mustache, and the validator checks the paths written after `state.`, not the names written without it. Both pass `cof check`:
-
 ```yaml
-# ✗ runtime — state. is a CEL binding; in a template it resolves to nothing
-- type: prompt
-  name: kind
-  template: "Is this issue a bug, a feature or a question? Issue: {{state.input.issue}}"
-```
-
-```yaml
-# ✗ runtime — the CEL root is missing, so the first evaluation fails the run
+# ✗ 'bug' in input.labels is a bare namespace; CEL's only root is state
 - type: if
   if: {mode: cel, expr: "'bug' in input.labels"}
   then:
@@ -119,7 +112,16 @@ Two more shapes are well-formed YAML that the compiler cannot flag. A template i
       template: "Name the docs page that answers this issue."
 ```
 
-The first goes green and renders "Is this issue a bug, a feature or a question? Issue: " — a question about nothing. The second fails the run the first time it is evaluated. `input` is not a name CEL knows (`state` is the only binding), so the `if` records a CEL evaluation error on its `meta.error`, and the run ends with `ok` false. The second failure is loud; the first is silent. For both, read what the run recorded: `meta.prompt_sent` on the prompt, and `meta.error` on the `if`.
+One more shape is well-formed YAML that the compiler cannot flag. A template is free text and a missing reference is legal Mustache, so a typo inside `{{ }}` is invisible to the compiler the way a bare name inside a CEL expression no longer is:
+
+```yaml
+# ✗ runtime — state. is a CEL binding; in a template it resolves to nothing
+- type: prompt
+  name: kind
+  template: "Is this issue a bug, a feature or a question? Issue: {{state.input.issue}}"
+```
+
+This goes green and renders "Is this issue a bug, a feature or a question? Issue: " — a question about nothing, silently. Read what the run recorded (`meta.prompt_sent`) to catch it.
 
 ## Rendering values
 

@@ -1,0 +1,17 @@
+{
+  "default_model": "m",
+  "runtime": {
+    "adapters": {
+      "bad_base": {"adapter": "nonesuch"},
+      "bad_nested": {"adapter": "good_alias"},
+      "good_alias": {"adapter": "claude_code"},
+      "claude_code": {"adapter": "pi"},
+      "openai": {"adapter": "pi"},
+      "bad_host": {"adapter": "host_claude"},
+      "bad_env_type": {"adapter": "claude_code", "env": "A=1"},
+      "bad_env_value": {"adapter": "claude_code", "env": {"CLAUDE_CONFIG_DIR": 5}},
+      "bad_env_name": {"adapter": "claude_code", "env": {"BAD-NAME": "secret-marker"}},
+      "bad_max_tokens": {"adapter": "anthropic", "max_tokens": "x"}
+    }
+  }
+}

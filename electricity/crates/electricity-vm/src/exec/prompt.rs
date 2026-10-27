@@ -190,14 +190,17 @@ fn build_attempts(
     attempts
 }
 
-/// Issue #498 ruling 4: *name* is Circuitry-known (`electricity_vm::
+/// Issue #498 ruling 4: *name* (already resolved through its alias
+/// target, if any -- #656) is Circuitry-known (`electricity_vm::
 /// adapter_names::ADAPTER_NAMES`) but this build has no builder for it
 /// at all -- never an ordinary "unknown adapter" failure, a fatal
 /// refusal instead.
 fn is_unbuildable(name: &str, run_ctx: &RunContext<'_>) -> bool {
-    let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
-    crate::adapter_names::ADAPTER_NAMES.contains(&normalized.as_str())
-        && !run_ctx.adapters.supported_names().contains(&normalized)
+    crate::adapter_names::ADAPTER_NAMES.contains(&name)
+        && !run_ctx
+            .adapters
+            .supported_names()
+            .contains(&name.to_string())
 }
 
 /// `allowlist_gate.py::allowed_adapters` -- the run's `enabled_adapters`,
@@ -262,6 +265,12 @@ struct AttemptEntry {
     error: Option<String>,
     tokens_sent: Option<i64>,
     tokens_received: Option<i64>,
+    /// Issue #660: set on the generate-error and build-error branches,
+    /// never on the decode/schema-failure branch, after
+    /// `tokens_received`, before `raw_reply` -- an entry never has
+    /// both these and `raw_reply`.
+    error_code: Option<String>,
+    http_status: Option<u16>,
     raw_reply: Option<String>,
 }
 
@@ -283,6 +292,12 @@ impl AttemptEntry {
             key("tokens_received"),
             self.tokens_received.map(Value::from).unwrap_or(Value::None),
         );
+        if let Some(error_code) = self.error_code {
+            dict.insert(key("error_code"), Value::Str(error_code));
+        }
+        if let Some(http_status) = self.http_status {
+            dict.insert(key("http_status"), Value::from(i64::from(http_status)));
+        }
         if let Some(raw_reply) = self.raw_reply {
             dict.insert(key("raw_reply"), Value::Str(raw_reply));
         }
@@ -471,13 +486,17 @@ async fn generate_with_fallbacks(
         if token.is_set() {
             return Err(HardStop::Refused(VmError::Cancelled));
         }
-        if is_unbuildable(adapter_name, run_ctx) {
+        // Resolved alias -> target before the check (#656): a used
+        // alias of `litellm` gets the same refusal a direct `provider:
+        // litellm` gets, naming `litellm`, not the alias.
+        let normalized_name = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
+        let resolved_name = crate::adapter::alias_target(&normalized_name, run_ctx.runtime_config)
+            .unwrap_or(normalized_name);
+        if is_unbuildable(&resolved_name, run_ctx) {
             return Err(HardStop::Refused(VmError::Refused {
                 refusal: electricity_bytecode::Refusal {
                     path: op_path.clone(),
-                    reason: electricity_bytecode::RefusalReason::UnsupportedAdapter(
-                        adapter_name.clone(),
-                    ),
+                    reason: electricity_bytecode::RefusalReason::UnsupportedAdapter(resolved_name),
                 },
                 child_label: None,
             }));
@@ -504,6 +523,8 @@ async fn generate_with_fallbacks(
                             error: Some(redact_str(&err.message)),
                             tokens_sent: None,
                             tokens_received: None,
+                            error_code: err.retry.error_code.as_deref().map(redact_str),
+                            http_status: err.retry.status,
                             raw_reply: None,
                         }
                         .into_value(),
@@ -558,6 +579,8 @@ async fn generate_with_fallbacks(
                         error: Some(redact_str(&err.message)),
                         tokens_sent: None,
                         tokens_received: None,
+                        error_code: err.retry.error_code.as_deref().map(redact_str),
+                        http_status: err.retry.status,
                         raw_reply: None,
                     }
                     .into_value(),
@@ -580,6 +603,8 @@ async fn generate_with_fallbacks(
                                 error: None,
                                 tokens_sent: result.tokens_sent,
                                 tokens_received: result.tokens_received,
+                                error_code: None,
+                                http_status: None,
                                 raw_reply: None,
                             }
                             .into_value(),
@@ -603,6 +628,8 @@ async fn generate_with_fallbacks(
                                 error: Some(redact_str(&message)),
                                 tokens_sent: result.tokens_sent,
                                 tokens_received: result.tokens_received,
+                                error_code: None,
+                                http_status: None,
                                 raw_reply: Some(cap_reply_text(&result.text)),
                             }
                             .into_value(),
@@ -686,7 +713,26 @@ fn finish_failure(
     message: String,
     py_class: electricity_tools::PyExc,
     cause: electricity_tools::ErrorCause,
+    from_last_attempt: bool,
 ) -> Result<(), VmError> {
+    // Issue #660: the top-level fields come from the attempt whose
+    // error ended the effect -- the last entry of this pass's own
+    // chain, read before it moves into the `fallback_attempts` list.
+    // Only when `from_last_attempt` (the attempts-exhausted call site):
+    // every other call site's `attempts_meta` is either empty (no
+    // attempt ever ran) or a stale earlier pass's chain (a
+    // timeout-resolve, limiter, or allowlist failure on a retry pass),
+    // and that pass's error is not an attempt failure at all.
+    let final_fields = if from_last_attempt {
+        attempts_meta.last().and_then(Value::as_dict).map(|dict| {
+            (
+                dict.get(&key("error_code")).cloned(),
+                dict.get(&key("http_status")).cloned(),
+            )
+        })
+    } else {
+        None
+    };
     set_leaf(
         store,
         meta_node,
@@ -696,6 +742,14 @@ fn finish_failure(
     set_leaf(store, meta_node, "fallback_recovered", Value::Bool(false));
     let redacted = redact_str(&message);
     set_leaf(store, meta_node, "error", Value::Str(redacted.clone()));
+    if let Some((error_code, http_status)) = final_fields {
+        if let Some(error_code) = error_code {
+            set_leaf(store, meta_node, "error_code", error_code);
+        }
+        if let Some(http_status) = http_status {
+            set_leaf(store, meta_node, "http_status", http_status);
+        }
+    }
     set_leaf(store, meta_node, "completed_at", now_iso());
     if attempt_index > 0 {
         set_leaf(
@@ -783,6 +837,8 @@ pub(crate) async fn execute_prompt(
             let RenderFailure { message, py_class } = failure;
             set_leaf(store, &meta_node, "created_at", now_iso());
             set_leaf(store, &meta_node, "error", Value::Str(redact_str(&message)));
+            pop_leaf(&meta_node, "error_code");
+            pop_leaf(&meta_node, "http_status");
             set_leaf(store, &meta_node, "completed_at", now_iso());
             set_leaf(store, &effect_node, "value", Value::None);
             let effect_path = frame.effect_path(&op.path);
@@ -894,6 +950,8 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
     pop_leaf(&meta_node, "template_files");
+    pop_leaf(&meta_node, "error_code");
+    pop_leaf(&meta_node, "http_status");
     set_leaf(store, &meta_node, "waiting_for", Value::None);
     if !template_files.is_empty() {
         set_leaf(
@@ -1010,6 +1068,7 @@ pub(crate) async fn execute_prompt(
                 message,
                 py_class,
                 cause,
+                false,
             );
         }
         Err(err) => return Err(err),
@@ -1046,6 +1105,7 @@ pub(crate) async fn execute_prompt(
                     crate::decompose::failure_text(name, reason, &error),
                     electricity_tools::PyExc::DecompositionError,
                     electricity_tools::ErrorCause::None,
+                    false,
                 );
             }
             crate::decompose::Posture::Dispatch { fallback_model } => {
@@ -1078,6 +1138,7 @@ pub(crate) async fn execute_prompt(
                 message,
                 electricity_tools::PyExc::ValueError,
                 electricity_tools::ErrorCause::None,
+                false,
             );
         }
     };
@@ -1107,6 +1168,7 @@ pub(crate) async fn execute_prompt(
                     err.to_string(),
                     electricity_tools::PyExc::TemplateError,
                     electricity_tools::ErrorCause::None,
+                    false,
                 );
             }
         };
@@ -1132,6 +1194,7 @@ pub(crate) async fn execute_prompt(
                     message,
                     electricity_tools::PyExc::ValueError,
                     electricity_tools::ErrorCause::None,
+                    false,
                 );
             }
         }
@@ -1195,6 +1258,7 @@ pub(crate) async fn execute_prompt(
                     message,
                     electricity_tools::PyExc::ValueError,
                     electricity_tools::ErrorCause::None,
+                    false,
                 );
             }
         };
@@ -1237,6 +1301,7 @@ pub(crate) async fn execute_prompt(
                     limiter_err.to_string(),
                     electricity_tools::PyExc::RuntimeError,
                     electricity_tools::ErrorCause::None,
+                    false,
                 );
             }
             Some(Ok(guard)) => guard,
@@ -1279,6 +1344,7 @@ pub(crate) async fn execute_prompt(
                     message,
                     electricity_tools::PyExc::AllowlistError,
                     electricity_tools::ErrorCause::None,
+                    false,
                 );
             }
             Ok(PassOutcome::Success {
@@ -1398,6 +1464,7 @@ pub(crate) async fn execute_prompt(
                         message,
                         py_class,
                         cause,
+                        true,
                     );
                 }
                 next_delay_ms =
@@ -1797,5 +1864,97 @@ mod tests {
         non_empty.insert(key("type"), Value::Str("object".to_string()));
         let schema = Value::Dict(non_empty);
         assert_eq!(truthy_schema(&Some(schema.clone())), Some(&schema));
+    }
+
+    /// Issue #660: `finish_failure`'s top-level fields come from the last
+    /// attempt only at the attempts-exhausted call site -- every other
+    /// call site's `attempts_meta` can be a stale earlier pass's chain
+    /// (a timeout-resolve or limiter failure on a retry pass, an
+    /// allowlist denial), whose own error is not an attempt failure at
+    /// all and must not borrow that chain's fields.
+    #[test]
+    fn finish_failure_only_reads_the_last_attempt_when_it_ended_the_effect() {
+        use crate::observer::NullObserver;
+
+        let stale_attempt = AttemptEntry {
+            adapter: "scripted".to_string(),
+            model: "m".to_string(),
+            status: "failed",
+            error: Some("pass 0 failure".to_string()),
+            tokens_sent: None,
+            tokens_received: None,
+            error_code: Some("bad_request".to_string()),
+            http_status: Some(400),
+            raw_reply: None,
+        }
+        .into_value();
+
+        let op = Op {
+            path: EffectPath::root(),
+            name: Some("ask".to_string()),
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Prompt(prompt_op()),
+            )),
+            on_error: OnError::Continue,
+            labels: None,
+            enabled: true,
+        };
+
+        // Not the attempts-exhausted call site: a later pass's own error
+        // (a timeout-resolve failure, say) ended the effect, with the
+        // *previous* pass's chain passed in only for `fallback_attempts`'
+        // own sake.
+        let store = Store::new();
+        let effect_node = store.ensure_dict(&store.root, key("ask")).unwrap();
+        let meta_node = store.ensure_dict(&effect_node, key("meta")).unwrap();
+        finish_failure(
+            &store,
+            &meta_node,
+            &effect_node,
+            &op,
+            &EffectPath::root(),
+            0,
+            &NullObserver,
+            vec![stale_attempt.clone()],
+            1,
+            "timeout_ms reference vanished".to_string(),
+            electricity_tools::PyExc::ValueError,
+            electricity_tools::ErrorCause::None,
+            false,
+        )
+        .unwrap();
+        let meta = store.snapshot(&meta_node);
+        let dict = meta.as_dict().unwrap();
+        assert_eq!(dict.get(&key("error_code")), None);
+        assert_eq!(dict.get(&key("http_status")), None);
+
+        // The attempts-exhausted call site: the same chain, now read as
+        // this pass's own attempts that actually ended the effect.
+        let store = Store::new();
+        let effect_node = store.ensure_dict(&store.root, key("ask")).unwrap();
+        let meta_node = store.ensure_dict(&effect_node, key("meta")).unwrap();
+        finish_failure(
+            &store,
+            &meta_node,
+            &effect_node,
+            &op,
+            &EffectPath::root(),
+            0,
+            &NullObserver,
+            vec![stale_attempt],
+            0,
+            "All adapter attempts failed".to_string(),
+            electricity_tools::PyExc::RuntimeError,
+            electricity_tools::ErrorCause::None,
+            true,
+        )
+        .unwrap();
+        let meta = store.snapshot(&meta_node);
+        let dict = meta.as_dict().unwrap();
+        assert_eq!(
+            dict.get(&key("error_code")),
+            Some(&Value::Str("bad_request".to_string()))
+        );
+        assert_eq!(dict.get(&key("http_status")), Some(&Value::from(400i64)));
     }
 }

@@ -1,0 +1,10 @@
+- request:
+    method: POST
+    path: /a/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-a"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}

@@ -1,0 +1,12 @@
+name: c657-while-cel-guard
+effects:
+  - type: loop
+    name: counter
+    while:
+      mode: cel
+      expr: "has(state.input.cfg) ? state.iter.count < state.input.cfg.limit : state.iter.count < 2"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {index: "{{iter.index}}"}}

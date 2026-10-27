@@ -300,7 +300,10 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   waiting_for, retries_used?, answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
-  assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
+  assets?, template_files? (a `file: {from: ...}` source read at dispatch only),
+  error_code? and http_status? (a failed prompt only, from the attempt whose
+  error ended the effect -- the last entry of the final pass's own
+  `fallback_attempts`; issue #660)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
   params_rendered (redacted), stdout, stderr, exit_code, stdout_chars? and
   stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
@@ -312,7 +315,8 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   inline (bool), resolved_path, validation_errors, child_errors,
   inputs (redacted-free copy of rendered child inputs), orchestration_sha256,
   library_ref? (pin, ref: children only), expect?, retries_used?,
-  finally_error?`.
+  attempts? (present exactly when retries_used is; one entry per attempt,
+  oldest first -- see "Retries" below), finally_error?`.
 - **loop** (named only — unnamed loops write no node of their own, see §2.4):
   `mode ("each"|model/cel string for while), each_in_path?, each_as?,
   max_iterations?, min_iterations, labels, completed_passes[], failed_passes?,
@@ -775,26 +779,43 @@ engine that reused Python's native `==` for CEL equality would diverge here.
 ### 4.4 Absent-path convention
 
 **Reading an unset path is not an expression error — it makes the whole
-expression `False`**, decided *structurally* (by walking the parse tree for
-every dotted `state.` read — `_collect_state_paths`, `core/cel_eval.py`, —
-then checking each against `ctx` *before* evaluating), not by catching an
-exception during evaluation. A `logger.warning` fires naming the unresolved
-path (confirmed: `"CEL expression %r reads unset state path %r; condition is
-false"`). Two escape hatches, both confirmed live:
+expression `False`, but only if that read decides the result.** The rule
+follows evaluation rather than preceding it: each unguarded `state.` read is
+marked, against `ctx`, immediately before evaluating (`_mark_unset`,
+`core/cel_eval.py`), and the expression is then evaluated under CEL's own
+rules for `has()`, the ternary `?:`, `&&`/`||` and the `all`/`exists` macros
+(a `celpy.evaluation.Evaluator` subclass, `_StateEvaluator`). Only if the
+whole expression's own result turns out to be one of those marks does the
+rule apply, naming its path; any other result — including one of the
+expression's *other* errors — stands. A `logger.warning` fires naming the
+unresolved path when the rule applies (confirmed: `"CEL expression %r reads
+unset state path %r; condition is false"`). Escape hatches, all confirmed
+live:
 
-- Any path appearing as an argument to `has()` **anywhere** in the
-  expression is exempt (`has(state.input.missing)` → `False`, no warning,
-  no effect on the rest of the expression).
+- `has(state.input.missing)` is `True` exactly when that read would
+  evaluate without error — unaffected by this rule either way.
   `has(state.x) && state.x > 1` evaluates properly instead of collapsing.
-- `strict: true` on the `if`/`while`/loop definition turns an unresolved path
-  back into a raised `CelEvaluationError` instead of a silent `False`
-  (confirmed: `strict=True` on `state.input.missing == null` raises
-  `"... reads unset state path 'state.input.missing' and is marked strict."`).
+- The ternary evaluates only the chosen branch: `has(state.x) ? state.x.y :
+  'fallback'` and `false ? state.x.y : 'fallback'` both give `'fallback'`
+  rather than being forced `null`/`False` by the untaken branch's own
+  unset read.
+- `&&`/`||` let a deciding operand win over an unset read on the other
+  side: `state.x == 1 || true` is `True`; when both sides are unset, the
+  warning names the right-hand path.
+- `all`/`exists` let a deciding element win over elements that errored.
+- `strict: true` on the `if`/`while`/loop definition turns a *deciding*
+  unresolved read back into a raised `CelEvaluationError` instead of a
+  silent `False` (confirmed: `strict=True` on `state.input.missing == null`
+  raises `"... reads unset state path 'state.input.missing' and is marked
+  strict."`); a guarded or short-circuited unset read never raises, strict
+  or not.
 
-A genuinely malformed/unparseable expression, an unknown function, or a real
-type error always raises `CelEvaluationError` — never silently `False`
-(deliberate: a typo in a condition must not quietly route every run down
-`else`).
+A genuinely malformed/unparseable expression, an unknown function or method,
+or a real type error always raises `CelEvaluationError` — never silently
+`False` (deliberate: a typo in a condition must not quietly route every run
+down `else`). An undeclared identifier, function or method is one line
+(`"undeclared reference to '<name>'"`), never a dump of cel-python's own
+activation repr.
 
 ### 4.5 Errors
 
@@ -917,7 +938,13 @@ fallen-back-from alike, across every retry pass, confirmed live (two attempts
 of 10/5 tokens each in a single-pass success still only shows one attempt;
 a multi-pass retry sums all passes' attempts). Each `fallback_attempts[]`
 entry carries its own `tokens_sent`/`tokens_received` (`None` if the call
-never got a reply at all).
+never got a reply at all), and, for a failed dispatch whose provider reported
+them, its own `error_code`/`http_status` (issue #660) right after
+`tokens_received` -- never alongside a `raw_reply` (a decode/schema failure
+carries that instead, never these). The top-level `meta.error_code`/
+`meta.http_status` mirror whichever is the *last* entry of the final pass's
+own chain -- absent on success, a decode/schema failure, a missing key, a
+timeout/connection failure and an allowlist denial.
 
 **`meta` fields written before vs. after dispatch**: everything *except*
 `value`, `tokens_sent`/`tokens_received` (the winning attempt's own, not the
@@ -1183,6 +1210,27 @@ attempt, never reset by a later attempt; `retries_used` is set on both a
 successful and a failed outcome, absent (not `0`) when the first attempt is
 also the last. Ported in `electricity-vm::exec::use_` (M1 lane I, #469,
 merged in #472), the rule included.
+
+**`meta.attempts`** (issue #659): present exactly when `meta.retries_used`
+is, with `retries_used + 1` entries, oldest first. Each entry: `created_at`,
+`completed_at`, `value` (what that attempt mapped, `null` in full-namespace
+mode or when the child failed), `error` (`null` or the text `meta.error`
+would show), `child_errors`, `expect`, and `children` only with
+`runtime.state.record_children` (that attempt's own child effects, in the
+same shape the complete record keeps). The last entry repeats the node's
+own fields. Written and published as each attempt ends, before the backoff
+wait, so `--live-state`, and the `use`'s own `expect`/`inputs`, can read the
+attempts before the current one — including a self-reference,
+`inputs: {earlier: {from: prime.<name>.meta.attempts}}` (`null` on the
+first attempt). Each retry starts from a clean node: from the second
+attempt on, the previous attempt's child effects are removed from under the
+node first (kept in its own `attempts` entry when `record_children` is on),
+so the final node never mixes an earlier attempt's step with the deciding
+one's, in either `record_children` or full-namespace mode. Reset at the
+start of every pass, same as `expect`/`retries_used`. A `--resume`d,
+unfinished retried `use` lists only the resumed run's attempts, as
+`retries_used` counts them. Ported in `electricity-vm::exec::use_` the same
+way.
 
 **Confirmed live node** (full-namespace mode):
 ```json

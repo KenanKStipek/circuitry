@@ -480,6 +480,29 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     return metadata
 
 
+def cargo_env() -> dict[str, str]:
+    """The environment to run `cargo` with: this process's own, plus
+    `RUSTUP_HOME`/`CARGO_HOME` pointed at the account's own `~/.rustup` and
+    `~/.cargo` when they're unset and those directories exist (#667).
+
+    A rustup-managed `cargo` finds its toolchains through those two, which
+    default to `$HOME/.rustup` and `$HOME/.cargo`; a suite run with a
+    temporary `HOME` (to keep `cof` away from the real config) would
+    otherwise find no toolchain and fail every electricity case. The
+    account's home comes from the password database, not from `HOME`.
+    Values already set are kept as they are."""
+    env = dict(os.environ)
+    try:
+        import pwd
+    except ImportError:  # not POSIX: nothing to default
+        return env
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    for var, subdir in (("RUSTUP_HOME", ".rustup"), ("CARGO_HOME", ".cargo")):
+        if not env.get(var) and (account_home / subdir).is_dir():
+            env[var] = str(account_home / subdir)
+    return env
+
+
 def _sandboxed_env(
     case_dir: Path,
     home_dir: Path,

@@ -1,0 +1,10 @@
+name: c656-alias-document-retarget-ignored
+model: m
+runtime:
+  adapters:
+    local_a:
+      adapter: openai
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

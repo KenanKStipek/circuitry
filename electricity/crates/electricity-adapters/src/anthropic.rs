@@ -3,7 +3,7 @@
 //! ahead of text, and `stop_reason`'s own truncation signal.
 
 use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
-use crate::curl_text::{classify_curl_outcome, curl_failure_message};
+use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
@@ -238,7 +238,7 @@ pub fn interpret_outcome(
         );
         return Err(AdapterError {
             message,
-            retry: classify_curl_outcome(outcome),
+            retry: classify_curl_outcome_with_error_code(outcome, &[api_key]),
             py_class: PyExc::AdapterCallError,
         });
     }
@@ -338,6 +338,8 @@ pub fn interpret_outcome(
 
 /// `adapters/anthropic.py::AnthropicAdapter`.
 pub struct AnthropicAdapter {
+    /// `anthropic`, or an alias's own name (#656).
+    pub name: String,
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
     /// comment.
     pub base_url: Value,
@@ -348,7 +350,7 @@ pub struct AnthropicAdapter {
 #[async_trait(?Send)]
 impl Adapter for AnthropicAdapter {
     fn name(&self) -> &str {
-        "anthropic"
+        &self.name
     }
 
     async fn generate(
@@ -418,7 +420,7 @@ impl Adapter for AnthropicAdapter {
 /// `adapters/factory.py::_build_anthropic`. `max_tokens`'s own
 /// `int()` failure is raised **at build time** (CPython's own
 /// `ValueError`/`TypeError` text/class).
-pub fn build_anthropic(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_anthropic(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     let raw_max_tokens = crate::config::cfg_get(cfg, "max_tokens");
     let truthy = raw_max_tokens.is_some_and(crate::config::value_is_truthy);
     let max_tokens_value = if truthy {
@@ -432,6 +434,7 @@ pub fn build_anthropic(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
         py_class: e.py_class,
     })?;
     Ok(Box::new(AnthropicAdapter {
+        name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "https://api.anthropic.com"),
         default_model: cfg_str_or(cfg, "default_model", "claude-sonnet-5"),
         max_tokens,
@@ -558,7 +561,7 @@ mod tests {
 
     #[test]
     fn build_anthropic_defaults_max_tokens_to_4096() {
-        let adapter = build_anthropic(&Value::None).unwrap();
+        let adapter = build_anthropic("anthropic", &Value::None).unwrap();
         assert_eq!(adapter.name(), "anthropic");
     }
 
@@ -570,7 +573,7 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
-        let adapter = build_anthropic(&Value::Dict(cfg)).unwrap();
+        let adapter = build_anthropic("anthropic", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
         }
@@ -599,7 +602,7 @@ mod tests {
             Value::Str("max_tokens".to_string()),
             Value::Str("x".to_string()),
         );
-        let err = match build_anthropic(&Value::Dict(cfg)) {
+        let err = match build_anthropic("anthropic", &Value::Dict(cfg)) {
             Err(err) => err,
             Ok(_) => panic!("expected build_anthropic to fail"),
         };

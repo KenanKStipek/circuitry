@@ -1,0 +1,7 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "With `runtime.state.record_children`, a child step that only the first attempt ran (`first_only`, gated on an `fs` counter) is gone from the node once the second attempt succeeds, but is still there under that attempt's own `meta.attempts[0].children`. The deciding attempt's own named `each` loop keeps its usual `last` alias.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -133,15 +133,25 @@ fn call_tool_check(tool: &dyn electricity_tools::ToolPlugin) -> PreflightCheckRe
 /// preflight is ever run. `None` when every referenced name is either
 /// buildable here or not in Circuitry's registry at all (preflight's
 /// own job to report that one as an ordinary "unknown adapter"
-/// failure).
-pub fn unbuildable_known_adapter(document: &Value, adapters: &AdapterRegistry) -> Option<String> {
+/// failure). Each reference is resolved through its alias target
+/// first (#656, *runtime_config* is the merged runtime), so a used
+/// alias of `litellm` gets this refusal naming `litellm`, not the
+/// alias.
+pub fn unbuildable_known_adapter(
+    document: &Value,
+    adapters: &AdapterRegistry,
+    runtime_config: &Value,
+) -> Option<String> {
     let (mut adapter_refs, _tool_refs) = preflight::preflight_refs(document, true);
     adapter_refs.sort();
     let buildable = adapters.supported_names();
-    adapter_refs.into_iter().find(|name| {
-        let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
-        electricity_vm::adapter_names::ADAPTER_NAMES.contains(&normalized.as_str())
-            && !buildable.contains(&normalized)
+    adapter_refs.into_iter().find_map(|name| {
+        let normalized = electricity_value::pycompat::py_strip(&name).to_lowercase();
+        let resolved = electricity_vm::adapter::alias_target(&normalized, runtime_config)
+            .unwrap_or(normalized);
+        (electricity_vm::adapter_names::ADAPTER_NAMES.contains(&resolved.as_str())
+            && !buildable.contains(&resolved))
+        .then_some(resolved)
     })
 }
 
@@ -710,7 +720,34 @@ mod tests {
         let document = doc_with_adapter("litellm", vec![]);
         let adapters = electricity_adapters::build_registry();
         assert_eq!(
-            unbuildable_known_adapter(&document, &adapters),
+            unbuildable_known_adapter(&document, &adapters, &Value::None),
+            Some("litellm".to_string())
+        );
+    }
+
+    #[test]
+    fn unbuildable_known_adapter_resolves_a_used_aliass_target_first() {
+        // #656: a used alias of `litellm` gets this refusal naming
+        // `litellm`, not the alias.
+        let document = doc_with_adapter("litellm_alt", vec![]);
+        let mut adapters_cfg = Dict::new();
+        let mut alias_entry = Dict::new();
+        alias_entry.insert(
+            Value::Str("adapter".to_string()),
+            Value::Str("litellm".to_string()),
+        );
+        adapters_cfg.insert(
+            Value::Str("litellm_alt".to_string()),
+            Value::Dict(alias_entry),
+        );
+        let mut runtime = Dict::new();
+        runtime.insert(
+            Value::Str("adapters".to_string()),
+            Value::Dict(adapters_cfg),
+        );
+        let adapters = electricity_adapters::build_registry();
+        assert_eq!(
+            unbuildable_known_adapter(&document, &adapters, &Value::Dict(runtime)),
             Some("litellm".to_string())
         );
     }
@@ -719,7 +756,10 @@ mod tests {
     fn unbuildable_known_adapter_is_none_for_a_buildable_name() {
         let document = doc_with_adapter("scripted", vec![]);
         let adapters = electricity_adapters::build_registry();
-        assert_eq!(unbuildable_known_adapter(&document, &adapters), None);
+        assert_eq!(
+            unbuildable_known_adapter(&document, &adapters, &Value::None),
+            None
+        );
     }
 
     fn doc_with_effects(effects: Vec<Value>) -> Value {
@@ -753,7 +793,10 @@ mod tests {
     fn unbuildable_known_adapter_is_none_for_a_genuinely_unknown_name() {
         let document = doc_with_adapter("bogus", vec![]);
         let adapters = electricity_adapters::build_registry();
-        assert_eq!(unbuildable_known_adapter(&document, &adapters), None);
+        assert_eq!(
+            unbuildable_known_adapter(&document, &adapters, &Value::None),
+            None
+        );
     }
 
     /// Not reachable from a real run yet (a `use` effect is the only

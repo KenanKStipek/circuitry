@@ -193,7 +193,22 @@ The model is the CLI's own name for it: a Claude Code model for `claude_code`, p
 
 `provider: claude_alt` (or `provider: "claude_alt:claude-sonnet-4-5"`) then runs Claude Code with that variable set, in that one child process; `meta.adapter` says `claude_alt`, and an effect that names `claude_code` is unaffected. `env` is applied after `unset_env`, a leading `~/` is the home directory, and its values are kept out of saved state, events and error messages. An alias is host configuration like any adapter setting: a document run by path may define one (it is listed in "Applied host settings"), a limited document's is ignored. `cof doctor` checks an alias's own binary under its name.
 
-The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key, and [Aliases of the CLI adapters](../orchestration-reference.md#aliases-of-the-cli-adapters) the rules.
+An alias's target is not limited to `claude_code`/`pi` — it can be any adapter except `host_claude`, which is how several variants of one adapter coexist in one config. Two local OpenAI-compatible endpoints, say:
+
+```json
+{
+  "runtime": {
+    "adapters": {
+      "desktop_a": { "adapter": "lmstudio", "base_url": "http://127.0.0.1:8765/v1" },
+      "desktop_b": { "adapter": "lmstudio", "base_url": "http://127.0.0.1:8766/v1" }
+    }
+  }
+}
+```
+
+`provider: desktop_a` and `provider: desktop_b` then each hit their own endpoint; neither needs a credential, since `lmstudio` itself doesn't. An alias of a provider that does need one (`groq`, say) reads that provider's own credential env var (`GROQ_API_KEY`), not a per-alias one. Every alias in the merged config is checked up front: `cof check` lists a broken one even if nothing uses it, and `cof run` fails the same way before the first effect, with an `Invalid adapter aliases:` block.
+
+The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key, and [Adapter aliases](../orchestration-reference.md#adapter-aliases) the general rules.
 
 ## Secrets for a request header or a tool's environment
 

@@ -1,0 +1,8 @@
+name: c658-check-bare-namespace
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "input.x == 1"
+    then: []

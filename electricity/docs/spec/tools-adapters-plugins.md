@@ -704,6 +704,11 @@ stripped; `finish_reason = choices[0].finish_reason` if a string. Token usage fr
 `raw["usage"]["prompt_tokens"]`/`["completion_tokens"]`, only kept if they're already `int`
 (no coercion from numeric strings).
 
+A failed response's own `error_code` (issue #660, §3.10): `error.code` when that is a
+non-empty string, else `error.type` — an OpenAI-shaped 5xx body commonly carries `code: null`
+with a `type`, so the fallback matters in practice, not just for symmetry with `anthropic`
+below (whose bodies carry only `type`, never `code`, at all).
+
 **Providers in this family and their env var names** (`adapters/factory.py` `_build_*`
 functions, `api_key_env=` in each adapter file):
 
@@ -860,12 +865,37 @@ the run. `build_adapter("host_claude", ...)` always raises in the reference impl
 should register the name in its adapter registry only to produce the same clear "not buildable
 from config" error, not implement a working transport.
 
-### 3.10 Retry classification and `Retry-After`
+### 3.10 Retry classification, `Retry-After`, and the provider's own error code
 
 `src/circuitry/adapters/_retry.py`. `RetryInfo{retryable: bool, status: int | None,
 retry_after: str | None}` (`:72-87`). `_status_is_retryable` (`:63-64`): `status == 429 or
 status == 408 or 500 <= status <= 599` — every other 4xx (400/401/403/404/422) is **not**
 retryable.
+
+Issue #660: `AdapterCallError` also carries `error_code: str | None`, set at the same raise
+site, independently of `retry_info` (a 4xx the status already marks non-retryable can still
+carry a code, and the two are read by different callers). `curl_support.parse_error_code(stdout)`
+reads it: the body's `error.code` when that is a non-empty string, else `error.type` when that
+is a non-empty string; `None` for an integer code (it only duplicates the HTTP status), a flat
+`{"error": "<text>"}` body, or no JSON body at all. `curl_error_code(stdout, secrets)` masks
+*secrets* first, the same credential values `curl_failure_message` masks, before parsing —
+electricity's own port is `curl_text::parse_error_code`/`curl_error_code`, byte-identical rules,
+replayed against the same corpus (`generate_adapter_corpus.py`'s `parse_error_code_cases`).
+On `RetryInfo` in electricity's own Rust port (not a separate field on `AdapterError`, since
+`RetryInfo` already has fourteen construction sites against `AdapterError`'s ~150) —
+`classify_curl_outcome_with_error_code(outcome, secrets)` wraps `classify_curl_outcome` with
+this same masked read. Every curl-shelling adapter in both languages calls it at its own raise
+site with its own request's credential values as *secrets*; `ollama` (no credential) and
+`cyberdiner` (out of scope for issue #660; no call at all) pass none. The watsonx IAM-token
+exchange calls it with its own api key as *secrets*, same as every other curl-shelling adapter.
+`litellm` (cof only; electricity has no builder for it) reads the
+raised exception's own `code` attribute, else `type`, each only when a non-empty string — its
+exception hierarchy mirrors the OpenAI SDK's, which carries both. The scripted adapter's error
+replies take an optional `code` (`scripted-replies.md` §4.2).
+
+`core/prompt.py`'s retry loop reads `error_code`/`status` into `meta.error_code`/
+`meta.http_status` — see `runtime-semantics.md`'s own prompt `meta` section for the exact
+placement and absence rules; this section is only the adapter-level classification.
 
 `AdapterCallError(RuntimeError)` (`:137-151`) carries a `retry_info: RetryInfo` set at raise
 time by adapters that can classify their own failure. For the reference implementation's
@@ -1038,39 +1068,14 @@ plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>
 on PATH. Install one of them...`, `subprocess_tool.rs::check_binary`), since there is exactly
 one binary name here, never a candidate list.
 
-**`env` and aliases** (issue #579, `adapters/factory.py::_env_pairs`/`_build_alias`,
-`electricity-adapters::config::env_pairs`, `electricity_vm::adapter::AdapterRegistry::build`). The
-child's environment, in order: the caller's, minus `PARENT_SESSION_ENV`, minus `unset_env`, then
-`env` applied last (`electricity_tools::process::RunOpts::env_set`, set after `env_remove`), so a
-variable in both `unset_env` and `env` gets the `env` value. Values must be strings; a leading
-`~/` becomes the home directory (`os.path.expanduser`, `$HOME` else the password database),
-nothing else is expanded. A `runtime.adapters.<name>` entry that sets `adapter` is an **alias**:
-`adapter` must name `claude_code` or `pi` (normalized like any adapter name), every other key is
-that base's own setting, and the alias is built by the base's own builder from *those keys only*
-(never the base's own entry, never another alias's) and reports the alias name as `name()`, so
-`meta.adapter`, the ignored-options warning and `check()`'s own message name it. An alias is selected by name wherever a provider token
-or `adapter:` names an adapter, including `<alias>:<model>`. Every error is a `ValueError` naming
-the alias and never showing an `env` value:
-
-- `runtime.adapters.<alias>.adapter must be claude_code or pi, got <repr>` (an unknown base, any
-  other adapter, a non-string; `, which is itself an alias` is appended when the base is a name
-  that is not in Circuitry's registry and whose own entry sets `adapter`);
-- `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a
-  name of its own` (a name in Circuitry's full registry, whether or not this build can build it);
-- `runtime.adapters.<alias>.env must be a mapping of variable names to strings, got <type>`;
-- `runtime.adapters.<alias>.env has an invalid variable name <repr>: a name matches
-  [A-Za-z_][A-Za-z0-9_]*`;
-- `runtime.adapters.<alias>.env.<NAME> must be a string, got <type>`.
-
-`unset_env`/`extra_args` errors name the alias too. Preflight builds adapters from *config*'s
-`runtime` plus the aliases the run's own merged runtime defines (`with_document_aliases`: a
-trusted document's alias is found, nothing else of its `runtime:` is), and a failing alias is
-soft or hard like any known adapter only when it builds (`is_known_adapter`). Every `env` value
-is replaced by `***REDACTED***` (names stay) in `electricity-redaction::redact` for any
-`adapters` mapping, so `runtime.effective_settings` never holds one, and `Debug` shows names only.
-Ported with five `c579-*` conformance cases (two `claude_code` aliases, a `pi` alias and both
-bases in one run through fakes that report a plain `ALIAS_PROBE` variable, a default-adapter alias,
-every config error's exact text, and an alias's missing binary hard and soft).
+**`env`.** The child's environment, in order: the caller's, minus `PARENT_SESSION_ENV`, minus
+`unset_env`, then `env` applied last (`electricity_tools::process::RunOpts::env_set`, set after
+`env_remove`), so a variable in both `unset_env` and `env` gets the `env` value. Values must be
+strings; a leading `~/` becomes the home directory (`os.path.expanduser`, `$HOME` else the
+password database), nothing else is expanded. Every `env` value is replaced by `***REDACTED***`
+(names stay) in `electricity-redaction::redact` for any `adapters` mapping, so
+`runtime.effective_settings` never holds one, and `Debug` shows names only. `claude_code`/`pi`
+can also be an alias's own target — see §3.14.
 
 **Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
 failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt
@@ -1087,6 +1092,86 @@ prompt`), these two adapters are only its first end-to-end exercise.
 test. Registered in `build_registry()` right after `host_claude`; the unbuildable set after this
 lane is `litellm` alone, which stays refused permanently (§13's own settled ruling: it imports
 the Python `litellm` package directly, which electricity neither embeds nor reimplements).
+
+### 3.14 Adapter aliases
+
+`adapters/factory.py::_build_alias`/`alias_config_errors`, `electricity_vm::adapter::
+AdapterRegistry::build_alias`/`alias_target` (issue #656; #579 scoped this to `claude_code`/`pi`
+alone). A `runtime.adapters.<name>` entry that sets `adapter` is an alias of the target it
+names, built from *that entry's own keys only* (never the target's own `runtime.adapters.<target>`
+entry, never another alias's), reporting the alias's own name as `name()` — `meta.adapter`,
+`fallback_attempts[].adapter`, the ignored-options warning, `check()`'s own message, the preflight
+label (`adapter:<alias>`), and `effective_settings.sources["adapters.<alias>.timeout_seconds"]`
+all name the alias, not the target. A hint naming a config key names the alias's own block
+(`runtime.adapters.<alias>.base_url`, not the target's); the wire-protocol label in a request
+failure (`"OpenAI-compatible request failed …"`) stays the target's. An alias is selected by
+name wherever a provider token or `adapter:` names an adapter, including `<alias>:<model>`.
+
+**The target** can be any adapter in Circuitry's own registry except `host_claude` (normalized
+like any adapter name: `.strip().lower()`), supplied at run time by `circuitry-mcp`, never built
+from config. An alias uses its target's own credential (an alias of `groq` reads
+`GROQ_API_KEY`); a keyless target needs none. Every error is a `ValueError` naming the alias and
+never showing an `env` value:
+
+- `runtime.adapters.<alias>.adapter must name a built-in adapter, got <repr>` (an unknown target,
+  or a non-string; `, which is itself an alias` is appended when the target is a name that is not
+  in Circuitry's registry and whose own entry sets `adapter`);
+- `runtime.adapters.<alias>.adapter cannot be 'host_claude': it is supplied at run time by
+  circuitry-mcp, never built from config`;
+- `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a
+  name of its own` (a name in Circuitry's full registry, whether or not this build can build it);
+- for a CLI target: `runtime.adapters.<alias>.env must be a mapping of variable names to
+  strings, got <type>`; `runtime.adapters.<alias>.env has an invalid variable name <repr>: a name
+  matches [A-Za-z_][A-Za-z0-9_]*`; `runtime.adapters.<alias>.env.<NAME> must be a string, got
+  <type>`; `unset_env`/`extra_args` errors name the alias too.
+
+**A builder with no `name` parameter can't be aliased** (detected by inspecting the builder's own
+signature, never by catching the `TypeError` a mismatched call would raise) — reported the same
+way, `runtime.adapters.<alias>.adapter targets <target>, which cannot be aliased`. A builder's
+own `ValueError`/`TypeError` for a malformed setting (an `int()` conversion failing on a bad
+`max_tokens`, say) is reported as `runtime.adapters.<alias>: <the builder's own message>`, unless
+that message already names the alias's own block itself (the CLI targets' `env`/`unset_env`/
+`extra_args` errors above do, from the start) — then it is reported verbatim, never prefixed
+twice.
+
+**Validated up front.** `electricity::lib`'s own run wiring builds every alias in the merged
+runtime (config plus a by-path document's) right after `pre_input_checks`, before preflight or
+any effect dispatches, whether or not the document uses it, through `AdapterRegistry::
+alias_config_errors` — a litellm-target alias is skipped there (below), unless its own name
+collides with a built-in adapter (reported regardless of its target), so a defined but unused one
+is fine. Any error fails the run with `Invalid adapter aliases:` plus one `  - ` line per broken
+alias, in name order, identical text to `cof`'s. Preflight builds adapters from *config*'s
+`runtime` plus the aliases the run's own merged runtime defines (`with_document_aliases` in
+`cof`), and a failing alias is soft or hard like any known adapter only when it builds
+(`is_known_adapter`).
+
+**`litellm` stays unbuildable.** `AdapterRegistry::build`'s own registry has no `litellm`
+builder, so a direct `provider: litellm` already refuses with the preview marker
+(`unbuildable_known_adapter`/`profile_provider_unbuildable`/the default-adapter path, each in
+`electricity::lib`) or, dispatched mid-run, `is_unbuildable` in `exec/prompt.rs`. Each of those
+now resolves an alias to its target first (`adapter::alias_target`), so a *used* alias of
+`litellm` gets the identical refusal, naming `litellm`, not the alias; a *defined but unused* one
+never reaches the check at all.
+
+**Strict allowlist.** `electricity-config::effective_settings_with_profile` applies the same rule
+`cli/effective_settings.py::_strip_disallowed_adapter_retargets` does: with `enabled_adapters`
+set, a document's own `runtime.adapters.<name>.adapter` key is dropped before the merge (the
+whole key is dropped, not left behind as an empty `{}` block, when nothing else is left in that
+entry), with the warning `runtime.adapters.<name>.adapter from <document> ignored: with
+enabled_adapters set, only config defines adapter aliases` — every document electricity runs is
+trusted (this module's own doc comment, at the top of `effective_settings.rs`), so without this
+rule a trusted document could point an allowlisted alias at an adapter the allowlist doesn't
+list. Other keys in the same block (a `base_url` override, say) still apply.
+
+Ported with `c656-*` conformance cases: an alias of any adapter in one run (several
+OpenAI-compatible endpoints plus a keyless-credential one, through the mock HTTP server), every
+config error's exact text in one run used by nothing, a keyless alias's preflight soft
+classification, the ignored-options warning naming an alias rather than its target, and the
+strict-allowlist rule ignoring a document's retarget (an `adapter:` key alone, with no other
+settings left behind). `c579-cli-alias-config-errors` is replaced by `c656-alias-config-errors`
+(its own `{"adapter": "openai"}` entry is valid now); the other four original `c579-*` alias
+cases (two `claude_code` aliases, a `pi` alias and both bases in one run, a default-adapter
+alias, an alias's missing binary hard and soft) are unchanged.
 
 ---
 

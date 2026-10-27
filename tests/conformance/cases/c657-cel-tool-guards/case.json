@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #657",
+  "description": "The `cel` tool's unset-path rule follows evaluation too: a guarded deeper read and an untaken ternary branch both give their own fallback value instead of `null`. electricity has no `cel` tool yet and refuses the document with the preview marker.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "electricity_preview_ok": true,
+  "cli_args": ["-e", "a={\"q\": 1}"]
+}

@@ -1,0 +1,14 @@
+name: c657-cel-tool-guards
+effects:
+  - type: tool
+    name: guarded_deeper
+    provider: cel
+    params: {expr: "has(state.input.a.b) ? state.input.a.b.c : 'fallback'"}
+  - type: tool
+    name: unreachable
+    provider: cel
+    params: {expr: "false ? state.input.x.y : 'fallback'"}
+  - type: tool
+    name: guarded_exact
+    provider: cel
+    params: {expr: "has(state.input.a.b.c) ? state.input.a.b.c : 'fallback'"}

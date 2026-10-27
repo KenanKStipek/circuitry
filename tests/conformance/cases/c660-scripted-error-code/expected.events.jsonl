@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-26T22:04:40.125Z","ev":"run_start","run_id":"149aaf70-3869-4b69-982a-56a2ad13d1c8","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":83116}
+{"v":1,"seq":1,"ts":"2026-10-26T22:04:40.128Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-26T22:04:40.128Z","ev":"start","id":1,"path":"prime.p1"}
+{"v":1,"seq":3,"ts":"2026-10-26T22:04:40.129Z","ev":"end","id":1,"path":"prime.p1","ok":false,"ms":1,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: invalid_request at 'prime.p1'\", 'tokens_sent': None, 'tokens_received': None, 'error_code': 'bad_schema', 'http_status': 400}]"}
+{"v":1,"seq":4,"ts":"2026-10-26T22:04:40.129Z","ev":"start","id":2,"path":"prime.p2"}
+{"v":1,"seq":5,"ts":"2026-10-26T22:04:40.129Z","ev":"end","id":2,"path":"prime.p2","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: timeout at 'prime.p2'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":6,"ts":"2026-10-26T22:04:40.129Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":7,"ts":"2026-10-26T22:04:40.129Z","ev":"run_end","ok":true}

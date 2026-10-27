@@ -100,13 +100,13 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `description` | string | no | — | Human-readable description |
 | `model` | string | no | — | Per-effect model override |
 | `provider` | string | no | — | Per-effect provider override |
-| `provider_fallbacks` | array | no | — | Ordered fallback providers. Tried on a dispatch failure *and* on a reply this effect can't use (an unreadable boolean/number, schema-invalid JSON) — either moves to the next provider before a retry is counted. Each attempt lands in `meta.fallback_attempts` with its own `tokens_sent`/`tokens_received` and, for an unusable reply, a size-capped `raw_reply` and a `decode_failed`/`schema_invalid` status |
+| `provider_fallbacks` | array | no | — | Ordered fallback providers. Tried on a dispatch failure *and* on a reply this effect can't use (an unreadable boolean/number, schema-invalid JSON) — either moves to the next provider before a retry is counted. Each attempt lands in `meta.fallback_attempts` with its own `tokens_sent`/`tokens_received`, a failed dispatch's own `error_code`/`http_status` (see below) when the provider reports them, and, for an unusable reply, a size-capped `raw_reply` and a `decode_failed`/`schema_invalid` status |
 | `params` | object | no | — | Generation parameters. `temperature`, `max_tokens` and `stop` are mapped to each provider's own names; every other key goes to the provider unchanged (e.g. ollama `num_ctx`, OpenAI `top_p`) — see [Generation options](#generation-options-messages-and-images) |
 | `timeout_ms` | integer or `{from, default}` | no | — | Per-attempt timeout in milliseconds, capped by the timeout of whichever adapter that attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds` for *that* adapter — not necessarily the run default's, if `provider:`/`provider_fallbacks` sends the attempt elsewhere); rounded up to whole seconds. `0` or absent: the adapter's timeout. Or read it from state, `{from: <path>, default: <int>}`: see [`timeout_ms` from state](#timeout_ms-from-state) |
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
-| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use |
+| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the final pass's chain survives into `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier pass's own attempts, and its classification, are gone once a retry starts a fresh one |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
 
@@ -154,6 +154,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `deterministic: true` seed | `options.seed: 0` | `openai` only: `seed: 0` | — |
 | `messages` | `/api/chat` turns | `messages` turns | `system` field + turns |
 | image assets | base64 `images` (local files only) | `image_url` parts (`data:` URL for a local file) | `image` blocks (base64 or `url`) |
+| a failed response's `meta.error_code` | none for Ollama's flat `{"error": "..."}` body | the body's `error.code`, else `error.type`, each only when a non-empty string | `error.type` (no `code` field at all) |
 
 A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `pi`, `claude_code`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
 
@@ -166,6 +167,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.prompt_sent` / `meta.prompt_sent_sha256` / `meta.prompt_chars` — the text sent (as `runtime.state.prompt_sent` leaves it), and its SHA-256 and length in characters; always present. See [Recording the prompt text](#recording-the-prompt-text-runtimestateprompt_sent).
 - `meta.template_files` — one `{field, path, sha256, chars}` per `file: {from: ...}` source read at dispatch. See [Reading a prompt file at dispatch](#reading-a-prompt-file-at-dispatch-file-from-state-path).
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
+- `meta.http_status` / `meta.error_code` — on a failed prompt only, from the attempt whose error ended the effect (the last entry of the final pass's `meta.fallback_attempts`): the failed response's HTTP status, and the provider's own error code (the body's `error.code` when that is a non-empty string, else `error.type`; see the adapter table above). Absent, never `null`, on success (a recovered fallback included), a template/render/decode/schema failure, a missing key, a timeout or connection failure, and an allowlist denial. Each failed `meta.fallback_attempts[]` entry carries its own copy of the two fields, after `tokens_sent`/`tokens_received`.
 
 **Example — an image to a local vision model:**
 ```yaml
@@ -240,11 +242,11 @@ The child gets the caller's environment minus the variables that make a CLI thin
 | `timeout_seconds` | the run's adapter timeout | Per-call budget. A CLI retries a failing request on its own before it gives up, which can take minutes |
 | `unset_env` | `["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]` | Variables removed from the CLI's environment; replaces the default list (`[]` keeps both) |
 | `extra_args` | `[]` | Extra CLI arguments, added before the prompt (`pi`) or last (`claude_code`) |
-| `env` | `{}` | Variables set in the CLI's environment, after the always-removed variables and `unset_env` are taken out, so a variable named in both `unset_env` and `env` gets the `env` value. Values are strings; a leading `~/` is the home directory, nothing else is expanded. Only that CLI's child process sees them. The values never appear in saved state, events, logs, error messages or `cof doctor` output (see [Aliases](#aliases-of-the-cli-adapters)) |
+| `env` | `{}` | Variables set in the CLI's environment, after the always-removed variables and `unset_env` are taken out, so a variable named in both `unset_env` and `env` gets the `env` value. Values are strings; a leading `~/` is the home directory, nothing else is expanded. Only that CLI's child process sees them. The values never appear in saved state, events, logs, error messages or `cof doctor` output (see [Adapter aliases](#adapter-aliases)) |
 
-##### Aliases of the CLI adapters
+##### Adapter aliases
 
-A CLI often picks its login or profile from an environment variable (a config directory, say), and a `prompt` effect has no `env` of its own. An **alias** runs `pi` or `claude_code` with settings and an `env` of its own, so one run can send some effects through one login and others through another. Define it where adapter settings already live, `runtime.adapters`:
+A config can give an adapter a name of its own, with settings of its own: a different `base_url`, timeout, or (for `pi`/`claude_code`) a different CLI login or profile. A `prompt` effect has no such settings of its own, so this is how several variants of one adapter coexist in one run — several local OpenAI-compatible endpoints, say, or two CLI logins. Define it where adapter settings already live, `runtime.adapters`:
 
 ```json
 {"runtime": {"adapters": {
@@ -252,17 +254,34 @@ A CLI often picks its login or profile from an environment variable (a config di
     "adapter": "claude_code",
     "env": {"CLAUDE_CONFIG_DIR": "~/.claude-alt"},
     "timeout_seconds": 1800
+  },
+  "local_a": {
+    "adapter": "lmstudio",
+    "base_url": "http://127.0.0.1:8765/v1"
   }
 }}}
 ```
 
-- **The base.** `adapter` names the alias's base: `claude_code` or `pi`, and nothing else (not another alias, not an API adapter). Every other key is one of the base's own settings from the table above (`binary`, `default_model`, `thinking` for `pi`, `timeout_seconds`, `unset_env`, `extra_args`) or `env`. An alias starts from nothing: it does not inherit the base's own `runtime.adapters.claude_code` entry, and it never changes that entry or another alias's.
-- **Selecting it.** Anywhere an effect can name an adapter: `provider: claude_alt`, `provider: "claude_alt:claude-sonnet-4-5"`, `provider_fallbacks`, a document's `adapter:`, `default_adapter`. `meta.adapter` records the alias name. `enabled_adapters` lists an alias by its own name, like any adapter.
-- **The child's environment.** In order: the caller's environment, minus the always-removed parent-session variables, minus the alias's `unset_env`, then its `env`. Two aliases in one run each give their own child its own `env`; cof's own environment is never changed.
-- **Errors.** A config error names the alias, and never shows an `env` value: an unknown base, or one other than `claude_code` or `pi`; a base that is itself an alias; an alias named like a built-in adapter (any name `cof list --extensions` shows); an `env` that is not a mapping, has a non-string value, or has a variable name that does not match `[A-Za-z_][A-Za-z0-9_]*`. A name that sets no `adapter` is not an alias, whatever else it sets.
-- **`cof check` and `cof doctor`** check the alias's binary, its own `binary` or else the base's default, and report it as `binary:<name>` under the alias's name.
+- **The target.** `adapter` names any adapter `cof list --extensions` shows, except `host_claude` (supplied at run time by `circuitry-mcp`, never built from config) — normalised with `.strip().lower()`. Every other key is one of the target's own settings (`base_url`, `default_model`, `timeout_seconds`, and the target's specific keys — `max_tokens`, `api_key_env` where supported, `endpoint`/`api_version`, `account_id`, `api_base`, `replies_file`, cyberdiner's own keys, and the CLI keys above: `binary`, `thinking` for `pi`, `unset_env`, `extra_args`, `env`). An alias starts from nothing: it does not inherit the target's own `runtime.adapters.<target>` entry, and it never changes that entry or another alias's. Keys the target doesn't read are ignored, exactly as on the target's own block.
+- **Credentials.** An alias uses its target's credential: an alias of `groq` reads `GROQ_API_KEY`. A keyless target (`lmstudio`, `vllm`, `llamacpp`) needs none — several local OpenAI-compatible endpoints in one config need no key at all between them. `api_key_env` works only where the target already accepts it (`nvidia-nim`, `tgi`).
+- **Selecting it.** Anywhere an effect can name an adapter: `provider: claude_alt`, `provider: "claude_alt:claude-sonnet-4-5"`, `provider_fallbacks`, a document's `adapter:`, `default_adapter`, and a profile's `adapter:`/`provider:` overrides. `meta.adapter` and `fallback_attempts[].adapter` record the alias's own name. `enabled_adapters` lists an alias by its own name, like any adapter.
+- **The name it reports.** Warnings, the preflight label (`adapter:<alias>`, carrying the target's `check()` result, e.g. `missing ['env:GROQ_API_KEY']`), and `effective_settings.sources["adapters.<alias>.timeout_seconds"]` all name the alias. A hint that tells you which config key to set names the alias's own block (ollama's unreachable hint becomes `runtime.adapters.<alias>.base_url`). The wire-protocol label in a request failure stays the target's (`OpenAI-compatible request failed …`). A built-in adapter sees no change. For `pi`/`claude_code` specifically, the child's environment is, in order: the caller's environment, minus the always-removed parent-session variables, minus the alias's `unset_env`, then its `env`. Two aliases in one run each give their own child its own `env`; cof's own environment is never changed.
+- **Errors.** A config error names the alias, and never shows an `env` value:
+
+  | Condition | Text |
+  |---|---|
+  | Unknown or non-string target | `runtime.adapters.<alias>.adapter must name a built-in adapter, got <repr>` |
+  | Target is itself an alias | same text, plus `, which is itself an alias` |
+  | Target `host_claude` | `runtime.adapters.<alias>.adapter cannot be 'host_claude': it is supplied at run time by circuitry-mcp, never built from config` |
+  | Alias named like a built-in adapter (any name `cof list --extensions` shows) | `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a name of its own` |
+  | `env`/`unset_env`/`extra_args` (CLI targets) | not a mapping, a non-string value, or a variable name that does not match `[A-Za-z_][A-Za-z0-9_]*` |
+  | A malformed setting the target's own builder rejects (e.g. `max_tokens: "x"`) | the builder's own message, prefixed `runtime.adapters.<alias>: ` unless it already names the alias's own block (the `env`/`unset_env`/`extra_args` errors above always do) |
+
+  A name that sets no `adapter` is not an alias, whatever else it sets.
+- **Validated up front.** Every alias in the run's merged runtime (config plus a by-path document's) is built up front, whether or not the document uses it. `cof check` lists one error per broken alias, in name order, even with `--skip-preflight`. `cof run` fails before the first effect with an `Invalid adapter aliases:` block, one line per broken alias, and writes `--out` like any other configuration error. Preflight never sees an invalid alias; `cof doctor` is unchanged (one row per alias).
+- **`cof check` and `cof doctor`** check the alias's own dependencies — binary and login for `pi`/`claude_code`, credential env var otherwise — reported under the alias's own name.
 - **Secrecy.** `env` values are blanked in the `runtime.effective_settings` snapshot of the saved state (the variable names stay) and appear in no event, log, error message or "Applied host settings" line (which lists key paths, such as `runtime.adapters.claude_alt.env`, never values). Treat `env` as host configuration all the same: put a secret in a file the CLI reads, not in a value that config.json holds.
-- **Trust.** An alias is adapter configuration, so the trust boundary is unchanged. A document run by path may define aliases in its `runtime.adapters`, and they are listed in "Applied host settings"; a limited document's `runtime.adapters` is ignored, so an effect of it that names an alias only that document defines fails as an unknown adapter.
+- **Trust.** An alias is adapter configuration, so the trust boundary is unchanged. A document run by path may define aliases in its `runtime.adapters`, and they are listed in "Applied host settings"; a limited document's `runtime.adapters` is ignored, so an effect of it that names an alias only that document defines fails as an unknown adapter. With `enabled_adapters` set, though, a document — trusted or not — can no longer define or retarget an adapter alias at all: its own `runtime.adapters.<name>.adapter` key is ignored, with the warning `runtime.adapters.<name>.adapter from <document> ignored: with enabled_adapters set, only config defines adapter aliases`; other keys in the same block (a `base_url` override, say) still apply. Without `enabled_adapters`, a document keeps the power described above.
 
 **`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 
@@ -385,7 +404,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `if.mode` | string | no | `model` | `model` or `cel` |
 | `if.template` | string | model only | — | LLM evaluates and returns boolean. The runtime wraps it and appends `Answer (yes/no):`, so phrase the ask as yes/no. Reply parsed leniently — `Yes.`, `yes, because …`, `**TRUE**`, `Y` parse as true, `No.`/`false!`/`N` as false (wrapping quotes/markdown/punctuation stripped first); an answer that still doesn't parse raises rather than defaulting to false, so `on_error` applies. Raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`) |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
-| `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
+| `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path whose read decides the result raises instead of making the expression `False` |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
 | `threshold` | number | no | `0.5` | Deprecated, no effect: the built-in evaluator is a categorical yes/no with no confidence to cut. Still recorded on `meta.threshold`; `cof check` warns when set. |
@@ -459,7 +478,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no. Parsed the same lenient way as `if.template`; raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`, `meta.tokens_sent`/`meta.tokens_received` for the last check and `meta.tokens_sent_total`/`meta.tokens_received_total` summed across every check this loop made) on each check |
 | `while.expr` | string | cel only | — | CEL expression against state |
-| `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
+| `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path whose read decides the result raises instead of making the expression `False` |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`). For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
 | `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
@@ -1024,7 +1043,7 @@ set a literal.
 | Param | Type | Required | Default | Meaning |
 |-------|------|----------|---------|---------|
 | `expr` | string | yes | — | The CEL expression |
-| `strict` | bool | no | `false` | An unset `state.` path fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
+| `strict` | bool | no | `false` | An unset `state.` path whose read decides the result fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
 | `schema` | object | no | — | A JSON Schema the result must match; a mismatch fails the effect, naming each mismatch (`cel: the result does not match params.schema: 1: 'two' is not of type 'integer'`) |
 
 - **Bindings.** The expression sees what an `if` at the same position sees:
@@ -1038,9 +1057,10 @@ set a literal.
   it has one) and a duration an ISO 8601 duration (`PT1H30M`, `PT1.5S`,
   `-PT1M30S`). A result with no JSON form (bytes, a non-finite number, a type)
   fails the effect.
-- **An unset path.** Without `strict`, an unguarded `state.` path that is
-  unset makes the value `null` and logs a warning naming the path, as an `if`
-  does; `has()` guards a path the same way.
+- **An unset path.** Without `strict`, an unguarded `state.` read that is
+  unset and decides the result makes the value `null` and logs a warning
+  naming the path, as an `if` does; `has()`, `?:`, `&&`/`||` and `all`/`exists`
+  guard a read the way CEL defines those constructs.
 - **Literal params.** `cof check` parses `expr` and checks the names it reads
   like any other CEL in the document, so the params are never
   Mustache-rendered and never read `{from: ...}`; `params_json` and any param
@@ -1346,7 +1366,7 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `validate` | bool | no | `true` | Check the child — `inline`, `path` or `ref` — the way `cof check` checks a file (schema, near-miss keys) before it runs. `false` skips that; a repeated key is still an error |
 | `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered; `{from: <path>}` passes the value at that path unchanged (see [Inputs by reference](#inputs-by-reference)) |
 | `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
-| `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries`. `meta.created_at`/`meta.retries_used` follow the same rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike, absent (not `0`) when the first attempt is also the last |
+| `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries`. `meta.created_at`/`meta.retries_used` follow the same rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike, absent (not `0`) when the first attempt is also the last. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts) |
 | `expect` | string or object | no | — | Output check, run after a successful child run, over this effect's own mapped `value`/`meta` plus `state` — same shape as a [tool's `expect`](#tool-expect) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this `use` when its saved node did not finish without error. `continue` continues inside its child when the saved state holds the child's record; `restart` always runs the child from its start in a fresh state. A finished one is skipped either way. |
@@ -1458,6 +1478,44 @@ Every `use` node also records, whether or not the setting is on:
 |-------|---------|
 | `meta.inputs` | What the child received: rendered strings, referenced values, literals |
 | `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) |
+
+#### Every attempt (meta.attempts)
+
+A `use` with `retries` only ever showed the attempt that decided the outcome: the earlier
+ones' proposals, errors and `expect` results were gone the moment the next attempt started,
+visible only in `--events` or an adapter's own log. `meta.attempts` keeps every attempt that
+ran, oldest first:
+
+| Key | Value |
+|-----|-------|
+| `created_at` | When this attempt started |
+| `completed_at` | When it ended |
+| `value` | What this attempt mapped: the declared-outputs dict, or `null` in full-namespace mode or when the child failed |
+| `error` | `null` if this attempt succeeded, otherwise the text `meta.error` would show for it |
+| `child_errors` | This attempt's own `meta.child_errors` |
+| `expect` | This attempt's own `meta.expect`, or `null` when the check didn't run |
+| `children` | Only with `runtime.state.record_children`: this attempt's own child effects, in the same shape the complete record keeps under the node |
+
+- **Present exactly when `meta.retries_used` is** — one attempt (a dry run, a failure before
+  the first attempt) never gets an `attempts` list at all, not an empty one.
+- **The last entry is the deciding attempt.** Its `value`, `error`, `expect` and `child_errors`
+  equal the node's own; `meta.created_at`/`meta.completed_at` tie to its first/last entry.
+- **Each retry starts from a clean node.** From the second attempt on, the previous attempt's
+  child effects are removed from under the node — kept in its own `attempts` entry when
+  `record_children` is on — so the final node never mixes an earlier attempt's step (an `if`
+  branch it alone took) with the deciding one's, in either `record_children` or
+  full-namespace mode.
+- **Written as soon as an attempt ends**, before the backoff wait — so `--live-state`, and the
+  `use`'s own `expect` and `inputs`, can read the attempts before the current one:
+  ```yaml
+  inputs:
+    earlier: {from: prime.theme.meta.attempts}  # null on the first attempt
+  ```
+- After `on_error: skip`/`continue` absorbs an exhausted retry, the entries are a record of what
+  each attempt mapped — downstream still reads the node's own `value`, which is `null`.
+- Reset at the start of every pass, same as `expect` and `retries_used` — a reused node (an
+  unnamed loop's next pass, `--state` carryover) never shows an earlier pass's attempts.
+- Tools and prompts do not record attempts yet; only `use` does.
 
 **Cycle detection:**
 
@@ -1904,10 +1962,10 @@ the node, so observability sees the skip rather than a gap.
 
 - Mustache templates referencing it render empty:
   `"report on <{{prime.goal.value}}>"` → `"report on <>"`
-- CEL conditions that read it evaluate `False` — a `state.` path that is unset
-  (missing, or resolving through `null`) makes the whole expression `False` by
-  rule, before evaluation, and logs a warning naming the path. That covers
-  comparisons (`state.prime.goal.value == "yes"`), sizes
+- CEL conditions that read it evaluate `False` — a `state.` read that is
+  unset (missing, or resolving through `null`) and decides the result makes
+  the whole expression `False`, and logs a warning naming the path. That
+  covers comparisons (`state.prime.goal.value == "yes"`), sizes
   (`size(state.prime.goal.value) > 0`) and negative tests
   (`state.prime.goal.value != ""`) alike: nothing there is never a satisfied
   condition.
@@ -1981,9 +2039,18 @@ Two CEL rules that surprise people coming from Python:
 Expressions are capped at 4096 characters and parsed once, then cached — a
 loop's `while` expression pays the parser cost on its first iteration only.
 
-Only `state` is in scope. Values are converted into CEL's type system on the
+Only `state` is in scope (plus `value` and `meta` in a `tool`/`use` effect's
+`expect:`, see below). Values are converted into CEL's type system on the
 way in, so an expression cannot reach a Python object's attributes, methods or
 class; anything with no CEL counterpart reads as `null`.
+
+Any other bare name is a compile-time error (`cof check`): CEL's own type
+names (`bool bytes double int list map null_type string type uint`) and a
+macro variable, inside its own macro's body (`all`, `exists`, `exists_one`,
+`map`, `filter`), are the only other names a bare identifier may be. A state
+namespace or a loop binding spelled without `state.` is still wrong, not
+skipped — see [CEL scoping](#cel-scoping-what-statekey-may-name-at-each-nesting-level)
+for the exact messages.
 
 #### CEL scoping: what `state.<key>` may name, at each nesting level
 
@@ -2043,6 +2110,37 @@ effect outputs. Names bound by an enclosing loop here: iter, score.
 
 See `learn/cel_showcase.yml`'s `filter_scores` loop for a runnable example.
 
+**A bare name is the same hard error, worded for what it actually is.**
+Writing a loop binding or a state namespace without the `state.` prefix
+(`score` instead of `state.score`, `input` instead of `state.input`) parses
+as CEL — it is just a different, undeclared name — so `cof check` reports it
+with its own wording rather than the `state.<key>` message above:
+
+```
+CEL expression at 'prime.effects[0].body[0]': 'score' is a loop binding: in
+CEL, write 'state.score'.
+```
+
+```
+CEL expression at 'prime.effects[0]': 'input' is a state namespace: in CEL,
+write 'state.input'.
+```
+
+Anything else undeclared — a typo, a name from the wrong scope — gets the
+third wording, the same `Names bound by an enclosing loop here:` suffix when
+there are any in scope:
+
+```
+CEL expression at 'prime.effects[0]': 'stat' is not defined ('state' is the
+only root). Write 'state.input.stat' for caller-supplied values or
+'state.prime.stat' for effect outputs.
+```
+
+The check reports the first such name in source order; it does not look at
+function or method names (`nope(1)`, `x.nope()` are not bare-name errors —
+see [What fails where](#what-fails-where) for what happens to those at run
+time).
+
 **The one exception: a `tool`/`use` effect's own `expect:` CEL.** Every CEL
 site above binds only `state`. A `tool`/`use` effect's `expect:` (mode `cel`)
 is the one place that is not true: it binds three roots — `value` and `meta`
@@ -2064,14 +2162,21 @@ CEL expression at 'prime.effects[0]' (effect 'gate'): expression does not parse
 ```
 
 At run time an expression that cannot be evaluated — a bad `size()` argument,
-an unknown function — **errors the effect** (`meta.error`) and fails the run,
-the same as a failing tool effect. It never quietly takes the `else` branch.
-Set `on_error: continue` on the conditional to opt into the else-branch
-fallback explicitly; the error is still recorded on `meta.error`.
+an unknown function or method — **errors the effect** (`meta.error`) and
+fails the run, the same as a failing tool effect. It never quietly takes the
+`else` branch. Set `on_error: continue` on the conditional to opt into the
+else-branch fallback explicitly; the error is still recorded on `meta.error`.
+An undeclared identifier, function or method reaching run time (the check
+above doesn't look at function/method names, so `nope(1)` or `x.nope()`
+only fails here) is one line, never a dump of CEL's own internal state:
+
+```
+CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'
+```
 
 Reading *unset* state is not an error: see
-[Disabling Effects](#disabling-effects) — an unset path makes
-the expression `False` and logs a warning naming the path.
+[Disabling Effects](#disabling-effects) — an unset read that decides the
+expression's result makes it `False` and logs a warning naming the path.
 
 #### `strict: true` — when absent state must not pick a branch
 
@@ -2079,7 +2184,7 @@ The default is deliberate: a disabled node or an effect that has not run yet
 reads as `False`, matching the way a template referencing one renders empty.
 For a condition where a missing field silently choosing a branch would be
 unsafe — an order-exit rule, a safety gate — set `strict: true` and an
-unresolved path raises instead:
+unresolved read that decides the result raises instead:
 
 ```yaml
 - type: if
@@ -2098,14 +2203,28 @@ Without `strict`, a `tick` that failed to produce a `price` would evaluate the
 whole condition to `False` and take the *no-exit* branch. With it, the effect
 errors and `on_error` decides what happens next.
 
-`strict` applies to `mode: cel` only, on both `if:` and a loop's `while:`.
+`strict` applies to `mode: cel` only, on both `if:` and a loop's `while:`, and
+only to an unset read that decides the result — one a guard already routes
+around never raises, strict or not:
 
-A path passed to `has()` is exempt from the absent-state rule anywhere in the
-expression — that is what `has()` is for:
+```yaml
+expr: "has(state.prime.score.value) ? state.prime.score.value > 0.8 : true"
+```
+
+The absent-state rule follows evaluation, not the raw text of the
+expression: `has()`, the ternary `?:`, `&&`/`||` and the `all`/`exists`
+macros guard a read exactly the way CEL defines those constructs — an
+untaken ternary branch, the short-circuited side of `&&`/`||`, or an
+`exists` element that already matched never triggers the rule, strict or
+not:
 
 ```yaml
 expr: "has(state.prime.score.value) && state.prime.score.value > 0.8"
 ```
+
+`has(state.prime.score.value)` guards the one read it names; a path that
+doesn't decide the result — because a guard or a short-circuit already
+routed around it — is never a reason to collapse the whole expression.
 
 ### Loop Iteration Paths
 
@@ -2348,9 +2467,10 @@ record. So does a child whose output the `use`'s own `expect:` judged false
 same check and fail again on every resume. An `expect` whose own model call
 failed recorded no result, so the finished child is reused and only the
 check runs again. A `use` with `retries` continues inside its child on its
-first attempt only; a retry runs the whole child again, as always. A `use`
-inside a resumed loop pass or `if` branch continues inside its child by the
-same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
+first attempt only; a retry runs the whole child again, as always. Its
+`meta.attempts` then lists the resumed run's attempts only, as
+`meta.retries_used` counts them. A `use` inside a resumed loop pass or `if`
+branch continues inside its child by the same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
 (including a `flow: tree` root), or inside a pass or branch that runs from
 its start, reruns from its start: a tree branch starts from only the
 finished nodes of the saved state.

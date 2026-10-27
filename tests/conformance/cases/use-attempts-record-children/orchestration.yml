@@ -1,0 +1,42 @@
+name: use-attempts-record-children
+effects:
+  - type: use
+    name: theme
+    inline: |
+      effects:
+        - type: tool
+          name: bump
+          provider: fs
+          params: {mode: append, path: "scratch/counter.txt", content: x}
+        - type: tool
+          name: tally
+          provider: fs
+          params: {mode: read, path: "scratch/counter.txt"}
+        - type: if
+          if: {mode: cel, expr: "state.prime.tally.value == 'x'"}
+          then:
+            - type: tool
+              name: first_only
+              provider: json
+              params: {mode: stringify, input: first-only}
+        - type: tool
+          name: seed
+          provider: json
+          params: {mode: parse, input: '["a", "b"]'}
+        - type: loop
+          name: frames
+          each: {in: "prime.seed.value", as: item}
+          body:
+            - type: tool
+              name: step
+              provider: json
+              params: {mode: stringify, input: "{{item}}"}
+    outputs:
+      tally: {path: prime.tally.value}
+    retries: {max_attempts: 2, backoff_ms: 0}
+    expect: "value.tally == 'xx'"
+finally:
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}

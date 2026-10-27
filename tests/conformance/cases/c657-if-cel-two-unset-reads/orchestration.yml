@@ -1,0 +1,17 @@
+name: c657-if-cel-two-unset-reads
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "state.input.x.y == 1 || state.input.z.w == 1"
+    then:
+      - type: tool
+        name: gate_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: gate_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

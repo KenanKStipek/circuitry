@@ -63,7 +63,7 @@ an object — `size(value) > 0` is the right shape for it; a tool whose
 `value` actually is an object, e.g. an `http` JSON response, checks a field
 on it the way the second example below does.)
 
-**`retries`** on `tool` and `use` is the same two fields, the same default (unset: one attempt) and the same backoff curve as a prompt's — and on both `tool` and `use`, the same `meta.created_at`/`meta.retries_used` rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike. What counts as retryable differs by what kind of failure it is. An **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies by status the way an adapter dispatch does: 429, 408 and 5xx retry; any other 4xx does not, for the same reason a prompt's bad request or missing key doesn't — it cannot succeed on a second try. Every other **process** tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and the motivating case is a macOS GPU watchdog killing a FLUX render mid-job, which a second attempt on a cooled-down GPU often clears. A `use` effect's `retries` re-runs the **whole child orchestration** from scratch each attempt, not just the step that failed inside it.
+**`retries`** on `tool` and `use` is the same two fields, the same default (unset: one attempt) and the same backoff curve as a prompt's — and on both `tool` and `use`, the same `meta.created_at`/`meta.retries_used` rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike. What counts as retryable differs by what kind of failure it is. An **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies by status the way an adapter dispatch does: 429, 408 and 5xx retry; any other 4xx does not, for the same reason a prompt's bad request or missing key doesn't — it cannot succeed on a second try. Every other **process** tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and the motivating case is a macOS GPU watchdog killing a FLUX render mid-job, which a second attempt on a cooled-down GPU often clears. A `use` effect's `retries` re-runs the **whole child orchestration** from scratch each attempt, not just the step that failed inside it. When more than one attempt ran, a `use`'s own `meta.attempts` keeps every one, oldest first, not only the attempt that decided the outcome.
 
 **`expect`** is a check run after an attempt otherwise succeeds — the native replacement for the hand-built "did this actually work" `tool` step a model-generation pipeline tends to grow on its own. Either a CEL expression (a bare string is shorthand for `{mode: cel, expr: <string>}`) over this effect's own `value` and `meta` — bound directly, not under `state.` the way every other CEL site in the framework binds — plus `state` for reaching other effects' output the normal way; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, spending real tokens recorded at `meta.expect.tokens_sent`/`tokens_received`. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>` — `retries` and `on_error` apply exactly as they would for any other failure, and an expect failure is always worth retrying (it carries no status of its own to classify). The outcome always lands at `meta.expect`, pass or fail:
 
@@ -171,17 +171,21 @@ If port 8000 is already held by something the plugin did not start, `start_web` 
 prime.<name>.value                    # null after a skip
 prime.<name>.meta.error               # the message
 prime.<name>.meta.fallback_attempts   # [{adapter, model, status, error, tokens_sent,
-                                       #   tokens_received, raw_reply?}, …]
+                                       #   tokens_received, error_code?, http_status?,
+                                       #   raw_reply?}, …]
 prime.<name>.meta.fallback_recovered  # true when a fallback answered
 prime.<name>.meta.retries_used        # present after any retry, win or lose
 prime.<name>.meta.tokens_sent_total   # every attempt's cost this execution made —
 prime.<name>.meta.tokens_received_total # failed, retried and fallen-back-from alike
 prime.<container>.meta.error          # "investigate.cause: …" — a breadcrumb into the child
+prime.<name>.meta.http_status         # a prompt only, from the attempt that ended it
+prime.<name>.meta.error_code          # the provider's own code; both absent when unknown
+prime.<name>.meta.attempts            # use only: one entry per attempt, oldest first
 ```
 
 A container that fails closes its own node with `value: false` and a `meta.error` that names the failing child's path (`context.search: …`), in `chain` and `tree` flow alike. The child's own node keeps its `meta.error` too, so from the root down you can follow the errors to the leaf. `inspect_divergence_paths(state)` in the SDK does the walk for you and returns every errored node in path order.
 
-Two things never happen. A failure never leaves a *partial* value: a `use` child whose run failed discards its scratch state, and nothing lands at the parent's `value`. (With `runtime.state.record_children: true`, the child's partial record is kept beside that `value` for the audit trail. It is a record, not something downstream reads.) And a failure never goes unrecorded: even `on_error: skip` writes the error into `meta`, and the per-effect `on_effect_complete` hook fires for the failed node as it does for a successful one, carrying the error. That includes a failure the child absorbed: when an effect inside a `use` child skipped its own failure, the `use` node lists it in `meta.child_errors` as `{path, error}`, so a composed run that went green still says what it lost.
+Two things never happen. A failure never leaves a *partial* value: a `use` child whose run failed discards its scratch state, and nothing lands at the parent's `value`. (With `runtime.state.record_children: true`, the child's partial record is kept beside that `value` for the audit trail. It is a record, not something downstream reads. A retried `use`'s `meta.attempts` is the same kind of record: each entry keeps what that attempt mapped, even one `on_error: skip`/`continue` discarded.) And a failure never goes unrecorded: even `on_error: skip` writes the error into `meta`, and the per-effect `on_effect_complete` hook fires for the failed node as it does for a successful one, carrying the error. That includes a failure the child absorbed: when an effect inside a `use` child skipped its own failure, the `use` node lists it in `meta.child_errors` as `{path, error}`, so a composed run that went green still says what it lost.
 
 ## Designing for degradation
 
@@ -206,6 +210,14 @@ The agent looks for related issues with `gh`, which needs a login and the networ
 When `gh` fails, `plan` reads "Related issues, if any: " and carries on. The model gets less; the run gets a plan; the state file says the lookup failed and why. That is the pattern: put `skip` on the effects whose absence downstream can tolerate, leave `fail` on the ones it cannot, and write the downstream templates so that an empty interpolation reads as "none" rather than as a broken sentence.
 
 The other half of the pattern is *not* to reach for `on_error` when what you want is a decision. If the missing related issues should change what happens next — a different planning prompt, say — that is an [`if`](06-if.md). Remember the CEL rule from [Shadow state](03-state.md): an expression that reads a null or missing path is false as a whole. So test positively for the value you need — `size(state.prime.related.value) > 0` — and let the missing case fall to `else`. To branch on the failure itself, test the error: `state.prime.related.meta.error != null` is true when the lookup failed, and false when it succeeded, because a null `error` makes the whole expression false. Do not write `state.prime.related.value == null`: it reads a null path, so it is false even after the skip.
+
+A prompt's failure can be more specific than "it failed": `meta.error_code` carries the provider's own code (a content-policy refusal, a context-length overflow, ...) when it reported one. It is absent on success and whenever the provider gave no code, so guard with `has()` the same way you would for any other possibly-missing path:
+
+```yaml
+if: {mode: cel, expr: "has(state.prime.line.meta.error_code) && state.prime.line.meta.error_code == 'guardrail_violation'"}
+```
+
+Without the `has()` guard, a success or a code-less failure would read the second half of the `&&` off a missing path and the whole expression would simply be false — usually what you want, but `has()` makes that explicit instead of relying on it.
 
 ## Validation is the first error handler
 

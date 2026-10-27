@@ -1,0 +1,126 @@
+name: c657-if-cel-guards
+effects:
+  - type: if
+    name: guarded_deeper
+    if:
+      mode: cel
+      expr: "has(state.input.a.b) ? state.input.a.b.c == 1 : true"
+    then:
+      - type: tool
+        name: guarded_deeper_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: guarded_deeper_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: untaken_branch
+    if:
+      mode: cel
+      expr: "false ? state.input.x.y == 1 : true"
+    then:
+      - type: tool
+        name: untaken_branch_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: untaken_branch_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: guarded_exact
+    if:
+      mode: cel
+      expr: "has(state.input.a.b.c) ? state.input.a.b.c == 1 : false"
+    then:
+      - type: tool
+        name: guarded_exact_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: guarded_exact_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: plain_unset
+    if:
+      mode: cel
+      expr: "state.input.missing.x == 1"
+    then:
+      - type: tool
+        name: plain_unset_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: plain_unset_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: or_guard
+    if:
+      mode: cel
+      expr: "!has(state.input.a.b) || state.input.a.b.c == 1"
+    then:
+      - type: tool
+        name: or_guard_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: or_guard_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: and_guard
+    if:
+      mode: cel
+      expr: "has(state.input.a.b) && state.input.a.b.c == 1"
+    then:
+      - type: tool
+        name: and_guard_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: and_guard_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: false_and
+    if:
+      mode: cel
+      expr: "false && state.input.x.y == 1"
+    then:
+      - type: tool
+        name: false_and_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: false_and_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: exists_guard
+    if:
+      mode: cel
+      expr: "state.input.items.exists(i, i == 2 || state.input.z.y == 1)"
+    then:
+      - type: tool
+        name: exists_guard_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: exists_guard_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}

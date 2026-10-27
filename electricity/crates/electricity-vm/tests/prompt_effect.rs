@@ -184,7 +184,9 @@ fn registry_with_scripted() -> AdapterRegistry {
     let mut adapters = AdapterRegistry::new();
     adapters.register(
         "scripted",
-        Box::new(|_cfg| Ok(Box::new(FakeAdapter::new("scripted", Vec::new())) as Box<dyn Adapter>)),
+        Box::new(|_name, _cfg| {
+            Ok(Box::new(FakeAdapter::new("scripted", Vec::new())) as Box<dyn Adapter>)
+        }),
     );
     adapters
 }
@@ -1568,7 +1570,7 @@ async fn a_routed_model_becomes_the_fallback_chains_default_model() {
     let mut adapters = registry_with_scripted();
     adapters.register(
         "ollama",
-        Box::new(|_cfg| {
+        Box::new(|_name, _cfg| {
             Ok(
                 Box::new(FakeAdapter::new("ollama", vec![FakeAdapter::text("done")]))
                     as Box<dyn Adapter>,
@@ -2139,4 +2141,336 @@ async fn retries_reuse_the_text_read_before_the_first_attempt() {
         *default.received.borrow(),
         vec!["first read".to_string(), "first read".to_string()]
     );
+}
+
+// ---------------------------------------------------------------------
+// Issue #660: `meta.error_code`/`meta.http_status` on a failed prompt.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn error_code_and_http_status_are_present_on_an_outright_failure() {
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![Err(AdapterError {
+            message: "guardrail tripped".to_string(),
+            retry: RetryInfo {
+                retryable: false,
+                status: Some(400),
+                retry_after: None,
+                error_code: Some("guardrail_violation".to_string()),
+            },
+            py_class: PyExc::AdapterCallError,
+        })],
+    ));
+    let adapters = registry_with_scripted();
+    let op = template_prompt("hi");
+    let (store, _observer, result) = run_prompt(op, OnError::Continue, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "error_code"),
+        Some(&Value::Str("guardrail_violation".to_string()))
+    );
+    assert_eq!(get(&meta, "http_status"), Some(&Value::from(400i64)));
+    let Some(Value::List(attempts)) = get(&meta, "fallback_attempts") else {
+        panic!("expected a fallback_attempts list");
+    };
+    let last = as_dict(attempts.last().unwrap());
+    assert_eq!(
+        get(last, "error_code"),
+        Some(&Value::Str("guardrail_violation".to_string()))
+    );
+    assert_eq!(get(last, "http_status"), Some(&Value::from(400i64)));
+}
+
+#[tokio::test]
+async fn error_code_and_http_status_are_absent_on_success() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let op = template_prompt("hi");
+    let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "error_code"), None);
+    assert_eq!(get(&meta, "http_status"), None);
+}
+
+#[tokio::test]
+async fn error_code_and_http_status_come_from_the_last_fallback_attempt() {
+    let mut op = template_prompt("hi");
+    op.provider_fallbacks = vec!["scripted:m2".to_string()];
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "bad request".to_string(),
+                retry: RetryInfo {
+                    retryable: false,
+                    status: Some(400),
+                    retry_after: None,
+                    error_code: Some("guardrail_violation".to_string()),
+                },
+                py_class: PyExc::AdapterCallError,
+            }),
+            Err(AdapterError {
+                message: "unavailable".to_string(),
+                retry: RetryInfo {
+                    retryable: false,
+                    status: Some(503),
+                    retry_after: None,
+                    error_code: Some("server_error".to_string()),
+                },
+                py_class: PyExc::AdapterCallError,
+            }),
+        ],
+    ));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt(op, OnError::Continue, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "error_code"),
+        Some(&Value::Str("server_error".to_string()))
+    );
+    assert_eq!(get(&meta, "http_status"), Some(&Value::from(503i64)));
+    let Some(Value::List(attempts)) = get(&meta, "fallback_attempts") else {
+        panic!("expected a fallback_attempts list");
+    };
+    let first = as_dict(&attempts[0]);
+    assert_eq!(
+        get(first, "error_code"),
+        Some(&Value::Str("guardrail_violation".to_string()))
+    );
+    assert_eq!(get(first, "http_status"), Some(&Value::from(400i64)));
+}
+
+#[tokio::test]
+async fn error_code_and_http_status_are_absent_on_a_fallback_that_recovered() {
+    let mut op = template_prompt("hi");
+    op.provider_fallbacks = vec!["scripted:m2".to_string()];
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "bad request".to_string(),
+                retry: RetryInfo {
+                    retryable: false,
+                    status: Some(400),
+                    retry_after: None,
+                    error_code: Some("context_length_exceeded".to_string()),
+                },
+                py_class: PyExc::AdapterCallError,
+            }),
+            FakeAdapter::text("ok"),
+        ],
+    ));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "error_code"), None);
+    assert_eq!(get(&meta, "http_status"), None);
+    let Some(Value::List(attempts)) = get(&meta, "fallback_attempts") else {
+        panic!("expected a fallback_attempts list");
+    };
+    let first = as_dict(&attempts[0]);
+    assert_eq!(
+        get(first, "error_code"),
+        Some(&Value::Str("context_length_exceeded".to_string()))
+    );
+    assert_eq!(get(first, "http_status"), Some(&Value::from(400i64)));
+    assert_eq!(get(as_dict(&attempts[1]), "error_code"), None);
+}
+
+#[tokio::test]
+async fn error_code_and_http_status_are_absent_on_a_decode_failure() {
+    let mut op = template_prompt("give a number");
+    op.prompt_type = PromptType::Number;
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![FakeAdapter::text("not a number")],
+    ));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt(op, OnError::Continue, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "error_code"), None);
+    assert_eq!(get(&meta, "http_status"), None);
+}
+
+#[tokio::test]
+async fn error_code_and_http_status_are_reset_on_a_reused_node() {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "pass 0 failure".to_string(),
+                retry: RetryInfo {
+                    retryable: false,
+                    status: Some(400),
+                    retry_after: None,
+                    error_code: Some("bad_request".to_string()),
+                },
+                py_class: PyExc::AdapterCallError,
+            }),
+            FakeAdapter::text("ok"),
+        ],
+    ));
+    ctx.default_adapter = default;
+    let adapters = registry_with_scripted();
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let leaf = prompt_leaf(
+        root_path().push_name("ask"),
+        "ask",
+        template_prompt("item"),
+        OnError::Continue,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf.clone()]);
+
+    electricity_vm::execute_root(
+        &program(root.clone()),
+        &store,
+        &Value::None,
+        &ctx,
+        &RecordingObserver::new(),
+        &token,
+    )
+    .await
+    .unwrap();
+
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &RecordingObserver::new(),
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "error_code"), None);
+    assert_eq!(get(&meta, "http_status"), None);
+    assert_eq!(get(&meta, "error"), Some(&Value::None));
+}
+
+#[tokio::test]
+async fn error_code_and_http_status_are_popped_on_a_render_failure_after_a_prior_passs_provider_error()
+ {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![Err(AdapterError {
+            message: "pass 0 failure".to_string(),
+            retry: RetryInfo {
+                retryable: false,
+                status: Some(400),
+                retry_after: None,
+                error_code: Some("bad_request".to_string()),
+            },
+            py_class: PyExc::AdapterCallError,
+        })],
+    ));
+    ctx.default_adapter = default;
+    let adapters = registry_with_scripted();
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let leaf = prompt_leaf(
+        root_path().push_name("ask"),
+        "ask",
+        template_prompt("{{input.x.0}}"),
+        OnError::Continue,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf.clone()]);
+
+    electricity_vm::execute_root(
+        &program(root.clone()),
+        &store,
+        &input_ctx(&[("x", Value::List(vec![Value::Str("ok".to_string())]))]),
+        &ctx,
+        &RecordingObserver::new(),
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let meta_after_pass_0 = ask_meta(&store);
+    assert_eq!(
+        get(&meta_after_pass_0, "error_code"),
+        Some(&Value::Str("bad_request".to_string()))
+    );
+    assert_eq!(
+        get(&meta_after_pass_0, "http_status"),
+        Some(&Value::from(400i64))
+    );
+
+    // `x` an int this time: `{{input.x.0}}` can't subscript it, the same
+    // way `subscripted_int_prompt`'s `{{n.0}}` fails against `n: 5`.
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &input_ctx(&[("x", Value::from(5i64))]),
+        &ctx,
+        &RecordingObserver::new(),
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "error_code"), None);
+    assert_eq!(get(&meta, "http_status"), None);
+    assert!(!get(&meta, "error").unwrap().as_str().unwrap().is_empty());
+}
+
+/// Issue #660: `error_code` goes through the run's own redaction, same as
+/// `error` text -- a provider that echoes a credential back as its own
+/// error code must not leak it into state, at any of the three places it
+/// appears (`meta.error_code`, `fallback_attempts[]`, `meta.error`'s text).
+#[tokio::test]
+async fn error_code_that_looks_like_a_secret_is_redacted() {
+    let secret_code = format!("sk-{}", "a".repeat(24));
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![Err(AdapterError {
+            message: "bad request".to_string(),
+            retry: RetryInfo {
+                retryable: false,
+                status: Some(400),
+                retry_after: None,
+                error_code: Some(secret_code.clone()),
+            },
+            py_class: PyExc::AdapterCallError,
+        })],
+    ));
+    let adapters = registry_with_scripted();
+    let op = template_prompt("hi");
+    let (store, _observer, result) = run_prompt(op, OnError::Continue, default, &adapters).await;
+    result.unwrap();
+
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "error_code"),
+        Some(&Value::Str("***REDACTED***".to_string()))
+    );
+    let attempts = get(&meta, "fallback_attempts").unwrap().as_list().unwrap();
+    let last = as_dict(attempts.last().unwrap());
+    assert_eq!(
+        get(last, "error_code"),
+        Some(&Value::Str("***REDACTED***".to_string()))
+    );
+    let error_text = get(&meta, "error").unwrap().as_str().unwrap();
+    assert!(!error_text.contains(&secret_code));
+    assert!(error_text.contains("***REDACTED***"));
 }

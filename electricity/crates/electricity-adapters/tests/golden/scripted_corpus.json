@@ -263,6 +263,7 @@
           "message": "scripted adapter: server_error at 'prime.flaky'",
           "path": "prime.flaky",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 500
@@ -293,6 +294,7 @@
           "message": "scripted adapter: rate_limited at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 429
@@ -312,6 +314,7 @@
           "message": "scripted adapter: server_error at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 500
@@ -331,6 +334,7 @@
           "message": "scripted adapter: invalid_request at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": false,
             "status": 400
@@ -350,6 +354,7 @@
           "message": "scripted adapter: unauthorized at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": false,
             "status": 401
@@ -369,6 +374,7 @@
           "message": "scripted adapter: not_found at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": false,
             "status": 404
@@ -388,6 +394,7 @@
           "message": "scripted adapter: timeout at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": null
@@ -407,6 +414,7 @@
           "message": "scripted adapter: connection at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": null
@@ -426,6 +434,7 @@
           "message": "scripted adapter: http at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 503
@@ -445,6 +454,7 @@
           "message": "scripted adapter: timeout at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 503
@@ -464,6 +474,7 @@
           "message": "scripted adapter: connection at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 503
@@ -483,6 +494,7 @@
           "message": "scripted adapter: rate_limited at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 429
@@ -502,6 +514,7 @@
           "message": "slow down",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": true,
             "status": 429
@@ -518,9 +531,50 @@
         {
           "error_class": "AdapterCallError",
           "kind": "generate",
+          "message": "scripted adapter: invalid_request at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "error_code": "bad_schema",
+            "retry_after": null,
+            "retryable": false,
+            "status": 400
+          }
+        }
+      ],
+      "case": "an_error_codes_value_reaches_the_adapter_call_error",
+      "contents": "prime.x:\n  - error:\n      kind: invalid_request\n      code: bad_schema\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: timeout at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "error_code": null,
+            "retry_after": null,
+            "retryable": true,
+            "status": null
+          }
+        }
+      ],
+      "case": "an_error_without_a_code_leaves_it_none",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
           "message": "scripted adapter: server_error at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": false,
             "status": 400
@@ -540,6 +594,7 @@
           "message": "scripted adapter: server_error at 'prime.x'",
           "path": "prime.x",
           "retry": {
+            "error_code": null,
             "retry_after": null,
             "retryable": false,
             "status": 99999999999999999999999999
@@ -737,7 +792,7 @@
       "calls": [
         {
           "kind": "check",
-          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['bogus']; one of ['kind', 'message', 'status']",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['bogus']; one of ['code', 'kind', 'message', 'status']",
           "missing": [],
           "ok": false
         }
@@ -800,6 +855,34 @@
       ],
       "case": "a_non_string_message_is_rejected",
       "contents": "prime.x:\n  - error:\n      kind: timeout\n      message: 5\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'code' must be a non-empty string",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "an_empty_code_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n      code: ''\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'code' must be a non-empty string",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_string_code_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n      code: 5\n",
       "filename": "replies.yaml",
       "raw_bytes_hex": null
     },

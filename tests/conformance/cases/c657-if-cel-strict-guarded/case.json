@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #657",
+  "description": "`strict: true` raises only for an unset read that decides the result: a guarded deeper read, and an `||` whose right side decides `true`, both still take `then` instead of raising.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "a={\"q\": 1}", "-e", "flag=true"]
+}

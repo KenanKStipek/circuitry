@@ -119,7 +119,7 @@ Seventy-odd ship in-tree. By purpose:
     schema: {type: array, items: {type: integer}}
 ```
 
-`cof check` parses the expression and checks every name it reads, like the CEL in an `if`; `schema` is optional and fails the step when the result doesn't match it, and `strict: true` fails it on an unset path that would otherwise give `null` with a warning. Timestamps and durations come out as ISO 8601 strings. [The reference](../orchestration-reference.md#cel-a-value-computed-with-cel) has the details.
+`cof check` parses the expression and checks every name it reads, like the CEL in an `if`; `schema` is optional and fails the step when the result doesn't match it, and `strict: true` fails it on a deciding unset read that would otherwise give `null` with a warning. Timestamps and durations come out as ISO 8601 strings. [The reference](../orchestration-reference.md#cel-a-value-computed-with-cel) has the details.
 
 `service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 

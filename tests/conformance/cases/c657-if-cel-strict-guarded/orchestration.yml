@@ -1,0 +1,34 @@
+name: c657-if-cel-strict-guarded
+effects:
+  - type: if
+    name: guarded_deeper
+    strict: true
+    if:
+      mode: cel
+      expr: "has(state.input.a.b) ? state.input.a.b.c == 1 : true"
+    then:
+      - type: tool
+        name: guarded_deeper_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: guarded_deeper_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: deciding_or
+    strict: true
+    if:
+      mode: cel
+      expr: "state.input.a.b.c == 1 || state.input.flag"
+    then:
+      - type: tool
+        name: deciding_or_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: deciding_or_branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

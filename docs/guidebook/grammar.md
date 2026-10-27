@@ -95,7 +95,7 @@ If        ::= { type: 'if', if: Condition, then: Effect*,
 
 Condition ::= { mode: 'model', template: TEMPLATE }      — LLM answers yes/no
             | { mode: 'cel',   expr: CEL,                — deterministic
-                strict?: BOOL }                          — default false; true ⇒ unset path is an error
+                strict?: BOOL }                          — default false; true ⇒ a deciding unset read is an error
 ```
 
 ### Loop — each xor while

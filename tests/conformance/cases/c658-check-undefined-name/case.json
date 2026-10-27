@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #658",
+  "description": "A name that isn't a state namespace, a loop binding, a type name or a macro variable is a `cof check` error naming every root CEL actually has.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

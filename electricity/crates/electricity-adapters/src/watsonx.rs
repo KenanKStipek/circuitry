@@ -4,7 +4,7 @@
 //! the reference); no conformance case (issue #503's own ruling).
 
 use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url, value_is_truthy};
-use crate::curl_text::{classify_curl_outcome, curl_failure_message};
+use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
 use electricity_value::{Dict, Value};
@@ -103,7 +103,7 @@ async fn exchange_iam_token(
         );
         return Err(AdapterError {
             message,
-            retry: classify_curl_outcome(&outcome),
+            retry: classify_curl_outcome_with_error_code(&outcome, &[api_key]),
             py_class: PyExc::AdapterCallError,
         });
     }
@@ -174,6 +174,8 @@ async fn get_token(
 
 /// `adapters/watsonx.py::WatsonXAdapter`.
 pub struct WatsonXAdapter {
+    /// `watsonx`, or an alias's own name (#656).
+    pub name: String,
     /// Raw -- `cfg.get("base_url") or ""`. Python's own `_resolve_base_
     /// url` only ever calls `.rstrip("/")` on a *truthy* value (`if
     /// self.base_url: return self.base_url.rstrip("/")`), so an empty
@@ -210,7 +212,7 @@ impl WatsonXAdapter {
 #[async_trait(?Send)]
 impl Adapter for WatsonXAdapter {
     fn name(&self) -> &str {
-        "watsonx"
+        &self.name
     }
 
     async fn generate(
@@ -303,7 +305,7 @@ impl Adapter for WatsonXAdapter {
             );
             return Err(AdapterError {
                 message,
-                retry: classify_curl_outcome(&outcome),
+                retry: classify_curl_outcome_with_error_code(&outcome, &[&api_key, &token]),
                 py_class: PyExc::AdapterCallError,
             });
         }
@@ -346,7 +348,7 @@ impl Adapter for WatsonXAdapter {
             tokens_sent,
             tokens_received,
             finish_reason: None,
-            warnings: crate::ignored_options_warning("watsonx", options, &[]),
+            warnings: crate::ignored_options_warning(&self.name, options, &[]),
             cost_usd: None,
         })
     }
@@ -374,8 +376,9 @@ impl Adapter for WatsonXAdapter {
 }
 
 /// `adapters/factory.py::_build_watsonx`.
-pub fn build_watsonx(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_watsonx(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(WatsonXAdapter {
+        name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", ""),
         default_model: cfg_str_or(cfg, "default_model", "meta-llama/llama-3-3-70b-instruct"),
         api_version: cfg_str_or(cfg, "api_version", "2024-03-14"),
@@ -454,6 +457,7 @@ mod tests {
             r#"{"results": [{"generated_text": " hi ", "input_token_count": 3, "generated_token_count": 5}]}"#,
         ));
         let adapter = WatsonXAdapter {
+            name: "watsonx".to_string(),
             base_url: Value::Str(format!("http://{gen_addr}")),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
@@ -575,6 +579,7 @@ mod tests {
 
         for _ in 0..2 {
             let adapter = WatsonXAdapter {
+                name: "watsonx".to_string(),
                 base_url: Value::Str(format!("http://{gen_addr}")),
                 default_model: "m".to_string(),
                 api_version: "2024-03-14".to_string(),
@@ -628,6 +633,7 @@ mod tests {
             token: &token,
         };
         let adapter_a = WatsonXAdapter {
+            name: "watsonx".to_string(),
             base_url: Value::Str(format!("http://{gen_addr}")),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
@@ -635,6 +641,7 @@ mod tests {
             token_cache: TokenCache,
         };
         let adapter_b = WatsonXAdapter {
+            name: "watsonx".to_string(),
             base_url: Value::Str(format!("http://{gen_addr}")),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
@@ -656,7 +663,7 @@ mod tests {
 
     #[test]
     fn build_watsonx_defaults_the_default_model_and_api_version() {
-        let adapter = build_watsonx(&Value::None).unwrap();
+        let adapter = build_watsonx("watsonx", &Value::None).unwrap();
         assert_eq!(adapter.name(), "watsonx");
     }
 
@@ -679,6 +686,7 @@ mod tests {
             1,
         );
         let adapter = WatsonXAdapter {
+            name: "watsonx".to_string(),
             base_url: Value::from(5i64),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),

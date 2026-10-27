@@ -1,0 +1,10 @@
+name: c658-cel-tool-bare-binding
+effects:
+  - type: loop
+    name: hands
+    each: {in: input.units, as: unit}
+    body:
+      - type: tool
+        name: plain
+        provider: cel
+        params: {expr: "{'first': unit.text}"}

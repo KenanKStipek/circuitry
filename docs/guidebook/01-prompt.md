@@ -193,10 +193,13 @@ prime.<name>.meta.template_files          # present only when a template or mess
 prime.<name>.meta.tokens_sent / tokens_received            # the winning attempt's own cost
 prime.<name>.meta.tokens_sent_total / tokens_received_total # every attempt this execution made
 prime.<name>.meta.error                  # null, or the failure
+prime.<name>.meta.http_status            # a failed prompt only, from the attempt that ended it
+prime.<name>.meta.error_code             # the provider's own code; absent, not null, when unknown
 prime.<name>.meta.fallback_attempts      # the provider attempt chain, each with its own
                                          # tokens_sent/tokens_received (null if it never got a
-                                         # reply) and, for one that answered but was unusable,
-                                         # a size-capped raw_reply
+                                         # reply), its own error_code/http_status when a failed
+                                         # dispatch carried them, and, for one that answered but
+                                         # was unusable, a size-capped raw_reply
 prime.<name>.meta.finish_reason          # the provider's stop reason, when it reports one
 prime.<name>.meta.warnings               # present only when something needs saying: a reply
                                          # cut off at the length limit, options an adapter ignored

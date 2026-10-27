@@ -230,6 +230,11 @@ fn prompt_timeout_ms_huge_int_is_valid() {
 }
 
 #[test]
+fn if_cel_bare_namespace_is_a_check_error() {
+    run_case("if_cel_bare_namespace_is_a_check_error");
+}
+
+#[test]
 fn timeout_ms_from_state_is_valid() {
     run_case("timeout_ms_from_state_is_valid");
 }
@@ -563,6 +568,7 @@ fn every_case_in_the_corpus_has_a_test() {
         "if_threshold_huge_int_is_a_maximum_error",
         "tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error",
         "prompt_timeout_ms_huge_int_is_valid",
+        "if_cel_bare_namespace_is_a_check_error",
         "timeout_ms_from_state_is_valid",
         "timeout_ms_from_state_a_string_is_a_schema_error",
         "timeout_ms_from_state_an_empty_mapping_is_a_schema_error",

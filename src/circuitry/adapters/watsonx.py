@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from ..curl_support import curl_failure_message, run_curl
+from ..curl_support import curl_error_code, curl_failure_message, run_curl
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
@@ -68,6 +68,7 @@ def _exchange_iam_token(api_key: str, *, timeout_seconds: int) -> tuple[str, flo
                 secrets=[api_key],
             ),
             retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+            error_code=curl_error_code(proc.stdout, [api_key]),
         )
     try:
         raw = json.loads(proc.stdout)
@@ -164,6 +165,7 @@ class WatsonXAdapter:
                     secrets=[api_key, token],
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+                error_code=curl_error_code(proc.stdout, [api_key, token]),
             )
 
         try:

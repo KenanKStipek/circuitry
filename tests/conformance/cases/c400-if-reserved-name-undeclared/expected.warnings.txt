@@ -1,2 +1,2 @@
-ERROR: <THIRD_PARTY_TEXT>
-WARNING: Conditional 'gate': condition failed (<THIRD_PARTY_TEXT>
+ERROR: CEL evaluation failed for expr '__electricity_strict_eq(1)': undeclared reference to '__electricity_strict_eq'
+WARNING: Conditional 'gate': condition failed (CEL evaluation failed for '__electricity_strict_eq(1)': undeclared reference to '__electricity_strict_eq'); on_error=continue, taking the else branch

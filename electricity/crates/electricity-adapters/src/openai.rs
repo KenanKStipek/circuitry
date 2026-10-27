@@ -5,7 +5,7 @@
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
 use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
-use crate::curl_text::{classify_curl_outcome, curl_failure_message};
+use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::openai_compat::{chat_messages, parse_chat_response, sampling_fields};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -131,7 +131,7 @@ pub fn interpret_outcome(
         );
         return Err(AdapterError {
             message,
-            retry: classify_curl_outcome(outcome),
+            retry: classify_curl_outcome_with_error_code(outcome, &[api_key]),
             py_class: PyExc::AdapterCallError,
         });
     }
@@ -174,6 +174,8 @@ pub fn interpret_outcome(
 
 /// `adapters/openai.py::OpenAIAdapter`.
 pub struct OpenAiAdapter {
+    /// `openai`, or an alias's own name (#656).
+    pub name: String,
     /// Raw -- `cfg.get("base_url") or default`; `.rstrip("/")`'d in
     /// [`Adapter::generate`] itself, the same point Python calls it
     /// (after the API-key check, never at build time: a
@@ -185,7 +187,7 @@ pub struct OpenAiAdapter {
 #[async_trait(?Send)]
 impl Adapter for OpenAiAdapter {
     fn name(&self) -> &str {
-        "openai"
+        &self.name
     }
 
     async fn generate(
@@ -252,8 +254,9 @@ impl Adapter for OpenAiAdapter {
 }
 
 /// `adapters/factory.py::_build_openai`.
-pub fn build_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(OpenAiAdapter {
+        name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "https://api.openai.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
     }))
@@ -312,7 +315,7 @@ mod tests {
 
     #[test]
     fn build_openai_defaults_base_url_and_model() {
-        let adapter = build_openai(&Value::None).unwrap();
+        let adapter = build_openai("openai", &Value::None).unwrap();
         assert_eq!(adapter.name(), "openai");
     }
 
@@ -325,7 +328,7 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
-        let adapter = build_openai(&Value::Dict(cfg)).unwrap();
+        let adapter = build_openai("openai", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::set_var("OPENAI_API_KEY", "sk-test");
         }
@@ -353,7 +356,7 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
-        let adapter = build_openai(&Value::Dict(cfg)).unwrap();
+        let adapter = build_openai("openai", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
         }

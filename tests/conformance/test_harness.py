@@ -840,3 +840,55 @@ def test_run_result_texts_omits_files_that_were_never_written(tmp_path: Path) ->
     )
 
     assert texts == {"stdout": "out", "stderr": "err", "--out": "{}"}
+
+
+class _Account:
+    def __init__(self, home: Path) -> None:
+        self.pw_dir = str(home)
+
+
+def test_cargo_env_defaults_the_toolchain_homes_from_the_account_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pwd
+
+    account = tmp_path / "account"
+    (account / ".rustup").mkdir(parents=True)
+    (account / ".cargo").mkdir()
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: _Account(account))
+    monkeypatch.delenv("RUSTUP_HOME", raising=False)
+    monkeypatch.delenv("CARGO_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "temporary-home"))
+    env = harness.cargo_env()
+    assert env["RUSTUP_HOME"] == str(account / ".rustup")
+    assert env["CARGO_HOME"] == str(account / ".cargo")
+    assert env["HOME"] == str(tmp_path / "temporary-home")
+
+
+def test_cargo_env_keeps_explicit_toolchain_homes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pwd
+
+    account = tmp_path / "account"
+    (account / ".rustup").mkdir(parents=True)
+    (account / ".cargo").mkdir()
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: _Account(account))
+    monkeypatch.setenv("RUSTUP_HOME", "/somewhere/rustup")
+    monkeypatch.setenv("CARGO_HOME", "/somewhere/cargo")
+    env = harness.cargo_env()
+    assert env["RUSTUP_HOME"] == "/somewhere/rustup"
+    assert env["CARGO_HOME"] == "/somewhere/cargo"
+
+
+def test_cargo_env_leaves_the_toolchain_homes_unset_without_those_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pwd
+
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: _Account(tmp_path / "no-toolchain"))
+    monkeypatch.delenv("RUSTUP_HOME", raising=False)
+    monkeypatch.delenv("CARGO_HOME", raising=False)
+    env = harness.cargo_env()
+    assert "RUSTUP_HOME" not in env
+    assert "CARGO_HOME" not in env

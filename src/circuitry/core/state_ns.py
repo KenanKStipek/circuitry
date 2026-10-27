@@ -33,6 +33,16 @@ deep sees both loops' bindings, with a repeated ``as`` name resolving to
 the innermost (shadowing) binding at runtime. Outside any loop, or
 referencing a name no enclosing loop declared, ``state.<key>`` is a hard
 error — same as any other undeclared namespace.
+
+``validate_cel_expr`` also rejects a bare (free) name in CEL — one
+written without the ``state.`` prefix at all. ``state`` itself is always
+allowed as a root (plus ``value`` and ``meta`` for ``expect:``, via the
+``roots`` parameter), as are CEL's own type names and a macro variable
+within its own macro's body (``all``, ``exists``, ``exists_one``, ``map``
+and ``filter``, in their exactly-two-argument form). Everything else is a
+hard error, reported as whichever of three cases it is: an enclosing
+loop's own binding written bare, a state namespace written bare, or an
+otherwise undefined name.
 """
 
 from __future__ import annotations
@@ -169,22 +179,62 @@ def validate_each_in_path(
     )
 
 
-def validate_cel_expr(
-    expr: str, *, effect_path: str, extra_names: frozenset[str] = frozenset()
-) -> None:
-    """Hard-error on ``state.<key>`` where ``<key>`` is not a namespace.
+#: CEL's own type names — always legal bare, in every expression.
+_TYPE_NAMES = frozenset(
+    {
+        "bool",
+        "bytes",
+        "double",
+        "int",
+        "list",
+        "map",
+        "null_type",
+        "string",
+        "type",
+        "uint",
+    }
+)
 
-    The paths come off the CEL parse tree, so a quoted ``'state.topic'``
-    is a string literal and not a violation. An expression that does not
-    parse is left alone here — ``cel_eval.validate_cel_syntax`` reports
-    that with the parser's own message.
+#: Display order for a ``roots`` set in the "is not defined" message
+#: ("'state', 'value' and 'meta' are the only roots", never alphabetical).
+_ROOT_ORDER = ("state", "value", "meta")
+
+
+def _format_roots(roots: frozenset[str]) -> str:
+    quoted = [f"'{root}'" for root in _ROOT_ORDER if root in roots]
+    if len(quoted) == 1:
+        return f"{quoted[0]} is the only root"
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]} are the only roots"
+
+
+def validate_cel_expr(
+    expr: str,
+    *,
+    effect_path: str,
+    extra_names: frozenset[str] = frozenset(),
+    roots: frozenset[str] = frozenset({"state"}),
+) -> None:
+    """Hard-error on ``state.<key>`` where ``<key>`` is not a namespace, or
+    on a bare (free) name CEL cannot resolve.
+
+    The paths and names come off the CEL parse tree, so a quoted
+    ``'state.topic'`` is a string literal and not a violation. An
+    expression that does not parse is left alone here —
+    ``cel_eval.validate_cel_syntax`` reports that with the parser's own
+    message.
 
     ``extra_names`` is the compile-time allow-list an enclosing loop
     contributes for its own body: its ``each.as`` name and/or ``iter``
     (see the module docstring). It has no effect outside a loop body,
     where the caller passes the empty default.
+
+    ``roots`` is every bare name this CEL site itself binds — ``state``
+    everywhere, plus ``value`` and ``meta`` for ``expect:``. Beyond
+    those, CEL's own type names and a macro variable (inside its own
+    macro's body) are always legal bare; every other free name is a hard
+    error, naming the first such name in source order.
     """
-    from .cel_eval import CelError, state_paths
+    from .cel_eval import _MAX_EXPR_LENGTH, CelError, free_identifiers, state_paths
 
     try:
         paths = state_paths(expr or "")
@@ -205,6 +255,44 @@ def validate_cel_expr(
                     else ""
                 )
             )
+
+    # An over-long expression is left to validate_cel_syntax's own
+    # length error, the same way a parse failure is left alone above:
+    # free_identifiers has no length cap of its own (matching
+    # state_paths), so without this an expression that happens to
+    # contain a bare name would report that instead of being too long.
+    if len(expr or "") > _MAX_EXPR_LENGTH:
+        return
+    try:
+        names = free_identifiers(expr or "")
+    except CelError:
+        return
+    allowed = roots | _TYPE_NAMES
+    for name in names:
+        if name in allowed:
+            continue
+        if name in extra_names:
+            raise ValueError(
+                f"CEL expression at '{effect_path}': '{name}' is a loop "
+                f"binding: in CEL, write 'state.{name}'."
+            )
+        if name in NAMESPACES:
+            raise ValueError(
+                f"CEL expression at '{effect_path}': '{name}' is a state "
+                f"namespace: in CEL, write 'state.{name}'."
+            )
+        raise ValueError(
+            f"CEL expression at '{effect_path}': '{name}' is not defined "
+            f"({_format_roots(roots)}). Write 'state.input.{name}' for "
+            f"caller-supplied values or 'state.prime.{name}' for effect "
+            f"outputs."
+            + (
+                f" Names bound by an enclosing loop here: "
+                f"{', '.join(sorted(extra_names))}."
+                if extra_names
+                else ""
+            )
+        )
 
 
 def declared_input_names(orch: dict[str, Any]) -> frozenset[str]:

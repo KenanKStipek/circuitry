@@ -73,7 +73,12 @@ def _call_path(path: str | None):
 
 def _encode_retry(exc: AdapterCallError) -> dict[str, Any]:
     info = exc.retry_info
-    return {"retryable": info.retryable, "status": info.status, "retry_after": info.retry_after}
+    return {
+        "retryable": info.retryable,
+        "status": info.status,
+        "retry_after": info.retry_after,
+        "error_code": exc.error_code,
+    }
 
 
 def _run_calls(adapter: ScriptedAdapter, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -332,6 +337,24 @@ def build_replies_cases() -> list[dict[str, Any]]:
 
     cases.append(
         _replies_case(
+            "an_error_codes_value_reaches_the_adapter_call_error",
+            filename="replies.yaml",
+            contents="prime.x:\n  - error:\n      kind: invalid_request\n      code: bad_schema\n",
+            calls=[{"kind": "generate", "path": "prime.x"}],
+        )
+    )
+
+    cases.append(
+        _replies_case(
+            "an_error_without_a_code_leaves_it_none",
+            filename="replies.yaml",
+            contents="prime.x:\n  - error:\n      kind: timeout\n",
+            calls=[{"kind": "generate", "path": "prime.x"}],
+        )
+    )
+
+    cases.append(
+        _replies_case(
             "an_overridden_status_still_classifies_by_status_not_kind_name",
             filename="replies.yaml",
             contents="prime.x:\n  - error:\n      kind: server_error\n      status: 400\n",
@@ -403,6 +426,14 @@ def build_replies_cases() -> list[dict[str, Any]]:
         (
             "a_non_string_message_is_rejected",
             "prime.x:\n  - error:\n      kind: timeout\n      message: 5\n",
+        ),
+        (
+            "an_empty_code_is_rejected",
+            "prime.x:\n  - error:\n      kind: timeout\n      code: ''\n",
+        ),
+        (
+            "a_non_string_code_is_rejected",
+            "prime.x:\n  - error:\n      kind: timeout\n      code: 5\n",
         ),
         (
             "an_error_replys_sibling_keys_are_not_checked",

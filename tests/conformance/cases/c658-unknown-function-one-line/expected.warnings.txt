@@ -1,0 +1,2 @@
+ERROR: CEL evaluation failed for expr 'nope(1) == 1': undeclared reference to 'nope'
+WARNING: Conditional 'gate': condition failed (CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'); on_error=continue, taking the else branch

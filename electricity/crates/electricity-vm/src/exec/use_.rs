@@ -120,6 +120,90 @@ fn set_leaf(store: &Store, node: &NodeRef, key: &str, value: Value) {
     store.set_leaf(node, Value::Str(key.to_string()), value);
 }
 
+/// *node*'s own *key*, materialized (`Value::None` when absent) --
+/// `core/use.py`'s own plain `meta.get(key)`/`node[key]` reads, for
+/// building a `meta.attempts` entry off keys [`attempt_once`] already
+/// wrote onto *node* through the ordinary [`set_leaf`] path.
+fn read_key(store: &Store, node: &NodeRef, key: &str) -> Value {
+    let slot = node.borrow().get(&Value::Str(key.to_string())).cloned();
+    match slot {
+        None => Value::None,
+        Some(Slot::Value(v)) => v,
+        Some(Slot::Node(child)) => store.snapshot(&child),
+    }
+}
+
+/// `core/use.py::_take_child_record`, used at the *start* of every
+/// attempt but the first: drops every child effect a previous attempt
+/// left under *node* -- everything but `value`/`meta` -- so this
+/// attempt's own child run starts from a clean node rather than mixing
+/// with whatever the last one left (issue #659). Safe against
+/// [`crate::store::Node::watermark`]'s own invariant (`store.rs`'s own
+/// doc comment): that invariant guards a `prime`/loop-name *container*
+/// node some sibling step's own chain-flow overlay watermarks by entry
+/// count, never an individual effect's own node like this one -- no
+/// overlay is ever built with a `use` effect's own node as its
+/// `fallback`.
+fn clear_child_record(node: &NodeRef) {
+    node.borrow_mut()
+        .retain(|key, _| matches!(key, Value::Str(s) if s == "value" || s == "meta"));
+}
+
+/// `core/use.py::_child_record_copy` -- the child's effects as one
+/// attempt left them, in the same saved form [`Store::saved`] gives a
+/// live node (a named loop's own `last` as its `{"$ref": "iter_<N>"}`
+/// reference, not the live node it aliases): a snapshot, not a
+/// [`Slot::Node`] alias, so nothing a *later* attempt does to the real
+/// child tree reaches an already-recorded entry.
+fn child_record_value(store: &Store, child_prime: &NodeRef) -> Value {
+    let mut saved = store.saved(child_prime);
+    if let Value::Dict(dict) = &mut saved {
+        dict.shift_remove(&Value::Str("value".to_string()));
+        dict.shift_remove(&Value::Str("meta".to_string()));
+    }
+    saved
+}
+
+/// One `meta.attempts` entry -- `core/use.py::_attempt_entry`, same
+/// keys, same order.
+#[allow(clippy::too_many_arguments)]
+fn attempt_entry(
+    store: &Store,
+    effect_node: &NodeRef,
+    meta_node: &NodeRef,
+    created_at: Value,
+    completed_at: Value,
+    error: Option<String>,
+    children: Option<Value>,
+) -> Value {
+    let mut entry = Dict::new();
+    entry.insert(Value::from("created_at"), created_at);
+    entry.insert(Value::from("completed_at"), completed_at);
+    entry.insert(Value::from("value"), read_key(store, effect_node, "value"));
+    entry.insert(
+        Value::from("error"),
+        error.map(Value::Str).unwrap_or(Value::None),
+    );
+    entry.insert(
+        Value::from("child_errors"),
+        read_key(store, meta_node, "child_errors"),
+    );
+    entry.insert(Value::from("expect"), read_key(store, meta_node, "expect"));
+    if let Some(children) = children {
+        entry.insert(Value::from("children"), children);
+    }
+    Value::Dict(entry)
+}
+
+/// `core/use.py::_write_attempts` -- `meta.attempts`, always written as
+/// `meta`'s last key: both engines compare state by insertion order, so
+/// this pops before it sets, exactly like [`pop_leaf`]+[`set_leaf`]
+/// everywhere else in this module that must stay last (`retries_used`).
+fn write_attempts(store: &Store, meta_node: &NodeRef, attempts: &[Value]) {
+    pop_leaf(meta_node, "attempts");
+    set_leaf(store, meta_node, "attempts", Value::List(attempts.to_vec()));
+}
+
 // `core/use.py::_resolve_reference` -- walks a dotted path through
 // *ctx*. `crate::params::ParamsCtx::resolve_from` is the exact same
 // walk (a mapping segment by exact key, a list segment by Python-
@@ -668,6 +752,7 @@ async fn attempt_once<R: ParamsCtx>(
     store: &Store,
     label: &mut String,
     record_children: bool,
+    attempt_children: &mut Option<Value>,
 ) -> Result<(), AttemptProblem> {
     let loaded = load_child(
         name,
@@ -918,6 +1003,20 @@ async fn attempt_once<R: ParamsCtx>(
     )
     .await;
 
+    // `meta.attempts[].children` (issue #659): whenever this attempt
+    // actually ran the child and `record_children` is on, whatever it
+    // got to -- a success, an `expect` failure (grafted again below,
+    // identically), or the child's own run raising mid-way. Taken here
+    // once, regardless of outcome, rather than re-derived at each of
+    // the three return points below.
+    if record_children {
+        if let Ok(Some(child_prime_node)) =
+            child_store.child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))
+        {
+            *attempt_children = Some(child_record_value(&child_store, &child_prime_node));
+        }
+    }
+
     let child_snapshot = child_store.snapshot(&child_store.root);
     let child_prime_snapshot = child_snapshot
         .as_dict()
@@ -964,14 +1063,17 @@ async fn attempt_once<R: ParamsCtx>(
             // attempt's failure has already been decided final
             // (`use.py:1121-1127`); a retryable attempt's own `except`
             // (`use.py:1082-1094`) sets `meta["error"]` and loops again
-            // with no graft at all. Grafting unconditionally here, on
-            // every attempt, would let a key only a now-discarded
-            // attempt's own child ever wrote survive a later successful
-            // retry (PR #472) -- so the record is
-            // only *collected* here (a live `NodeRef`, not a `Value`
-            // snapshot, to keep `graft_child_record`'s own node-identity
-            // preservation) and [`execute_use`] grafts it, only once it
-            // knows this attempt will not be retried.
+            // with no graft at all. Grafting here unconditionally, before
+            // that attempt's failure is known final, would let a retried
+            // attempt's own record appear on the node mid-backoff, for
+            // `--live-state` to see -- `clear_child_record`'s per-attempt
+            // clear (issue #659) already drops a prior attempt's stale
+            // keys at the next attempt's start, but that is a different
+            // moment than this one. So the record is only *collected*
+            // here (a live `NodeRef`, not a `Value` snapshot, to keep
+            // `graft_child_record`'s own node-identity preservation) and
+            // [`execute_use`] grafts it, only once it knows this attempt
+            // will not be retried.
             let child_record = if record_children {
                 child_store
                     .child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))
@@ -1246,6 +1348,7 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     set_leaf(store, &meta_node, "orchestration_sha256", Value::None);
     pop_leaf(&meta_node, "expect");
     pop_leaf(&meta_node, "retries_used");
+    pop_leaf(&meta_node, "attempts");
 
     let effect_path = frame.effect_path(&op.path);
     let instance: InstanceId = observer.effect_start(&effect_path);
@@ -1268,6 +1371,7 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     let max_attempts = use_op.retries.max_attempts.max(1);
     let base_backoff_ms = use_op.retries.backoff_ms;
     let mut next_delay_ms = base_backoff_ms;
+    let mut attempts: Vec<Value> = Vec::new();
 
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
@@ -1281,8 +1385,16 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         }
 
         set_leaf(store, &effect_node, "value", Value::None);
+        if attempt_index > 0 {
+            // The previous attempt's child effects: kept in its own
+            // `meta.attempts` entry below when `record_children` asks,
+            // never left under the node for this attempt's to mix with
+            // (issue #659).
+            clear_child_record(&effect_node);
+        }
+        let attempt_started_at = now_iso();
         if attempt_index == 0 {
-            set_leaf(store, &meta_node, "created_at", now_iso());
+            set_leaf(store, &meta_node, "created_at", attempt_started_at.clone());
         }
         set_leaf(store, &meta_node, "completed_at", Value::None);
         set_leaf(store, &meta_node, "error", Value::None);
@@ -1293,6 +1405,7 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         pop_leaf(&meta_node, "retries_used");
         observer.write();
 
+        let mut attempt_children: Option<Value> = None;
         let attempt_result = attempt_once(
             op,
             use_op,
@@ -1307,8 +1420,39 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             store,
             &mut label,
             record_children,
+            &mut attempt_children,
         )
         .await;
+
+        let entry_error = match &attempt_result {
+            Ok(()) => None,
+            Err(AttemptProblem::Fatal(e)) => Some(e.to_string()),
+            Err(AttemptProblem::NotRetried { message, .. })
+            | Err(AttemptProblem::Retryable { message, .. }) => Some(message.clone()),
+        };
+        let entry_completed_at = if attempt_result.is_ok() {
+            read_key(store, &meta_node, "completed_at")
+        } else {
+            now_iso()
+        };
+        let entry_children = if record_children {
+            Some(
+                attempt_children
+                    .take()
+                    .unwrap_or_else(|| Value::Dict(Dict::new())),
+            )
+        } else {
+            None
+        };
+        attempts.push(attempt_entry(
+            store,
+            &effect_node,
+            &meta_node,
+            attempt_started_at,
+            entry_completed_at,
+            entry_error,
+            entry_children,
+        ));
 
         let (message, py_class, child_record) = match attempt_result {
             Ok(()) => {
@@ -1319,6 +1463,7 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                         "retries_used",
                         Value::from(i64::from(attempt_index)),
                     );
+                    write_attempts(store, &meta_node, &attempts);
                 }
                 observer.effect_complete(
                     &effect_path,
@@ -1333,7 +1478,8 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             Err(AttemptProblem::Fatal(refused @ VmError::Refused { .. })) => {
                 let text = refused.to_string();
                 set_leaf(store, &meta_node, "error", Value::Str(text.clone()));
-                set_leaf(store, &meta_node, "completed_at", now_iso());
+                let completed_at = now_iso();
+                set_leaf(store, &meta_node, "completed_at", completed_at.clone());
                 if attempt_index > 0 {
                     set_leaf(
                         store,
@@ -1341,6 +1487,10 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                         "retries_used",
                         Value::from(i64::from(attempt_index)),
                     );
+                    if let Some(Value::Dict(last)) = attempts.last_mut() {
+                        last.insert(Value::from("completed_at"), completed_at);
+                    }
+                    write_attempts(store, &meta_node, &attempts);
                 }
                 observer.effect_complete(
                     &effect_path,
@@ -1368,6 +1518,10 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         // subclass, checked separately.
         let retryable = !(py_class.is_value_error_class() || py_class == PyExc::RecursionError);
         if !is_last_attempt && retryable {
+            // The finished attempts, readable (and on --live-state)
+            // before the next one starts (issue #659).
+            write_attempts(store, &meta_node, &attempts);
+            observer.write();
             next_delay_ms = crate::retry::next_backoff_delay_ms(
                 &crate::retry::RetryInfo::retryable(),
                 attempt_index,
@@ -1384,7 +1538,8 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             graft_child_record(&effect_node, child_record);
         }
 
-        set_leaf(store, &meta_node, "completed_at", now_iso());
+        let completed_at = now_iso();
+        set_leaf(store, &meta_node, "completed_at", completed_at.clone());
         if attempt_index > 0 {
             set_leaf(
                 store,
@@ -1392,6 +1547,10 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                 "retries_used",
                 Value::from(i64::from(attempt_index)),
             );
+            if let Some(Value::Dict(last)) = attempts.last_mut() {
+                last.insert(Value::from("completed_at"), completed_at);
+            }
+            write_attempts(store, &meta_node, &attempts);
         }
         if message.to_lowercase().contains("validation failed") {
             set_leaf(
@@ -1735,6 +1894,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &store,
             &mut label,
             true, // record_children
+            &mut None,
         )
         .await;
 
@@ -1865,6 +2025,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &store,
             &mut label,
             false,
+            &mut None,
         )
         .await;
 
@@ -2169,6 +2330,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &store,
             &mut label,
             false,
+            &mut None,
         )
         .await;
         assert!(result.is_ok(), "a model expect answered 'yes' must succeed");
@@ -2333,6 +2495,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &store,
             &mut label,
             false,
+            &mut None,
         )
         .await
     }
@@ -2532,6 +2695,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &store,
             &mut label,
             false,
+            &mut None,
         )
         .await
         {
@@ -2625,6 +2789,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &store,
             &mut label,
             false,
+            &mut None,
         )
         .await
         {

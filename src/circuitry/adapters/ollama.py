@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from ..core.cancellation import run_tracked
 from ..curl_support import (
+    curl_error_code,
     curl_failure_message,
     parse_error_body,
     redact_host_url,
@@ -119,15 +120,15 @@ class OllamaAdapter:
                 hint = (
                     f"Ollama at {self.base_url} is not reachable. "
                     "Start it (`ollama serve`), or set "
-                    "`runtime.adapters.ollama.base_url` in your config. "
+                    f"`runtime.adapters.{self.name}.base_url` in your config. "
                     "Run `cof doctor` to verify connectivity."
                 )
             elif proc.returncode == 28:
                 hint = (
                     f"The model didn't finish within {int(timeout_seconds)}s. "
-                    "Raise `runtime.adapters.ollama.timeout_seconds` in your "
-                    "config (a prompt's `timeout_ms` can only shorten it), "
-                    "or use a smaller/faster model."
+                    f"Raise `runtime.adapters.{self.name}.timeout_seconds` in "
+                    "your config (a prompt's `timeout_ms` can only shorten "
+                    "it), or use a smaller/faster model."
                 )
             elif proc.returncode == 22:
                 body_message = parse_error_body(proc.stdout) or ""
@@ -144,6 +145,7 @@ class OllamaAdapter:
                     hint=hint,
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+                error_code=curl_error_code(proc.stdout),
             )
 
         try:

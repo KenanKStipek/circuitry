@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #657",
+  "description": "When `||` meets two unset reads, the warning names the right-hand one -- the right-hand error wins, matching electricity's own `cel` crate semantics.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

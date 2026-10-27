@@ -74,19 +74,70 @@ _NOTICE_KEY_DEPTH = 2
 _NOTICE_KEY_DEPTHS: dict[str, int] = {"secrets": 1}
 
 
+def _strip_disallowed_adapter_retargets(
+    orch_runtime: dict[str, Any],
+    *,
+    enabled_adapters: list[str] | None,
+    document_name: str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop a document's `adapters.<name>.adapter` key when `enabled_adapters`
+    is set: only config may then define or retarget an adapter alias, or a
+    trusted document could point an allowlisted alias at an adapter the
+    allowlist doesn't list. Without `enabled_adapters`, a document keeps its
+    current power to define or retarget an alias. Other keys in the same
+    block (a `base_url` override, say) are untouched.
+    """
+    if enabled_adapters is None:
+        return orch_runtime, []
+    adapters = orch_runtime.get("adapters")
+    if not isinstance(adapters, dict):
+        return orch_runtime, []
+    source = document_name or "the orchestration"
+    warnings: list[str] = []
+    filtered: dict[str, Any] = {}
+    for name, entry in adapters.items():
+        if isinstance(entry, dict) and "adapter" in entry:
+            warnings.append(
+                f"runtime.adapters.{name}.adapter from {source} ignored: with "
+                "enabled_adapters set, only config defines adapter aliases"
+            )
+            remainder = {k: v for k, v in entry.items() if k != "adapter"}
+            if remainder:
+                filtered[name] = remainder
+        else:
+            filtered[name] = entry
+    if not warnings:
+        return orch_runtime, []
+    result = dict(orch_runtime)
+    if filtered:
+        result["adapters"] = filtered
+    else:
+        result.pop("adapters", None)
+    return result, warnings
+
+
 def _split_orchestration_runtime(
-    orch_runtime: dict[str, Any], *, trusted: bool
+    orch_runtime: dict[str, Any],
+    *,
+    trusted: bool,
+    enabled_adapters: list[str] | None = None,
+    document_name: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Keep the author-level keys of a document's `runtime:` block.
 
     Returns the accepted block and one warning per dropped key. A trusted
-    document keeps its whole block.
+    document keeps its whole block, except an adapter-alias retarget
+    `enabled_adapters` disallows (see
+    :func:`_strip_disallowed_adapter_retargets`), stripped either way.
     """
+    orch_runtime, alias_warnings = _strip_disallowed_adapter_retargets(
+        orch_runtime, enabled_adapters=enabled_adapters, document_name=document_name
+    )
     if trusted:
-        return dict(orch_runtime), []
+        return dict(orch_runtime), alias_warnings
     allowed = ", ".join(f"runtime.{k}" for k in sorted(ORCHESTRATION_RUNTIME_KEYS))
     accepted: dict[str, Any] = {}
-    warnings: list[str] = []
+    warnings: list[str] = list(alias_warnings)
     for key, value in orch_runtime.items():
         if key in ORCHESTRATION_RUNTIME_KEYS:
             accepted[key] = value
@@ -213,12 +264,23 @@ def orchestration_host_setting_warnings(
     if not isinstance(orch_runtime, dict):
         orch_runtime = {}
     if trust_document or cfg.trust_orchestration_runtime:
-        return _applied_host_settings_notice(
-            orch_runtime, orch_plugins, cfg=cfg, document_name=document_name
+        orch_runtime, alias_warnings = _strip_disallowed_adapter_retargets(
+            orch_runtime, enabled_adapters=cfg.enabled_adapters, document_name=document_name
         )
+        return [
+            *_applied_host_settings_notice(
+                orch_runtime, orch_plugins, cfg=cfg, document_name=document_name
+            ),
+            *alias_warnings,
+        ]
     return [
         *_split_orchestration_plugins(orch_plugins, cfg=cfg, trusted=False)[1],
-        *_split_orchestration_runtime(orch_runtime, trusted=False)[1],
+        *_split_orchestration_runtime(
+            orch_runtime,
+            trusted=False,
+            enabled_adapters=cfg.enabled_adapters,
+            document_name=document_name,
+        )[1],
     ]
 
 
@@ -445,6 +507,20 @@ def resolve_effective_settings(
     orch_runtime = orch.get("runtime") or {}
     if orch_runtime and not isinstance(orch_runtime, dict):
         raise ValueError("Orchestration 'runtime' must be an object if provided.")
+    # runtime: orch overrides config, deep-merged under `plugins`/`adapters`
+    # (see _DEEP_MERGE_RUNTIME_KEYS), merged by name under `secrets` (see
+    # _NAME_MERGE_RUNTIME_KEYS), shallow everywhere else — for the
+    # author-level keys only, unless the document is trusted (see
+    # ORCHESTRATION_RUNTIME_KEYS). Also strips a disallowed adapter-alias
+    # retarget up front (see _strip_disallowed_adapter_retargets), so the
+    # applied-settings notice below never lists a key that was actually
+    # dropped.
+    orch_runtime, runtime_warnings = _split_orchestration_runtime(
+        orch_runtime,
+        trusted=trusted,
+        enabled_adapters=cfg.enabled_adapters,
+        document_name=document_name,
+    )
     if trusted:
         warnings.extend(
             _applied_host_settings_notice(
@@ -477,15 +553,6 @@ def resolve_effective_settings(
             if orch_plugins
             else ("config" if cfg.plugins else "default")
         )
-
-    # runtime: orch overrides config, deep-merged under `plugins`/`adapters`
-    # (see _DEEP_MERGE_RUNTIME_KEYS), merged by name under `secrets` (see
-    # _NAME_MERGE_RUNTIME_KEYS), shallow everywhere else — for the
-    # author-level keys only, unless the document is trusted (see
-    # ORCHESTRATION_RUNTIME_KEYS)
-    orch_runtime, runtime_warnings = _split_orchestration_runtime(
-        orch_runtime, trusted=trusted
-    )
     warnings.extend(runtime_warnings)
 
     runtime = _merge_runtime(cfg.runtime, orch_runtime)
