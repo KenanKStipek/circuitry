@@ -1934,13 +1934,41 @@ leaf's own path itself (not merely its parent's) to be one `PlanTree::
 is_unnamed_loop_body_path` says an unnamed loop's own body directly
 contributes -- a sibling at the same parent path that merely happens
 to sit next to the loop must never expand, or read its own progress
-count, either. Drawing always hides every row under any loop's own
+count, either. A `⟲` count itself needs more than one logged interval
+or open pass at the path, the same "more than one" rule `loop_is_
+expandable` already requires -- a path reached just once by something
+else entirely (an `if` whose `else` branch happens to share a path
+with the `then` branch's own loop) reads no progress count at all,
+not `⟲ 1/1`. A named loop sitting directly inside an unnamed loop's
+own body shares that body's path, but it is still a real
+`RowKind::Loop` row with real progress of its own -- the outer loop's
+pass count never replaces it. Between two chain passes, this path's
+own row can read plain `Done` for a moment, right after one pass ends
+and before the next one's own `Start` event lands -- whether the
+total is still unknown is decided from the loop's own running state
+(a running-type status, or an event-sourced open start events already
+know about) rather than from the row's own momentary status, so the
+total never flashes a false `N/N` in that gap. Drawing always hides every row under any loop's own
 path from the base tree, collapsed or expanded, since the Time
 screen's own pass rows (or lack of them) are what stands in for them
 either way. Follow selecting a leaf whose own row is hidden this way
 (a named loop's pass, collapsed or expanded) highlights and scrolls
 to the nearest ancestor loop row that is actually drawn instead of
 leaving the selection unmatched.
+
+A run that stops without finishing every pass still shows each one
+honestly. A pass still open when the process is simply killed outright
+(no `run_end` at all) keeps growing towards `now` on every other
+screen's own fallback, but the Time screen instead freezes its
+duration at the run's own resolved end (`header.run_end_ts`, the same
+fallback used elsewhere once a run has stopped) -- both for a named
+loop's own still-running pass and an unnamed loop's own last open one.
+A pass an interrupted `run_end` cancels mid-flight is cleared from
+`RunModel::open_starts_at` the moment the run ends, so an unnamed
+loop's own expansion keeps its own start time separately
+(`RunModel::cancelled_pass_starts_at`) and still lists it as its own
+row, with a cancelled status, rather than letting it silently vanish
+from the list.
 
 **The strips** carry raw points, not pre-bucketed heights --
 `screens::TimeStrips` holds `events_points`/`decisions`/`in_flight_
@@ -2046,7 +2074,14 @@ neither has anywhere else to be read from.
   `oscilloscope-core` for exactly this, so the two screens never
   disagree), with a `think` band covering every gap between them
   (and from the session's own start to the first call, and from the
-  last call to now while it's still running). Each kind draws as its
+  last call to now while it's still running). An interrupted run's
+  own leftover transcript can end in a `tool_start` with no matching
+  `tool_end`, and no later `tool_start` of its own to mark it
+  `stopped` either -- `agent_running` (not the call's own
+  `is_running` alone, which reads the same whether the session is
+  genuinely still going or the run simply died mid-call) is what
+  decides whether that last band reads running or frozen at the
+  pane's own axis end. Each kind draws as its
   own row, one band kind per line, since an agent can call the same
   kind of tool more than once in a session. When the transcript's own
   tailed window doesn't reach back to the session's own start

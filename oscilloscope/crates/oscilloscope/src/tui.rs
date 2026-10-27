@@ -9918,6 +9918,188 @@ mod golden_tests {
         );
     }
 
+    fn unnamed_loop_plan_for_tui() -> PlanTree {
+        use electricity_bytecode::{LoopFlow, LoopSpec, Region};
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone();
+        let body_path = loop_path.clone().push_name("nap");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::Loop {
+                        name: None,
+                        spec: LoopSpec::Each {
+                            in_path: "prime.items".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool(body_path, "nap", OnError::Fail)],
+                            overlay: true,
+                        }),
+                        flow: LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    /// The same 50,000-interval log as the test above, but logged at
+    /// an unnamed loop's own body path on a real compiled plan --
+    /// `build_time_rows`'s own loop-progress count
+    /// (`is_unnamed_loop_body_path`, `step_intervals` filtered by
+    /// path) must stay as cheap as a plain leaf's, not re-scan the
+    /// whole log on every redraw.
+    #[test]
+    fn time_screen_performance_with_50_000_logged_intervals_on_an_unnamed_loop() {
+        let plan = unnamed_loop_plan_for_tui();
+        let mut model = RunModel::new();
+        let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap();
+        for i in 0..50_000i64 {
+            let start = (base + chrono::Duration::milliseconds(10 * i))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let end = (base + chrono::Duration::milliseconds(10 * i + 5))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            model.observe_event(&Event::Start {
+                ts: start,
+                id: Some(i),
+                path: "prime.nap".to_string(),
+            });
+            model.observe_event(&Event::End {
+                ts: end,
+                id: Some(i),
+                path: "prime.nap".to_string(),
+                ok: true,
+                ms: Some(5),
+                error: None,
+            });
+        }
+        assert_eq!(model.step_intervals().len(), 50_000);
+        let state = json!({"prime": {"value": null, "meta": {
+            "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+        }}});
+        let now = (base + chrono::Duration::milliseconds(10 * 50_000))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            500.0,
+            &now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        {
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                None,
+                &Default::default(),
+                &now,
+            );
+            assert!(
+                time_screen.rows.iter().any(|r| matches!(
+                    r,
+                    oscilloscope_core::screens::TimeDisplayRow::Row(row)
+                        if row.loop_progress.is_some()
+                )),
+                "the unnamed loop's own body row must carry a real pass count"
+            );
+        }
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let start_time = std::time::Instant::now();
+        for _ in 0..3 {
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                None,
+                &Default::default(),
+                &now,
+            );
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        0,
+                        &mut app,
+                        Some(&state),
+                        &test_ctx,
+                        0,
+                        &now,
+                        None,
+                        None,
+                        None,
+                        Some(&time_screen),
+                        None,
+                        &mut CostLayoutCache::default(),
+                    )
+                })
+                .unwrap();
+        }
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "building the strips and drawing three times over a 50,000-interval unnamed-loop log took {elapsed:?}, a generous bound even for a debug build"
+        );
+    }
+
     /// A tree-loop pass's prompt never
     /// appears in live state at all while it runs (DESIGN.md §1.4), on
     /// either engine -- `fan.iter_0.ask` here has no node of its own in

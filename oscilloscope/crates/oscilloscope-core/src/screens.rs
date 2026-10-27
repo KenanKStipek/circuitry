@@ -1718,7 +1718,14 @@ pub fn build_time_screen(
         display_rows.push(TimeDisplayRow::Row(row));
         if expand {
             if let Some(run_start_ts) = run_start_ts.as_deref() {
-                for pass in crate::time::expand_loop(&path, flat, model, run_start_ts, now) {
+                for pass in crate::time::expand_loop(
+                    &path,
+                    flat,
+                    model,
+                    run_start_ts,
+                    now,
+                    header.run_end_ts.as_deref(),
+                ) {
                     display_rows.push(TimeDisplayRow::Pass(TimeLoopPassRow {
                         label: pass.label,
                         status: pass.status,
@@ -5024,6 +5031,93 @@ mod tests {
         let heights =
             crate::time::in_flight_heights(0.0, 5.0, 1, &screen.strips.in_flight_intervals);
         assert_eq!(heights, vec![3], "max overlap must read 3, not 1");
+    }
+
+    /// An unnamed loop's own body leaf, with several passes open at
+    /// once (`flow: tree`), feeds one events/min start point per
+    /// pass -- not a single point for the whole loop, which would
+    /// undercount a tree loop's own concurrent passes the same way
+    /// `in_flight_intervals` would.
+    #[test]
+    fn build_time_screen_events_per_minute_counts_an_unnamed_loops_concurrent_pass_starts() {
+        let plan = unnamed_loop_plan_with_sibling();
+        let mut model = RunModel::new();
+        for id in 1..=3 {
+            model.observe_event(&crate::observe::Event::Start {
+                ts: format!("2026-01-01T00:00:0{id}Z"),
+                id: Some(id),
+                path: "prime.u_nap".to_string(),
+            });
+        }
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            },
+            "u_nap": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let rows = vec![
+            Row {
+                path: "prime".to_string(),
+                depth: 0,
+                label: "prime".to_string(),
+                kind: RowKind::Root,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: true,
+            },
+            Row {
+                path: "prime.u_nap".to_string(),
+                depth: 1,
+                label: "u_nap".to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Running,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let header = crate::render::Header {
+            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
+            ..base_header()
+        };
+        let screen = build_time_screen(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            "2026-01-01T00:00:05Z",
+        );
+        let starts: Vec<f64> = screen
+            .strips
+            .events_points
+            .iter()
+            .filter(|&&(t, _)| t == 1.0 || t == 2.0 || t == 3.0)
+            .map(|&(t, _)| t)
+            .collect();
+        assert_eq!(
+            starts.len(),
+            3,
+            "every concurrently open pass's own start must count, not one for the whole loop: {:?}",
+            screen.strips.events_points
+        );
     }
 
     /// An agent is a `RowKind::Tool` with provider `agent`, never a

@@ -669,6 +669,13 @@ pub struct RunModel {
     /// quick steps by the same under-a-second rule as any other row.
     ended_ms: BTreeMap<String, Option<u64>>,
     cancelled_by_run_end: BTreeSet<String>,
+    /// Every id'd open pass's own start timestamp, by path, cancelled
+    /// by an interrupted `run_end` (issue #654) -- `cancelled_by_run_
+    /// end` alone says *that* a path had one, not when it started,
+    /// which `expand_unnamed_loop` still needs to show it as its own
+    /// row rather than letting it silently vanish once `open_by_id`
+    /// itself is cleared.
+    cancelled_pass_starts: BTreeMap<String, Vec<String>>,
     run_start: Option<(String, Option<i32>)>,
     /// `run_start`'s own `ts` (DESIGN.md §3's format table) -- the
     /// run's own start, when `--events` carried one (issue #613's "one
@@ -829,6 +836,7 @@ impl RunModel {
             started_at: BTreeMap::new(),
             ended_ms: BTreeMap::new(),
             cancelled_by_run_end: BTreeSet::new(),
+            cancelled_pass_starts: BTreeMap::new(),
             run_start: None,
             run_start_ts: None,
             run_end: None,
@@ -1008,6 +1016,21 @@ impl RunModel {
                     .as_deref()
                     .is_some_and(|e| e.starts_with("Interrupted"));
                 if interrupted {
+                    // Issue #654: an id'd open pass (every unnamed
+                    // loop's own pass gets one) still has a real
+                    // start time of its own, in `start_ts_by_id` --
+                    // captured here, before `open_by_id` itself is
+                    // cleared below, so an expanded unnamed loop can
+                    // still show this cancelled pass as its own row
+                    // instead of it simply vanishing.
+                    for (id, path) in &self.open_by_id {
+                        if let Some(start_ts) = self.start_ts_by_id.get(id) {
+                            self.cancelled_pass_starts
+                                .entry(path.clone())
+                                .or_default()
+                                .push(start_ts.clone());
+                        }
+                    }
                     for path in self.open_by_id.values() {
                         self.cancelled_by_run_end.insert(path.clone());
                     }
@@ -1232,6 +1255,17 @@ impl RunModel {
             .filter(|(_, p)| p.as_str() == path)
             .filter_map(|(id, _)| self.start_ts_by_id.get(id).map(String::as_str))
             .collect()
+    }
+
+    /// Every id'd pass at `path` an interrupted `run_end` cancelled
+    /// mid-flight (issue #654), its own start timestamp -- unlike
+    /// [`Self::open_starts_at`], these never get an `end` event of
+    /// their own; the run simply stopped.
+    pub fn cancelled_pass_starts_at(&self, path: &str) -> &[String] {
+        self.cancelled_pass_starts
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// `path`'s own latest `end` event duration, in seconds: `None`

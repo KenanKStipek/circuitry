@@ -514,6 +514,7 @@ fn expand_named_loop(
     flat: &BTreeMap<String, NodeMeta>,
     run_start_ts: &str,
     now: &str,
+    run_ended_at: Option<&str>,
 ) -> Vec<LoopPassRow> {
     let prefix = format!("{path}.iter_");
     let mut indices: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
@@ -566,8 +567,15 @@ fn expand_named_loop(
                 }
             }
             let start_s = start_ts.and_then(|t| duration_seconds(run_start_ts, t));
+            // Issue #654: a run killed outright, with no `run_end`
+            // at all, never completes this pass's own node either --
+            // `now` alone would keep this growing on every later
+            // redraw, long after the run itself has actually ended.
+            // `run_ended_at` freezes it at the run's own end instead,
+            // the same fallback `header.run_end_ts` already resolves
+            // for everything else once a run has stopped.
             let end_s = if running {
-                duration_seconds(run_start_ts, now)
+                duration_seconds(run_start_ts, run_ended_at.unwrap_or(now))
             } else {
                 end_ts.and_then(|t| duration_seconds(run_start_ts, t))
             };
@@ -603,6 +611,7 @@ fn expand_unnamed_loop(
     model: &RunModel,
     run_start_ts: &str,
     now: &str,
+    run_ended_at: Option<&str>,
 ) -> Vec<LoopPassRow> {
     let mut rows: Vec<LoopPassRow> = model
         .step_intervals()
@@ -630,15 +639,45 @@ fn expand_unnamed_loop(
         .collect();
     // A pass still running when expanded lists as its own row too
     // (DESIGN.md), numbered right after every finished pass -- it has
-    // no `end` event yet, so it never reaches the loop above.
+    // no `end` event yet, so it never reaches the loop above. A run
+    // killed outright, with no `run_end` at all, never ends this
+    // pass either -- `run_ended_at` (issue #654) freezes its own
+    // duration at the run's own end instead of `now` alone, which
+    // would otherwise keep it growing on every later redraw, long
+    // after the run has actually stopped.
     let finished = rows.len();
     for (n, start_ts) in model.open_starts_at(path).into_iter().enumerate() {
         let start_s = duration_seconds(run_start_ts, start_ts);
-        let duration_s = start_s.and_then(|s| duration_seconds(run_start_ts, now).map(|e| e - s));
+        let duration_s = start_s.and_then(|s| {
+            duration_seconds(run_start_ts, run_ended_at.unwrap_or(now)).map(|e| e - s)
+        });
         rows.push(LoopPassRow {
             label: format!("#{}", finished + n + 1),
             status: RowStatus {
                 kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_s,
+            duration_s,
+        });
+    }
+    // Issue #654: a pass an interrupted `run_end` cancelled mid-
+    // flight never gets an `end` event either, but it never counts
+    // as merely "still open" above (events clear `open_by_id` once
+    // the run itself has ended) -- without its own row here, it
+    // would simply vanish from the list instead of showing as
+    // cancelled.
+    let before_cancelled = rows.len();
+    for (n, start_ts) in model.cancelled_pass_starts_at(path).iter().enumerate() {
+        let start_s = duration_seconds(run_start_ts, start_ts);
+        let duration_s = start_s.and_then(|s| {
+            duration_seconds(run_start_ts, run_ended_at.unwrap_or(now)).map(|e| e - s)
+        });
+        rows.push(LoopPassRow {
+            label: format!("#{}", before_cancelled + n + 1),
+            status: RowStatus {
+                kind: StatusKind::Cancelled,
                 skip_reason: None,
                 retrying: false,
             },
@@ -659,11 +698,12 @@ pub fn expand_loop(
     model: &RunModel,
     run_start_ts: &str,
     now: &str,
+    run_ended_at: Option<&str>,
 ) -> Vec<LoopPassRow> {
     if has_named_loop_passes(path, flat) {
-        expand_named_loop(path, flat, run_start_ts, now)
+        expand_named_loop(path, flat, run_start_ts, now, run_ended_at)
     } else {
-        expand_unnamed_loop(path, model, run_start_ts, now)
+        expand_unnamed_loop(path, model, run_start_ts, now, run_ended_at)
     }
 }
 
@@ -1117,7 +1157,15 @@ pub fn agent_zoom_bands(
                     duration_seconds(run_start_ts, end_t).unwrap_or(now_s),
                     false,
                 ),
-                None => (now_s, call.is_running()),
+                // Issue #654: `call.is_running()` alone (no matching
+                // `tool_end`, and no later `tool_start` marking it
+                // `stopped`) can't tell a call that's genuinely still
+                // going from an interrupted run's own last, unfinished
+                // one -- a run that dies between `tool_start` lines
+                // leaves no later start to mark this one `stopped` at
+                // all. `agent_running` is the one thing that already
+                // knows the session itself has stopped.
+                None => (now_s, agent_running && call.is_running()),
             };
             Some(ZoomBand {
                 kind: ToolKind::classify(&call.tool).into(),
@@ -2357,6 +2405,38 @@ mod tests {
         assert!(bands[2].running);
     }
 
+    /// Issue #654: an interrupted run's own leftover transcript can
+    /// end in a `tool_start` with no `tool_end` -- `call.is_running
+    /// ()` alone reads that the same as a call genuinely still
+    /// going, since nothing marks it `stopped` either (that needs a
+    /// *later* `tool_start`, which a run that died has none of).
+    /// `agent_running` is what actually knows the session has
+    /// stopped, so the band must read frozen, not running.
+    #[test]
+    fn agent_zoom_bands_an_unmatched_call_does_not_read_running_once_the_agent_has_stopped() {
+        let calls = vec![ToolCall {
+            start_t: Some("2026-01-01T00:00:20Z".to_string()),
+            end_t: None,
+            tool: "bash".to_string(),
+            target: None,
+            ok: None,
+            ms: None,
+            lines_added: None,
+            lines_removed: None,
+            stopped: false,
+        }];
+        let bands = agent_zoom_bands(&calls, 0.0, 30.0, "2026-01-01T00:00:00Z", false);
+        let bash = bands
+            .iter()
+            .find(|b| b.kind == ZoomBandKind::Bash)
+            .expect("the unmatched call still gets its own band");
+        assert_eq!(bash.end_s, 30.0, "frozen at the axis's own end");
+        assert!(
+            !bash.running,
+            "the session itself has stopped, so this call must not read running"
+        );
+    }
+
     #[test]
     fn agent_zoom_bands_with_no_calls_is_all_think_while_running() {
         let bands = agent_zoom_bands(&[], 0.0, 15.0, "2026-01-01T00:00:00Z", true);
@@ -2407,6 +2487,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:25Z",
+            None,
         );
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[0].label, "pass 1");
@@ -2451,6 +2532,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:02Z",
+            None,
         );
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[0].label, "pass 1");
@@ -2481,6 +2563,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:30Z",
+            None,
         );
         assert_eq!(passes.len(), 2);
         let (p0_start, p0_dur) = (passes[0].start_s.unwrap(), passes[0].duration_s.unwrap());
@@ -2612,6 +2695,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:01:00Z",
+            None,
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes[0].label, "pass 2", "iter_1, 1-based");
@@ -2674,6 +2758,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:12Z",
+            None,
         );
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[0].label, "#1");
@@ -2901,12 +2986,124 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:08Z",
+            None,
         );
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[0].label, "#1");
         assert_eq!(passes[0].status.kind, StatusKind::Done);
         assert_eq!(passes[1].label, "#2");
         assert_eq!(passes[1].status.kind, StatusKind::Running);
+        assert_eq!(passes[1].start_s, Some(5.0));
+        assert_eq!(passes[1].duration_s, Some(3.0));
+    }
+
+    /// Issue #654: a run killed outright, with no `run_end` at all,
+    /// never completes an unnamed loop's own last open pass either --
+    /// its duration freezes at the run's own resolved end
+    /// (`run_ended_at`), not at `now` (which would otherwise keep
+    /// growing on every later redraw).
+    #[test]
+    fn expand_unnamed_loop_freezes_the_open_passs_duration_at_the_runs_own_end() {
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        let passes = expand_loop(
+            "prime.u_nap",
+            &BTreeMap::new(),
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-02-01T00:00:00Z", // long after the run actually ended
+            Some("2026-01-01T00:00:08Z"),
+        );
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].duration_s, Some(8.0));
+    }
+
+    /// Issue #654: a named loop's own still-running pass has the
+    /// exact same freezing rule.
+    #[test]
+    fn expand_named_loop_freezes_a_running_passs_duration_at_the_runs_own_end() {
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.fan.iter_0.nap".to_string(),
+            NodeMeta {
+                created_at: Some("2026-01-01T00:00:00Z".to_string()),
+                completed_at: None,
+                error: None,
+                branch: None,
+                progress_done: None,
+                progress_total: None,
+                progress_eta_s: None,
+                live: None,
+                value: serde_json::Value::Null,
+                meta: serde_json::Value::Null,
+            },
+        );
+        let model = RunModel::new();
+        let passes = expand_loop(
+            "prime.fan",
+            &flat,
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-02-01T00:00:00Z",
+            Some("2026-01-01T00:00:08Z"),
+        );
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].status.kind, StatusKind::Running);
+        assert_eq!(passes[0].duration_s, Some(8.0));
+    }
+
+    /// Issue #654: a pass an interrupted `run_end` cancels mid-flight
+    /// shows as its own cancelled row, not vanishing from the list --
+    /// `open_by_id` is cleared the moment the run ends, so it is the
+    /// model's own `cancelled_pass_starts_at`, not `open_starts_at`,
+    /// that still has it.
+    #[test]
+    fn expand_unnamed_loop_shows_a_run_end_cancelled_pass_instead_of_dropping_it() {
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5_000),
+            error: None,
+        });
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&crate::observe::Event::RunEnd {
+            ts: "2026-01-01T00:00:08Z".to_string(),
+            ok: false,
+            error: Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
+            signal: None,
+        });
+        assert!(
+            model.open_starts_at("prime.u_nap").is_empty(),
+            "run_end clears the open start -- proves the bug this guards against"
+        );
+        let passes = expand_loop(
+            "prime.u_nap",
+            &BTreeMap::new(),
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:08Z",
+            Some("2026-01-01T00:00:08Z"),
+        );
+        assert_eq!(passes.len(), 2);
+        assert_eq!(passes[0].status.kind, StatusKind::Done);
+        assert_eq!(passes[1].label, "#2");
+        assert_eq!(passes[1].status.kind, StatusKind::Cancelled);
         assert_eq!(passes[1].start_s, Some(5.0));
         assert_eq!(passes[1].duration_s, Some(3.0));
     }
