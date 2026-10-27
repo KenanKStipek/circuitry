@@ -57,8 +57,8 @@ class CloudflareWorkersAIAdapter:
         cfg = self._cfg()
         if not cfg.base_url:
             raise RuntimeError(
-                "cloudflare-workers-ai: account_id not configured. Set "
-                "CF_ACCOUNT_ID or runtime.adapters.cloudflare-workers-ai."
+                f"{self.name}: account_id not configured. Set "
+                f"CF_ACCOUNT_ID or runtime.adapters.{self.name}."
                 "account_id (or supply a fully-formed base_url)."
             )
         return chat_completion(

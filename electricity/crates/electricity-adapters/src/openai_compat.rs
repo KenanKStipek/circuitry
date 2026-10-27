@@ -466,7 +466,7 @@ pub fn check_dependencies(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 /// alongside the ordinary ones, or an error with exact text
 /// (`azure-openai`'s endpoint/key checks, `cloudflare-workers-ai`'s/
 /// `databricks`'s own resolved-base-url checks).
-type Precheck = fn(&OpenAiCompatibleConfig) -> Result<Vec<(String, String)>, AdapterError>;
+type Precheck = fn(&str, &OpenAiCompatibleConfig) -> Result<Vec<(String, String)>, AdapterError>;
 
 pub struct OpenAiCompatibleAdapter {
     pub provider_name: String,
@@ -476,7 +476,7 @@ pub struct OpenAiCompatibleAdapter {
     /// more than the API key (`cloudflare-workers-ai`/`databricks`'s
     /// own missing-base-url message, `azure-openai`'s own two env
     /// vars).
-    pub check_override: Option<fn(&OpenAiCompatibleConfig) -> CheckResult>,
+    pub check_override: Option<fn(&str, &OpenAiCompatibleConfig) -> CheckResult>,
 }
 
 #[async_trait(?Send)]
@@ -493,7 +493,7 @@ impl Adapter for OpenAiCompatibleAdapter {
         call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
         let extra_headers = match self.precheck {
-            Some(precheck) => precheck(&self.cfg)?,
+            Some(precheck) => precheck(&self.provider_name, &self.cfg)?,
             None => Vec::new(),
         };
         chat_completion(
@@ -510,7 +510,7 @@ impl Adapter for OpenAiCompatibleAdapter {
 
     async fn check(&self) -> CheckResult {
         match self.check_override {
-            Some(f) => f(&self.cfg),
+            Some(f) => f(&self.provider_name, &self.cfg),
             None => check_dependencies(&self.cfg),
         }
     }
@@ -533,9 +533,9 @@ fn simple_adapter(provider_name: &str, cfg: OpenAiCompatibleConfig) -> Box<dyn A
 // Per-provider builders (`adapters/factory.py`'s own `_build_*`).
 // ---------------------------------------------------------------------
 
-pub fn build_ai21(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_ai21(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "ai21",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.ai21.com/studio/v1"),
             "AI21_API_KEY",
@@ -544,9 +544,9 @@ pub fn build_ai21(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_cohere(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_cohere(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "cohere",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.cohere.com"),
             "COHERE_API_KEY",
@@ -556,9 +556,9 @@ pub fn build_cohere(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_deepseek(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_deepseek(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "deepseek",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.deepseek.com/v1"),
             "DEEPSEEK_API_KEY",
@@ -567,9 +567,9 @@ pub fn build_deepseek(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_fireworks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_fireworks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "fireworks",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.fireworks.ai/inference/v1"),
             "FIREWORKS_API_KEY",
@@ -582,9 +582,9 @@ pub fn build_fireworks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_gemini(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_gemini(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "gemini",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(
                 cfg,
@@ -597,9 +597,9 @@ pub fn build_gemini(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_groq(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_groq(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "groq",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.groq.com/openai/v1"),
             "GROQ_API_KEY",
@@ -608,9 +608,12 @@ pub fn build_groq(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_huggingface_inference(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_huggingface_inference(
+    name: &str,
+    cfg: &Value,
+) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "huggingface-inference",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://router.huggingface.co/v1"),
             "HF_TOKEN",
@@ -619,9 +622,9 @@ pub fn build_huggingface_inference(cfg: &Value) -> Result<Box<dyn Adapter>, Adap
     ))
 }
 
-pub fn build_llamacpp(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_llamacpp(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "llamacpp",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:8080/v1"),
             "",
@@ -630,9 +633,9 @@ pub fn build_llamacpp(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_lmstudio(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_lmstudio(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "lmstudio",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:1234/v1"),
             "",
@@ -641,9 +644,9 @@ pub fn build_lmstudio(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_mistral(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_mistral(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "mistral",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.mistral.ai/v1"),
             "MISTRAL_API_KEY",
@@ -652,14 +655,14 @@ pub fn build_mistral(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_nvidia_nim(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_nvidia_nim(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     let api_key_env = match cfg_get(cfg, "api_key_env") {
         None | Some(Value::None) => "NIM_API_KEY".to_string(),
         Some(Value::Str(s)) => s.clone(),
         Some(_) => "NIM_API_KEY".to_string(),
     };
     Ok(simple_adapter(
-        "nvidia-nim",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://integrate.api.nvidia.com/v1"),
             api_key_env,
@@ -668,9 +671,9 @@ pub fn build_nvidia_nim(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_openrouter(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_openrouter(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "openrouter",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://openrouter.ai/api/v1"),
             "OPENROUTER_API_KEY",
@@ -679,9 +682,9 @@ pub fn build_openrouter(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_perplexity(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_perplexity(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "perplexity",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.perplexity.ai"),
             "PERPLEXITY_API_KEY",
@@ -690,9 +693,9 @@ pub fn build_perplexity(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_qwen_dashscope(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_qwen_dashscope(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "qwen-dashscope",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(
                 cfg,
@@ -705,14 +708,14 @@ pub fn build_qwen_dashscope(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterErro
     ))
 }
 
-pub fn build_tgi(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_tgi(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     let api_key_env = match cfg_get(cfg, "api_key_env") {
         None | Some(Value::None) => String::new(),
         Some(Value::Str(s)) => s.clone(),
         Some(_) => String::new(),
     };
     Ok(simple_adapter(
-        "tgi",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:3000/v1"),
             api_key_env,
@@ -721,9 +724,9 @@ pub fn build_tgi(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_together(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_together(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "together",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.together.xyz/v1"),
             "TOGETHER_API_KEY",
@@ -736,9 +739,9 @@ pub fn build_together(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_vllm(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_vllm(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "vllm",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:8000/v1"),
             "",
@@ -747,9 +750,9 @@ pub fn build_vllm(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     ))
 }
 
-pub fn build_xai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_xai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
-        "xai",
+        name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.x.ai/v1"),
             "XAI_API_KEY",
@@ -761,6 +764,7 @@ pub fn build_xai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
 // -- Members needing a pre-check or a `check()` override. --
 
 fn azure_openai_precheck(
+    name: &str,
     cfg: &OpenAiCompatibleConfig,
 ) -> Result<Vec<(String, String)>, AdapterError> {
     // `self._cfg()` is the first thing Python's own `generate()` does --
@@ -769,9 +773,10 @@ fn azure_openai_precheck(
     let endpoint = azure_resolve_endpoint(&cfg.base_url)?;
     if endpoint.is_empty() {
         return Err(AdapterError {
-            message: "azure-openai: endpoint not configured. Set AZURE_OPENAI_ENDPOINT or \
-                      runtime.adapters.azure-openai.endpoint."
-                .to_string(),
+            message: format!(
+                "{name}: endpoint not configured. Set AZURE_OPENAI_ENDPOINT or \
+                 runtime.adapters.{name}.endpoint."
+            ),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         });
@@ -779,7 +784,7 @@ fn azure_openai_precheck(
     let api_key = std::env::var("AZURE_OPENAI_API_KEY").unwrap_or_default();
     if api_key.is_empty() {
         return Err(AdapterError {
-            message: "azure-openai: AZURE_OPENAI_API_KEY not set.".to_string(),
+            message: format!("{name}: AZURE_OPENAI_API_KEY not set."),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         });
@@ -806,7 +811,7 @@ fn azure_resolve_endpoint(raw_endpoint: &Value) -> Result<String, AdapterError> 
     Ok(env.trim_end_matches('/').to_string())
 }
 
-fn azure_openai_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
+fn azure_openai_check(_name: &str, cfg: &OpenAiCompatibleConfig) -> CheckResult {
     match azure_resolve_endpoint(&cfg.base_url) {
         Err(err) => CheckResult {
             ok: false,
@@ -837,7 +842,7 @@ fn azure_openai_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
     }
 }
 
-pub fn build_azure_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_azure_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     // `adapters/factory.py::_build_azure_openai`: `cfg.get("endpoint")
     // or cfg.get("base_url") or ""` -- the first truthy value wins,
     // kept raw (never pre-stripped: `azure_resolve_endpoint` above
@@ -854,7 +859,7 @@ pub fn build_azure_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError>
                 "/openai/deployments/{{model}}/chat/completions?api-version={api_version}"
             ));
     Ok(Box::new(OpenAiCompatibleAdapter {
-        provider_name: "azure-openai".to_string(),
+        provider_name: name.to_string(),
         cfg: openai_cfg,
         precheck: Some(azure_openai_precheck),
         check_override: Some(azure_openai_check),
@@ -874,14 +879,15 @@ fn cloudflare_resolve_base_url(explicit: &Value, account_id: &str) -> Value {
 }
 
 fn cloudflare_precheck(
+    name: &str,
     cfg: &OpenAiCompatibleConfig,
 ) -> Result<Vec<(String, String)>, AdapterError> {
     if !value_is_truthy(&cfg.base_url) {
         return Err(AdapterError {
-            message: "cloudflare-workers-ai: account_id not configured. Set CF_ACCOUNT_ID or \
-                      runtime.adapters.cloudflare-workers-ai.account_id (or supply a \
-                      fully-formed base_url)."
-                .to_string(),
+            message: format!(
+                "{name}: account_id not configured. Set CF_ACCOUNT_ID or \
+                 runtime.adapters.{name}.account_id (or supply a fully-formed base_url)."
+            ),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         });
@@ -889,7 +895,7 @@ fn cloudflare_precheck(
     Ok(Vec::new())
 }
 
-fn cloudflare_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
+fn cloudflare_check(_name: &str, cfg: &OpenAiCompatibleConfig) -> CheckResult {
     let base = check_dependencies(cfg);
     if !value_is_truthy(&cfg.base_url) {
         let mut missing = base.missing;
@@ -903,7 +909,10 @@ fn cloudflare_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
     base
 }
 
-pub fn build_cloudflare_workers_ai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_cloudflare_workers_ai(
+    name: &str,
+    cfg: &Value,
+) -> Result<Box<dyn Adapter>, AdapterError> {
     let explicit_base_url = cfg_value_or(cfg, "base_url", "");
     let account_id = {
         let configured = cfg_str_or(cfg, "account_id", "");
@@ -924,7 +933,7 @@ pub fn build_cloudflare_workers_ai(cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         ),
     );
     Ok(Box::new(OpenAiCompatibleAdapter {
-        provider_name: "cloudflare-workers-ai".to_string(),
+        provider_name: name.to_string(),
         cfg: openai_cfg,
         precheck: Some(cloudflare_precheck),
         check_override: Some(cloudflare_check),
@@ -949,13 +958,15 @@ fn databricks_resolve_base_url(explicit: &Value) -> Value {
 }
 
 fn databricks_precheck(
+    name: &str,
     cfg: &OpenAiCompatibleConfig,
 ) -> Result<Vec<(String, String)>, AdapterError> {
     if !value_is_truthy(&cfg.base_url) {
         return Err(AdapterError {
-            message: "databricks: workspace host not configured. Set DATABRICKS_HOST or \
-                      runtime.adapters.databricks.base_url to your workspace URL."
-                .to_string(),
+            message: format!(
+                "{name}: workspace host not configured. Set DATABRICKS_HOST or \
+                 runtime.adapters.{name}.base_url to your workspace URL."
+            ),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         });
@@ -963,7 +974,7 @@ fn databricks_precheck(
     Ok(Vec::new())
 }
 
-fn databricks_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
+fn databricks_check(_name: &str, cfg: &OpenAiCompatibleConfig) -> CheckResult {
     let base = check_dependencies(cfg);
     if !value_is_truthy(&cfg.base_url) {
         let mut missing = base.missing;
@@ -977,7 +988,7 @@ fn databricks_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
     base
 }
 
-pub fn build_databricks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_databricks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     let base_url = databricks_resolve_base_url(&cfg_value_or(cfg, "base_url", ""));
     let openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
@@ -989,7 +1000,7 @@ pub fn build_databricks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
         ),
     );
     Ok(Box::new(OpenAiCompatibleAdapter {
-        provider_name: "databricks".to_string(),
+        provider_name: name.to_string(),
         cfg: openai_cfg,
         precheck: Some(databricks_precheck),
         check_override: Some(databricks_check),
@@ -1094,13 +1105,13 @@ mod tests {
 
     #[test]
     fn build_azure_openai_combines_endpoint_and_model_into_the_path() {
-        let adapter = build_azure_openai(&Value::None).unwrap();
+        let adapter = build_azure_openai("azure-openai", &Value::None).unwrap();
         assert_eq!(adapter.name(), "azure-openai");
     }
 
     #[test]
     fn build_cloudflare_requires_an_account_id_before_any_request() {
-        let adapter = build_cloudflare_workers_ai(&Value::None).unwrap();
+        let adapter = build_cloudflare_workers_ai("cloudflare-workers-ai", &Value::None).unwrap();
         assert_eq!(adapter.name(), "cloudflare-workers-ai");
     }
 
@@ -1108,7 +1119,7 @@ mod tests {
     fn build_nvidia_nim_lets_an_explicit_empty_api_key_env_disable_the_key() {
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "api_key_env", Value::Str(String::new()));
-        let adapter = build_nvidia_nim(&Value::Dict(cfg)).unwrap();
+        let adapter = build_nvidia_nim("nvidia-nim", &Value::Dict(cfg)).unwrap();
         assert_eq!(adapter.name(), "nvidia-nim");
     }
 
@@ -1122,7 +1133,7 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::Bool(true));
-        let adapter = build_mistral(&Value::Dict(cfg)).unwrap();
+        let adapter = build_mistral("mistral", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::set_var("MISTRAL_API_KEY", "test-key");
         }
@@ -1159,7 +1170,7 @@ mod tests {
         }
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "endpoint", Value::from(5i64));
-        let adapter = build_azure_openai(&Value::Dict(cfg)).unwrap();
+        let adapter = build_azure_openai("azure-openai", &Value::Dict(cfg)).unwrap();
         let path = EffectPath::root();
         let token = CancellationToken::new();
         let err = adapter
@@ -1185,7 +1196,7 @@ mod tests {
         }
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::from(5i64));
-        let adapter = build_azure_openai(&Value::Dict(cfg)).unwrap();
+        let adapter = build_azure_openai("azure-openai", &Value::Dict(cfg)).unwrap();
         let path = EffectPath::root();
         let token = CancellationToken::new();
         let err = adapter
@@ -1218,7 +1229,7 @@ mod tests {
         }
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "endpoint", Value::from(5i64));
-        let adapter = build_azure_openai(&Value::Dict(cfg)).unwrap();
+        let adapter = build_azure_openai("azure-openai", &Value::Dict(cfg)).unwrap();
         let result = adapter.check().await;
         assert!(!result.ok);
         assert_eq!(
@@ -1236,7 +1247,8 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::from(5i64));
-        let adapter = build_cloudflare_workers_ai(&Value::Dict(cfg)).unwrap();
+        let adapter =
+            build_cloudflare_workers_ai("cloudflare-workers-ai", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::set_var("CF_API_TOKEN", "test-token");
         }
@@ -1265,7 +1277,7 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::from(5i64));
-        let adapter = build_databricks(&Value::Dict(cfg)).unwrap();
+        let adapter = build_databricks("databricks", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::set_var("DATABRICKS_TOKEN", "test-token");
         }

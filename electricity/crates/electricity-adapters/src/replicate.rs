@@ -39,6 +39,7 @@ fn transport_failure_error(failure: TransportFailure) -> AdapterError {
 /// own scripted `(returncode, stdout, stderr)` triples
 /// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 pub fn interpret_outcome(
+    name: &str,
     outcome: &crate::transport::CurlOutcome,
     target_model: &str,
     url: &str,
@@ -138,12 +139,14 @@ pub fn interpret_outcome(
         tokens_sent: None,
         tokens_received: None,
         finish_reason: None,
-        warnings: crate::ignored_options_warning("replicate", options, &[]),
+        warnings: crate::ignored_options_warning(name, options, &[]),
         cost_usd: None,
     })
 }
 
 pub struct ReplicateAdapter {
+    /// `replicate`, or an alias's own name (#656).
+    pub name: String,
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
     /// comment.
     pub base_url: Value,
@@ -153,7 +156,7 @@ pub struct ReplicateAdapter {
 #[async_trait(?Send)]
 impl Adapter for ReplicateAdapter {
     fn name(&self) -> &str {
-        "replicate"
+        &self.name
     }
 
     async fn generate(
@@ -218,7 +221,15 @@ impl Adapter for ReplicateAdapter {
         let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
             .await
             .map_err(transport_failure_error)?;
-        interpret_outcome(&outcome, target_model, &url, &api_token, wait, options)
+        interpret_outcome(
+            &self.name,
+            &outcome,
+            target_model,
+            &url,
+            &api_token,
+            wait,
+            options,
+        )
     }
 
     async fn check(&self) -> CheckResult {
@@ -238,8 +249,9 @@ impl Adapter for ReplicateAdapter {
 }
 
 /// `adapters/factory.py::_build_replicate`.
-pub fn build_replicate(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_replicate(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(ReplicateAdapter {
+        name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "https://api.replicate.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "meta/meta-llama-3-70b-instruct"),
     }))
@@ -260,7 +272,7 @@ mod tests {
 
     #[test]
     fn build_replicate_defaults_base_url_and_model() {
-        let adapter = build_replicate(&Value::None).unwrap();
+        let adapter = build_replicate("replicate", &Value::None).unwrap();
         assert_eq!(adapter.name(), "replicate");
     }
 
@@ -273,7 +285,7 @@ mod tests {
         let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
-        let adapter = build_replicate(&Value::Dict(cfg)).unwrap();
+        let adapter = build_replicate("replicate", &Value::Dict(cfg)).unwrap();
         unsafe {
             std::env::set_var("REPLICATE_API_TOKEN", "r8-test");
         }

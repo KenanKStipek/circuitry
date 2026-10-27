@@ -1,7 +1,0 @@
-{
-  "spec_case": "issue #579 (aliases of the CLI adapters), config errors",
-  "description": "Every alias config error in one preflight failure, each naming its alias, in the order preflight reports adapters: an unknown base, a base that is itself an alias, an alias named like a built-in adapter (a CLI one and an API one), `env` that is not a mapping, a non-string `env` value and an invalid variable name. The error text carries no `env` value.",
-  "engines": ["python", "electricity"],
-  "config": "config.json",
-  "expect": "failure"
-}

@@ -1,0 +1,20 @@
+name: c656-alias-openai-compatible-mock
+effects:
+  - type: prompt
+    name: p_default
+    model: default-model
+    template: "default"
+  - type: prompt
+    name: p_local_b
+    provider: "local_b:model-b"
+    template: "local b"
+  - type: prompt
+    name: p_lmstudio
+    provider: lmstudio
+    model: base-model
+    template: "lmstudio"
+  - type: prompt
+    name: p_groq_alt
+    provider: groq_alt
+    model: groq-model
+    template: "groq alt"

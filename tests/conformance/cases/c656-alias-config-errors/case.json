@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #656: every alias in the merged runtime is validated up front",
+  "description": "expect: failure, error_compare: exact. One config with every adapter-alias error kind (unknown target, alias of an alias, a target of host_claude, an alias named like a built-in CLI and API adapter, and each `env` error), none referenced by the document. `cof run` fails before the first effect with the `Invalid adapter aliases:` block, one line per broken alias in name order, and still writes `--out`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

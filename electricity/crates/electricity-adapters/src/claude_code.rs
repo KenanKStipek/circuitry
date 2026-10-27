@@ -114,14 +114,10 @@ fn build(name: &str, cfg: &Value) -> Result<ClaudeCodeAdapter, AdapterError> {
     })
 }
 
-/// `adapters/factory.py::_build_claude_code`.
-pub fn build_claude_code(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    build_claude_code_named("claude_code", cfg)
-}
-
-/// `adapters/factory.py::_build_claude_code` under *name*: an alias's
-/// own name, which is also what it reports as its `meta.adapter`.
-pub fn build_claude_code_named(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+/// `adapters/factory.py::_build_claude_code`, under *name*:
+/// `"claude_code"` for its own registration, an alias's own name
+/// otherwise -- also what it reports as its `meta.adapter`.
+pub fn build_claude_code(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(build(name, cfg)?))
 }
 
@@ -251,7 +247,7 @@ mod tests {
 
     #[test]
     fn build_claude_code_defaults_binary_and_model() {
-        let adapter = build_claude_code(&Value::None).unwrap();
+        let adapter = build_claude_code("claude_code", &Value::None).unwrap();
         assert_eq!(adapter.name(), "claude_code");
     }
 
@@ -561,7 +557,7 @@ mod tests {
             err.message,
             "runtime.adapters.claude_alt.unset_env must be a list of strings, got 'X'"
         );
-        let adapter = build_claude_code_named("claude_alt", &Value::None).unwrap();
+        let adapter = build_claude_code("claude_alt", &Value::None).unwrap();
         assert_eq!(adapter.name(), "claude_alt");
         let debug = format!(
             "{:?}",

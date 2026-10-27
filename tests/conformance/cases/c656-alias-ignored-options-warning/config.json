@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "adapters": {
+      "scripted_alt": {
+        "adapter": "scripted",
+        "replies_file": "scripted-replies.yaml"
+      }
+    }
+  }
+}

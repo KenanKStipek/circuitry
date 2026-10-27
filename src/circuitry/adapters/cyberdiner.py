@@ -104,7 +104,11 @@ SEED_TIERS: tuple[str, ...] = (
 
 
 def _resolve_tier(
-    model: str, default_tier: str, valid_tiers: tuple[str, ...] = ()
+    model: str,
+    default_tier: str,
+    valid_tiers: tuple[str, ...] = (),
+    *,
+    adapter_name: str = "cyberdiner",
 ) -> str:
     """Map an orchestration ``model:`` onto a CyberDiner tier name.
 
@@ -117,14 +121,14 @@ def _resolve_tier(
     tier = (model or "").strip() or (default_tier or "").strip()
     if not tier:
         raise ValueError(
-            "cyberdiner: no tier resolved. Pin `model:` in the orchestration "
-            "or set runtime.adapters.cyberdiner.default_tier."
+            f"{adapter_name}: no tier resolved. Pin `model:` in the "
+            f"orchestration or set runtime.adapters.{adapter_name}.default_tier."
         )
     if valid_tiers and tier not in valid_tiers:
         valid = ", ".join(valid_tiers)
         raise ValueError(
-            f"cyberdiner: unknown tier {tier!r}. Configured "
-            f"runtime.adapters.cyberdiner.valid_tiers: {valid}."
+            f"{adapter_name}: unknown tier {tier!r}. Configured "
+            f"runtime.adapters.{adapter_name}.valid_tiers: {valid}."
         )
     return tier
 
@@ -274,18 +278,20 @@ class CyberdinerAdapter:
     ) -> GenerateResult:
         if not self.expo_url:
             raise RuntimeError(
-                "cyberdiner: expo_url not configured. Set "
-                "runtime.adapters.cyberdiner.expo_url to your CyberDiner "
+                f"{self.name}: expo_url not configured. Set "
+                f"runtime.adapters.{self.name}.expo_url to your CyberDiner "
                 "expo deployment's root URL."
             )
         if not self.token:
             raise RuntimeError(
-                "cyberdiner: token not configured. Set "
-                "runtime.adapters.cyberdiner.token to a CyberDiner API key "
+                f"{self.name}: token not configured. Set "
+                f"runtime.adapters.{self.name}.token to a CyberDiner API key "
                 "(ck_...), minted via expo's api_keys routes or the web app."
             )
 
-        tier = _resolve_tier(model, self.default_tier, tuple(self.valid_tiers))
+        tier = _resolve_tier(
+            model, self.default_tier, tuple(self.valid_tiers), adapter_name=self.name
+        )
         base = self.expo_url.rstrip("/")
         req_timeout = max(0.001, min(float(self.timeout_seconds), float(timeout_seconds)))
         deadline = time.monotonic() + timeout_seconds
@@ -372,10 +378,10 @@ class CyberdinerAdapter:
     def check(self) -> CheckResult:
         missing: list[str] = []
         if not self.token:
-            missing.append("env:CYBERDINER token (runtime.adapters.cyberdiner.token)")
+            missing.append(f"env:CYBERDINER token (runtime.adapters.{self.name}.token)")
         if not self.expo_url:
             missing.append(
-                "env:CYBERDINER expo_url (runtime.adapters.cyberdiner.expo_url)"
+                f"env:CYBERDINER expo_url (runtime.adapters.{self.name}.expo_url)"
             )
             return CheckResult(ok=False, missing=missing)
 

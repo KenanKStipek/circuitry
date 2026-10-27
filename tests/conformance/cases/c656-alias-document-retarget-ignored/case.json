@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #656: the strict-allowlist rule",
+  "description": "With enabled_adapters set, a document's own runtime.adapters.local_a.adapter key is ignored (the warning names the alias and the document), so the request still reaches the config-defined lmstudio alias, never the document's attempted openai retarget.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "compare_run_warnings": true
+}

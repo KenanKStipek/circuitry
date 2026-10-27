@@ -25,7 +25,7 @@ const HOST_CLAUDE_MESSAGE: &str = concat!(
 /// `adapters/factory.py::_build_host_claude` -- always fails, with
 /// Circuitry's exact text; not retryable (tools-adapters-plugins §7
 /// case 17).
-pub fn build_host_claude(_cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_host_claude(_name: &str, _cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Err(AdapterError {
         message: HOST_CLAUDE_MESSAGE.to_string(),
         retry: RetryInfo::not_retryable(),
@@ -38,7 +38,7 @@ mod tests {
     use super::*;
 
     fn expect_err(cfg: &Value) -> AdapterError {
-        match build_host_claude(cfg) {
+        match build_host_claude("host_claude", cfg) {
             Err(err) => err,
             Ok(_) => panic!("build_host_claude unexpectedly succeeded"),
         }

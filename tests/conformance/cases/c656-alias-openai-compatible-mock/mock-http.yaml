@@ -1,0 +1,40 @@
+- request:
+    method: POST
+    path: /a/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-a"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+- request:
+    method: POST
+    path: /b/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-b"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+- request:
+    method: POST
+    path: /base/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-base"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+- request:
+    method: POST
+    path: /groq/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-groq"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}

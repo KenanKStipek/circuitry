@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #656: an alias of any adapter, preflight",
+  "description": "A keyless groq alias (no fake_credentials), its one usage `on_error: skip`: preflight downgrades the missing env:GROQ_API_KEY to a soft warning naming the alias, as for a built-in adapter, checked through `compare_run_warnings`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "compare_run_warnings": true
+}

@@ -1,0 +1,8 @@
+name: c656-alias-ignored-options-warning
+adapter: scripted_alt
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    deterministic: true

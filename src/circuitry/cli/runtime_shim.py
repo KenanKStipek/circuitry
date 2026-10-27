@@ -14,7 +14,12 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
-from ..adapters.factory import alias_names, configured_timeout_seconds, is_known_adapter
+from ..adapters.factory import (
+    alias_config_errors,
+    alias_names,
+    configured_timeout_seconds,
+    is_known_adapter,
+)
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..capability_gate import install_capability_ceiling
 from ..core.cancellation import RunCancelledBySignal, get_token
@@ -550,6 +555,18 @@ def run(req: RunRequest) -> RunResult:
         concurrency_limiter = RunConcurrencyLimiter.from_runtime_config(
             effective.runtime or {}
         )
+
+        # Every alias in the run's merged runtime, whether or not the
+        # document actually selects it, built up front (#656) — `cof check`
+        # already reports the identical errors, so a document that passed it
+        # must not reach preflight (or the first effect) only to fail
+        # against a different adapter instance.
+        alias_errors = alias_config_errors(effective.runtime)
+        if alias_errors:
+            raise ValueError(
+                "Invalid adapter aliases:\n"
+                + "\n".join(f"  - {e}" for e in alias_errors)
+            )
 
         if profile is not None and profile.effects:
             # A pinned band name can only be checked once the run's actual
@@ -1486,11 +1503,12 @@ def validate(
         trusted = trust_document or (config is not None and config.trust_orchestration_runtime)
         orch_runtime_raw = orch.get("runtime")
         orch_runtime = orch_runtime_raw if isinstance(orch_runtime_raw, dict) else {}
-        accepted_orch_runtime = (
-            dict(orch_runtime)
-            if trusted
-            else _split_orchestration_runtime(orch_runtime, trusted=False)[0]
-        )
+        accepted_orch_runtime = _split_orchestration_runtime(
+            orch_runtime,
+            trusted=trusted,
+            enabled_adapters=config.enabled_adapters if config is not None else None,
+            document_name=orchestration_path.name,
+        )[0]
         merged_runtime = _merge_runtime(
             (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
         )
@@ -1515,6 +1533,7 @@ def validate(
         state_config_errors = [
             *prompt_sent_errors(merged_runtime),
             *parsed_stdout_errors(merged_runtime),
+            *alias_config_errors(merged_runtime),
         ]
         if state_config_errors:
             return {
