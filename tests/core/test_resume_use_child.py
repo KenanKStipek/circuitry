@@ -375,6 +375,7 @@ def test_a_retry_of_a_resumed_use_child_runs_it_from_its_start(tmp_path: Path) -
     first = _run(orch, adapter)
     assert first.ok is False
     assert adapter.calls == ["a x", "b x", "c x", "a x", "b x", "c x"]
+    assert len(first.state["prime"]["sub"]["meta"]["attempts"]) == 2
 
     # Resumed: the first attempt continues at `c` and fails again; the retry
     # runs the whole child, then succeeds.
@@ -394,6 +395,9 @@ def test_a_retry_of_a_resumed_use_child_runs_it_from_its_start(tmp_path: Path) -
     second = _run(orch, retrying, saved=_saved(first))
     assert second.ok is True, second.error
     assert retrying.calls == ["c x", "a x", "b x", "c x"]
+    # Only the resumed run's own two attempts -- the interrupted first run's
+    # attempts stay behind in the state it resumed from, not merged in here.
+    assert len(second.state["prime"]["sub"]["meta"]["attempts"]) == 2
 
 
 def _expect_parent(tmp_path: Path, expect: Any) -> Path:

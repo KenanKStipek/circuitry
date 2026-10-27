@@ -1348,7 +1348,7 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `validate` | bool | no | `true` | Check the child — `inline`, `path` or `ref` — the way `cof check` checks a file (schema, near-miss keys) before it runs. `false` skips that; a repeated key is still an error |
 | `inputs` | object | no | `{}` | Map of name → value passed to child as initial state. String values are Mustache-rendered; `{from: <path>}` passes the value at that path unchanged (see [Inputs by reference](#inputs-by-reference)) |
 | `outputs` | object | no | — | Declared outputs — see [Outputs](#outputs). When present, switches to declared-outputs mode |
-| `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries`. `meta.created_at`/`meta.retries_used` follow the same rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike, absent (not `0`) when the first attempt is also the last |
+| `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries`. `meta.created_at`/`meta.retries_used` follow the same rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike, absent (not `0`) when the first attempt is also the last. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts) |
 | `expect` | string or object | no | — | Output check, run after a successful child run, over this effect's own mapped `value`/`meta` plus `state` — same shape as a [tool's `expect`](#tool-expect) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this `use` when its saved node did not finish without error. `continue` continues inside its child when the saved state holds the child's record; `restart` always runs the child from its start in a fresh state. A finished one is skipped either way. |
@@ -1460,6 +1460,44 @@ Every `use` node also records, whether or not the setting is on:
 |-------|---------|
 | `meta.inputs` | What the child received: rendered strings, referenced values, literals |
 | `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) |
+
+#### Every attempt (meta.attempts)
+
+A `use` with `retries` only ever showed the attempt that decided the outcome: the earlier
+ones' proposals, errors and `expect` results were gone the moment the next attempt started,
+visible only in `--events` or an adapter's own log. `meta.attempts` keeps every attempt that
+ran, oldest first:
+
+| Key | Value |
+|-----|-------|
+| `created_at` | When this attempt started |
+| `completed_at` | When it ended |
+| `value` | What this attempt mapped: the declared-outputs dict, or `null` in full-namespace mode or when the child failed |
+| `error` | `null` if this attempt succeeded, otherwise the text `meta.error` would show for it |
+| `child_errors` | This attempt's own `meta.child_errors` |
+| `expect` | This attempt's own `meta.expect`, or `null` when the check didn't run |
+| `children` | Only with `runtime.state.record_children`: this attempt's own child effects, in the same shape the complete record keeps under the node |
+
+- **Present exactly when `meta.retries_used` is** — one attempt (a dry run, a failure before
+  the first attempt) never gets an `attempts` list at all, not an empty one.
+- **The last entry is the deciding attempt.** Its `value`, `error`, `expect` and `child_errors`
+  equal the node's own; `meta.created_at`/`meta.completed_at` tie to its first/last entry.
+- **Each retry starts from a clean node.** From the second attempt on, the previous attempt's
+  child effects are removed from under the node — kept in its own `attempts` entry when
+  `record_children` is on — so the final node never mixes an earlier attempt's step (an `if`
+  branch it alone took) with the deciding one's, in either `record_children` or
+  full-namespace mode.
+- **Written as soon as an attempt ends**, before the backoff wait — so `--live-state`, and the
+  `use`'s own `expect` and `inputs`, can read the attempts before the current one:
+  ```yaml
+  inputs:
+    earlier: {from: prime.theme.meta.attempts}  # null on the first attempt
+  ```
+- After `on_error: skip`/`continue` absorbs an exhausted retry, the entries are a record of what
+  each attempt mapped — downstream still reads the node's own `value`, which is `null`.
+- Reset at the start of every pass, same as `expect` and `retries_used` — a reused node (an
+  unnamed loop's next pass, `--state` carryover) never shows an earlier pass's attempts.
+- Tools and prompts do not record attempts yet; only `use` does.
 
 **Cycle detection:**
 
@@ -2350,9 +2388,10 @@ record. So does a child whose output the `use`'s own `expect:` judged false
 same check and fail again on every resume. An `expect` whose own model call
 failed recorded no result, so the finished child is reused and only the
 check runs again. A `use` with `retries` continues inside its child on its
-first attempt only; a retry runs the whole child again, as always. A `use`
-inside a resumed loop pass or `if` branch continues inside its child by the
-same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
+first attempt only; a retry runs the whole child again, as always. Its
+`meta.attempts` then lists the resumed run's attempts only, as
+`meta.retries_used` counts them. A `use` inside a resumed loop pass or `if`
+branch continues inside its child by the same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
 (including a `flow: tree` root), or inside a pass or branch that runs from
 its start, reruns from its start: a tree branch starts from only the
 finished nodes of the saved state.

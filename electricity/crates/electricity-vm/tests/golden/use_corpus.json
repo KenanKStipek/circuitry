@@ -1628,6 +1628,205 @@
                     "t": "int",
                     "v": "1"
                   }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "attempts"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: false"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "child_errors"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "false"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: false"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "child_errors"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "false"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  }
                 ]
               ]
             }
@@ -1794,6 +1993,2429 @@
         ]
       },
       "raised": true
+    },
+    {
+      "case": "record_children_clean_node",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "tally"
+                  },
+                  {
+                    "t": "str",
+                    "v": "xx"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_attempts_clean_node.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_attempts_clean_node.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "counter"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<temp>/counter_record_children_clean_node.txt"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "8ddf3777a25e0bd4b484b282f52cfe65c95ce6bf6589caaab703f0ba3f75c0f1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "value.tally == 'xx'"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "retries_used"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "attempts"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "tally"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "x"
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: value.tally == 'xx'"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "child_errors"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value.tally == 'xx'"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "children"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "bump"
+                                  },
+                                  {
+                                    "t": "dict",
+                                    "v": [
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "value"
+                                        },
+                                        {
+                                          "t": "str",
+                                          "v": "<temp>/counter_record_children_clean_node.txt"
+                                        }
+                                      ],
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "meta"
+                                        },
+                                        {
+                                          "t": "dict",
+                                          "v": [
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "created_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "completed_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "provider"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "fs"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "error"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stdout"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stderr"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "exit_code"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "waiting_for"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "params_rendered"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "append"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "content"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "x"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "raw"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "append"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "bytes_written"
+                                                    },
+                                                    {
+                                                      "t": "int",
+                                                      "v": "1"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ]
+                                          ]
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "tally"
+                                  },
+                                  {
+                                    "t": "dict",
+                                    "v": [
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "value"
+                                        },
+                                        {
+                                          "t": "str",
+                                          "v": "x"
+                                        }
+                                      ],
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "meta"
+                                        },
+                                        {
+                                          "t": "dict",
+                                          "v": [
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "created_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "completed_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "provider"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "fs"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "error"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stdout"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stderr"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "exit_code"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "waiting_for"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "params_rendered"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "read"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "raw"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "read"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ]
+                                          ]
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "stale"
+                                  },
+                                  {
+                                    "t": "dict",
+                                    "v": [
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "value"
+                                        },
+                                        {
+                                          "t": "str",
+                                          "v": "\"stale\""
+                                        }
+                                      ],
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "meta"
+                                        },
+                                        {
+                                          "t": "dict",
+                                          "v": [
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "created_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "completed_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "provider"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "json"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "error"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stdout"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stderr"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "exit_code"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "waiting_for"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "params_rendered"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "stringify"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "input"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "stale"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "raw"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "stringify"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ]
+                                          ]
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "tally"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "xx"
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "child_errors"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value.tally == 'xx'"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": true
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "children"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "bump"
+                                  },
+                                  {
+                                    "t": "dict",
+                                    "v": [
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "value"
+                                        },
+                                        {
+                                          "t": "str",
+                                          "v": "<temp>/counter_record_children_clean_node.txt"
+                                        }
+                                      ],
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "meta"
+                                        },
+                                        {
+                                          "t": "dict",
+                                          "v": [
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "created_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "completed_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "provider"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "fs"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "error"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stdout"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stderr"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "exit_code"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "waiting_for"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "params_rendered"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "append"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "content"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "x"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "raw"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "append"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "bytes_written"
+                                                    },
+                                                    {
+                                                      "t": "int",
+                                                      "v": "1"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ]
+                                          ]
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "tally"
+                                  },
+                                  {
+                                    "t": "dict",
+                                    "v": [
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "value"
+                                        },
+                                        {
+                                          "t": "str",
+                                          "v": "xx"
+                                        }
+                                      ],
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "meta"
+                                        },
+                                        {
+                                          "t": "dict",
+                                          "v": [
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "created_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "completed_at"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "<TIMESTAMP>"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "provider"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "fs"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "error"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stdout"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "stderr"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "exit_code"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "waiting_for"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "params_rendered"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "read"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "raw"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "mode"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "read"
+                                                    }
+                                                  ],
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "path"
+                                                    },
+                                                    {
+                                                      "t": "str",
+                                                      "v": "<temp>/counter_record_children_clean_node.txt"
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ]
+                                          ]
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "bump"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/counter_record_children_clean_node.txt"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "fs"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "append"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_record_children_clean_node.txt"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "content"
+                              },
+                              {
+                                "t": "str",
+                                "v": "x"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "append"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_record_children_clean_node.txt"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "bytes_written"
+                              },
+                              {
+                                "t": "int",
+                                "v": "1"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "tally"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "xx"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "fs"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "read"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_record_children_clean_node.txt"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "read"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_record_children_clean_node.txt"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "full_namespace_clean_node",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_attempts_clean_node.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_attempts_clean_node.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "counter"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<temp>/counter_full_namespace_clean_node.txt"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "8ddf3777a25e0bd4b484b282f52cfe65c95ce6bf6589caaab703f0ba3f75c0f1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "has(meta.attempts)"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "retries_used"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "attempts"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: has(meta.attempts)"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "child_errors"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "has(meta.attempts)"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "child_errors"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "has(meta.attempts)"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": true
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "bump"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/counter_full_namespace_clean_node.txt"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "fs"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "append"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_full_namespace_clean_node.txt"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "content"
+                              },
+                              {
+                                "t": "str",
+                                "v": "x"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "append"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_full_namespace_clean_node.txt"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "bytes_written"
+                              },
+                              {
+                                "t": "int",
+                                "v": "1"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "tally"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "xx"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "fs"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "read"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_full_namespace_clean_node.txt"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "read"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "path"
+                              },
+                              {
+                                "t": "str",
+                                "v": "<temp>/counter_full_namespace_clean_node.txt"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
     },
     {
       "case": "on_error_skip_absorbs_failure",

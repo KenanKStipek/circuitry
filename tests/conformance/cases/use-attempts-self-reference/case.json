@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "A retried `use`'s own `inputs: {from: prime.theme.meta.attempts}` reads the attempts the use's own node holds before the current one starts: `null` on the first attempt, then one more entry per attempt after, which its own `expect` checks directly. Passes on the third attempt.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
