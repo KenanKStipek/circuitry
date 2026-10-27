@@ -12,15 +12,16 @@ on the extended copy `c-shell-background-survives-normal-exit` keeps
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+CASES = Path(__file__).resolve().parent / "cases"
 FAKE = (
-    Path(__file__).resolve().parent
-    / "cases"
+    CASES
     / "c-shell-path-fake"
     / "fakes"
     / "fake"
@@ -124,3 +125,75 @@ def test_sleep_ignores_sigterm_until_killed() -> None:
     finally:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         proc.wait(timeout=5)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Another account's process now holds the pid: ours is gone.
+        return False
+    return True
+
+
+def test_sleep_exits_by_itself_once_orphaned() -> None:
+    """An engine normally stops a `--sleep` fake with SIGKILL. If the engine
+    dies first, nothing ever would, so the fake stops by itself once its
+    parent is gone (#661)."""
+    parent_code = (
+        "import subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, {str(FAKE)!r}, '--sleep'], start_new_session=True)\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    parent = subprocess.Popen(
+        [sys.executable, "-c", parent_code], stdout=subprocess.PIPE, text=True
+    )
+    assert parent.stdout is not None
+    fake_pid = int(parent.stdout.readline())
+    exited = False
+    try:
+        parent.kill()  # SIGKILL: the parent never gets to stop its child
+        parent.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if not _alive(fake_pid):
+                exited = True
+                break
+            time.sleep(0.1)
+        assert exited, "the --sleep fake outlived its parent by more than 5 s"
+    finally:
+        if not exited and _alive(fake_pid):
+            os.kill(fake_pid, signal.SIGKILL)
+
+
+def test_no_fake_sleeps_without_a_bound() -> None:
+    """A fake that sleeps in an unbounded loop outlives an engine that dies
+    mid-case (#661): every such loop must also watch for its parent going
+    away and stop at a deadline."""
+    unbounded = re.compile(r"while True:\s*\n\s*time\.sleep\(")
+    offenders = [
+        str(path.relative_to(CASES))
+        for path in sorted(CASES.glob("*/fakes/*"))
+        if path.is_file() and unbounded.search(path.read_text(errors="replace"))
+    ]
+    assert offenders == []
+
+
+def test_every_copy_of_the_generic_fake_is_identical() -> None:
+    """Each case keeps its own copy of the generic fake, so a change to one
+    (such as the bounded `--sleep`) must reach them all. The pidfile-extended
+    copy in `c-shell-background-survives-normal-exit` is the one exception."""
+    header = "A fake process-backed binary for the conformance suite"
+    reference = FAKE.read_bytes()
+    differing = [
+        str(path.relative_to(CASES))
+        for path in sorted(CASES.glob("*/fakes/*"))
+        if path.is_file()
+        and path.parent.parent.name != "c-shell-background-survives-normal-exit"
+        and header in path.read_text(errors="replace")
+        and path.read_bytes() != reference
+    ]
+    assert differing == []
