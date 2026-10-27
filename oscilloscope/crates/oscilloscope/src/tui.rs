@@ -4926,13 +4926,40 @@ fn draw_time_zoom_pane(
                     // at` the same as a running one does.
                     let running = step.status.kind == StatusKind::Running && live.is_some();
                     // The session's own end: `now` while it's still
-                    // running, else the row's own real (frozen) span.
+                    // running, else the row's own real (frozen) span,
+                    // else the run's own end (issue #654: a stopped
+                    // agent's row with no resolvable duration must not
+                    // keep reaching for `now` either) -- falling back
+                    // further still to the leftover live summary's own
+                    // last heartbeat when the run itself hasn't ended
+                    // yet (an interrupted session, the rest of the run
+                    // still going elsewhere).
                     let axis_end_s = if running {
                         now_s
                     } else {
                         selected_row
                             .and_then(|row| row.start_s.zip(row.duration_s))
-                            .map_or(now_s, |(s, d)| s + d)
+                            .map(|(s, d)| s + d)
+                            .or_else(|| {
+                                (!screen.axis.show_now)
+                                    .then_some(run_start_ts.as_deref())
+                                    .flatten()
+                                    .and_then(|rs| {
+                                        oscilloscope_core::observe::duration_seconds(
+                                            rs,
+                                            &screen.axis.end_ts,
+                                        )
+                                    })
+                            })
+                            .or_else(|| {
+                                live.as_deref()
+                                    .and_then(|l| l.updated_at.as_deref())
+                                    .zip(run_start_ts.as_deref())
+                                    .and_then(|(u, rs)| {
+                                        oscilloscope_core::observe::duration_seconds(rs, u)
+                                    })
+                            })
+                            .unwrap_or(now_s)
                     };
                     if let (Some(view), Some(run_start_ts)) =
                         (transcript_view, run_start_ts.as_deref())
@@ -12344,6 +12371,139 @@ mod golden_tests {
         assert_eq!(
             right_after, hours_later,
             "the zoom pane must not keep growing once the run has ended, even with meta.live left over"
+        );
+    }
+
+    /// Issue #654: a stopped agent's own row can have no resolvable
+    /// `duration_s` at all (known only from `--events`, with no
+    /// matching end event before the run was killed) -- its zoom
+    /// axis must still end at the run's own end, never at `now`.
+    #[test]
+    fn time_agent_zoom_pane_with_no_resolvable_duration_ends_its_axis_at_the_runs_end() {
+        use oscilloscope_core::model::{AgentLiveToolUsage, RowStatus};
+        use oscilloscope_core::render::RowKind;
+        use oscilloscope_core::screens::{
+            FocusDetail, FocusedStep, TimeDisplayRow, TimeScreen, TimeStrips, TimeVsUsualPane,
+        };
+        use oscilloscope_core::time::{AxisSpan, TimeRow};
+
+        let run_start_ts = "2026-01-01T11:46:43Z";
+        let run_end_ts = "2026-01-01T11:46:54Z";
+        let status = RowStatus {
+            kind: StatusKind::Cancelled,
+            skip_reason: None,
+            retrying: false,
+        };
+        let row = TimeRow {
+            path: "prime.fan.iter_1".to_string(),
+            depth: 1,
+            label: "iter_1".to_string(),
+            kind: RowKind::Tool,
+            status: status.clone(),
+            start_s: Some(0.0),
+            duration_s: None,
+            loop_progress: None,
+            has_children: false,
+            loop_expandable: false,
+            ghost: None,
+        };
+        let mut tools = std::collections::BTreeMap::new();
+        tools.insert(
+            "bash".to_string(),
+            AgentLiveToolUsage {
+                calls: 1,
+                ms: 2_000,
+            },
+        );
+        let selected = FocusedStep {
+            path: row.path.clone(),
+            breadcrumb: "fan › iter_1".to_string(),
+            kind_label: "agent",
+            provider_or_model: Some("agent".to_string()),
+            since_ts: Some(run_start_ts.to_string()),
+            elapsed_s: Some(11.0),
+            detail: FocusDetail::Agent {
+                asked: Some("Fix the bug.".to_string()),
+                live: None,
+                stale: true,
+                current_tool_elapsed_s: None,
+                note: "",
+                raw_transcript: None,
+                raw_files_changed: None,
+                raw_turns: Some(1),
+                raw_tool_calls: Some(1),
+                raw_tool_counts: tools,
+            },
+            status,
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        };
+        let footer_line = |now: &str| -> String {
+            let screen = TimeScreen {
+                rows: vec![TimeDisplayRow::Row(row.clone())],
+                axis: AxisSpan {
+                    start_ts: Some(run_start_ts.to_string()),
+                    end_ts: run_end_ts.to_string(),
+                    show_now: false,
+                },
+                now_s: None,
+                planned: None,
+                strips: TimeStrips {
+                    events_points: Vec::new(),
+                    events_from_state: false,
+                    decisions: Vec::new(),
+                    in_flight_intervals: Vec::new(),
+                    queued: 0,
+                    quiet_agent: false,
+                },
+                selected: Some(selected.clone()),
+                zoom_extra: None,
+                vs_usual: TimeVsUsualPane::default(),
+            };
+            let mut app = App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Time;
+            app.selected_path = Some(row.path.clone());
+            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+            let test_tracker = crate::highlight::Tracker::new();
+            let test_ctx = DrawCtx {
+                theme: &test_theme,
+                highlights: &test_tracker,
+                now: Instant::now(),
+                color_mode: ColorMode::TrueColor,
+                theme_banner: None,
+                zone: &test_zone(),
+                no_animation: false,
+            };
+            let backend = TestBackend::new(100, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    draw_time_zoom_pane(f, area, &screen, &mut app, None, &test_ctx, now);
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .to_string()
+                .lines()
+                .find(|l| l.contains("tools"))
+                .unwrap()
+                .to_string()
+        };
+        let right_after = footer_line("2026-01-01T11:46:55Z");
+        let hours_later = footer_line("2026-01-01T13:00:00Z");
+        assert_eq!(
+            right_after, hours_later,
+            "the zoom axis must not keep reaching for `now` once the run has ended"
+        );
+        assert!(
+            right_after.contains("18%"),
+            "the footer must read the fixed 2s/11s share, not a share against `now`: {right_after:?}"
         );
     }
 
