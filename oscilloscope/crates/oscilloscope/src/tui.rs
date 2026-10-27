@@ -761,7 +761,12 @@ fn agent_live_lines(
                 match call.ok {
                     Some(true) => text.push_str(" ✓"),
                     Some(false) => text.push_str(" ✗"),
-                    None if call.stopped => text.push_str(" stopped"),
+                    // Issue #647: a stopped session's own transcript
+                    // can end mid-call, with no later `tool_start` to
+                    // ever mark it `call.stopped` -- `stale` alone
+                    // (the session itself has stopped) is enough to
+                    // call this unfinished, not still running.
+                    None if call.stopped || stale => text.push_str(" stopped"),
                     // Issue #647: the session's own elapsed is shown
                     // next to `since`, but a running call's own time
                     // wasn't shown anywhere -- `current_tool_elapsed_s`
@@ -7301,6 +7306,25 @@ mod golden_tests {
         let state = agent_cancelled_state();
         let process = ProcessState::exited(true);
         let text = flow_agent_snapshot_at(80, 24, &state, None, process);
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #647: a stopped agent's transcript can end in a
+    /// `tool_start` with no later `tool_end` or lower-id
+    /// `tool_start` to ever flag it `stopped` -- that last call must
+    /// still read "stopped", never "running", once the session
+    /// itself has stopped.
+    #[test]
+    fn flow_selected_pane_cancelled_agent_with_transcript_at_80x24() {
+        let state = agent_cancelled_state();
+        let process = ProcessState::exited(true);
+        let lines = vec![
+            json!({"t": "2026-01-01T11:46:50Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -q"}),
+        ];
+        let transcript = oscilloscope_core::transcript::build_transcript_view(&lines, false);
+        let text = flow_agent_snapshot_at(80, 24, &state, Some(&transcript), process);
+        assert!(text.contains("stopped"), "{text}");
+        assert!(!text.contains("running"), "{text}");
         insta::assert_snapshot!(text);
     }
 
