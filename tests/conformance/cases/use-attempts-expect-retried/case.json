@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "Three retried `use` effects with `fs` counters under `scratch/`, removed by a root `finally:` delete. `third` passes on its third attempt (three `meta.attempts` entries). `first` has `retries` configured but passes on its first attempt, so `meta.attempts` is absent. `never` exhausts `max_attempts: 2` under `on_error: continue`. Pins the entry shape, key order, the presence rule, and `on_error`.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

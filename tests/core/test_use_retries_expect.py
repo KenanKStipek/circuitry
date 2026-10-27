@@ -147,8 +147,8 @@ def test_use_created_at_is_the_first_attempts_start_not_the_last(
     retries_used, which does track the attempt that decided the outcome."""
     from circuitry.core import use as use_mod
 
-    timestamps = iter(["T_outer", "T0", "T1"])
-    monkeypatch.setattr(use_mod, "_now_iso", lambda: next(timestamps))
+    ticks = iter(range(1000))
+    monkeypatch.setattr(use_mod, "_now_iso", lambda: f"T{next(ticks)}")
 
     counter_file = tmp_path / "attempts.txt"
     child_path = _write_orch(
@@ -187,8 +187,10 @@ def test_use_created_at_is_the_first_attempts_start_not_the_last(
     UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
 
     meta = store.state["run_child"]["meta"]
-    assert meta["created_at"] == "T0"
-    assert meta["completed_at"] == "T1"
+    attempts = meta["attempts"]
+    assert len(attempts) == 2
+    assert meta["created_at"] == attempts[0]["created_at"]
+    assert meta["completed_at"] == attempts[-1]["completed_at"]
     assert meta["retries_used"] == 1
 
 
@@ -199,8 +201,8 @@ def test_use_exhausting_retries_still_records_created_at_and_retries_used(
     success -- and created_at still names the first attempt's start."""
     from circuitry.core import use as use_mod
 
-    timestamps = iter(["T_outer", "T0", "T1"])
-    monkeypatch.setattr(use_mod, "_now_iso", lambda: next(timestamps))
+    ticks = iter(range(1000))
+    monkeypatch.setattr(use_mod, "_now_iso", lambda: f"T{next(ticks)}")
 
     child_path = _write_orch(
         tmp_path,
@@ -228,8 +230,11 @@ def test_use_exhausting_retries_still_records_created_at_and_retries_used(
         UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
 
     meta = store.state["run_child"]["meta"]
-    assert meta["created_at"] == "T0"
-    assert meta["completed_at"] == "T1"
+    attempts = meta["attempts"]
+    assert len(attempts) == 2
+    assert meta["created_at"] == attempts[0]["created_at"]
+    assert meta["completed_at"] == attempts[-1]["completed_at"]
+    assert [a["error"] for a in attempts] == [meta["error"], meta["error"]]
     assert meta["retries_used"] == 1
 
 
