@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import (
+    adapter_api_key_env_errors,
     alias_config_errors,
     alias_names,
     configured_timeout_seconds,
@@ -566,6 +567,13 @@ def run(req: RunRequest) -> RunResult:
             raise ValueError(
                 "Invalid adapter aliases:\n"
                 + "\n".join(f"  - {e}" for e in alias_errors)
+            )
+
+        api_key_env_errors = adapter_api_key_env_errors(effective.runtime)
+        if api_key_env_errors:
+            raise ValueError(
+                "Invalid adapter api_key_env:\n"
+                + "\n".join(f"  - {e}" for e in api_key_env_errors)
             )
 
         if profile is not None and profile.effects:
@@ -1534,6 +1542,7 @@ def validate(
             *prompt_sent_errors(merged_runtime),
             *parsed_stdout_errors(merged_runtime),
             *alias_config_errors(merged_runtime),
+            *adapter_api_key_env_errors(merged_runtime),
         ]
         if state_config_errors:
             return {

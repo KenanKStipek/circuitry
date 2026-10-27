@@ -24,11 +24,12 @@ class PerplexityAdapter:
     name: str = "perplexity"
     base_url: str = "https://api.perplexity.ai"
     default_model: str = "sonar"
+    api_key_env: str = "PERPLEXITY_API_KEY"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="PERPLEXITY_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

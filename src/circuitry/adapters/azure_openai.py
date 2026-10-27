@@ -40,6 +40,7 @@ class AzureOpenAIAdapter:
     endpoint: str = ""  # e.g. "https://my-resource.openai.azure.com"
     api_version: str = "2024-10-21"
     default_model: str = ""  # deployment name
+    api_key_env: str = "AZURE_OPENAI_API_KEY"
 
     def _resolve_endpoint(self) -> str:
         return self.endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
@@ -73,9 +74,9 @@ class AzureOpenAIAdapter:
                 f"{self.name}: endpoint not configured. Set "
                 f"AZURE_OPENAI_ENDPOINT or runtime.adapters.{self.name}.endpoint."
             )
-        api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
+        api_key = os.environ.get(self.api_key_env, "")
         if not api_key:
-            raise RuntimeError(f"{self.name}: AZURE_OPENAI_API_KEY not set.")
+            raise RuntimeError(f"{self.name}: {self.api_key_env} not set.")
         return chat_completion(
             cfg=cfg,
             model=model,
@@ -87,8 +88,8 @@ class AzureOpenAIAdapter:
 
     def check(self) -> CheckResult:
         missing: list[str] = []
-        if not os.environ.get("AZURE_OPENAI_API_KEY"):
-            missing.append("env:AZURE_OPENAI_API_KEY")
+        if not os.environ.get(self.api_key_env):
+            missing.append(f"env:{self.api_key_env}")
         if not self._resolve_endpoint():
             missing.append("env:AZURE_OPENAI_ENDPOINT")
         # Reuse the helper's curl + key-env machinery for the binary

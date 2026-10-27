@@ -30,11 +30,12 @@ class GeminiAdapter:
     name: str = "gemini"
     base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     default_model: str = "gemini-2.5-flash"
+    api_key_env: str = "GOOGLE_API_KEY"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="GOOGLE_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

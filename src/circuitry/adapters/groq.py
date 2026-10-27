@@ -24,11 +24,12 @@ class GroqAdapter:
     name: str = "groq"
     base_url: str = "https://api.groq.com/openai/v1"
     default_model: str = "llama-3.3-70b-versatile"
+    api_key_env: str = "GROQ_API_KEY"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="GROQ_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

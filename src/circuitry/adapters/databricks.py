@@ -43,11 +43,12 @@ class DatabricksAdapter:
     name: str = "databricks"
     base_url: str = ""
     default_model: str = "databricks-meta-llama-3-3-70b-instruct"
+    api_key_env: str = "DATABRICKS_TOKEN"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=_resolve_base_url(self.base_url),
-            api_key_env="DATABRICKS_TOKEN",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

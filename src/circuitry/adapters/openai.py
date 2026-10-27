@@ -24,12 +24,15 @@ class OpenAIAdapter:
     Config options (in config.json under runtime.adapters.openai):
       - base_url: API base URL (defaults to https://api.openai.com/v1)
       - default_model: Default model if not specified (defaults to gpt-4o-mini)
+      - api_key_env: Name of the environment variable to read the key from
+        (defaults to OPENAI_API_KEY)
     """
 
     accepts_images: ClassVar[bool] = True
     name: str = "openai"
     base_url: str = "https://api.openai.com/v1"
     default_model: str = "gpt-4o-mini"
+    api_key_env: str = "OPENAI_API_KEY"
 
     def generate(
         self,
@@ -41,11 +44,11 @@ class OpenAIAdapter:
     ) -> GenerateResult:
         options = options or GenerateOptions()
         model = model or self.default_model
-        api_key = os.environ.get("OPENAI_API_KEY", "")
+        api_key = os.environ.get(self.api_key_env, "")
 
         if not api_key:
             raise RuntimeError(
-                "OpenAI API key not found. Set OPENAI_API_KEY in the environment "
+                f"OpenAI API key not found. Set {self.api_key_env} in the environment "
                 "(recommended: ~/.config/circuitry/.env). Run `cof doctor` to verify."
             )
 
@@ -114,8 +117,8 @@ class OpenAIAdapter:
 
     def check(self) -> CheckResult:
         missing: list[str] = []
-        if not os.environ.get("OPENAI_API_KEY"):
-            missing.append("env:OPENAI_API_KEY")
+        if not os.environ.get(self.api_key_env):
+            missing.append(f"env:{self.api_key_env}")
         if shutil.which("curl") is None:
             missing.append("binary:curl")
         return CheckResult(ok=not missing, missing=missing)
