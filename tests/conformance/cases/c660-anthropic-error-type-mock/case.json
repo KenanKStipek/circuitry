@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #660",
+  "description": "Anthropic bodies only carry error.type, never error.code: a 529 with error.type overloaded_error becomes meta.error_code='overloaded_error' and meta.http_status=529 on the failed prompt.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {
+    "ANTHROPIC_API_KEY": "circuitry-test-fake-anthropic-key"
+  }
+}

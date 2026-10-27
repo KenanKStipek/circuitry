@@ -49,6 +49,48 @@
       "expected": "null"
     }
   ],
+  "parse_error_code_cases": [
+    {
+      "stdout": "",
+      "expected": null
+    },
+    {
+      "stdout": "{\"error\": {\"code\": \"guardrail_violation\", \"message\": \"nope\"}}",
+      "expected": "guardrail_violation"
+    },
+    {
+      "stdout": "{\"error\": {\"code\": null, \"type\": \"overloaded_error\"}}",
+      "expected": "overloaded_error"
+    },
+    {
+      "stdout": "{\"error\": {\"code\": 5}}",
+      "expected": null
+    },
+    {
+      "stdout": "{\"error\": \"model not found\"}",
+      "expected": null
+    },
+    {
+      "stdout": "{\"error\": {\"code\": \"\", \"type\": \"overloaded_error\"}}",
+      "expected": "overloaded_error"
+    },
+    {
+      "stdout": "{\"error\": {\"type\": \"\"}}",
+      "expected": null
+    },
+    {
+      "stdout": "not json at all {",
+      "expected": null
+    },
+    {
+      "stdout": "{\"error\": [1, 2, 3]}",
+      "expected": null
+    },
+    {
+      "stdout": "null",
+      "expected": null
+    }
+  ],
   "mask_credential_query_params_cases": [
     {
       "url": "https://api.example.com/search",
@@ -429,7 +471,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -447,7 +490,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -465,7 +509,8 @@
         "retry": {
           "retryable": false,
           "status": 404,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -483,7 +528,27 @@
         "retry": {
           "retryable": false,
           "status": 400,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": \"model not found\"}",
+      "stderr": "curl: (22) The requested URL returned error: 404",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "ollama request failed (curl exit 22) model='m' url=http://localhost:11434/api/generate: model not found Try `ollama pull m` first.",
+        "retry": {
+          "retryable": false,
+          "status": 404,
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -501,7 +566,8 @@
         "retry": {
           "retryable": true,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -519,7 +585,8 @@
         "retry": {
           "retryable": true,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -537,7 +604,8 @@
         "retry": {
           "retryable": true,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -555,7 +623,8 @@
         "retry": {
           "retryable": true,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -573,7 +642,8 @@
         "retry": {
           "retryable": true,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -591,7 +661,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     }
@@ -736,7 +807,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -752,7 +824,42 @@
         "retry": {
           "retryable": false,
           "status": 401,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": {\"code\": \"guardrail_violation\", \"message\": \"blocked\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 400",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "OpenAI-compatible request failed (curl exit 22) model='m' url=http://localhost:1234/v1/chat/completions: blocked",
+        "retry": {
+          "retryable": false,
+          "status": 400,
+          "retry_after": null,
+          "error_code": "guardrail_violation"
+        }
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": {\"code\": null, \"type\": \"server_error\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 503",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "OpenAI-compatible request failed (curl exit 22) model='m' url=http://localhost:1234/v1/chat/completions: {\"error\": {\"code\": null, \"type\": \"server_error\"}}",
+        "retry": {
+          "retryable": true,
+          "status": 503,
+          "retry_after": null,
+          "error_code": "server_error"
         }
       }
     },
@@ -768,7 +875,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     }
@@ -913,7 +1021,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -929,7 +1038,25 @@
         "retry": {
           "retryable": false,
           "status": 401,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": {\"code\": \"context_length_exceeded\", \"message\": \"too long\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 400",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "openai request failed (curl exit 22) model='m' url=https://api.openai.com/v1/chat/completions: too long",
+        "retry": {
+          "retryable": false,
+          "status": 400,
+          "retry_after": null,
+          "error_code": "context_length_exceeded"
         }
       }
     }
@@ -1105,7 +1232,25 @@
         "retry": {
           "retryable": true,
           "status": 529,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 529",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "anthropic request failed (curl exit 22) model='m' url=https://api.anthropic.com/v1/messages: Overloaded",
+        "retry": {
+          "retryable": true,
+          "status": 529,
+          "retry_after": null,
+          "error_code": "overloaded_error"
         }
       }
     }
@@ -1179,7 +1324,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -1196,7 +1342,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -1213,7 +1360,26 @@
         "retry": {
           "retryable": false,
           "status": 401,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": {\"message\": \"rate limited\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 429",
+      "model": "meta/llama",
+      "wait": 60,
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "replicate request failed (curl exit 22) model='meta/llama' url=https://api.replicate.com/v1/models/meta/llama/predictions: rate limited",
+        "retry": {
+          "retryable": true,
+          "status": 429,
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -1230,7 +1396,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     },
@@ -1247,7 +1414,8 @@
         "retry": {
           "retryable": false,
           "status": null,
-          "retry_after": null
+          "retry_after": null,
+          "error_code": null
         }
       }
     }

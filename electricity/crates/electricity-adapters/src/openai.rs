@@ -5,7 +5,7 @@
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
 use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
-use crate::curl_text::{classify_curl_outcome, curl_failure_message};
+use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::openai_compat::{chat_messages, parse_chat_response, sampling_fields};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -131,7 +131,7 @@ pub fn interpret_outcome(
         );
         return Err(AdapterError {
             message,
-            retry: classify_curl_outcome(outcome),
+            retry: classify_curl_outcome_with_error_code(outcome, &[api_key]),
             py_class: PyExc::AdapterCallError,
         });
     }

@@ -1,0 +1,12 @@
+name: c660-scripted-error-code
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: p1
+    template: "p1"
+    on_error: continue
+  - type: prompt
+    name: p2
+    template: "p2"
+    on_error: continue

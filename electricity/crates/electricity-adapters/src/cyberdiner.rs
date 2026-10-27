@@ -400,6 +400,7 @@ fn http_error(
             retryable: status_is_retryable(status),
             status: Some(status),
             retry_after: retry_after.map(str::to_string),
+            error_code: None,
         },
         py_class: PyExc::RuntimeError,
     }

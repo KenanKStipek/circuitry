@@ -54,6 +54,7 @@ from circuitry.curl_support import (  # noqa: E402
     _validate_no_control_chars,
     curl_failure_message,
     parse_error_body,
+    parse_error_code,
 )
 
 OUTPUT = (
@@ -104,9 +105,16 @@ def _options_from_json(spec: dict[str, Any]) -> GenerateOptions:
 def _retry_info_json(exc: BaseException) -> dict[str, Any]:
     if isinstance(exc, AdapterCallError):
         info = exc.retry_info
+        error_code = exc.error_code
     else:
         info = classify_curl_exit(0, "")
-    return {"retryable": info.retryable, "status": info.status, "retry_after": info.retry_after}
+        error_code = None
+    return {
+        "retryable": info.retryable,
+        "status": info.status,
+        "retry_after": info.retry_after,
+        "error_code": error_code,
+    }
 
 
 def _fake_completed(returncode: int, stdout: str, stderr: str) -> CompletedProcess[str]:
@@ -174,6 +182,22 @@ def _parse_error_body_cases() -> list[dict[str, Any]]:
         "null",
     ]
     return [{"stdout": body, "expected": parse_error_body(body)} for body in bodies]
+
+
+def _parse_error_code_cases() -> list[dict[str, Any]]:
+    bodies = [
+        "",
+        '{"error": {"code": "guardrail_violation", "message": "nope"}}',
+        '{"error": {"code": null, "type": "overloaded_error"}}',
+        '{"error": {"code": 5}}',
+        '{"error": "model not found"}',
+        '{"error": {"code": "", "type": "overloaded_error"}}',
+        '{"error": {"type": ""}}',
+        "not json at all {",
+        '{"error": [1, 2, 3]}',
+        "null",
+    ]
+    return [{"stdout": body, "expected": parse_error_code(body)} for body in bodies]
 
 
 def _mask_credential_query_params_cases() -> list[dict[str, Any]]:
@@ -395,6 +419,10 @@ def _ollama_outcome_cases() -> list[dict[str, Any]]:
             "curl: (22) The requested URL returned error: 404",
         ),
         (22, '{"error": {"message": "bad request"}}', "curl: (22) The requested URL returned error: 400"),
+        # Issue #660: ollama's own body is always flat (`{"error": "..."}`),
+        # so it never carries a code by the generic rule -- pinned here
+        # rather than left to the shared assertion to notice by omission.
+        (22, '{"error": "model not found"}', "curl: (22) The requested URL returned error: 404"),
         (7, "", ""),
         (28, "", ""),
         (52, "", ""),
@@ -490,6 +518,17 @@ def _openai_compat_outcome_cases() -> list[dict[str, Any]]:
             22,
             '{"error": {"message": "Invalid API Key"}}',
             "curl: (22) The requested URL returned error: 401",
+        ),
+        # Issue #660: error.code, else error.type.
+        (
+            22,
+            '{"error": {"code": "guardrail_violation", "message": "blocked"}}',
+            "curl: (22) The requested URL returned error: 400",
+        ),
+        (
+            22,
+            '{"error": {"code": null, "type": "server_error"}}',
+            "curl: (22) The requested URL returned error: 503",
         ),
         (29, "", ""),
     ]
@@ -590,6 +629,12 @@ def _openai_outcome_cases() -> list[dict[str, Any]]:
             "",
         ),
         (22, '{"error": {"message": "bad key"}}', "curl: (22) The requested URL returned error: 401"),
+        # Issue #660.
+        (
+            22,
+            '{"error": {"code": "context_length_exceeded", "message": "too long"}}',
+            "curl: (22) The requested URL returned error: 400",
+        ),
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
@@ -671,6 +716,12 @@ def _anthropic_outcome_cases() -> list[dict[str, Any]]:
             "",
         ),
         (22, '{"error": {"message": "overloaded"}}', "curl: (22) The requested URL returned error: 529"),
+        # Issue #660: anthropic bodies only ever carry `type`, never `code`.
+        (
+            22,
+            '{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}',
+            "curl: (22) The requested URL returned error: 529",
+        ),
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
@@ -721,6 +772,9 @@ def _replicate_outcome_cases() -> list[dict[str, Any]]:
         (0, '{"status": "processing", "id": "abc123"}', ""),
         (0, '{"status": "failed", "error": "boom"}', ""),
         (22, '{"detail": "unauthorized"}', "curl: (22) The requested URL returned error: 401"),
+        # Issue #660: replicate's problem-details body has neither
+        # `error.code` nor `error.type` by the generic rule.
+        (22, '{"error": {"message": "rate limited"}}', "curl: (22) The requested URL returned error: 429"),
         # Issue #515: a non-string `id` reprs as Python shows it
         # (`None`, not the Rust port's old `'?'`).
         (0, '{"status": "processing", "id": null}', ""),
@@ -756,6 +810,7 @@ def _replicate_outcome_cases() -> list[dict[str, Any]]:
 def build_corpus() -> dict[str, Any]:
     return {
         "parse_error_body_cases": _parse_error_body_cases(),
+        "parse_error_code_cases": _parse_error_code_cases(),
         "mask_credential_query_params_cases": _mask_credential_query_params_cases(),
         "strip_url_userinfo_cases": _strip_url_userinfo_cases(),
         "curl_failure_message_cases": _curl_failure_message_cases(),

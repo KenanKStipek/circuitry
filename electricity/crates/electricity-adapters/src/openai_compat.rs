@@ -7,7 +7,7 @@
 //! `together`, `vllm`, `xai`) shares, over [`crate::transport`].
 
 use crate::config::{cfg_get, cfg_str_or, cfg_value_or, rstrip_base_url, value_is_truthy};
-use crate::curl_text::{classify_curl_outcome, curl_failure_message};
+use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
@@ -408,7 +408,7 @@ pub fn interpret_outcome(
         );
         return Err(AdapterError {
             message,
-            retry: classify_curl_outcome(outcome),
+            retry: classify_curl_outcome_with_error_code(outcome, secrets),
             py_class: PyExc::AdapterCallError,
         });
     }

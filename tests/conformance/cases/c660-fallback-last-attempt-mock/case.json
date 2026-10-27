@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #660",
+  "description": "p1: a lmstudio 400 (error.code guardrail_violation) falls back to a vllm 503 (error.type server_error, error.code null) that also fails -- the top-level fields come from the last (fallback) attempt, server_error/503, not the primary's guardrail_violation/400. p2: a lmstudio 400 (context_length_exceeded) falls back to a vllm 200 that recovers -- the top-level fields are absent, while fallback_attempts[0] keeps its own error_code/http_status.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

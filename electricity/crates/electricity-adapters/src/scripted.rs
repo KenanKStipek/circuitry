@@ -238,7 +238,7 @@ enum Reply {
 /// `adapters/scripted.py::_TEXT_REPLY_KEYS`.
 const TEXT_REPLY_KEYS: &[&str] = &["text", "tokens_sent", "tokens_received", "finish_reason"];
 /// `adapters/scripted.py::_ERROR_KEYS`.
-const ERROR_KEYS: &[&str] = &["kind", "status", "message"];
+const ERROR_KEYS: &[&str] = &["kind", "status", "message", "code"];
 /// `adapters/scripted.py::_DEFAULT_STATUS`'s own key set.
 const KNOWN_KINDS: &[&str] = &[
     "timeout",
@@ -424,6 +424,18 @@ fn parse_error(dict: &Dict, prefix: &str) -> Result<Reply, AdapterError> {
             )));
         }
     };
+    // `adapters/scripted.py::_parse_error`'s own `code` validation --
+    // an optional `error.code` (issue #660), a non-empty string when
+    // present.
+    let error_code = match error_dict.get(&key("code")) {
+        None | Some(Value::None) => None,
+        Some(Value::Str(s)) if !s.is_empty() => Some(s.clone()),
+        Some(_) => {
+            return Err(scripted_error(format!(
+                "{prefix}: 'code' must be a non-empty string"
+            )));
+        }
+    };
     let status_int = status_opt.as_ref().and_then(Value::as_int);
     let retryable = if always_retryable(&kind) {
         true
@@ -434,6 +446,7 @@ fn parse_error(dict: &Dict, prefix: &str) -> Result<Reply, AdapterError> {
         retryable,
         status: status_int.and_then(int_value_as_u16),
         retry_after: None,
+        error_code,
     };
     Ok(Reply::Error {
         kind,
