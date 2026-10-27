@@ -864,3 +864,15 @@ class TestFreeIdentifiers:
 
     def test_first_name_in_source_order(self):
         assert free_identifiers("unit == 1 && stat == 2") == ("unit", "stat")
+
+    def test_leading_dot_identifier_is_free(self):
+        assert free_identifiers(".unit.text == 1") == ("unit",)
+
+    def test_leading_dot_identifier_escapes_a_macro_variables_binding(self):
+        # `.v` explicitly asks CEL to skip local scoping (the leading
+        # dot) and resolve against the root package, so it is never
+        # exempt as the macro's own bound variable the bare `v` is.
+        assert free_identifiers("state.input.items.all(v, .v > 0)") == ("state", "v")
+
+    def test_leading_dot_function_call_is_not_an_identifier(self):
+        assert free_identifiers(".size(1) == 1") == ()

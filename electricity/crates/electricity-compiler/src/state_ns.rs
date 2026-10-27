@@ -659,6 +659,25 @@ mod tests {
     }
 
     #[test]
+    fn cel_expr_rejects_a_leading_dot_loop_binding() {
+        // `.unit` (`cel`'s own absolute-scope form) is a bare name the
+        // same as `unit` is -- `free_identifiers` strips the leading
+        // dot before this check ever sees it (issue #657/#658).
+        let err = validate_cel_expr(
+            ".unit.text == 'a'",
+            "prime.effects[0].body[0]",
+            &names(&["unit", "iter"]),
+            &state_only(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.0,
+            "CEL expression at 'prime.effects[0].body[0]': 'unit' is a loop \
+             binding: in CEL, write 'state.unit'."
+        );
+    }
+
+    #[test]
     fn cel_expr_rejects_a_bare_namespace() {
         let err = validate_cel_expr(
             "input.x == 1",

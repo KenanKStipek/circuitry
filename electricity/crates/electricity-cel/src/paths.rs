@@ -253,8 +253,18 @@ fn walk_free_identifiers(
 ) {
     match expr {
         Expr::Ident(name) => {
-            if !bound.contains(name.as_str()) {
-                out.push(name.clone());
+            // `cel`'s own parser keeps a leading-dot identifier's dot
+            // baked into the name (`.unit` parses as `Ident(".unit")`,
+            // not `Ident("unit")`) -- strip it before reporting, to
+            // match `core/cel_eval.py`'s own `_walk_free_identifiers`,
+            // and never exempt it as a macro's own bound variable: the
+            // leading dot explicitly asks CEL to skip local scoping and
+            // resolve against the root package, bypassing any macro
+            // binding that would otherwise shadow it.
+            match name.strip_prefix('.') {
+                Some(stripped) => out.push(stripped.to_string()),
+                None if !bound.contains(name.as_str()) => out.push(name.clone()),
+                None => {}
             }
         }
         Expr::Select(select) => walk_free_identifiers(&select.operand.expr, bound, out),

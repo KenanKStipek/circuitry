@@ -708,6 +708,14 @@ def _walk_free_identifiers(
         if name not in bound:
             out.append(name)
         return
+    if data == "dot_ident":
+        # `.unit` (a leading-dot identifier, CEL's absolute-scope form)
+        # is a bare name the same as `unit` is -- and never exempt as a
+        # macro variable, since the leading dot explicitly asks CEL to
+        # skip local scoping and resolve against the root package,
+        # bypassing any macro binding that would otherwise shadow it.
+        out.append(str(node.children[0]))
+        return
     if data == "member_dot_arg":
         member_tree = node.children[0]
         method_name = str(node.children[1])

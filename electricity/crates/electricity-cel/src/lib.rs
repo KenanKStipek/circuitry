@@ -1351,6 +1351,22 @@ mod tests {
     }
 
     #[test]
+    fn free_identifiers_strips_a_leading_dot() {
+        assert_eq!(
+            free_identifiers(".unit.text == 1").unwrap(),
+            vec!["unit".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_leading_dot_escapes_a_macro_variables_binding() {
+        assert_eq!(
+            free_identifiers("state.input.items.all(v, .v > 0)").unwrap(),
+            vec!["state".to_string(), "v".to_string()]
+        );
+    }
+
+    #[test]
     fn unset_path_is_none_for_an_ordinary_result() {
         let state = dict(vec![("a", Value::from(1_i64))]);
         assert_eq!(unset_path("state.a == 1", &state, false), Ok(None));
