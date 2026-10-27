@@ -580,9 +580,19 @@ fn expand_named_loop(
                 end_ts.and_then(|t| duration_seconds(run_start_ts, t))
             };
             let duration_s = start_s.zip(end_s).map(|(s, e)| e - s);
+            // Issue #654: a run killed outright never completes this
+            // pass's own node, so `running` alone would still read
+            // it as going, with its duration frozen but its glyph
+            // not -- once `run_ended_at` is known, a still-open pass
+            // reads `Aborted`, the same as the rest of a killed run's
+            // own unfinished rows.
             let status = RowStatus {
                 kind: if running {
-                    StatusKind::Running
+                    if run_ended_at.is_some() {
+                        StatusKind::Aborted
+                    } else {
+                        StatusKind::Running
+                    }
                 } else if ok {
                     StatusKind::Done
                 } else {
@@ -654,7 +664,17 @@ fn expand_unnamed_loop(
         rows.push(LoopPassRow {
             label: format!("#{}", finished + n + 1),
             status: RowStatus {
-                kind: StatusKind::Running,
+                // Issue #654: a run killed outright never gets an
+                // `end` event for this pass either, so it still
+                // shows up as merely "open" here -- once
+                // `run_ended_at` is known, it reads `Aborted`, the
+                // same as the rest of a killed run's own unfinished
+                // rows, not still `Running`.
+                kind: if run_ended_at.is_some() {
+                    StatusKind::Aborted
+                } else {
+                    StatusKind::Running
+                },
                 skip_reason: None,
                 retrying: false,
             },
@@ -3001,7 +3021,8 @@ mod tests {
     /// never completes an unnamed loop's own last open pass either --
     /// its duration freezes at the run's own resolved end
     /// (`run_ended_at`), not at `now` (which would otherwise keep
-    /// growing on every later redraw).
+    /// growing on every later redraw), and the pass itself reads
+    /// `Aborted`, not still `Running`.
     #[test]
     fn expand_unnamed_loop_freezes_the_open_passs_duration_at_the_runs_own_end() {
         let mut model = RunModel::new();
@@ -3019,13 +3040,15 @@ mod tests {
             Some("2026-01-01T00:00:08Z"),
         );
         assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].status.kind, StatusKind::Aborted);
         assert_eq!(passes[0].duration_s, Some(8.0));
     }
 
-    /// Issue #654: a named loop's own still-running pass has the
-    /// exact same freezing rule.
+    /// Issue #654: a named loop's own still-open pass has the exact
+    /// same freezing rule, and reads `Aborted` once the run's own end
+    /// is known, not still `Running`.
     #[test]
-    fn expand_named_loop_freezes_a_running_passs_duration_at_the_runs_own_end() {
+    fn expand_named_loop_freezes_an_open_passs_duration_at_the_runs_own_end() {
         let mut flat = BTreeMap::new();
         flat.insert(
             "prime.fan.iter_0.nap".to_string(),
@@ -3052,8 +3075,43 @@ mod tests {
             Some("2026-01-01T00:00:08Z"),
         );
         assert_eq!(passes.len(), 1);
-        assert_eq!(passes[0].status.kind, StatusKind::Running);
+        assert_eq!(passes[0].status.kind, StatusKind::Aborted);
         assert_eq!(passes[0].duration_s, Some(8.0));
+    }
+
+    /// Issue #654: a named loop's own open pass stays `Running` while
+    /// the run itself hasn't ended yet (`run_ended_at` unknown) --
+    /// only once the run's own end is resolved does it read `Aborted`
+    /// instead.
+    #[test]
+    fn expand_named_loop_keeps_an_open_pass_running_while_the_run_itself_still_is() {
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.fan.iter_0.nap".to_string(),
+            NodeMeta {
+                created_at: Some("2026-01-01T00:00:00Z".to_string()),
+                completed_at: None,
+                error: None,
+                branch: None,
+                progress_done: None,
+                progress_total: None,
+                progress_eta_s: None,
+                live: None,
+                value: serde_json::Value::Null,
+                meta: serde_json::Value::Null,
+            },
+        );
+        let model = RunModel::new();
+        let passes = expand_loop(
+            "prime.fan",
+            &flat,
+            &model,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:08Z",
+            None,
+        );
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].status.kind, StatusKind::Running);
     }
 
     /// Issue #654: a pass an interrupted `run_end` cancels mid-flight
