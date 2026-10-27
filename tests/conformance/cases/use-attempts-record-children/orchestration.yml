@@ -13,7 +13,6 @@ effects:
           provider: fs
           params: {mode: read, path: "scratch/counter.txt"}
         - type: if
-          name: gate
           if: {mode: cel, expr: "state.prime.tally.value == 'x'"}
           then:
             - type: tool

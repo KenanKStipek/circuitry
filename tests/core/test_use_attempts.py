@@ -248,15 +248,18 @@ def test_attempts_interrupt_during_backoff_leaves_no_entry_for_the_in_flight_att
 
 
 def _child_with_a_first_attempt_only_step(counter_file: Path) -> dict[str, Any]:
-    """Bumps *counter_file*, then an `if` that runs `first_only` only when
-    the counter reads ``1`` (so only the orchestration's own first attempt
-    runs it, whichever attempt that turns out to be)."""
+    """Bumps *counter_file*, then an unnamed `if` that runs `first_only` only
+    when the counter reads ``1`` (so only the orchestration's own first
+    attempt runs it, whichever attempt that turns out to be). An unnamed
+    `if` merges its branch's effects into the node itself, so the stale key
+    the next attempt's graft has to drop is `first_only` directly -- not a
+    key nested under a named `if`'s own node, which the graft replaces
+    wholesale on every attempt regardless of whether anything clears it."""
     return {
         "effects": [
             _bump_tool(counter_file),
             {
                 "type": "if",
-                "name": "gate",
                 "if": {"mode": "cel", "expr": "state.prime.bump.value == '1'"},
                 "then": [
                     {
@@ -294,11 +297,11 @@ def test_attempts_record_children_keeps_the_stale_step_only_in_its_own_entry(
     state = _run_top(orch, runtime_config={"state": {"record_children": True}})
 
     node = state["prime"]["theme"]
-    assert "first_only" not in node["gate"]
+    assert "first_only" not in node
     attempts = node["meta"]["attempts"]
     assert len(attempts) == 2
-    assert "first_only" in attempts[0]["children"]["gate"]
-    assert "first_only" not in attempts[1]["children"]["gate"]
+    assert "first_only" in attempts[0]["children"]
+    assert "first_only" not in attempts[1]["children"]
 
 
 def test_attempts_full_namespace_mode_also_keeps_a_clean_node(tmp_path: Path) -> None:
@@ -321,7 +324,7 @@ def test_attempts_full_namespace_mode_also_keeps_a_clean_node(tmp_path: Path) ->
     state = _run_top(orch)
 
     node = state["prime"]["theme"]
-    assert "first_only" not in node["gate"]
+    assert "first_only" not in node
     attempts = node["meta"]["attempts"]
     assert len(attempts) == 2
     assert all(a["value"] is None for a in attempts)

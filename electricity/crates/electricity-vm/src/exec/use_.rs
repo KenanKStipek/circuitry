@@ -1063,14 +1063,17 @@ async fn attempt_once<R: ParamsCtx>(
             // attempt's failure has already been decided final
             // (`use.py:1121-1127`); a retryable attempt's own `except`
             // (`use.py:1082-1094`) sets `meta["error"]` and loops again
-            // with no graft at all. Grafting unconditionally here, on
-            // every attempt, would let a key only a now-discarded
-            // attempt's own child ever wrote survive a later successful
-            // retry (PR #472) -- so the record is
-            // only *collected* here (a live `NodeRef`, not a `Value`
-            // snapshot, to keep `graft_child_record`'s own node-identity
-            // preservation) and [`execute_use`] grafts it, only once it
-            // knows this attempt will not be retried.
+            // with no graft at all. Grafting here unconditionally, before
+            // that attempt's failure is known final, would let a retried
+            // attempt's own record appear on the node mid-backoff, for
+            // `--live-state` to see -- `clear_child_record`'s per-attempt
+            // clear (issue #659) already drops a prior attempt's stale
+            // keys at the next attempt's start, but that is a different
+            // moment than this one. So the record is only *collected*
+            // here (a live `NodeRef`, not a `Value` snapshot, to keep
+            // `graft_child_record`'s own node-identity preservation) and
+            // [`execute_use`] grafts it, only once it knows this attempt
+            // will not be retried.
             let child_record = if record_children {
                 child_store
                     .child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))

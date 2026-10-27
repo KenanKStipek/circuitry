@@ -378,7 +378,7 @@ effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode
 async fn attempts_record_children_keeps_the_stale_step_only_in_its_own_entry() {
     let inline_yaml = "\
 interface:\n  inputs:\n    earlier: {required: false, default: []}\n\
-effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode: stringify, input: ok}\n  - type: if\n    name: gate\n    if: {mode: cel, expr: \"size(state.input.earlier) == 0\"}\n    then:\n      - type: tool\n        name: stale\n        provider: json\n        params: {mode: stringify, input: stale}\n";
+effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode: stringify, input: ok}\n  - type: if\n    if: {mode: cel, expr: \"size(state.input.earlier) == 0\"}\n    then:\n      - type: tool\n        name: stale\n        provider: json\n        params: {mode: stringify, input: stale}\n";
     let mut inputs = IndexMap::new();
     inputs.insert(
         Value::Str("earlier".to_string()),
@@ -417,10 +417,9 @@ effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode
     let snapshot = store.snapshot(&store.root);
     let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
     let use_node = as_dict(get(prime, "step").unwrap());
-    // The clean-node fix: attempt 1's `gate.stale` never ran on attempt
-    // 2, and is no longer under the node once attempt 2 succeeds.
-    let gate = as_dict(get(use_node, "gate").unwrap());
-    assert!(get(gate, "stale").is_none());
+    // The clean-node fix: attempt 1's `stale` never ran on attempt 2, and
+    // is no longer under the node itself once attempt 2 succeeds.
+    assert!(get(use_node, "stale").is_none());
 
     let meta = as_dict(get(use_node, "meta").unwrap());
     let Some(Value::List(attempts)) = get(meta, "attempts") else {
@@ -428,11 +427,9 @@ effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode
     };
     assert_eq!(attempts.len(), 2);
     let first_children = as_dict(get(as_dict(&attempts[0]), "children").unwrap());
-    let first_gate = as_dict(get(first_children, "gate").unwrap());
-    assert!(get(first_gate, "stale").is_some());
+    assert!(get(first_children, "stale").is_some());
     let second_children = as_dict(get(as_dict(&attempts[1]), "children").unwrap());
-    let second_gate = as_dict(get(second_children, "gate").unwrap());
-    assert!(get(second_gate, "stale").is_none());
+    assert!(get(second_children, "stale").is_none());
 }
 
 /// Rule 7 (issue #659): retries exhausted with `on_error: continue`

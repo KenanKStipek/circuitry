@@ -2134,7 +2134,48 @@
                   },
                   {
                     "t": "str",
-                    "v": "7bedd9bb6b253fed82002a90d7ca62ec0098565112e4d2ee4f65ff5ccf44cc53"
+                    "v": "8ddf3777a25e0bd4b484b282f52cfe65c95ce6bf6589caaab703f0ba3f75c0f1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "value.tally == 'xx'"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
                   }
                 ],
                 [
@@ -2184,7 +2225,19 @@
                               "v": "value"
                             },
                             {
-                              "t": "none"
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "tally"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "x"
+                                  }
+                                ]
+                              ]
                             }
                           ],
                           [
@@ -2194,7 +2247,7 @@
                             },
                             {
                               "t": "str",
-                              "v": "prime.ready: force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
+                              "v": "expect failed: value.tally == 'xx'"
                             }
                           ],
                           [
@@ -2203,84 +2256,7 @@
                               "v": "child_errors"
                             },
                             {
-                              "t": "list",
-                              "v": [
-                                {
-                                  "t": "dict",
-                                  "v": [
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "path"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "prime"
-                                      }
-                                    ],
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "error"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "prime.ready: force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                      }
-                                    ]
-                                  ]
-                                },
-                                {
-                                  "t": "dict",
-                                  "v": [
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "path"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "ready"
-                                      }
-                                    ],
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "error"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                      }
-                                    ]
-                                  ]
-                                },
-                                {
-                                  "t": "dict",
-                                  "v": [
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "path"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "ready.force_retry"
-                                      }
-                                    ],
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "error"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                      }
-                                    ]
-                                  ]
-                                }
-                              ]
+                              "t": "none"
                             }
                           ],
                           [
@@ -2289,7 +2265,39 @@
                               "v": "expect"
                             },
                             {
-                              "t": "none"
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value.tally == 'xx'"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
                             }
                           ],
                           [
@@ -2661,7 +2669,7 @@
                                 [
                                   {
                                     "t": "str",
-                                    "v": "gate"
+                                    "v": "stale"
                                   },
                                   {
                                     "t": "dict",
@@ -2672,75 +2680,8 @@
                                           "v": "value"
                                         },
                                         {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": true
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "then"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "effects"
-                                              },
-                                              {
-                                                "t": "list",
-                                                "v": [
-                                                  {
-                                                    "t": "dict",
-                                                    "v": [
-                                                      [
-                                                        {
-                                                          "t": "str",
-                                                          "v": "index"
-                                                        },
-                                                        {
-                                                          "t": "int",
-                                                          "v": "0"
-                                                        }
-                                                      ],
-                                                      [
-                                                        {
-                                                          "t": "str",
-                                                          "v": "type"
-                                                        },
-                                                        {
-                                                          "t": "str",
-                                                          "v": "ToolDefinition"
-                                                        }
-                                                      ],
-                                                      [
-                                                        {
-                                                          "t": "str",
-                                                          "v": "name"
-                                                        },
-                                                        {
-                                                          "t": "str",
-                                                          "v": "stale"
-                                                        }
-                                                      ]
-                                                    ]
-                                                  }
-                                                ]
-                                              }
-                                            ]
-                                          ]
+                                          "t": "str",
+                                          "v": "\"stale\""
                                         }
                                       ],
                                       [
@@ -2774,6 +2715,16 @@
                                             [
                                               {
                                                 "t": "str",
+                                                "v": "provider"
+                                              },
+                                              {
+                                                "t": "str",
+                                                "v": "json"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
                                                 "v": "error"
                                               },
                                               {
@@ -2783,27 +2734,7 @@
                                             [
                                               {
                                                 "t": "str",
-                                                "v": "mode"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "cel"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "threshold"
-                                              },
-                                              {
-                                                "bits": "3fe0000000000000",
-                                                "t": "float"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "labels"
+                                                "v": "stdout"
                                               },
                                               {
                                                 "t": "none"
@@ -2812,48 +2743,34 @@
                                             [
                                               {
                                                 "t": "str",
-                                                "v": "condition_result"
+                                                "v": "stderr"
                                               },
                                               {
-                                                "t": "bool",
-                                                "v": true
+                                                "t": "none"
                                               }
                                             ],
                                             [
                                               {
                                                 "t": "str",
-                                                "v": "branch"
+                                                "v": "exit_code"
                                               },
                                               {
-                                                "t": "str",
-                                                "v": "then"
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ],
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "stale"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "value"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "\"stale\""
+                                                "t": "none"
                                               }
                                             ],
                                             [
                                               {
                                                 "t": "str",
-                                                "v": "meta"
+                                                "v": "waiting_for"
+                                              },
+                                              {
+                                                "t": "none"
+                                              }
+                                            ],
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "params_rendered"
                                               },
                                               {
                                                 "t": "dict",
@@ -2861,299 +2778,30 @@
                                                   [
                                                     {
                                                       "t": "str",
-                                                      "v": "created_at"
+                                                      "v": "mode"
                                                     },
                                                     {
                                                       "t": "str",
-                                                      "v": "<TIMESTAMP>"
+                                                      "v": "stringify"
                                                     }
                                                   ],
                                                   [
                                                     {
                                                       "t": "str",
-                                                      "v": "completed_at"
+                                                      "v": "input"
                                                     },
                                                     {
                                                       "t": "str",
-                                                      "v": "<TIMESTAMP>"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "provider"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "json"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "error"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "stdout"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "stderr"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "exit_code"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "waiting_for"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "params_rendered"
-                                                    },
-                                                    {
-                                                      "t": "dict",
-                                                      "v": [
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "mode"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "stringify"
-                                                          }
-                                                        ],
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "input"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "stale"
-                                                          }
-                                                        ]
-                                                      ]
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "raw"
-                                                    },
-                                                    {
-                                                      "t": "dict",
-                                                      "v": [
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "mode"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "stringify"
-                                                          }
-                                                        ]
-                                                      ]
+                                                      "v": "stale"
                                                     }
                                                   ]
                                                 ]
                                               }
-                                            ]
-                                          ]
-                                        }
-                                      ]
-                                    ]
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "ready"
-                                  },
-                                  {
-                                    "t": "dict",
-                                    "v": [
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "value"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": false
-                                              }
                                             ],
                                             [
                                               {
                                                 "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "else"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "effects"
-                                              },
-                                              {
-                                                "t": "list",
-                                                "v": []
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ],
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "meta"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "created_at"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "<TIMESTAMP>"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "completed_at"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "<TIMESTAMP>"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "error"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "mode"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "cel"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "threshold"
-                                              },
-                                              {
-                                                "bits": "3fe0000000000000",
-                                                "t": "float"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "labels"
-                                              },
-                                              {
-                                                "t": "none"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "condition_result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": false
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "else"
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ],
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "force_retry"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "value"
-                                              },
-                                              {
-                                                "t": "none"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "meta"
+                                                "v": "raw"
                                               },
                                               {
                                                 "t": "dict",
@@ -3161,108 +2809,11 @@
                                                   [
                                                     {
                                                       "t": "str",
-                                                      "v": "created_at"
+                                                      "v": "mode"
                                                     },
                                                     {
                                                       "t": "str",
-                                                      "v": "<TIMESTAMP>"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "completed_at"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "<TIMESTAMP>"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "provider"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "json"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "error"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "stdout"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "stderr"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "exit_code"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "waiting_for"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "params_rendered"
-                                                    },
-                                                    {
-                                                      "t": "dict",
-                                                      "v": [
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "mode"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "parse"
-                                                          }
-                                                        ],
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "input"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "not json"
-                                                          }
-                                                        ]
-                                                      ]
+                                                      "v": "stringify"
                                                     }
                                                   ]
                                                 ]
@@ -3347,7 +2898,39 @@
                               "v": "expect"
                             },
                             {
-                              "t": "none"
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value.tally == 'xx'"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": true
+                                  }
+                                ]
+                              ]
                             }
                           ],
                           [
@@ -3705,483 +3288,6 @@
                                                     {
                                                       "t": "str",
                                                       "v": "<temp>/counter_record_children_clean_node.txt"
-                                                    }
-                                                  ]
-                                                ]
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ]
-                                    ]
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "gate"
-                                  },
-                                  {
-                                    "t": "dict",
-                                    "v": [
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "value"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": false
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "else"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "effects"
-                                              },
-                                              {
-                                                "t": "list",
-                                                "v": []
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ],
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "meta"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "created_at"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "<TIMESTAMP>"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "completed_at"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "<TIMESTAMP>"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "error"
-                                              },
-                                              {
-                                                "t": "none"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "mode"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "cel"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "threshold"
-                                              },
-                                              {
-                                                "bits": "3fe0000000000000",
-                                                "t": "float"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "labels"
-                                              },
-                                              {
-                                                "t": "none"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "condition_result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": false
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "else"
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ]
-                                    ]
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "ready"
-                                  },
-                                  {
-                                    "t": "dict",
-                                    "v": [
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "value"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": true
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "then"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "effects"
-                                              },
-                                              {
-                                                "t": "list",
-                                                "v": [
-                                                  {
-                                                    "t": "dict",
-                                                    "v": [
-                                                      [
-                                                        {
-                                                          "t": "str",
-                                                          "v": "index"
-                                                        },
-                                                        {
-                                                          "t": "int",
-                                                          "v": "0"
-                                                        }
-                                                      ],
-                                                      [
-                                                        {
-                                                          "t": "str",
-                                                          "v": "type"
-                                                        },
-                                                        {
-                                                          "t": "str",
-                                                          "v": "ToolDefinition"
-                                                        }
-                                                      ],
-                                                      [
-                                                        {
-                                                          "t": "str",
-                                                          "v": "name"
-                                                        },
-                                                        {
-                                                          "t": "str",
-                                                          "v": "ok_marker"
-                                                        }
-                                                      ]
-                                                    ]
-                                                  }
-                                                ]
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ],
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "meta"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "created_at"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "<TIMESTAMP>"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "completed_at"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "<TIMESTAMP>"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "error"
-                                              },
-                                              {
-                                                "t": "none"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "mode"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "cel"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "threshold"
-                                              },
-                                              {
-                                                "bits": "3fe0000000000000",
-                                                "t": "float"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "labels"
-                                              },
-                                              {
-                                                "t": "none"
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "condition_result"
-                                              },
-                                              {
-                                                "t": "bool",
-                                                "v": true
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "branch"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "then"
-                                              }
-                                            ]
-                                          ]
-                                        }
-                                      ],
-                                      [
-                                        {
-                                          "t": "str",
-                                          "v": "ok_marker"
-                                        },
-                                        {
-                                          "t": "dict",
-                                          "v": [
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "value"
-                                              },
-                                              {
-                                                "t": "str",
-                                                "v": "\"ok\""
-                                              }
-                                            ],
-                                            [
-                                              {
-                                                "t": "str",
-                                                "v": "meta"
-                                              },
-                                              {
-                                                "t": "dict",
-                                                "v": [
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "created_at"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "<TIMESTAMP>"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "completed_at"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "<TIMESTAMP>"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "provider"
-                                                    },
-                                                    {
-                                                      "t": "str",
-                                                      "v": "json"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "error"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "stdout"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "stderr"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "exit_code"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "waiting_for"
-                                                    },
-                                                    {
-                                                      "t": "none"
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "params_rendered"
-                                                    },
-                                                    {
-                                                      "t": "dict",
-                                                      "v": [
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "mode"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "stringify"
-                                                          }
-                                                        ],
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "input"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "ok"
-                                                          }
-                                                        ]
-                                                      ]
-                                                    }
-                                                  ],
-                                                  [
-                                                    {
-                                                      "t": "str",
-                                                      "v": "raw"
-                                                    },
-                                                    {
-                                                      "t": "dict",
-                                                      "v": [
-                                                        [
-                                                          {
-                                                            "t": "str",
-                                                            "v": "mode"
-                                                          },
-                                                          {
-                                                            "t": "str",
-                                                            "v": "stringify"
-                                                          }
-                                                        ]
-                                                      ]
                                                     }
                                                   ]
                                                 ]
@@ -4561,483 +3667,6 @@
                 ]
               ]
             }
-          ],
-          [
-            {
-              "t": "str",
-              "v": "gate"
-            },
-            {
-              "t": "dict",
-              "v": [
-                [
-                  {
-                    "t": "str",
-                    "v": "value"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": false
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "else"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "effects"
-                        },
-                        {
-                          "t": "list",
-                          "v": []
-                        }
-                      ]
-                    ]
-                  }
-                ],
-                [
-                  {
-                    "t": "str",
-                    "v": "meta"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "created_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "completed_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "error"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "mode"
-                        },
-                        {
-                          "t": "str",
-                          "v": "cel"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "threshold"
-                        },
-                        {
-                          "bits": "3fe0000000000000",
-                          "t": "float"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "labels"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "condition_result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": false
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "else"
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              ]
-            }
-          ],
-          [
-            {
-              "t": "str",
-              "v": "ready"
-            },
-            {
-              "t": "dict",
-              "v": [
-                [
-                  {
-                    "t": "str",
-                    "v": "value"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": true
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "then"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "effects"
-                        },
-                        {
-                          "t": "list",
-                          "v": [
-                            {
-                              "t": "dict",
-                              "v": [
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "index"
-                                  },
-                                  {
-                                    "t": "int",
-                                    "v": "0"
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "type"
-                                  },
-                                  {
-                                    "t": "str",
-                                    "v": "ToolDefinition"
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "name"
-                                  },
-                                  {
-                                    "t": "str",
-                                    "v": "ok_marker"
-                                  }
-                                ]
-                              ]
-                            }
-                          ]
-                        }
-                      ]
-                    ]
-                  }
-                ],
-                [
-                  {
-                    "t": "str",
-                    "v": "meta"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "created_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "completed_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "error"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "mode"
-                        },
-                        {
-                          "t": "str",
-                          "v": "cel"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "threshold"
-                        },
-                        {
-                          "bits": "3fe0000000000000",
-                          "t": "float"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "labels"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "condition_result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": true
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "then"
-                        }
-                      ]
-                    ]
-                  }
-                ],
-                [
-                  {
-                    "t": "str",
-                    "v": "ok_marker"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "value"
-                        },
-                        {
-                          "t": "str",
-                          "v": "\"ok\""
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "meta"
-                        },
-                        {
-                          "t": "dict",
-                          "v": [
-                            [
-                              {
-                                "t": "str",
-                                "v": "created_at"
-                              },
-                              {
-                                "t": "str",
-                                "v": "<TIMESTAMP>"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "completed_at"
-                              },
-                              {
-                                "t": "str",
-                                "v": "<TIMESTAMP>"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "provider"
-                              },
-                              {
-                                "t": "str",
-                                "v": "json"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "error"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "stdout"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "stderr"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "exit_code"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "waiting_for"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "params_rendered"
-                              },
-                              {
-                                "t": "dict",
-                                "v": [
-                                  [
-                                    {
-                                      "t": "str",
-                                      "v": "mode"
-                                    },
-                                    {
-                                      "t": "str",
-                                      "v": "stringify"
-                                    }
-                                  ],
-                                  [
-                                    {
-                                      "t": "str",
-                                      "v": "input"
-                                    },
-                                    {
-                                      "t": "str",
-                                      "v": "ok"
-                                    }
-                                  ]
-                                ]
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "raw"
-                              },
-                              {
-                                "t": "dict",
-                                "v": [
-                                  [
-                                    {
-                                      "t": "str",
-                                      "v": "mode"
-                                    },
-                                    {
-                                      "t": "str",
-                                      "v": "stringify"
-                                    }
-                                  ]
-                                ]
-                              }
-                            ]
-                          ]
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              ]
-            }
           ]
         ]
       },
@@ -5171,7 +3800,48 @@
                   },
                   {
                     "t": "str",
-                    "v": "7bedd9bb6b253fed82002a90d7ca62ec0098565112e4d2ee4f65ff5ccf44cc53"
+                    "v": "8ddf3777a25e0bd4b484b282f52cfe65c95ce6bf6589caaab703f0ba3f75c0f1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "has(meta.attempts)"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
                   }
                 ],
                 [
@@ -5231,7 +3901,7 @@
                             },
                             {
                               "t": "str",
-                              "v": "prime.ready: force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
+                              "v": "expect failed: has(meta.attempts)"
                             }
                           ],
                           [
@@ -5240,84 +3910,7 @@
                               "v": "child_errors"
                             },
                             {
-                              "t": "list",
-                              "v": [
-                                {
-                                  "t": "dict",
-                                  "v": [
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "path"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "prime"
-                                      }
-                                    ],
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "error"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "prime.ready: force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                      }
-                                    ]
-                                  ]
-                                },
-                                {
-                                  "t": "dict",
-                                  "v": [
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "path"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "ready"
-                                      }
-                                    ],
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "error"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "force_retry: json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                      }
-                                    ]
-                                  ]
-                                },
-                                {
-                                  "t": "dict",
-                                  "v": [
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "path"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "ready.force_retry"
-                                      }
-                                    ],
-                                    [
-                                      {
-                                        "t": "str",
-                                        "v": "error"
-                                      },
-                                      {
-                                        "t": "str",
-                                        "v": "json: parse failed: Expecting value: line 1 column 1 (char 0)"
-                                      }
-                                    ]
-                                  ]
-                                }
-                              ]
+                              "t": "none"
                             }
                           ],
                           [
@@ -5326,7 +3919,39 @@
                               "v": "expect"
                             },
                             {
-                              "t": "none"
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "has(meta.attempts)"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
                             }
                           ]
                         ]
@@ -5387,7 +4012,39 @@
                               "v": "expect"
                             },
                             {
-                              "t": "none"
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "has(meta.attempts)"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": true
+                                  }
+                                ]
+                              ]
                             }
                           ]
                         ]
@@ -5745,483 +4402,6 @@
                               {
                                 "t": "str",
                                 "v": "<temp>/counter_full_namespace_clean_node.txt"
-                              }
-                            ]
-                          ]
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              ]
-            }
-          ],
-          [
-            {
-              "t": "str",
-              "v": "gate"
-            },
-            {
-              "t": "dict",
-              "v": [
-                [
-                  {
-                    "t": "str",
-                    "v": "value"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": false
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "else"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "effects"
-                        },
-                        {
-                          "t": "list",
-                          "v": []
-                        }
-                      ]
-                    ]
-                  }
-                ],
-                [
-                  {
-                    "t": "str",
-                    "v": "meta"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "created_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "completed_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "error"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "mode"
-                        },
-                        {
-                          "t": "str",
-                          "v": "cel"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "threshold"
-                        },
-                        {
-                          "bits": "3fe0000000000000",
-                          "t": "float"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "labels"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "condition_result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": false
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "else"
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              ]
-            }
-          ],
-          [
-            {
-              "t": "str",
-              "v": "ready"
-            },
-            {
-              "t": "dict",
-              "v": [
-                [
-                  {
-                    "t": "str",
-                    "v": "value"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": true
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "then"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "effects"
-                        },
-                        {
-                          "t": "list",
-                          "v": [
-                            {
-                              "t": "dict",
-                              "v": [
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "index"
-                                  },
-                                  {
-                                    "t": "int",
-                                    "v": "0"
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "type"
-                                  },
-                                  {
-                                    "t": "str",
-                                    "v": "ToolDefinition"
-                                  }
-                                ],
-                                [
-                                  {
-                                    "t": "str",
-                                    "v": "name"
-                                  },
-                                  {
-                                    "t": "str",
-                                    "v": "ok_marker"
-                                  }
-                                ]
-                              ]
-                            }
-                          ]
-                        }
-                      ]
-                    ]
-                  }
-                ],
-                [
-                  {
-                    "t": "str",
-                    "v": "meta"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "created_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "completed_at"
-                        },
-                        {
-                          "t": "str",
-                          "v": "<TIMESTAMP>"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "error"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "mode"
-                        },
-                        {
-                          "t": "str",
-                          "v": "cel"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "threshold"
-                        },
-                        {
-                          "bits": "3fe0000000000000",
-                          "t": "float"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "labels"
-                        },
-                        {
-                          "t": "none"
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "condition_result"
-                        },
-                        {
-                          "t": "bool",
-                          "v": true
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "branch"
-                        },
-                        {
-                          "t": "str",
-                          "v": "then"
-                        }
-                      ]
-                    ]
-                  }
-                ],
-                [
-                  {
-                    "t": "str",
-                    "v": "ok_marker"
-                  },
-                  {
-                    "t": "dict",
-                    "v": [
-                      [
-                        {
-                          "t": "str",
-                          "v": "value"
-                        },
-                        {
-                          "t": "str",
-                          "v": "\"ok\""
-                        }
-                      ],
-                      [
-                        {
-                          "t": "str",
-                          "v": "meta"
-                        },
-                        {
-                          "t": "dict",
-                          "v": [
-                            [
-                              {
-                                "t": "str",
-                                "v": "created_at"
-                              },
-                              {
-                                "t": "str",
-                                "v": "<TIMESTAMP>"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "completed_at"
-                              },
-                              {
-                                "t": "str",
-                                "v": "<TIMESTAMP>"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "provider"
-                              },
-                              {
-                                "t": "str",
-                                "v": "json"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "error"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "stdout"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "stderr"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "exit_code"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "waiting_for"
-                              },
-                              {
-                                "t": "none"
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "params_rendered"
-                              },
-                              {
-                                "t": "dict",
-                                "v": [
-                                  [
-                                    {
-                                      "t": "str",
-                                      "v": "mode"
-                                    },
-                                    {
-                                      "t": "str",
-                                      "v": "stringify"
-                                    }
-                                  ],
-                                  [
-                                    {
-                                      "t": "str",
-                                      "v": "input"
-                                    },
-                                    {
-                                      "t": "str",
-                                      "v": "ok"
-                                    }
-                                  ]
-                                ]
-                              }
-                            ],
-                            [
-                              {
-                                "t": "str",
-                                "v": "raw"
-                              },
-                              {
-                                "t": "dict",
-                                "v": [
-                                  [
-                                    {
-                                      "t": "str",
-                                      "v": "mode"
-                                    },
-                                    {
-                                      "t": "str",
-                                      "v": "stringify"
-                                    }
-                                  ]
-                                ]
                               }
                             ]
                           ]

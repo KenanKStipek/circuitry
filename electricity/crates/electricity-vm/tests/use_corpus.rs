@@ -434,26 +434,12 @@ fn write_fixtures(dir: &std::path::Path) {
          \x20\x20\x20\x20provider: fs\n\
          \x20\x20\x20\x20params: {mode: read, path: '{{input.counter}}'}\n\
          \x20\x20- type: if\n\
-         \x20\x20\x20\x20name: gate\n\
          \x20\x20\x20\x20if: {mode: cel, expr: \"state.prime.tally.value == 'x'\"}\n\
          \x20\x20\x20\x20then:\n\
          \x20\x20\x20\x20\x20\x20- type: tool\n\
          \x20\x20\x20\x20\x20\x20\x20\x20name: stale\n\
          \x20\x20\x20\x20\x20\x20\x20\x20provider: json\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: stringify, input: stale}\n\
-         \x20\x20- type: if\n\
-         \x20\x20\x20\x20name: ready\n\
-         \x20\x20\x20\x20if: {mode: cel, expr: \"state.prime.tally.value == 'xx'\"}\n\
-         \x20\x20\x20\x20then:\n\
-         \x20\x20\x20\x20\x20\x20- type: tool\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20name: ok_marker\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20provider: json\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: stringify, input: ok}\n\
-         \x20\x20\x20\x20else:\n\
-         \x20\x20\x20\x20\x20\x20- type: tool\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20name: force_retry\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20provider: json\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: parse, input: 'not json'}\n",
+         \x20\x20\x20\x20\x20\x20\x20\x20params: {mode: stringify, input: stale}\n",
     )
     .unwrap();
 }
@@ -654,7 +640,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                     max_attempts: 2,
                     backoff_ms: 0,
                 },
-                expect: None,
+                expect: Some(ExpectCondition::Cel {
+                    expr: "value.tally == 'xx'".to_string(),
+                }),
                 description: None,
             }
         }
@@ -678,7 +666,15 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                     max_attempts: 2,
                     backoff_ms: 0,
                 },
-                expect: None,
+                // This harness's own `ctx` is a fixed, empty `Value::Dict`
+                // (see `case_use_op`'s own doc comment), not a live store, so
+                // a `state.`-bound expect could never see this use's own
+                // later attempts; `meta` is bound directly either way, so
+                // `has(meta.attempts)` -- false only before any attempt has
+                // finished -- decides the retry without it.
+                expect: Some(ExpectCondition::Cel {
+                    expr: "has(meta.attempts)".to_string(),
+                }),
                 description: None,
             }
         }
@@ -770,6 +766,11 @@ async fn golden_corpus_end_to_end() {
     assert!(!corpus.end_to_end_cases.is_empty());
 
     let tmp = fixtures_dir();
+    // A run that panicked before the `remove_dir_all` at the bottom of this
+    // test leaves this same PID-keyed directory behind, counter files and
+    // all; start clean so a leftover `counter_*.txt` from an earlier run
+    // can never change this run's clean-node outcome.
+    let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
     write_fixtures(&tmp);
     let resolved_tmp = tmp.canonicalize().unwrap_or_else(|_| tmp.clone());
