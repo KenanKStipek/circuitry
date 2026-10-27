@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #658",
+  "description": "An undeclared function called from CEL fails with one line (`undeclared reference to 'nope'`), never a dump of the CEL activation: `cof check` doesn't look at function names, so this is a run-time failure, caught here by `on_error: continue`, in both an `if` condition and a tool's `expect:`.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

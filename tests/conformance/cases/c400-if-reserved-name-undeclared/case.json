@@ -1,12 +1,6 @@
 {
   "spec_case": "issue #400",
-  "description": "An `if` condition that calls one of electricity-cel's own internal names directly (`__electricity_strict_eq(1)`), on_error: continue. cof treats this the same as calling any other undeclared function -- a CelEvaluationError, caught by the if's own on_error handling, taking the else branch -- and electricity now matches: a direct reference to a reserved __electricity_* name fails the same way, worded like an undeclared-function reference, rather than panicking.",
+  "description": "An `if` condition that calls one of electricity-cel's own internal names directly (`__electricity_strict_eq(1)`), on_error: continue. cof treats this the same as calling any other undeclared function -- a CelEvaluationError, caught by the if's own on_error handling, taking the else branch -- and electricity now matches: a direct reference to a reserved __electricity_* name fails the same way, one line, worded like an undeclared-function reference, rather than panicking.",
   "engines": ["python", "electricity"],
-  "expect": "success",
-  "third_party_text": [
-    {
-      "location": "prime.gate.meta.error",
-      "pattern": "CEL evaluation failed for '__electricity_strict_eq\\(1\\)': .*[Uu]ndeclared reference to '__electricity_strict_eq'.*"
-    }
-  ]
+  "expect": "success"
 }

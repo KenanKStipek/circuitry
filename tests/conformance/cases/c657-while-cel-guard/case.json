@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #657",
+  "description": "A `while` condition's `has()` guard protects the read it actually guards: with no `input.cfg`, `has(state.input.cfg) ? state.iter.count < state.input.cfg.limit : state.iter.count < 2` takes its own (unguarded) fallback comparison instead of being forced `false` by the guarded read, so the loop still runs its two passes.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

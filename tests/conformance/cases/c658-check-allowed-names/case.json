@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #658",
+  "description": "`cof check` allows every name both engines resolve the same way: the ten CEL type names, a macro variable, and (in `expect:`) `value`/`meta` alongside `state`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "units=[1, 2]"]
+}

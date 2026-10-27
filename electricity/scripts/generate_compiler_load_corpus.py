@@ -860,6 +860,22 @@ CASES: list[dict[str, Any]] = [
         },
         "entry": "doc.yml",
     },
+    {
+        # A bare `state.` namespace name in a CEL expression is a
+        # check-time error (#658), reported before validation ever
+        # reaches the schema or any lint rule.
+        "name": "if_cel_bare_namespace_is_a_check_error",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: if\n"
+                "    name: c\n"
+                "    if: {mode: cel, expr: 'input.x == 1'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
     # --- Issue #428: `core/lint.py`'s advisory warnings, one rule per
     # case, then several together, then one next to an unknown-key
     # warning and one next to the "Applied host settings" notice.
@@ -1078,7 +1094,7 @@ CASES: list[dict[str, Any]] = [
                 "    body:\n"
                 "      - type: loop\n"
                 "        name: inner\n"
-                "        while: {mode: cel, expr: \"prime.inner.last.marker.value == ''\"}\n"
+                "        while: {mode: cel, expr: \"state.prime.inner.last.marker.value == ''\"}\n"
                 "        body:\n"
                 "          - type: prompt\n"
                 "            name: marker\n"

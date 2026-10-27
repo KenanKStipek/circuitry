@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #658",
+  "description": "A macro variable (`map`'s own `i`) is never flagged as a free name, even next to a genuinely bare loop binding (`unit`) in the same expression.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

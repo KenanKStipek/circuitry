@@ -638,7 +638,12 @@ fn compile_condition_labeled(
             )));
         };
         let expr = expr.py_str();
-        validate_cel_expr(&expr, effect_path, loop_names)?;
+        validate_cel_expr(
+            &expr,
+            effect_path,
+            loop_names,
+            &BTreeSet::from(["state".to_string()]),
+        )?;
         validate_cel_syntax(&expr, effect_path, effect_name, cel_label)?;
         let strict = get_bool_default(def, "strict", false);
         Ok(Condition::Cel { expr, strict })

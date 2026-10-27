@@ -1,0 +1,3 @@
+{
+  "error": "CEL expression at 'prime.effects[0]': 'stat' is not defined ('state' is the only root). Write 'state.input.stat' for caller-supplied values or 'state.prime.stat' for effect outputs."
+}

@@ -1,0 +1,8 @@
+name: c658-check-undefined-name
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "stat.input.x == 1"
+    then: []

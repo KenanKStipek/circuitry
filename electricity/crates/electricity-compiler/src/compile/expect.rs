@@ -29,6 +29,14 @@ pub(crate) fn compile_retries(effect: &Dict) -> Option<RetryPolicy> {
     })
 }
 
+/// `expect:`'s own three-root allow-list for
+/// [`validate_cel_expr`]'s bare-name check (#658): `value`/`meta` (this
+/// effect's own outcome) besides `state`, matching
+/// `core/compiler.py::_compile_expect`'s own `roots={"state", "value", "meta"}`.
+fn expect_roots() -> BTreeSet<String> {
+    BTreeSet::from(["state".to_string(), "value".to_string(), "meta".to_string()])
+}
+
 /// `expect:` on a `tool`/`use` effect (#273). Ports
 /// `core/compiler.py::_compile_expect`.
 pub(crate) fn compile_expect(
@@ -52,7 +60,7 @@ pub(crate) fn compile_expect(
                      an empty string."
                 )));
             }
-            validate_cel_expr(expr, effect_path, loop_names)?;
+            validate_cel_expr(expr, effect_path, loop_names, &expect_roots())?;
             validate_cel_syntax(expr, effect_path, None, "expect CEL expression")?;
             Ok(Some(ExpectCondition::Cel {
                 expr: expr.to_string(),
@@ -97,7 +105,7 @@ pub(crate) fn compile_expect(
                      requires a non-empty 'expr' field."
                 )));
             };
-            validate_cel_expr(expr, effect_path, loop_names)?;
+            validate_cel_expr(expr, effect_path, loop_names, &expect_roots())?;
             validate_cel_syntax(expr, effect_path, None, "expect CEL expression")?;
             Ok(Some(ExpectCondition::Cel {
                 expr: expr.to_string(),

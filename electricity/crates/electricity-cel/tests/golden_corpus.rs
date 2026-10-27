@@ -21,7 +21,7 @@
 //! evaluator, not a guess.
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
-use electricity_cel::{evaluate_condition, evaluate_expect};
+use electricity_cel::{evaluate_condition, evaluate_expect, unset_path};
 use electricity_value::{Dict, IntValue, Value};
 use serde::Deserialize;
 
@@ -99,7 +99,7 @@ impl From<TaggedValue> for Value {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Mode {
     Condition,
@@ -142,6 +142,8 @@ struct Case {
     #[serde(default)]
     meta: Option<TaggedValue>,
     outcome: Outcome,
+    #[serde(default)]
+    unset_path: Option<String>,
 }
 
 #[test]
@@ -244,6 +246,20 @@ fn golden_corpus_matches_circuitrys_real_cel_evaluator() {
                  (Circuitry: Ok({python_result})), got Err({err})",
                 case.expr
             )),
+        }
+
+        if case.mode == Mode::Condition {
+            // Pins which path the unset-path rule names, not only the
+            // bool it collapses to -- a second evaluation sharing the
+            // same decision `evaluate_condition` made above, not a
+            // second source of truth.
+            let got_path = unset_path(&case.expr, &state, case.strict).ok().flatten();
+            if got_path != case.unset_path {
+                failures.push(format!(
+                    "case {i}: unset_path mismatch for {:?}\n  expected: {:?}\n  got:      {:?}",
+                    case.expr, case.unset_path, got_path
+                ));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

@@ -1,0 +1,12 @@
+{"v":1,"seq":0,"ts":"2026-10-27T00:54:27.853Z","ev":"run_start","run_id":"d26e1cea-9cc7-4e6d-bea5-d26d3c402f66","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":44498}
+{"v":1,"seq":1,"ts":"2026-10-27T00:54:27.856Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-27T00:54:27.856Z","ev":"start","id":1,"path":"prime.gate"}
+{"v":1,"seq":3,"ts":"2026-10-27T00:54:27.857Z","ev":"start","id":2,"path":"prime.gate.else_step"}
+{"v":1,"seq":4,"ts":"2026-10-27T00:54:27.857Z","ev":"end","id":2,"path":"prime.gate.else_step","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-27T00:54:27.857Z","ev":"end","id":1,"path":"prime.gate","ok":false,"ms":1,"error":"CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'"}
+{"v":1,"seq":6,"ts":"2026-10-27T00:54:27.858Z","ev":"start","id":3,"path":"prime.expect_gate"}
+{"v":1,"seq":7,"ts":"2026-10-27T00:54:27.858Z","ev":"end","id":3,"path":"prime.expect_gate","ok":false,"ms":1,"error":"expect failed: nope(value)"}
+{"v":1,"seq":8,"ts":"2026-10-27T00:54:27.858Z","ev":"start","id":4,"path":"prime.marker"}
+{"v":1,"seq":9,"ts":"2026-10-27T00:54:27.858Z","ev":"end","id":4,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-27T00:54:27.858Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":11,"ts":"2026-10-27T00:54:27.858Z","ev":"run_end","ok":true}

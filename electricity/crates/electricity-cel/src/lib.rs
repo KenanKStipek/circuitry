@@ -6,12 +6,16 @@
 //! `DESIGN.md` §7.2) behind Circuitry's own strict/non-strict layer:
 //!
 //! - [`evaluate_condition`] — `if`/`while` CEL mode. Binds one root,
-//!   `state`. An unset `state.` path the expression reads makes the
-//!   whole expression `false` (logged, never silently swallowed),
-//!   decided *structurally* by walking the parse tree before evaluating
-//!   — not by catching a failure during evaluation. Two exemptions:
-//!   `has(...)` guards the one path it names, and `strict: true` turns
-//!   the same case back into an error.
+//!   `state`. An unset, unguarded `state.` read that decides the
+//!   expression's result makes the whole result `false` (logged, never
+//!   silently swallowed): each such read is marked, before evaluating,
+//!   with a call to a reserved marker function
+//!   ([`paths::mark_unset`]), so `has(...)`, `?:`, `&&`/`||` and
+//!   `all`/`exists` guard it the way `cel` already evaluates those
+//!   constructs, and the rule applies only if the whole result turns
+//!   out to be that marker's own error. `has(...)` always exempts the
+//!   path it names outright; `strict: true` turns a deciding unset read
+//!   back into an error.
 //! - [`evaluate_expect`] — tool/use `expect:` CEL. Binds three roots,
 //!   `value`, `meta` (this effect's own outcome, unprefixed) and `state`.
 //!   Gets none of the absent-path exemption above: an unresolved path
@@ -486,7 +490,39 @@ fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
 /// does.
 fn reserved_call_message(original: &cel::common::ast::IdedExpr) -> Option<String> {
     let name = paths::reserved_call_name(original)?;
-    Some(format!("Undeclared reference to '{name}'"))
+    Some(format!("undeclared reference to '{name}'"))
+}
+
+/// `message` in Circuitry's own words for *err*, lowercase
+/// (`core/cel_eval.py::_error_text`): an undeclared identifier,
+/// function or method (`ExecutionError::UndeclaredReference`, raised by
+/// `cel::Value::resolve` itself -- never a direct call to one of this
+/// crate's own reserved names, which [`reserved_call_message`] already
+/// catches earlier) becomes one line naming it, never `cel`'s own
+/// `Display`, which capitalizes "Undeclared". Every other failure keeps
+/// `cel`'s own text.
+fn evaluation_error_text(err: &cel::ExecutionError) -> String {
+    match err {
+        cel::ExecutionError::UndeclaredReference(name) => {
+            format!("undeclared reference to '{name}'")
+        }
+        other => other.to_string(),
+    }
+}
+
+/// The path [`paths::UNSET_MARKER_FN`] carries, if *err* is the marker
+/// error [`paths::mark_unset`]'s own replacement call raises when
+/// evaluation actually reaches it — `None` for every other failure,
+/// `cel`'s genuine evaluation errors included.
+fn unset_marker_path(err: &cel::ExecutionError) -> Option<&str> {
+    match err {
+        cel::ExecutionError::FunctionError { function, message }
+            if function == paths::UNSET_MARKER_FN =>
+        {
+            Some(message.as_str())
+        }
+        _ => None,
+    }
 }
 
 /// `core/cel_eval.py`'s `ValueError("overflow")` for a `Value::Int` too
@@ -568,35 +604,53 @@ fn truthy(value: &cel::Value) -> bool {
 /// evaluates to `false` — that would be indistinguishable from a
 /// legitimately false condition.
 pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<bool, CelError> {
+    match evaluate_condition_inner(expr, state, strict)? {
+        ConditionOutcome::Value(value) => Ok(value),
+        ConditionOutcome::Unset(_) => Ok(false),
+    }
+}
+
+/// Which path, if any, the unset-path rule named for *expr* against
+/// *state* -- the same evaluation [`evaluate_condition`] runs, except it
+/// returns the marker's own path instead of collapsing it into `false`.
+/// Not part of the public evaluator API: exists so the CEL golden corpus
+/// can pin, across both engines, which path the rule names, not only
+/// the resulting bool.
+///
+/// # Errors
+///
+/// Every failure [`evaluate_condition`] raises on, raises here too.
+#[doc(hidden)]
+pub fn unset_path(expr: &str, state: &Value, strict: bool) -> Result<Option<String>, CelError> {
+    match evaluate_condition_inner(expr, state, strict)? {
+        ConditionOutcome::Value(_) => Ok(None),
+        ConditionOutcome::Unset(path) => Ok(Some(path)),
+    }
+}
+
+/// [`evaluate_condition`]'s own result, before the unset-path rule's
+/// path is collapsed into a plain `false` -- shared with [`unset_path`]
+/// so the rule's decision is computed once.
+enum ConditionOutcome {
+    Value(bool),
+    Unset(String),
+}
+
+fn evaluate_condition_inner(
+    expr: &str,
+    state: &Value,
+    strict: bool,
+) -> Result<ConditionOutcome, CelError> {
     check_length(expr)?;
     check_stack_safety(expr)?;
     let env = stdlib_env();
     let program = compile(&env, expr)?;
 
     let collected = paths::collect_state_paths(program.expression());
-    if let Some(unresolved) = paths::first_unresolved(&collected.paths, state) {
-        if strict {
-            return Err(CelError::new(
-                expr,
-                format!(
-                    "CEL expression {} reads unset state path {} and is marked strict.",
-                    py_repr(expr),
-                    py_repr(unresolved)
-                ),
-            ));
-        }
-        log::warn!(
-            "CEL expression {} reads unset state path {}; condition is false",
-            py_repr(expr),
-            py_repr(unresolved)
-        );
-        return Ok(false);
-    }
 
-    // The four parity caps, checked only now: Circuitry's own
-    // evaluation (the thing that can raise this) never runs once the
-    // unset-path check above already decided the condition is `false`
-    // -- `check_stack_safety` above is a genuine
+    // The four parity caps, checked unconditionally now: Circuitry
+    // always evaluates (there is no pre-evaluation short-circuit left
+    // to order around) -- `check_stack_safety` above is a genuine
     // pre-compile concern instead, unaffected by this ordering. This
     // crate's own pre-check stands in for the real evaluator's own
     // recursion failure (the `cel` crate doesn't actually overflow at
@@ -624,12 +678,23 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
 
     let mut tree = program.expression().clone();
     paths::rewrite(&mut tree);
+    // Each unguarded `state.` occurrence that is unset against the state
+    // this evaluation actually uses becomes a call to
+    // `paths::UNSET_MARKER_FN`, carrying its own path -- decided per
+    // occurrence, after `rewrite`, rather than structurally over every
+    // path before evaluating at all (issue #657): `has(...)`, `?:`,
+    // `&&`/`||` and `all`/`exists` already guard a marked read exactly
+    // the way `cel`'s own evaluator (`objects.rs`) evaluates those
+    // constructs, so the absent-state rule below applies only if the
+    // whole expression's own result turns out to be the marker's error.
+    paths::mark_unset(&mut tree, &projected_state);
 
     let mut ctx = Context::with_env(Arc::clone(&env));
     ordering::register(&mut ctx);
     equality::register(&mut ctx);
     indexing::register(&mut ctx);
     macros::register(&mut ctx);
+    paths::register(&mut ctx);
     let converted_state = convert::to_cel(&projected_state).map_err(|e| {
         // `core/cel_eval.py::evaluate_cel`'s own `compiled.context(ctx)`
         // (which calls `_to_cel`, raising on a big int the expression
@@ -658,21 +723,43 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
             format!("CEL evaluation failed for {}: {message}", py_repr(expr)),
         ));
     }
-    let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
-        // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
-        // evaluation failed for expr %r: %s", expr, exc)` -- an `if`/
-        // `while` condition's genuine evaluation failure, not the
-        // absent-path-is-false case above (that one only ever warns).
-        // `evaluate_expect`'s own identical-looking error below never
-        // logs this: `core/cel_eval.py::evaluate_cel_expect` doesn't
-        // either.
-        log::error!("CEL evaluation failed for expr {}: {e}", py_repr(expr));
-        CelError::new(
-            expr,
-            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
-        )
-    })?;
-    Ok(truthy(&result))
+    let result = match cel::Value::resolve(&tree, &ctx) {
+        Ok(result) => result,
+        Err(e) => {
+            if let Some(path) = unset_marker_path(&e) {
+                if strict {
+                    return Err(CelError::new(
+                        expr,
+                        format!(
+                            "CEL expression {} reads unset state path {} and is marked strict.",
+                            py_repr(expr),
+                            py_repr(path)
+                        ),
+                    ));
+                }
+                log::warn!(
+                    "CEL expression {} reads unset state path {}; condition is false",
+                    py_repr(expr),
+                    py_repr(path)
+                );
+                return Ok(ConditionOutcome::Unset(path.to_string()));
+            }
+            // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
+            // evaluation failed for expr %r: %s", expr, exc)` -- an
+            // `if`/`while` condition's genuine evaluation failure, not
+            // the absent-state case above (that one only ever warns).
+            // `evaluate_expect`'s own identical-looking error below
+            // never logs this: `core/cel_eval.py::evaluate_cel_expect`
+            // doesn't either.
+            let text = evaluation_error_text(&e);
+            log::error!("CEL evaluation failed for expr {}: {text}", py_repr(expr));
+            return Err(CelError::new(
+                expr,
+                format!("CEL evaluation failed for {}: {text}", py_repr(expr)),
+            ));
+        }
+    };
+    Ok(ConditionOutcome::Value(truthy(&result)))
 }
 
 /// Evaluates a tool/use `expect:` CEL expression and returns a bool.
@@ -736,9 +823,10 @@ pub fn evaluate_expect(
         ));
     }
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
+        let text = evaluation_error_text(&e);
         CelError::new(
             expr,
-            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
+            format!("CEL evaluation failed for {}: {text}", py_repr(expr)),
         )
     })?;
     Ok(truthy(&result))
@@ -902,6 +990,22 @@ pub fn state_paths(expr: &str) -> Result<Vec<String>, CelError> {
         .collect())
 }
 
+/// Every free identifier *expr* reads, in source order -- ported from
+/// `core/cel_eval.py`'s `free_identifiers`, the check-time input
+/// `electricity-compiler`'s own `state_ns::validate_cel_expr` uses the
+/// same way `core/state_ns.py`'s own version does.
+///
+/// # Errors
+///
+/// An expression that doesn't parse returns `Err`, the same way
+/// [`state_paths`] does.
+pub fn free_identifiers(expr: &str) -> Result<Vec<String>, CelError> {
+    check_stack_safety(expr)?;
+    let env = stdlib_env();
+    let program = compile(&env, expr)?;
+    Ok(paths::free_identifiers(program.expression()))
+}
+
 /// Every `state.`-rooted path *expr* reads (raw, `state.`-prefixed,
 /// [`state_paths`]'s own shape, guarded or not -- [`evaluate_condition`]'s
 /// own `project` call narrows by this same, unfiltered list, not just
@@ -1014,27 +1118,26 @@ mod tests {
     }
 
     #[test]
-    fn an_unset_path_past_a_parity_cap_is_still_false_not_a_nesting_error() {
-        // The four parity caps must run *after* the
-        // unset-path short-circuit, matching Circuitry's own order
-        // (compile, then unset path, then evaluate) -- `_compile`
-        // never fails for these shapes, only evaluation does, and
-        // Circuitry never reaches evaluation once the unset path has
-        // already decided the condition is `false`. `state.input.x` is
-        // never set here, and the chain is one past
+    fn an_unset_path_past_a_parity_cap_is_the_nesting_error_not_false() {
+        // Circuitry now always evaluates (issue #657): the four parity
+        // caps run unconditionally, before the unset-path rule ever
+        // gets a chance to decide the result, so a nesting failure past
+        // the cap wins over an unset read it might also contain.
+        // `state.input.x` is never set here, and the chain is one past
         // `MAX_CHAIN_NESTING_DEPTH`.
         let state = Value::Dict(Dict::new());
         let expr = format!("state.input.x{}", "+1".repeat(MAX_CHAIN_NESTING_DEPTH + 1));
-        assert_eq!(evaluate_condition(&expr, &state, false), Ok(false));
+        let err = evaluate_condition(&expr, &state, false).unwrap_err();
+        assert!(err.is_too_deeply_nested());
     }
 
     #[test]
-    fn an_unset_path_past_a_parity_cap_raises_circuitrys_own_strict_text_not_a_nesting_error() {
+    fn an_unset_path_past_a_parity_cap_is_the_nesting_error_even_under_strict() {
         let state = Value::Dict(Dict::new());
         let expr = format!("state.input.x{}", "+1".repeat(MAX_CHAIN_NESTING_DEPTH + 1));
         let err = evaluate_condition(&expr, &state, true).unwrap_err();
-        assert!(!err.is_too_deeply_nested());
-        assert!(err.to_string().contains("strict"));
+        assert!(err.is_too_deeply_nested());
+        assert!(!err.to_string().contains("strict"));
     }
 
     #[test]
@@ -1084,6 +1187,189 @@ mod tests {
             evaluate_condition("has(state.prime.x.value.price)", &state, false),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn ternary_guard_reaches_the_untaken_branch_instead_of_the_rule() {
+        let present = dict(vec![(
+            "input",
+            dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]),
+        )]);
+        let expr = "has(state.input.a.b) ? state.input.a.b.c : 'fallback'";
+        assert_eq!(
+            evaluate_condition(expr, &present, false),
+            Ok(true) // truthy('fallback')
+        );
+    }
+
+    #[test]
+    fn false_ternarys_untaken_branch_never_reads_the_unset_path() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "false ? state.input.x.y : 'fallback'";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(true));
+    }
+
+    #[test]
+    fn two_unset_reads_in_or_names_the_right_hand_one() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "state.input.x.y == 1 || state.input.z.w == 1";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(false));
+        assert_eq!(
+            unset_path(expr, &empty, false),
+            Ok(Some("state.input.z.w".to_string()))
+        );
+    }
+
+    #[test]
+    fn or_with_true_on_the_right_wins_over_the_errored_left() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "state.input.x.y == 1 || true";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(true));
+        assert_eq!(unset_path(expr, &empty, false), Ok(None));
+    }
+
+    #[test]
+    fn exists_deciding_element_wins_over_an_errored_one() {
+        let state = dict(vec![(
+            "input",
+            dict(vec![(
+                "items",
+                Value::List(vec![Value::from(1_i64), Value::from(2_i64)]),
+            )]),
+        )]);
+        let expr = "state.input.items.exists(i, i == 2 || state.input.z.y == 1)";
+        assert_eq!(evaluate_condition(expr, &state, false), Ok(true));
+        assert_eq!(unset_path(expr, &state, false), Ok(None));
+    }
+
+    #[test]
+    fn map_literal_with_an_unset_value_is_unchanged() {
+        let empty = Value::Dict(Dict::new());
+        let expr = "{'k': state.input.missing}";
+        assert_eq!(evaluate_condition(expr, &empty, false), Ok(false));
+        assert_eq!(
+            unset_path(expr, &empty, false),
+            Ok(Some("state.input.missing".to_string()))
+        );
+    }
+
+    #[test]
+    fn strict_ternary_guarded_read_does_not_raise() {
+        let present = dict(vec![(
+            "input",
+            dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]),
+        )]);
+        let expr = "has(state.input.a.b) ? state.input.a.b.c == 1 : true";
+        assert_eq!(evaluate_condition(expr, &present, true), Ok(true));
+    }
+
+    #[test]
+    fn strict_false_and_short_circuit_does_not_raise() {
+        let empty = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_condition("false && state.input.z == 1", &empty, true),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn strict_deciding_or_with_true_does_not_raise() {
+        let state = dict(vec![("input", dict(vec![("force", Value::Bool(true))]))]);
+        let expr = "state.prime.tick.value.price <= 10 || state.input.force";
+        assert_eq!(evaluate_condition(expr, &state, true), Ok(true));
+    }
+
+    #[test]
+    fn free_identifiers_bare_namespace() {
+        assert_eq!(
+            free_identifiers("input.x == 1").unwrap(),
+            vec!["input".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_type_names_and_two_arg_all_are_free_of_their_own_names() {
+        assert_eq!(
+            free_identifiers("type(1) == int && [1, 2].all(i, i > 0)").unwrap(),
+            vec!["int".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_reduce_binds_nothing() {
+        // `cel`'s own `reduce` macro is dropped entirely from this
+        // crate's registration (`macros::register`), so the compiled
+        // call is an undeclared `reduce`, a function name, never an
+        // identifier -- `r`/`i` inside it are, since nothing binds them.
+        assert_eq!(
+            free_identifiers("[0, 1, 2].reduce(r, i, 0, r + 2 * i + 1)").unwrap(),
+            vec![
+                "r".to_string(),
+                "i".to_string(),
+                "r".to_string(),
+                "i".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_three_argument_map_binds_nothing() {
+        assert_eq!(
+            free_identifiers("[1, 2, 3].map(i, i > 0, i * 2)").unwrap(),
+            vec!["i".to_string(), "i".to_string(), "i".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_nested_macros_accumulate_and_shadow() {
+        let expr = "state.input.rows.all(r, r.items.exists(r, r > 0))";
+        assert_eq!(free_identifiers(expr).unwrap(), vec!["state".to_string()]);
+    }
+
+    #[test]
+    fn free_identifiers_message_construction_type_name_counts() {
+        assert_eq!(
+            free_identifiers("Msg{f: 1} == 1").unwrap(),
+            vec!["Msg".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_function_and_method_names_are_not_identifiers() {
+        assert_eq!(
+            free_identifiers("size(state.a) > 0 && state.a.startsWith('x')").unwrap(),
+            vec!["state".to_string(), "state".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_first_name_in_source_order() {
+        assert_eq!(
+            free_identifiers("unit == 1 && stat == 2").unwrap(),
+            vec!["unit".to_string(), "stat".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_strips_a_leading_dot() {
+        assert_eq!(
+            free_identifiers(".unit.text == 1").unwrap(),
+            vec!["unit".to_string()]
+        );
+    }
+
+    #[test]
+    fn free_identifiers_leading_dot_escapes_a_macro_variables_binding() {
+        assert_eq!(
+            free_identifiers("state.input.items.all(v, .v > 0)").unwrap(),
+            vec!["state".to_string(), "v".to_string()]
+        );
+    }
+
+    #[test]
+    fn unset_path_is_none_for_an_ordinary_result() {
+        let state = dict(vec![("a", Value::from(1_i64))]);
+        assert_eq!(unset_path("state.a == 1", &state, false), Ok(None));
     }
 
     #[test]
@@ -1215,6 +1501,46 @@ mod tests {
     fn unknown_function_raises() {
         let state = dict(vec![("a", Value::from(1_i64))]);
         assert!(evaluate_condition("nope(state.a)", &state, false).is_err());
+    }
+
+    #[test]
+    fn undeclared_identifier_is_one_line_in_evaluate_condition() {
+        let err = evaluate_condition("unit == 1", &Value::Dict(Dict::new()), false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for 'unit == 1': undeclared reference to 'unit'"
+        );
+    }
+
+    #[test]
+    fn undeclared_function_is_one_line_in_evaluate_condition() {
+        let err = evaluate_condition("nope(1) == 1", &Value::Dict(Dict::new()), false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'"
+        );
+    }
+
+    #[test]
+    fn undeclared_method_is_one_line_in_evaluate_condition() {
+        let err =
+            evaluate_condition("'a'.nope() == 1", &Value::Dict(Dict::new()), false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for \"'a'.nope() == 1\": undeclared reference to 'nope'"
+        );
+    }
+
+    #[test]
+    fn undeclared_reference_is_one_line_in_evaluate_expect() {
+        let value = Value::from(1_i64);
+        let meta = Value::Dict(Dict::new());
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_expect("nope(value)", &value, &meta, &state).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL evaluation failed for 'nope(value)': undeclared reference to 'nope'"
+        );
     }
 
     #[test]

@@ -404,7 +404,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `if.mode` | string | no | `model` | `model` or `cel` |
 | `if.template` | string | model only | — | LLM evaluates and returns boolean. The runtime wraps it and appends `Answer (yes/no):`, so phrase the ask as yes/no. Reply parsed leniently — `Yes.`, `yes, because …`, `**TRUE**`, `Y` parse as true, `No.`/`false!`/`N` as false (wrapping quotes/markdown/punctuation stripped first); an answer that still doesn't parse raises rather than defaulting to false, so `on_error` applies. Raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`) |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
-| `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
+| `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path whose read decides the result raises instead of making the expression `False` |
 | `then` | array | yes | — | Effects when condition is true |
 | `else` | array | no | `[]` | Effects when condition is false |
 | `threshold` | number | no | `0.5` | Deprecated, no effect: the built-in evaluator is a categorical yes/no with no confidence to cut. Still recorded on `meta.threshold`; `cof check` warns when set. |
@@ -478,7 +478,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `while.mode` | string | no | `model` | `model` or `cel` |
 | `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no. Parsed the same lenient way as `if.template`; raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`, `meta.tokens_sent`/`meta.tokens_received` for the last check and `meta.tokens_sent_total`/`meta.tokens_received_total` summed across every check this loop made) on each check |
 | `while.expr` | string | cel only | — | CEL expression against state |
-| `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path raises instead of making the expression `False` |
+| `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path whose read decides the result raises instead of making the expression `False` |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`). For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
 | `min_iterations` | integer | no | `0` | Minimum iterations to run before the condition is checked at all. A forced pass does not evaluate the condition and discard the answer — it never evaluates it. `while` loops only; on an `each` loop it has no effect and `cof check` warns. |
 | `on_error` | string | no | `fail` | `fail`, `break`, `continue` |
@@ -1043,7 +1043,7 @@ set a literal.
 | Param | Type | Required | Default | Meaning |
 |-------|------|----------|---------|---------|
 | `expr` | string | yes | — | The CEL expression |
-| `strict` | bool | no | `false` | An unset `state.` path fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
+| `strict` | bool | no | `false` | An unset `state.` path whose read decides the result fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
 | `schema` | object | no | — | A JSON Schema the result must match; a mismatch fails the effect, naming each mismatch (`cel: the result does not match params.schema: 1: 'two' is not of type 'integer'`) |
 
 - **Bindings.** The expression sees what an `if` at the same position sees:
@@ -1057,9 +1057,10 @@ set a literal.
   it has one) and a duration an ISO 8601 duration (`PT1H30M`, `PT1.5S`,
   `-PT1M30S`). A result with no JSON form (bytes, a non-finite number, a type)
   fails the effect.
-- **An unset path.** Without `strict`, an unguarded `state.` path that is
-  unset makes the value `null` and logs a warning naming the path, as an `if`
-  does; `has()` guards a path the same way.
+- **An unset path.** Without `strict`, an unguarded `state.` read that is
+  unset and decides the result makes the value `null` and logs a warning
+  naming the path, as an `if` does; `has()`, `?:`, `&&`/`||` and `all`/`exists`
+  guard a read the way CEL defines those constructs.
 - **Literal params.** `cof check` parses `expr` and checks the names it reads
   like any other CEL in the document, so the params are never
   Mustache-rendered and never read `{from: ...}`; `params_json` and any param
@@ -1961,10 +1962,10 @@ the node, so observability sees the skip rather than a gap.
 
 - Mustache templates referencing it render empty:
   `"report on <{{prime.goal.value}}>"` → `"report on <>"`
-- CEL conditions that read it evaluate `False` — a `state.` path that is unset
-  (missing, or resolving through `null`) makes the whole expression `False` by
-  rule, before evaluation, and logs a warning naming the path. That covers
-  comparisons (`state.prime.goal.value == "yes"`), sizes
+- CEL conditions that read it evaluate `False` — a `state.` read that is
+  unset (missing, or resolving through `null`) and decides the result makes
+  the whole expression `False`, and logs a warning naming the path. That
+  covers comparisons (`state.prime.goal.value == "yes"`), sizes
   (`size(state.prime.goal.value) > 0`) and negative tests
   (`state.prime.goal.value != ""`) alike: nothing there is never a satisfied
   condition.
@@ -2038,9 +2039,18 @@ Two CEL rules that surprise people coming from Python:
 Expressions are capped at 4096 characters and parsed once, then cached — a
 loop's `while` expression pays the parser cost on its first iteration only.
 
-Only `state` is in scope. Values are converted into CEL's type system on the
+Only `state` is in scope (plus `value` and `meta` in a `tool`/`use` effect's
+`expect:`, see below). Values are converted into CEL's type system on the
 way in, so an expression cannot reach a Python object's attributes, methods or
 class; anything with no CEL counterpart reads as `null`.
+
+Any other bare name is a compile-time error (`cof check`): CEL's own type
+names (`bool bytes double int list map null_type string type uint`) and a
+macro variable, inside its own macro's body (`all`, `exists`, `exists_one`,
+`map`, `filter`), are the only other names a bare identifier may be. A state
+namespace or a loop binding spelled without `state.` is still wrong, not
+skipped — see [CEL scoping](#cel-scoping-what-statekey-may-name-at-each-nesting-level)
+for the exact messages.
 
 #### CEL scoping: what `state.<key>` may name, at each nesting level
 
@@ -2100,6 +2110,37 @@ effect outputs. Names bound by an enclosing loop here: iter, score.
 
 See `learn/cel_showcase.yml`'s `filter_scores` loop for a runnable example.
 
+**A bare name is the same hard error, worded for what it actually is.**
+Writing a loop binding or a state namespace without the `state.` prefix
+(`score` instead of `state.score`, `input` instead of `state.input`) parses
+as CEL — it is just a different, undeclared name — so `cof check` reports it
+with its own wording rather than the `state.<key>` message above:
+
+```
+CEL expression at 'prime.effects[0].body[0]': 'score' is a loop binding: in
+CEL, write 'state.score'.
+```
+
+```
+CEL expression at 'prime.effects[0]': 'input' is a state namespace: in CEL,
+write 'state.input'.
+```
+
+Anything else undeclared — a typo, a name from the wrong scope — gets the
+third wording, the same `Names bound by an enclosing loop here:` suffix when
+there are any in scope:
+
+```
+CEL expression at 'prime.effects[0]': 'stat' is not defined ('state' is the
+only root). Write 'state.input.stat' for caller-supplied values or
+'state.prime.stat' for effect outputs.
+```
+
+The check reports the first such name in source order; it does not look at
+function or method names (`nope(1)`, `x.nope()` are not bare-name errors —
+see [What fails where](#what-fails-where) for what happens to those at run
+time).
+
 **The one exception: a `tool`/`use` effect's own `expect:` CEL.** Every CEL
 site above binds only `state`. A `tool`/`use` effect's `expect:` (mode `cel`)
 is the one place that is not true: it binds three roots — `value` and `meta`
@@ -2121,14 +2162,21 @@ CEL expression at 'prime.effects[0]' (effect 'gate'): expression does not parse
 ```
 
 At run time an expression that cannot be evaluated — a bad `size()` argument,
-an unknown function — **errors the effect** (`meta.error`) and fails the run,
-the same as a failing tool effect. It never quietly takes the `else` branch.
-Set `on_error: continue` on the conditional to opt into the else-branch
-fallback explicitly; the error is still recorded on `meta.error`.
+an unknown function or method — **errors the effect** (`meta.error`) and
+fails the run, the same as a failing tool effect. It never quietly takes the
+`else` branch. Set `on_error: continue` on the conditional to opt into the
+else-branch fallback explicitly; the error is still recorded on `meta.error`.
+An undeclared identifier, function or method reaching run time (the check
+above doesn't look at function/method names, so `nope(1)` or `x.nope()`
+only fails here) is one line, never a dump of CEL's own internal state:
+
+```
+CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'
+```
 
 Reading *unset* state is not an error: see
-[Disabling Effects](#disabling-effects) — an unset path makes
-the expression `False` and logs a warning naming the path.
+[Disabling Effects](#disabling-effects) — an unset read that decides the
+expression's result makes it `False` and logs a warning naming the path.
 
 #### `strict: true` — when absent state must not pick a branch
 
@@ -2136,7 +2184,7 @@ The default is deliberate: a disabled node or an effect that has not run yet
 reads as `False`, matching the way a template referencing one renders empty.
 For a condition where a missing field silently choosing a branch would be
 unsafe — an order-exit rule, a safety gate — set `strict: true` and an
-unresolved path raises instead:
+unresolved read that decides the result raises instead:
 
 ```yaml
 - type: if
@@ -2155,14 +2203,28 @@ Without `strict`, a `tick` that failed to produce a `price` would evaluate the
 whole condition to `False` and take the *no-exit* branch. With it, the effect
 errors and `on_error` decides what happens next.
 
-`strict` applies to `mode: cel` only, on both `if:` and a loop's `while:`.
+`strict` applies to `mode: cel` only, on both `if:` and a loop's `while:`, and
+only to an unset read that decides the result — one a guard already routes
+around never raises, strict or not:
 
-A path passed to `has()` is exempt from the absent-state rule anywhere in the
-expression — that is what `has()` is for:
+```yaml
+expr: "has(state.prime.score.value) ? state.prime.score.value > 0.8 : true"
+```
+
+The absent-state rule follows evaluation, not the raw text of the
+expression: `has()`, the ternary `?:`, `&&`/`||` and the `all`/`exists`
+macros guard a read exactly the way CEL defines those constructs — an
+untaken ternary branch, the short-circuited side of `&&`/`||`, or an
+`exists` element that already matched never triggers the rule, strict or
+not:
 
 ```yaml
 expr: "has(state.prime.score.value) && state.prime.score.value > 0.8"
 ```
+
+`has(state.prime.score.value)` guards the one read it names; a path that
+doesn't decide the result — because a guard or a short-circuit already
+routed around it — is never a reason to collapse the whole expression.
 
 ### Loop Iteration Paths
 

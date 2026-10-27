@@ -48,7 +48,7 @@ fn a_reserved_name_call_is_worded_like_an_undeclared_function() {
     assert_eq!(
         err.to_string(),
         "CEL evaluation failed for '__electricity_strict_eq(1)': \
-         Undeclared reference to '__electricity_strict_eq'"
+         undeclared reference to '__electricity_strict_eq'"
     );
 }
 
@@ -59,7 +59,7 @@ fn a_reserved_name_call_nested_inside_a_legitimate_has_still_errors() {
     assert_eq!(
         err.to_string(),
         "CEL evaluation failed for 'has(__electricity_python_index(1))': \
-         Undeclared reference to '__electricity_python_index'"
+         undeclared reference to '__electricity_python_index'"
     );
 }
 

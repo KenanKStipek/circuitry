@@ -2485,6 +2485,35 @@
     }
   },
   {
+    "name": "if_cel_bare_namespace_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: c\n    if: {mode: cel, expr: 'input.x == 1'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "CEL expression at 'prime.effects[0]': 'input' is a state namespace: in CEL, write 'state.input'."
+      ],
+      "warnings": []
+    },
+    "run_error": "CEL expression at 'prime.effects[0]': 'input' is a state namespace: in CEL, write 'state.input'.",
+    "definition": null,
+    "definition_error": "ValueError: CEL expression at 'prime.effects[0]': 'input' is a state namespace: in CEL, write 'state.input'.",
+    "digest": "89302b6e0fbfd21edcf8d952da12d10700461488cd2e077e1ec8af66e6890183",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "lint_deprecated_effect_type_alias",
     "files": {
       "doc.yml": "effects:\n  - type: conditional\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
@@ -3556,7 +3585,7 @@
   {
     "name": "lint_legacy_steps_nested_loops_finally_and_seen_dedup",
     "files": {
-      "doc.yml": "steps:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: loop\n        name: inner\n        while: {mode: cel, expr: \"prime.inner.last.marker.value == ''\"}\n        body:\n          - type: prompt\n            name: marker\n            template: 'ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}'\nfinally:\n  - type: conditional\n    name: cleanup\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+      "doc.yml": "steps:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: loop\n        name: inner\n        while: {mode: cel, expr: \"state.prime.inner.last.marker.value == ''\"}\n        body:\n          - type: prompt\n            name: marker\n            template: 'ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}'\nfinally:\n  - type: conditional\n    name: cleanup\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
     },
     "entry": "doc.yml",
     "options": {
@@ -3611,7 +3640,7 @@
               "while_def": {
                 "mode": "cel",
                 "template": null,
-                "expr": "prime.inner.last.marker.value == ''",
+                "expr": "state.prime.inner.last.marker.value == ''",
                 "strict": false
               },
               "each_def": null,
@@ -3697,7 +3726,7 @@
       ]
     },
     "definition_error": null,
-    "digest": "98c0fb5bb6267be76d1cb417f55c91c80b5ab1e9351a1b344a12dd6235cfe017",
+    "digest": "9d17b6443db339cbc32aea7ebb4c33c2f025b783f56ab98b3e14b0e14a9aab4c",
     "comparison": {
       "validate_errors": [
         "exact"
