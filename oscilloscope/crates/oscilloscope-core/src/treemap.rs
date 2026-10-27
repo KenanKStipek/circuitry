@@ -1723,7 +1723,7 @@ mod tests {
     /// `kind_breadcrumb_eligible` excludes `RowKind::If` -- shared
     /// with this treemap's own chain folding, so `gate`'s single
     /// real child (`chosen`) must stay its own tile too, never
-    /// folded into one `gate \u{203a} chosen` tile.
+    /// folded into one `gate › chosen` tile.
     #[test]
     fn a_named_ifs_single_child_does_not_fold_into_a_breadcrumb() {
         use crate::model::flatten_state;

@@ -938,19 +938,22 @@ own rules are unchanged:
     (§3), so such a row cannot be told apart from a running *tool* by
     path and events alone. A row that *does* have a state node applies
     `model::is_running_prompt`'s full criteria instead: `created_at`
-    and no `completed_at`, `meta.adapter`/`meta.model` set and `meta.
-    prompt_chars` recorded, and `meta.waiting_for` empty — a prompt
-    merely queued behind a concurrency slot isn't processing yet (an
-    event-only row can never be merely queued in the first place:
-    `on_effect_start` fires only once a pass or branch actually
-    begins). These fields all come from `runtime.state.prompt_sent`'s
-    own setting (#577), not `meta.prompt_sent` itself: `prompt_chars`
-    and the adapter/model pair are written together in every mode
-    (`full`, `head:<N>`, `sha256`), so a prompt running under `sha256`
-    -- where `meta.prompt_sent` stays `null` -- is counted exactly
-    like one running under `full` (#587). A model-mode `if`/loop
-    condition sets `adapter`/`model` too but never `prompt_chars`, so
-    it is never mistaken for a running prompt here.
+    and no `completed_at`, `meta.adapter`/`meta.model` set and either
+    `meta.prompt_chars` recorded or a non-empty `meta.prompt_sent`,
+    and `meta.waiting_for` empty — a prompt merely queued behind a
+    concurrency slot isn't processing yet (an event-only row can
+    never be merely queued in the first place: `on_effect_start`
+    fires only once a pass or branch actually begins). `prompt_chars`
+    and the adapter/model pair come from `runtime.state.prompt_sent`'s
+    own setting (#577), written together in every mode (`full`,
+    `head:<N>`, `sha256`), so a prompt running under `sha256` -- where
+    `meta.prompt_sent` stays `null` -- is counted exactly like one
+    running under `full` (#587). State a cof build before #577 wrote
+    never has `prompt_chars` at all; a non-empty `meta.prompt_sent`
+    (there under `full`/`head:<N>`, never under `sha256`) still
+    recognises those. A model-mode `if`/loop condition sets `adapter`/
+    `model` too but never either, so it is never mistaken for a
+    running prompt here.
 
     The *estimate* sums each running prompt's own `ceil(chars / 4)`
     from `meta.prompt_chars` when the run recorded it (every mode), or
@@ -1116,9 +1119,11 @@ elapsed time still visibly ticks while the run is otherwise quiet. The
 state pane is built from the one `flatten_state` call `render::build`
 already makes for the plan tree, not a second pass of its own; the
 Cost screen's own by-store tree (§6.3b) is a further, separate pass,
-but only while that screen is actually on display, not on every
-rebuild regardless of which screen is showing, the way screen 2's old
-treemap used to be. Measured against a synthetic 2,000-node state, one
+built only while the screen that actually needs it (Cost itself, or
+the overview, whose own "top" line reads the same tree's first row,
+issue #641) is on display, never regardless of which screen is
+showing, the way screen 2's old treemap used to be. Measured against a
+synthetic 2,000-node state, one
 redraw stays well under `REDRAW_INTERVAL`
 (`render::tests::redraw_from_a_2000_node_state_stays_well_under_the_
 redraw_interval`). That measurement times `render::build` alone, which
@@ -1583,8 +1588,7 @@ top-level phases than `tui::PHASE_GLYPHS` has distinct glyphs for
 their original relative order, and folds every other phase into one
 further `other` band (bucket-wise summed), appended last -- a glyph
 is never reused for two different phases in the legend. No projection
-to the run's own ETA yet, though issue #649 now gives one -- a later
-issue (#641).
+to the run's own ETA, though issue #649 now gives one.
 
 **The largest-stores table** (`oscilloscope-core::cost::
 largest_stores`, drawn by `tui.rs`'s `draw_cost_table`). Always ranks

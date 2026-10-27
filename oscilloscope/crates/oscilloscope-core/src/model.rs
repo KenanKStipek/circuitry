@@ -405,18 +405,32 @@ pub fn subtree_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, u6
 /// prompt_sent` itself, which is `null` under `sha256` — its own
 /// `created_at`/`completed_at`, `meta.adapter` and `meta.model` (set
 /// together, before the call), `meta.prompt_chars` (recorded in every
-/// mode, #577), and that it isn't still queued behind a concurrency
-/// slot. A node that merely exists with `completed_at: null` can be a
-/// tool, or a prompt that hasn't reached the adapter call yet; a
-/// model-mode `if`/loop condition sets `adapter`/`model` too but never
-/// `prompt_chars`, so it is never counted here.
+/// mode since #577) or a non-empty `meta.prompt_sent` (state a build
+/// before #577 wrote), and that it isn't still queued behind a
+/// concurrency slot. A node that merely exists with `completed_at:
+/// null` can be a tool, or a prompt that hasn't reached the adapter
+/// call yet; a model-mode `if`/loop condition sets `adapter`/`model`
+/// too but never either of those, so it is never counted here.
 pub fn is_running_prompt(node: &NodeMeta) -> bool {
     node.created_at.is_some()
         && node.completed_at.is_none()
         && node.meta.get("adapter").and_then(Value::as_str).is_some()
         && node.meta.get("model").and_then(Value::as_str).is_some()
-        && node.meta.get("prompt_chars").is_some_and(|v| !v.is_null())
+        && has_prompt_chars_or_sent_text(&node.meta)
         && node.meta.get("waiting_for").is_none_or(|v| v.is_null())
+}
+
+/// Whether `meta` carries `prompt_chars` (recorded under every mode
+/// since #577) or, for state a cof build before #577 wrote, a
+/// non-empty `prompt_sent` text (`null` under `sha256`, but the
+/// actual prompt under `full`/`head`) -- the one other place #577's
+/// own count could be missing from a real prompt node.
+fn has_prompt_chars_or_sent_text(meta: &Value) -> bool {
+    meta.get("prompt_chars").is_some_and(|v| !v.is_null())
+        || meta
+            .get("prompt_sent")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
 }
 
 /// The estimated input for one running prompt (DESIGN.md §6.3, #587):
@@ -465,11 +479,13 @@ pub fn prompt_sent_or_placeholder(meta: &Value) -> Option<String> {
 
 /// Whether `meta` belongs to a prompt effect at all (#587),
 /// regardless of `runtime.state.prompt_sent`'s mode: `meta.
-/// prompt_chars` is recorded under every mode, and only ever by a
-/// prompt effect (a model-mode `if`/loop condition sets `adapter`/
-/// `model` but never this).
+/// prompt_chars` is recorded under every mode since #577, and a
+/// non-empty `meta.prompt_sent` (state a build before #577 wrote)
+/// otherwise -- only ever set by a prompt effect (a model-mode
+/// `if`/loop condition sets `adapter`/`model` but never either of
+/// these).
 pub fn is_prompt_node(meta: &Value) -> bool {
-    meta.get("prompt_chars").is_some_and(|v| !v.is_null())
+    has_prompt_chars_or_sent_text(meta)
 }
 
 /// Why a plan node was skipped (DESIGN.md §2.2). `Unknown` covers every
@@ -3179,6 +3195,24 @@ mod tests {
                 "{path} should count as a running prompt"
             );
         }
+    }
+
+    /// Issue #587: state written by a cof build before #577 never
+    /// recorded `prompt_chars` at all -- a running `full`/`head`
+    /// prompt there still has its own non-empty `prompt_sent` text to
+    /// recognise it by, and must not drop out of the token bar's
+    /// "what's in flight" count just because that field is missing.
+    #[test]
+    fn is_running_prompt_holds_with_no_prompt_chars_from_before_577() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "full": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": "hello"
+            }}
+        }});
+        let flat = flatten_state(&state);
+        assert!(is_running_prompt(flat.get("prime.full").unwrap()));
+        assert!(is_prompt_node(&flat.get("prime.full").unwrap().meta));
     }
 
     #[test]
