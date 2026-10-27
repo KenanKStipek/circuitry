@@ -348,7 +348,7 @@ impl Adapter for WatsonXAdapter {
             tokens_sent,
             tokens_received,
             finish_reason: None,
-            warnings: crate::ignored_options_warning("watsonx", options, &[]),
+            warnings: crate::ignored_options_warning(&self.name, options, &[]),
             cost_usd: None,
         })
     }

@@ -22,6 +22,7 @@ from circuitry.adapters.groq import GroqAdapter
 from circuitry.adapters.lmstudio import LMStudioAdapter
 from circuitry.adapters.ollama import OllamaAdapter
 from circuitry.allowlist_gate import allowed_adapters
+from circuitry.api import run_orchestration
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.effective_settings import resolve_effective_settings
 from circuitry.cli.runtime_shim import validate
@@ -185,6 +186,17 @@ def test_cof_check_and_run_agree_on_the_issues_reproduction(tmp_path: Path) -> N
         for e in broken_result["errors"]
     )
 
+    run_result = run_orchestration(
+        orchestration_path=doc, config=broken_config, raise_on_error=False
+    )
+    assert not run_result.ok
+    assert run_result.error is not None
+    assert str(run_result.error).startswith("Invalid adapter aliases:\n")
+    assert (
+        "runtime.adapters.apple_fm.adapter must name a built-in adapter"
+        in str(run_result.error)
+    )
+
 
 def test_cof_check_reports_a_broken_alias_used_by_nothing(tmp_path: Path) -> None:
     doc = tmp_path / "alias.yml"
@@ -317,6 +329,72 @@ def test_a_documents_retarget_of_a_config_alias_is_ignored_when_enabled_adapters
     built = build_adapter(adapter_name="local_a", runtime=effective.runtime)
     assert isinstance(built, LMStudioAdapter)
     assert built.base_url == "http://config/v1"
+
+
+def test_a_fully_stripped_retarget_is_not_recorded_as_applied() -> None:
+    # The document's only key for `local_a` is `adapter`, so once it is
+    # dropped nothing from the document actually applies: `runtime`'s own
+    # source must say so ("config", not "orchestration"), and no "Applied
+    # host settings" notice should name `runtime.adapters` for it.
+    cfg = CircuitryConfig(
+        enabled_adapters=["local_a"],
+        default_model="m",
+        runtime=_runtime(local_a={"adapter": "lmstudio", "base_url": "http://config/v1"}),
+    )
+    orch = {"runtime": {"adapters": {"local_a": {"adapter": "openai"}}}}
+    effective = resolve_effective_settings(
+        cfg=cfg, orch=orch, trust_document=True, document_name="doc.yml"
+    )
+    assert effective.sources["runtime"] == "config"
+    assert not any(w.startswith("Applied host settings") for w in effective.warnings)
+
+
+def test_the_applied_settings_notice_precedes_the_alias_retarget_warning() -> None:
+    # `cof check`'s own `orchestration_host_setting_warnings` and `cof run`'s
+    # `resolve_effective_settings` must agree on the order: the notice,
+    # then the alias warning.
+    cfg = CircuitryConfig(
+        enabled_adapters=["local_a"],
+        default_model="m",
+        runtime=_runtime(local_a={"adapter": "lmstudio", "base_url": "http://config/v1"}),
+    )
+    orch = {
+        "runtime": {
+            "adapters": {"local_a": {"adapter": "openai", "base_url": "http://doc/v1"}}
+        }
+    }
+    effective = resolve_effective_settings(
+        cfg=cfg, orch=orch, trust_document=True, document_name="doc.yml"
+    )
+    from circuitry.cli.effective_settings import orchestration_host_setting_warnings
+
+    check_warnings = orchestration_host_setting_warnings(orch, cfg, trust_document=True, document_name="doc.yml")
+    for warnings in (effective.warnings, check_warnings):
+        notice_index = next(
+            i for i, w in enumerate(warnings) if w.startswith("Applied host settings")
+        )
+        alias_index = next(
+            i for i, w in enumerate(warnings) if "adapter from doc.yml ignored" in w
+        )
+        assert notice_index < alias_index, warnings
+
+
+def test_an_untrusted_documents_plugin_warning_precedes_its_runtime_warning() -> None:
+    # `cof check`'s own untrusted-document order (`_split_orchestration_
+    # plugins` then `_split_orchestration_runtime`) must match `cof run`'s.
+    cfg = CircuitryConfig(default_model="m")
+    orch = {
+        "plugins": ["not_listed"],
+        "runtime": {"adapters": {"ollama": {"base_url": "http://x"}}},
+    }
+    effective = resolve_effective_settings(cfg=cfg, orch=orch, document_name="doc.yml")
+    plugin_index = next(
+        i for i, w in enumerate(effective.warnings) if w.startswith("Skipped plugin")
+    )
+    runtime_index = next(
+        i for i, w in enumerate(effective.warnings) if w.startswith("Ignored runtime.")
+    )
+    assert plugin_index < runtime_index, effective.warnings
 
 
 def test_a_documents_base_url_only_override_still_applies_when_enabled_adapters_is_set() -> None:

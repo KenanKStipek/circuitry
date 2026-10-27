@@ -562,12 +562,12 @@ fn cancelled_error(job_id: &Value) -> AdapterError {
 
 /// `adapters/cyberdiner.py::CyberdinerAdapter`.
 pub struct CyberdinerAdapter {
+    /// `cyberdiner`, or an alias's own name (#656).
+    pub name: String,
     /// Raw -- `cfg.get("expo_url") or ""`. See `openai.rs::
     /// OpenAiAdapter::base_url`'s own doc comment:
     /// `.rstrip("/")`'d in `generate()`/`check()` themselves, after
     /// the same earlier checks Python runs first.
-    /// `cyberdiner`, or an alias's own name (#656).
-    pub name: String,
     pub expo_url: Value,
     /// Raw -- `cfg.get("token") or ""`. Never itself a source of a
     /// non-string failure: Python's own

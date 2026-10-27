@@ -109,7 +109,10 @@ def _strip_disallowed_adapter_retargets(
     if not warnings:
         return orch_runtime, []
     result = dict(orch_runtime)
-    result["adapters"] = filtered
+    if filtered:
+        result["adapters"] = filtered
+    else:
+        result.pop("adapters", None)
     return result, warnings
 
 
@@ -265,10 +268,10 @@ def orchestration_host_setting_warnings(
             orch_runtime, enabled_adapters=cfg.enabled_adapters, document_name=document_name
         )
         return [
-            *alias_warnings,
             *_applied_host_settings_notice(
                 orch_runtime, orch_plugins, cfg=cfg, document_name=document_name
             ),
+            *alias_warnings,
         ]
     return [
         *_split_orchestration_plugins(orch_plugins, cfg=cfg, trusted=False)[1],
@@ -527,7 +530,6 @@ def resolve_effective_settings(
                 document_name=document_name,
             )
         )
-    warnings.extend(runtime_warnings)
 
     if cli_plugins is not None:
         plugins = list(cli_plugins)
@@ -551,6 +553,7 @@ def resolve_effective_settings(
             if orch_plugins
             else ("config" if cfg.plugins else "default")
         )
+    warnings.extend(runtime_warnings)
 
     runtime = _merge_runtime(cfg.runtime, orch_runtime)
     sources["runtime"] = (

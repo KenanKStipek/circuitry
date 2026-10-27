@@ -39,6 +39,7 @@ fn transport_failure_error(failure: TransportFailure) -> AdapterError {
 /// own scripted `(returncode, stdout, stderr)` triples
 /// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 pub fn interpret_outcome(
+    name: &str,
     outcome: &crate::transport::CurlOutcome,
     target_model: &str,
     url: &str,
@@ -138,7 +139,7 @@ pub fn interpret_outcome(
         tokens_sent: None,
         tokens_received: None,
         finish_reason: None,
-        warnings: crate::ignored_options_warning("replicate", options, &[]),
+        warnings: crate::ignored_options_warning(name, options, &[]),
         cost_usd: None,
     })
 }
@@ -220,7 +221,15 @@ impl Adapter for ReplicateAdapter {
         let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
             .await
             .map_err(transport_failure_error)?;
-        interpret_outcome(&outcome, target_model, &url, &api_token, wait, options)
+        interpret_outcome(
+            &self.name,
+            &outcome,
+            target_model,
+            &url,
+            &api_token,
+            wait,
+            options,
+        )
     }
 
     async fn check(&self) -> CheckResult {

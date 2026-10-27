@@ -181,7 +181,11 @@ fn strip_disallowed_adapter_retargets(
         return (orch_runtime.clone(), Vec::new());
     }
     let mut result = orch_runtime.clone();
-    result.insert(Value::Str("adapters".to_string()), Value::Dict(filtered));
+    if filtered.is_empty() {
+        result.shift_remove(&Value::Str("adapters".to_string()));
+    } else {
+        result.insert(Value::Str("adapters".to_string()), Value::Dict(filtered));
+    }
     (result, warnings)
 }
 

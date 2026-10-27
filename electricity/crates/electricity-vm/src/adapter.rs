@@ -287,12 +287,22 @@ impl AdapterRegistry {
     /// `adapters/factory.py::alias_config_errors` -- why each alias in
     /// *runtime_config* does not build, in name order; `[]` when all
     /// do. Every alias in the merged runtime is checked up front here,
-    /// whether or not any effect actually selects it (#656).
+    /// whether or not any effect actually selects it (#656). A
+    /// litellm-target alias is skipped -- litellm itself stays
+    /// unbuildable in this engine (it embeds the Python `litellm`
+    /// package, which electricity neither embeds nor calls out to),
+    /// refused only when actually used, never merely for being
+    /// defined -- unless the alias's own name collides with a
+    /// built-in adapter, which is reported regardless of its target.
     pub fn alias_config_errors(&self, runtime_config: &Value) -> Vec<String> {
         let mut names = alias_names(runtime_config);
         names.sort();
         names
             .into_iter()
+            .filter(|name| {
+                crate::adapter_names::ADAPTER_NAMES.contains(&name.as_str())
+                    || alias_target(name, runtime_config).as_deref() != Some("litellm")
+            })
             .filter_map(|name| match self.build(&name, runtime_config) {
                 Err(e) if e.py_class == PyExc::ValueError => Some(e.message),
                 _ => None,
@@ -401,7 +411,22 @@ impl AdapterRegistry {
         }
         let mut settings = entry.clone();
         settings.shift_remove(&Value::Str("adapter".to_string()));
-        builder(name, &Value::Dict(settings))
+        builder(name, &Value::Dict(settings)).map_err(|err| {
+            // A builder's own `ValueError`/`TypeError` for a malformed setting
+            // (`adapters/factory.py::_build_alias`'s own `except (ValueError,
+            // TypeError)`): named with the alias's own block, unless the
+            // message already does (the CLI targets' `env`/`unset_env`/
+            // `extra_args` errors above, built with *name* already) -- then
+            // it is kept verbatim, never prefixed twice.
+            if !matches!(err.py_class, PyExc::ValueError | PyExc::TypeError) {
+                return err;
+            }
+            let prefix = format!("runtime.adapters.{name}");
+            if err.message.starts_with(&prefix) {
+                return err;
+            }
+            value_error(format!("{prefix}: {}", err.message))
+        })
     }
 }
 
@@ -763,5 +788,103 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn alias_config_errors_skips_a_litellm_target_alias_but_not_a_builtin_named_one() {
+        // litellm has no builder in this registry (as in the real one --
+        // it stays unbuildable in electricity), so building it always
+        // fails; a defined but unused alias of it must not be reported,
+        // but a name that collides with a built-in adapter still must be,
+        // regardless of its target (#656).
+        let registry = alias_registry();
+        let rt = runtime(entry(&[
+            (
+                "unused_litellm_alias",
+                entry(&[("adapter", Value::Str("litellm".to_string()))]),
+            ),
+            (
+                "openai",
+                entry(&[("adapter", Value::Str("litellm".to_string()))]),
+            ),
+        ]));
+        let errors = registry.alias_config_errors(&rt);
+        assert_eq!(
+            errors,
+            vec![
+                "runtime.adapters.openai.adapter is set, but 'openai' is a built-in adapter; \
+                 an alias needs a name of its own"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_builders_own_value_error_for_a_malformed_setting_is_named_for_the_alias() {
+        // `adapters/factory.py::_build_anthropic`'s own `max_tokens` int()
+        // failure, ported: a builder's own `ValueError`/`TypeError` for a
+        // malformed setting (never one that already names the alias's own
+        // block, see the next test) is reported as `runtime.adapters.
+        // <alias>: <the builder's own message>` (#656).
+        let mut registry = AdapterRegistry::new();
+        registry.register(
+            "int_like",
+            Box::new(|_name, cfg| {
+                let raw = cfg
+                    .as_dict()
+                    .and_then(|d| d.get(&Value::Str("max_tokens".to_string())));
+                match raw {
+                    Some(value @ Value::Str(_)) => Err(AdapterError {
+                        message: format!(
+                            "invalid literal for int() with base 10: {}",
+                            value.py_repr()
+                        ),
+                        retry: RetryInfo::not_retryable(),
+                        py_class: PyExc::ValueError,
+                    }),
+                    _ => Ok(Box::new(NamedStub("ok".to_string())) as Box<dyn Adapter>),
+                }
+            }),
+        );
+        let rt = runtime(entry(&[(
+            "my_alias",
+            entry(&[
+                ("adapter", Value::Str("int_like".to_string())),
+                ("max_tokens", Value::Str("x".to_string())),
+            ]),
+        )]));
+        assert_eq!(
+            build_err(&registry, "my_alias", &rt),
+            "runtime.adapters.my_alias: invalid literal for int() with base 10: 'x'"
+        );
+    }
+
+    #[test]
+    fn a_builders_own_error_already_naming_the_aliass_block_is_kept_verbatim() {
+        // The CLI targets' own `env`/`unset_env`/`extra_args` errors
+        // (`electricity-adapters::config::env_pairs`, built with the
+        // alias's own name already) must never be prefixed twice.
+        let mut registry = AdapterRegistry::new();
+        registry.register(
+            "env_like",
+            Box::new(|name, _cfg| {
+                Err(AdapterError {
+                    message: format!(
+                        "runtime.adapters.{name}.env must be a mapping of variable names \
+                         to strings, got str"
+                    ),
+                    retry: RetryInfo::not_retryable(),
+                    py_class: PyExc::ValueError,
+                })
+            }),
+        );
+        let rt = runtime(entry(&[(
+            "my_alias",
+            entry(&[("adapter", Value::Str("env_like".to_string()))]),
+        )]));
+        assert_eq!(
+            build_err(&registry, "my_alias", &rt),
+            "runtime.adapters.my_alias.env must be a mapping of variable names to strings, got str"
+        );
     }
 }

@@ -273,6 +273,7 @@ A config can give an adapter a name of its own, with settings of its own: a diff
   | Target `host_claude` | `runtime.adapters.<alias>.adapter cannot be 'host_claude': it is supplied at run time by circuitry-mcp, never built from config` |
   | Alias named like a built-in adapter (any name `cof list --extensions` shows) | `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a name of its own` |
   | `env`/`unset_env`/`extra_args` (CLI targets) | not a mapping, a non-string value, or a variable name that does not match `[A-Za-z_][A-Za-z0-9_]*` |
+  | A malformed setting the target's own builder rejects (e.g. `max_tokens: "x"`) | the builder's own message, prefixed `runtime.adapters.<alias>: ` unless it already names the alias's own block (the `env`/`unset_env`/`extra_args` errors above always do) |
 
   A name that sets no `adapter` is not an alias, whatever else it sets.
 - **Validated up front.** Every alias in the run's merged runtime (config plus a by-path document's) is built up front, whether or not the document uses it. `cof check` lists one error per broken alias, in name order, even with `--skip-preflight`. `cof run` fails before the first effect with an `Invalid adapter aliases:` block, one line per broken alias, and writes `--out` like any other configuration error. Preflight never sees an invalid alias; `cof doctor` is unchanged (one row per alias).

@@ -10,7 +10,8 @@
       "bad_host": {"adapter": "host_claude"},
       "bad_env_type": {"adapter": "claude_code", "env": "A=1"},
       "bad_env_value": {"adapter": "claude_code", "env": {"CLAUDE_CONFIG_DIR": 5}},
-      "bad_env_name": {"adapter": "claude_code", "env": {"BAD-NAME": "secret-marker"}}
+      "bad_env_name": {"adapter": "claude_code", "env": {"BAD-NAME": "secret-marker"}},
+      "bad_max_tokens": {"adapter": "anthropic", "max_tokens": "x"}
     }
   }
 }

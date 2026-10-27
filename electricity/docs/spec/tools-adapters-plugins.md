@@ -1047,6 +1047,22 @@ password database), nothing else is expanded. Every `env` value is replaced by `
 `runtime.effective_settings` never holds one, and `Debug` shows names only. `claude_code`/`pi`
 can also be an alias's own target — see §3.14.
 
+**Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
+failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt
+outright. stdout/stderr not valid UTF-8 escapes as CPython's own `UnicodeDecodeError`, never
+wrapped as an `AdapterCallError` at all — `classify_exception` finds nothing retryable in it
+either. **Cost.** These are the first electricity adapters that report one at all —
+`meta.cost_usd` and `runtime.last_run.totals.cost_usd` flow through the same, already-wired code
+every other adapter's own `cost_usd` field would (`core/prompt.py`; `electricity_vm::exec::
+prompt`), these two adapters are only its first end-to-end exercise.
+
+**Ported** (issue #520, `electricity-adapters::{claude_code, pi}`, over part A's own
+`electricity_tools::agent_cli`): every rule above, with a fourteen-case conformance suite
+(`c520-*`) against fake `claude`/`pi` binaries — never a real CLI, enforced by its own guard
+test. Registered in `build_registry()` right after `host_claude`; the unbuildable set after this
+lane is `litellm` alone, which stays refused permanently (§13's own settled ruling: it imports
+the Python `litellm` package directly, which electricity neither embeds nor reimplements).
+
 ### 3.14 Adapter aliases
 
 `adapters/factory.py::_build_alias`/`alias_config_errors`, `electricity_vm::adapter::
@@ -1079,14 +1095,25 @@ never showing an `env` value:
   matches [A-Za-z_][A-Za-z0-9_]*`; `runtime.adapters.<alias>.env.<NAME> must be a string, got
   <type>`; `unset_env`/`extra_args` errors name the alias too.
 
+**A builder with no `name` parameter can't be aliased** (detected by inspecting the builder's own
+signature, never by catching the `TypeError` a mismatched call would raise) — reported the same
+way, `runtime.adapters.<alias>.adapter targets <target>, which cannot be aliased`. A builder's
+own `ValueError`/`TypeError` for a malformed setting (an `int()` conversion failing on a bad
+`max_tokens`, say) is reported as `runtime.adapters.<alias>: <the builder's own message>`, unless
+that message already names the alias's own block itself (the CLI targets' `env`/`unset_env`/
+`extra_args` errors above do, from the start) — then it is reported verbatim, never prefixed
+twice.
+
 **Validated up front.** `electricity::lib`'s own run wiring builds every alias in the merged
 runtime (config plus a by-path document's) right after `pre_input_checks`, before preflight or
-any effect dispatches, whether or not the document uses it — a litellm-target alias is skipped
-(below), so a defined but unused one is fine. Any error fails the run with `Invalid adapter
-aliases:` plus one `  - ` line per broken alias, in name order, identical text to `cof`'s.
-Preflight builds adapters from *config*'s `runtime` plus the aliases the run's own merged runtime
-defines (`with_document_aliases` in `cof`), and a failing alias is soft or hard like any known
-adapter only when it builds (`is_known_adapter`).
+any effect dispatches, whether or not the document uses it, through `AdapterRegistry::
+alias_config_errors` — a litellm-target alias is skipped there (below), unless its own name
+collides with a built-in adapter (reported regardless of its target), so a defined but unused one
+is fine. Any error fails the run with `Invalid adapter aliases:` plus one `  - ` line per broken
+alias, in name order, identical text to `cof`'s. Preflight builds adapters from *config*'s
+`runtime` plus the aliases the run's own merged runtime defines (`with_document_aliases` in
+`cof`), and a failing alias is soft or hard like any known adapter only when it builds
+(`is_known_adapter`).
 
 **`litellm` stays unbuildable.** `AdapterRegistry::build`'s own registry has no `litellm`
 builder, so a direct `provider: litellm` already refuses with the preview marker
@@ -1098,37 +1125,23 @@ never reaches the check at all.
 
 **Strict allowlist.** `electricity-config::effective_settings_with_profile` applies the same rule
 `cli/effective_settings.py::_strip_disallowed_adapter_retargets` does: with `enabled_adapters`
-set, a document's own `runtime.adapters.<name>.adapter` key is dropped before the merge, with the
-warning `runtime.adapters.<name>.adapter from <document> ignored: with enabled_adapters set, only
-config defines adapter aliases` — every document electricity runs is trusted (§3.13's own doc
-comment doesn't apply here; this file's module doc comment does), so without this rule a trusted
-document could point an allowlisted alias at an adapter the allowlist doesn't list. Other keys in
-the same block (a `base_url` override, say) still apply.
+set, a document's own `runtime.adapters.<name>.adapter` key is dropped before the merge (the
+whole key is dropped, not left behind as an empty `{}` block, when nothing else is left in that
+entry), with the warning `runtime.adapters.<name>.adapter from <document> ignored: with
+enabled_adapters set, only config defines adapter aliases` — every document electricity runs is
+trusted (this module's own doc comment, at the top of `effective_settings.rs`), so without this
+rule a trusted document could point an allowlisted alias at an adapter the allowlist doesn't
+list. Other keys in the same block (a `base_url` override, say) still apply.
 
 Ported with `c656-*` conformance cases: an alias of any adapter in one run (several
 OpenAI-compatible endpoints plus a keyless-credential one, through the mock HTTP server), every
 config error's exact text in one run used by nothing, a keyless alias's preflight soft
-classification, and the strict-allowlist rule ignoring a document's retarget while a `base_url`
-override still applies. `c579-cli-alias-config-errors` is replaced by `c656-alias-config-errors`
+classification, the ignored-options warning naming an alias rather than its target, and the
+strict-allowlist rule ignoring a document's retarget (an `adapter:` key alone, with no other
+settings left behind). `c579-cli-alias-config-errors` is replaced by `c656-alias-config-errors`
 (its own `{"adapter": "openai"}` entry is valid now); the other four original `c579-*` alias
 cases (two `claude_code` aliases, a `pi` alias and both bases in one run, a default-adapter
 alias, an alias's missing binary hard and soft) are unchanged.
-
-**Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
-failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt
-outright. stdout/stderr not valid UTF-8 escapes as CPython's own `UnicodeDecodeError`, never
-wrapped as an `AdapterCallError` at all — `classify_exception` finds nothing retryable in it
-either. **Cost.** These are the first electricity adapters that report one at all —
-`meta.cost_usd` and `runtime.last_run.totals.cost_usd` flow through the same, already-wired code
-every other adapter's own `cost_usd` field would (`core/prompt.py`; `electricity_vm::exec::
-prompt`), these two adapters are only its first end-to-end exercise.
-
-**Ported** (issue #520, `electricity-adapters::{claude_code, pi}`, over part A's own
-`electricity_tools::agent_cli`): every rule above, with a fourteen-case conformance suite
-(`c520-*`) against fake `claude`/`pi` binaries — never a real CLI, enforced by its own guard
-test. Registered in `build_registry()` right after `host_claude`; the unbuildable set after this
-lane is `litellm` alone, which stays refused permanently (§13's own settled ruling: it imports
-the Python `litellm` package directly, which electricity neither embeds nor reimplements).
 
 ---
 

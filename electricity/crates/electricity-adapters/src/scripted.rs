@@ -748,7 +748,7 @@ impl Adapter for ScriptedAdapter {
                     tokens_sent,
                     tokens_received,
                     finish_reason,
-                    warnings: crate::ignored_options_warning("scripted", options, &[]),
+                    warnings: crate::ignored_options_warning(&self.name, options, &[]),
                     cost_usd: None,
                 })
             }

@@ -1301,21 +1301,7 @@ pub async fn run_orchestration_with_config(
     // `profile_provider_unbuildable`, each resolved through its own
     // alias target first), never merely for being defined.
     let alias_check_runtime = effective.runtime.clone().unwrap_or(Value::None);
-    let mut alias_names = electricity_vm::adapter::alias_names(&alias_check_runtime);
-    alias_names.retain(|name| {
-        electricity_vm::adapter::alias_target(name, &alias_check_runtime).as_deref()
-            != Some("litellm")
-    });
-    alias_names.sort();
-    let alias_errors: Vec<String> = alias_names
-        .into_iter()
-        .filter_map(|name| match adapters.build(&name, &alias_check_runtime) {
-            Err(err) if err.py_class == electricity_vm::adapter::PyExc::ValueError => {
-                Some(err.message)
-            }
-            _ => None,
-        })
-        .collect();
+    let alias_errors = adapters.alias_config_errors(&alias_check_runtime);
     if !alias_errors.is_empty() {
         fail!(format!(
             "Invalid adapter aliases:\n{}",

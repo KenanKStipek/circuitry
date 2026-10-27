@@ -541,6 +541,7 @@ fn replicate_outcome_interpretation_matches_circuitry() {
         let wait = i64_opt(get(case, "wait")).unwrap();
         let options = GenerateOptions::default();
         let actual = replicate::interpret_outcome(
+            "replicate",
             &outcome,
             model,
             "https://api.replicate.com/v1/models/meta/llama/predictions",

@@ -1049,3 +1049,157 @@ async fn a_tool_naming_a_provider_that_is_not_a_cof_plugin_reaches_preflights_re
             .is_some()
     );
 }
+
+/// Issue #656: a used alias of `litellm` named directly by the
+/// document's own top-level `adapter:` is resolved to its target
+/// before the unbuildable check, so it gets the same up-front,
+/// stateless refusal naming `litellm` the document-level `adapter:
+/// litellm` case gets above -- never the alias's own name.
+#[tokio::test]
+async fn a_document_level_adapter_alias_of_litellm_is_refused_naming_the_target() {
+    let dir = temp_dir("document-adapter-alias-refusal");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"adapters": {"my_litellm": {"adapter": "litellm"}}}}"#,
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: my_litellm\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("litellm"));
+    assert!(!error.contains("my_litellm"));
+    assert!(error.contains("refused permanently"), "{error}");
+}
+
+/// Issue #656's own counterpart to
+/// `a_profile_provider_naming_an_unbuildable_adapter_on_an_enabled_prompt_is_refused`:
+/// a profile `provider:` naming a *litellm alias* on an enabled prompt is
+/// resolved to `litellm` before the unbuildable check, so it is refused
+/// the same way a direct `provider: litellm` override would be.
+#[tokio::test]
+async fn a_profile_provider_naming_a_litellm_alias_on_an_enabled_prompt_is_refused() {
+    let dir = temp_dir("profile-provider-litellm-alias-enabled");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"adapters": {"my_litellm": {"adapter": "litellm"}}}}"#,
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: prompt\n    name: p\n    template: hi\n",
+    );
+    let profile = write(&dir, "p.yml", "effects:\n  p:\n    provider: my_litellm\n");
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("litellm"));
+    assert!(!error.contains("my_litellm"));
+}
+
+/// The same profile, but on a disabled prompt -- never dispatched, so
+/// the override's own alias is never even looked at.
+#[tokio::test]
+async fn the_same_litellm_alias_provider_on_a_disabled_prompt_runs() {
+    let dir = temp_dir("profile-provider-litellm-alias-disabled");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"adapters": {"my_litellm": {"adapter": "litellm"}}}}"#,
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: prompt\n    name: p\n    template: hi\n",
+    );
+    let profile = write(
+        &dir,
+        "p.yml",
+        "effects:\n  p:\n    provider: my_litellm\n    enabled: false\n",
+    );
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+}
+
+/// Issue #656: a used alias of `litellm` that neither the document-level
+/// refusal nor the profile-override refusal above ever sees -- a `use`
+/// child's own content is never walked by either static check (both
+/// doc comments say so) -- still gets the identical refusal, naming
+/// `litellm`, the moment the VM actually dispatches that prompt
+/// (`exec/prompt.rs`'s own `is_unbuildable`, resolved through the
+/// alias's target first).
+#[tokio::test]
+async fn an_alias_of_litellm_inside_a_use_child_is_refused_at_dispatch_naming_the_target() {
+    let dir = temp_dir("use-child-litellm-alias");
+    let replies_path = write(&dir, "scripted-replies.yaml", "{}\n");
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(
+            r#"{{"runtime": {{"adapters": {{"my_litellm": {{"adapter": "litellm"}}, "scripted": {{"replies_file": "{}"}}}}}}}}"#,
+            replies_path.display()
+        ),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: scripted\nmodel: m\neffects:\n  - type: use\n    name: child\n    inline: |\n      effects:\n        - type: prompt\n          name: p\n          provider: my_litellm\n          template: hi\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok, "expected a refusal, got: {result:?}");
+    let error = result.error.unwrap();
+    assert!(error.contains("litellm"), "{error}");
+    assert!(!error.contains("my_litellm"), "{error}");
+}
+
+/// Issue #656: a litellm alias config defines but nothing in the
+/// document ever selects is fine -- it is never built, so it never
+/// reaches any of the three unbuildable checks above.
+#[tokio::test]
+async fn a_defined_but_unused_litellm_alias_is_fine() {
+    let dir = temp_dir("unused-litellm-alias");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"adapters": {"my_litellm": {"adapter": "litellm"}}}}"#,
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: parse\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import re
@@ -557,12 +558,20 @@ def _build_alias(name: str, cfg: dict[str, Any], adapters_cfg: dict[str, Any]) -
         )
     settings = {key: value for key, value in cfg.items() if key != "adapter"}
     builder = ADAPTER_REGISTRY[target]
-    try:
-        return builder(settings, name=name)
-    except TypeError as exc:
+    if "name" not in inspect.signature(builder).parameters:
         raise ValueError(
             f"runtime.adapters.{name}.adapter targets {target!r}, which cannot be aliased"
-        ) from exc
+        )
+    try:
+        return builder(settings, name=name)
+    except (ValueError, TypeError) as exc:
+        message = str(exc)
+        prefix = f"runtime.adapters.{name}"
+        # The CLI builders' own env/unset_env/extra_args errors already
+        # name the alias's block (they take adapter_name=name); only a
+        # builder's unlabelled error (e.g. int()'s own message) needs it
+        # added.
+        raise ValueError(message if message.startswith(prefix) else f"{prefix}: {message}") from exc
 
 
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
@@ -595,4 +604,4 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
             "Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution."
         )
 
-    return builder(cfg, name=adapter_name)
+    return builder(cfg)
