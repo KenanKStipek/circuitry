@@ -32,7 +32,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.ok == true",
@@ -67,7 +68,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.prime.get_role.value == 'admin'",
@@ -113,7 +115,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.items) >= 1",
@@ -150,7 +153,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.items) >= 1",
@@ -174,7 +178,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == true && state.b == true",
@@ -208,7 +213,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == true || state.b == true",
@@ -242,7 +248,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.status != 'ok'",
@@ -266,7 +273,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.msg == 'done!'",
@@ -290,7 +298,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "true",
@@ -303,7 +312,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "false",
@@ -316,7 +326,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 == 1",
@@ -329,7 +340,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a.b.c.d.e.f == 42",
@@ -408,7 +420,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "",
@@ -421,7 +434,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "   ",
@@ -434,7 +448,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a' && state.x == 'a'",
@@ -458,7 +473,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "",
@@ -502,60 +518,8 @@
         ]
       ]
     },
-    "strict": false
-  },
-  {
-    "expr": "size(state.a) > nope(1)",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": [
-        [
-          {
-            "t": "str",
-            "v": "a"
-          },
-          {
-            "t": "list",
-            "v": [
-              {
-                "t": "int",
-                "v": "1"
-              }
-            ]
-          }
-        ]
-      ]
-    },
-    "strict": false
-  },
-  {
-    "expr": "nope(state.a)",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": [
-        [
-          {
-            "t": "str",
-            "v": "a"
-          },
-          {
-            "t": "int",
-            "v": "1"
-          }
-        ]
-      ]
-    },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.input.n) == 1",
@@ -590,7 +554,139 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "size(state.a) > nope(1)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'size(state.a) > nope(1)': undeclared reference to 'nope'"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "nope(state.a)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'nope(state.a)': undeclared reference to 'nope'"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "unit == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'unit == 1': undeclared reference to 'unit'"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "'a'.nope() == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for \"'a'.nope() == 1\": undeclared reference to 'nope'"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[1, 2].map(i, unit.text) == ['a', 'a']",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for \"[1, 2].map(i, unit.text) == ['a', 'a']\": undeclared reference to 'unit'"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "{'first': unit.text} == {'first': 'a'}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for \"{'first': unit.text} == {'first': 'a'}\": undeclared reference to 'unit'"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "nope(value)",
+    "meta": {
+      "t": "dict",
+      "v": []
+    },
+    "mode": "expect",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'nope(value)': undeclared reference to 'nope'"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "value": {
+      "t": "int",
+      "v": "1"
+    }
   },
   {
     "expr": "state.nonexistent.key == 'x'",
@@ -603,7 +699,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": "state.nonexistent.key"
   },
   {
     "expr": "state.prime.a.value.count == 2",
@@ -648,7 +745,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": "state.prime.a.value.count"
   },
   {
     "expr": "size(state.prime.a.value) > 0",
@@ -693,7 +791,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": "state.prime.a.value"
   },
   {
     "expr": "state.prime.typo.value == 1",
@@ -706,7 +805,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": "state.prime.typo.value"
   },
   {
     "expr": "state.a.n == 0",
@@ -771,7 +871,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a.s == ''",
@@ -836,7 +937,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.a.l) == 0",
@@ -901,7 +1003,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a.b == false",
@@ -966,7 +1069,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.input.name)",
@@ -1001,7 +1105,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.input.name)",
@@ -1025,7 +1130,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.input.n) && state.input.n > 1",
@@ -1060,7 +1166,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.input.n) && state.input.n > 1",
@@ -1084,7 +1191,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!has(state.input.n) || state.input.n > 1",
@@ -1108,7 +1216,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!has(state.input.n) || state.input.n > 1",
@@ -1121,7 +1230,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.input.n)",
@@ -1134,7 +1244,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!has(state.a.b) || has(state.a.b.c)",
@@ -1147,7 +1258,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.a.b) || has(state.a.b.c)",
@@ -1160,7 +1272,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.prime.x.value.price)",
@@ -1205,7 +1318,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!state.prime.x.value",
@@ -1251,7 +1365,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!!state.prime.x.value",
@@ -1297,7 +1412,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "(state.input.ok ? state.input.a : state.input.b) == 1",
@@ -1352,7 +1468,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "(state.input.ok ? state.input.a : state.input.b) == 2",
@@ -1407,7 +1524,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.items.all(i, i > 0)",
@@ -1465,7 +1583,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.items.all(i, i > 1)",
@@ -1523,7 +1642,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.items.exists(i, i == 3)",
@@ -1581,7 +1701,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.items.exists(i, i == 9)",
@@ -1639,7 +1760,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.items.exists_one(i, i > 2)",
@@ -1697,7 +1819,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.items.exists_one(i, i > 1)",
@@ -1755,7 +1878,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.input.items.map(i, i * 2)) == 3",
@@ -1813,7 +1937,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.input.items.filter(i, i > 1)) == 2",
@@ -1871,7 +1996,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.empty.all(i, i > 0)",
@@ -1929,7 +2055,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.rows.exists(r, r.n > 4)",
@@ -1995,7 +2122,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l.map(x, x > 1, x * 10) == [20]",
@@ -2028,7 +2156,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 == true",
@@ -2041,7 +2170,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 != true",
@@ -2054,7 +2184,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.n == state.input.flag",
@@ -2099,7 +2230,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "'1' == 1",
@@ -2112,7 +2244,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 == 1.0",
@@ -2125,7 +2258,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 == 1u",
@@ -2138,7 +2272,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.a == [1, 2]",
@@ -2203,7 +2338,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.m == {'k': 'v'}",
@@ -2268,7 +2404,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.input.s) == 3",
@@ -2383,7 +2520,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.input.l) == 2",
@@ -2498,7 +2636,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.input.m) == 3",
@@ -2613,7 +2752,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "string(state.input.n) == '7'",
@@ -2728,7 +2868,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "int(state.input.sn) == 42",
@@ -2843,7 +2984,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.s.startsWith('a')",
@@ -2958,7 +3100,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "'bc' in state.input.l.map(x, string(x))",
@@ -3073,7 +3216,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.greeting.startsWith('hello')",
@@ -3108,7 +3252,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.greeting.contains('lo wo')",
@@ -3143,7 +3288,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.greeting.matches('^h.*d$')",
@@ -3178,7 +3324,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "'a' in state.input.items",
@@ -3222,7 +3369,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.msg == 'state.x.y'",
@@ -3257,7 +3405,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.msg == 'a && b || !c ? d : e'",
@@ -3292,7 +3441,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == 'state.b.c'",
@@ -3337,7 +3487,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == \"state.b.c\"",
@@ -3361,7 +3512,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == 'it\\'s state.b.c'",
@@ -3385,7 +3537,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == 'state.b.c' && state.x == 1",
@@ -3419,7 +3572,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value.price <= 10",
@@ -3432,7 +3586,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value.price <= 10",
@@ -3477,7 +3632,8 @@
         ]
       ]
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value.price <= state.input.stop",
@@ -3555,7 +3711,8 @@
         ]
       ]
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value.price <= 10",
@@ -3568,7 +3725,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": "state.prime.tick.value.price"
   },
   {
     "expr": "state.prime.tick.value == 'open'",
@@ -3581,7 +3739,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.n == null",
@@ -3605,7 +3764,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.ok == true",
@@ -3650,7 +3810,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n < 1.5",
@@ -3674,7 +3835,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n > 1.5",
@@ -3698,7 +3860,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1.5 > state.n",
@@ -3722,7 +3885,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1.5 < state.n",
@@ -3746,7 +3910,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n < 2",
@@ -3770,7 +3935,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n < 2u",
@@ -3794,7 +3960,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "2 < 1u",
@@ -3807,7 +3974,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1u < 2",
@@ -3820,7 +3988,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == b'abc'",
@@ -3844,7 +4013,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == state.b",
@@ -3878,7 +4048,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.a) == 3",
@@ -3902,7 +4073,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == state.b",
@@ -3938,7 +4110,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a != state.b",
@@ -3974,7 +4147,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a == state.b",
@@ -4010,7 +4184,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a < state.b",
@@ -4046,7 +4221,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a < state.b",
@@ -4082,7 +4258,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a > state.b",
@@ -4118,7 +4295,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a < state.b",
@@ -4154,7 +4332,8 @@
         ]
       ]
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "value < state.b",
@@ -4223,7 +4402,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a - state.b",
@@ -4259,7 +4439,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.d == null",
@@ -4283,7 +4464,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(value.prompt_id)",
@@ -4537,7 +4719,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.p.v.price) ? state.p.v.price > 1 : state.p.v == 'skip'",
@@ -4572,7 +4755,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.t.primary) || size(state.t) > 0",
@@ -4601,7 +4785,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.l[0].x)",
@@ -4625,7 +4810,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.m[state.k].x)",
@@ -4659,7 +4845,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.rows.all(r, !has(r.a.b) || r.a.b > 0)",
@@ -4688,7 +4875,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "value.items.all(value, has(value.x))",
@@ -4769,7 +4957,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a <= state.b",
@@ -4803,7 +4992,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.flag < state.n",
@@ -4837,7 +5027,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.f > state.flag",
@@ -4871,7 +5062,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n > state.flag",
@@ -4905,7 +5097,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n < 1.0",
@@ -4929,7 +5122,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "value <= value",
@@ -5000,7 +5194,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a != [1, 2]",
@@ -5033,7 +5228,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m != {'a': 1.0}",
@@ -5068,7 +5264,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m == {'a': 1.0}",
@@ -5103,7 +5300,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 in state.l",
@@ -5132,7 +5330,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.x in ['a', 'b']",
@@ -5156,7 +5355,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value == \"it's open\"",
@@ -5169,7 +5369,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value == 'she said \"hi\"'",
@@ -5182,7 +5383,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value == 'back\\\\slash'",
@@ -5195,7 +5397,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value == '''line1\nline2'''",
@@ -5208,7 +5411,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "state.prime.tick.value == 'héllo wörld'",
@@ -5221,7 +5425,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": true
+    "strict": true,
+    "unset_path": null
   },
   {
     "expr": "size(state.m) == 1",
@@ -5265,7 +5470,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "null in state.m",
@@ -5309,7 +5515,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m.exists(k, k == null)",
@@ -5521,7 +5728,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.input.answer in ['yes', 'no']",
@@ -5556,7 +5764,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!(value.status in ['failed'])",
@@ -5641,7 +5850,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.l[-1].x)",
@@ -5681,7 +5891,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.l[0.0].x)",
@@ -5721,7 +5932,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l[true] == 2",
@@ -5754,7 +5966,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.results.filter(r, r.ok)[0].id)",
@@ -5794,7 +6007,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.m[has(state.sub.deep) ? 'a' : 'b'].x)",
@@ -5840,7 +6054,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.a.n.x) || state.a.n > 0.0",
@@ -5875,7 +6090,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "true == 1",
@@ -5888,7 +6104,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 in [true]",
@@ -5901,7 +6118,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "true in [1]",
@@ -5914,7 +6132,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.f < state.n",
@@ -5948,7 +6167,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.code[0] == 'A'",
@@ -5972,7 +6192,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.s[-1] == 'c'",
@@ -5996,7 +6217,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.grade in 'ABC'",
@@ -6020,7 +6242,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "'lo' in state.s",
@@ -6044,7 +6267,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 in state.s",
@@ -6068,7 +6292,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.b[0] == 97",
@@ -6092,7 +6317,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "97 in state.b",
@@ -6116,7 +6342,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.items[0])",
@@ -6145,7 +6372,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.items[0])",
@@ -6169,7 +6397,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.results.filter(r, r.ok)[0].id)",
@@ -6182,7 +6411,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[1, 2] in [[1.0, 3]]",
@@ -6195,7 +6425,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "{'a': 1, 'b': 2} in [{'a': 1.0, 'b': 3}]",
@@ -6208,7 +6439,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[1u] == 'a'",
@@ -6243,7 +6475,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[1] == 'a'",
@@ -6278,7 +6511,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[1u] == 'a'",
@@ -6313,7 +6547,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[0] == 'a'",
@@ -6348,7 +6583,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[true] == 'a'",
@@ -6383,7 +6619,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.l[0].x)",
@@ -6411,7 +6648,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.a.n.x)",
@@ -6446,7 +6684,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.a.n.x)",
@@ -6481,7 +6720,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l[-3] == 1",
@@ -6514,7 +6754,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l[0.0] == 1",
@@ -6547,7 +6788,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[1] == 'a'",
@@ -6582,7 +6824,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.m[1].x)",
@@ -6628,7 +6871,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(state.x.value)",
@@ -6662,7 +6906,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(meta.x)",
@@ -6675,7 +6920,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "has(meta.x)",
@@ -6801,7 +7047,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.rows.exists_one(r, has(r.a))",
@@ -6845,7 +7092,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state.rows.filter(r, has(r.a.b))) == 1",
@@ -6911,7 +7159,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.rows.map(r, has(r.a)) == [true, false]",
@@ -6955,7 +7204,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!has(value.error)",
@@ -7065,7 +7315,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))",
@@ -7078,7 +7329,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "(((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))",
@@ -7091,7 +7343,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))",
@@ -7104,7 +7357,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))))))))))))))))))))))",
@@ -7117,7 +7371,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1)))))))))))))))))))))))))))))))))))))))))))))))))))))",
@@ -7130,7 +7385,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))))))))))))))))))))))))",
@@ -7143,7 +7399,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
@@ -7156,7 +7413,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
@@ -7169,7 +7427,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
@@ -7182,7 +7441,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
@@ -7195,7 +7455,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
@@ -7208,7 +7469,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
@@ -7221,7 +7483,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
@@ -7234,7 +7497,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
@@ -7247,7 +7511,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
@@ -7260,7 +7525,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
@@ -7273,7 +7539,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
@@ -7286,7 +7553,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
@@ -7299,7 +7567,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
@@ -7312,7 +7581,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
@@ -7325,7 +7595,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a",
@@ -7558,7 +7829,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]",
@@ -7671,7 +7943,8 @@
         }
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(state)",
@@ -7697,7 +7970,8 @@
         }
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "size(size(state))",
@@ -7723,7 +7997,8 @@
         }
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l == 1",
@@ -7752,7 +8027,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 == state.l",
@@ -7781,7 +8057,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l == null",
@@ -7805,7 +8082,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m != null",
@@ -7829,7 +8107,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l == state.m",
@@ -7863,7 +8142,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[1.0] == 1",
@@ -7876,7 +8156,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l < 1",
@@ -7905,7 +8186,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m <= state.m",
@@ -7929,7 +8211,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[1] < [2]",
@@ -7942,7 +8225,8 @@
       "t": "dict",
       "v": []
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 in state.n",
@@ -7966,7 +8250,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1u in state.m",
@@ -8001,7 +8286,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "1 in state.m",
@@ -8036,7 +8322,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "true in state.m",
@@ -8071,7 +8358,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "null in state.l",
@@ -8099,7 +8387,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "null in state.m",
@@ -8134,7 +8423,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "null in state.m",
@@ -8169,7 +8459,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "[1] in state.l",
@@ -8203,7 +8494,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l[5] == 1",
@@ -8232,7 +8524,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l[18446744073709551615u] == 1",
@@ -8261,7 +8554,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l[0u] == 1",
@@ -8290,7 +8584,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l['a'] == 1",
@@ -8319,7 +8614,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m[1.0] == 'a'",
@@ -8354,7 +8650,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.n[0] == 1",
@@ -8378,7 +8675,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.m['missing'] == 1",
@@ -8413,7 +8711,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.s[1] == 'é'",
@@ -8437,7 +8736,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.b[-4] == 97",
@@ -8461,7 +8761,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.l.map(x, x)[0] == 1",
@@ -8490,7 +8791,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.a < state.b",
@@ -8524,7 +8826,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "(state.b - state.a) < (state.c - state.b)",
@@ -8571,7 +8874,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.f <= 0.0",
@@ -8595,7 +8899,8 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
   },
   {
     "expr": "state.f > state.n",
@@ -8629,6 +8934,1343 @@
         ]
       ]
     },
-    "strict": false
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "has(state.input.a.b) ? state.input.a.b.c : 'fallback'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "false ? state.input.x.y : 'fallback'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "has(state.input.a.b.c) ? state.input.a.b.c : 'fallback'",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "!has(state.input.a.b) || state.input.a.b.c == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "has(state.input.a.b) && state.input.a.b.c == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "false && state.input.x.y == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.input.x.y == 1 || true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.input.items.exists(i, i == 2 || state.input.z.y == 1)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.input.a.b.c == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": "state.input.a.b.c"
+  },
+  {
+    "expr": "state.input.x.y == 1 || state.input.z.w == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": "state.input.z.w"
+  },
+  {
+    "expr": "{'k': state.input.missing}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": "state.input.missing"
+  },
+  {
+    "expr": "has(state.prime.x.value) && state.prime.x.value > 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "prime"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "x"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "value"
+                      },
+                      {
+                        "t": "none"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": "state.prime.x.value"
+  },
+  {
+    "expr": "(state.input.m.x == 1 || true) && 1/0 == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "has(state.input.a.b) ? state.input.a.b.c == 1 : true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": true,
+    "unset_path": null
+  },
+  {
+    "expr": "false && state.input.z == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": true,
+    "unset_path": null
+  },
+  {
+    "expr": "state.input.a.b.c == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL expression 'state.input.a.b.c == 1' reads unset state path 'state.input.a.b.c' and is marked strict."
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": true,
+    "unset_path": null
+  },
+  {
+    "expr": "state.prime.tick.value.price <= 10 || state.input.force",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "force"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": true,
+    "unset_path": null
+  },
+  {
+    "expr": "state.input.items.all(i, i == 1 && state.input.z.y == 1)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true || [1].map(i, state.input.z.y).size() == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true || state.input.items.filter(i, i > state.input.z.y).size() > 0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true || state.input.items.exists_one(i, i == state.input.z.y)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "input"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "q"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "items"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
   }
 ]

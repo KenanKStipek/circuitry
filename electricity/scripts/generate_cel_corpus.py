@@ -43,6 +43,7 @@ from circuitry.core.cel_eval import (
     CelEvaluationError,
     evaluate_cel,
     evaluate_cel_expect,
+    unset_path,
 )
 
 OUTPUT = (
@@ -155,12 +156,20 @@ def condition(
         return evaluate_cel(expr, state, strict=strict)
 
     outcome = _outcome_exact(call) if exact_error else _outcome(call, pad=pad)
+    try:
+        named_path = unset_path(expr, state, strict=strict)
+    except CelEvaluationError:
+        # Only meaningful when the rule actually decided the result
+        # (`outcome` is `{"kind": "ok", "result": False}` because of
+        # it) -- any other failure, strict or not, has no path to pin.
+        named_path = None
     return {
         "mode": "condition",
         "expr": expr,
         "strict": strict,
         "state": encode(state),
         "outcome": outcome,
+        "unset_path": named_path,
     }
 
 
@@ -290,9 +299,19 @@ def build_corpus() -> list[dict]:
     # --- Fail-loud: third-party text, just "must raise" -----------------
     cases += [
         condition("state.a ==", {"a": 1}),
-        condition("size(state.a) > nope(1)", {"a": [1]}),
-        condition("nope(state.a)", {"a": 1}),
         condition("size(state.input.n) == 1", {"input": {"n": 3}}),
+    ]
+
+    # --- Undeclared references (#658): Circuitry's own one-line text,
+    # never cel-python's activation repr -- exact, not third-party.
+    cases += [
+        condition("size(state.a) > nope(1)", {"a": [1]}, exact_error=True),
+        condition("nope(state.a)", {"a": 1}, exact_error=True),
+        condition("unit == 1", {}, exact_error=True),
+        condition("'a'.nope() == 1", {}, exact_error=True),
+        condition("[1, 2].map(i, unit.text) == ['a', 'a']", {}, exact_error=True),
+        condition("{'first': unit.text} == {'first': 'a'}", {}, exact_error=True),
+        expect("nope(value)", value=1, exact_error=True),
     ]
 
     # --- Absent state is false by rule, not an error --------------------
@@ -1101,6 +1120,63 @@ def build_corpus() -> list[dict]:
         ),
         condition("state.f <= 0.0", {"f": -0.0}),
         condition("state.f > state.n", {"f": float("inf"), "n": 2**62}),
+    ]
+
+    # --- issue #657: the unset-path rule follows evaluation, not every
+    # path written -- has()/?:/&&/||/all/exists guard a read exactly
+    # the way CEL defines those constructs.
+    guard_input = {"input": {"a": {"q": 1}, "items": [1, 2]}}
+    cases += [
+        condition("has(state.input.a.b) ? state.input.a.b.c : 'fallback'", guard_input),
+        condition("false ? state.input.x.y : 'fallback'", guard_input),
+        condition("has(state.input.a.b.c) ? state.input.a.b.c : 'fallback'", guard_input),
+        condition("!has(state.input.a.b) || state.input.a.b.c == 1", guard_input),
+        condition("has(state.input.a.b) && state.input.a.b.c == 1", guard_input),
+        condition("false && state.input.x.y == 1", guard_input),
+        condition("state.input.x.y == 1 || true", guard_input),
+        condition("state.input.items.exists(i, i == 2 || state.input.z.y == 1)", guard_input),
+        condition("state.input.a.b.c == 1", guard_input),
+        condition("state.input.x.y == 1 || state.input.z.w == 1", guard_input),
+        condition("{'k': state.input.missing}", guard_input),
+        condition(
+            "has(state.prime.x.value) && state.prime.x.value > 1",
+            {"prime": {"x": {"value": None}}},
+        ),
+        condition(
+            "(state.input.m.x == 1 || true) && 1/0 == 1",
+            guard_input,
+        ),
+        condition(
+            "has(state.input.a.b) ? state.input.a.b.c == 1 : true",
+            guard_input,
+            strict=True,
+        ),
+        condition("false && state.input.z == 1", guard_input, strict=True),
+        condition("state.input.a.b.c == 1", guard_input, strict=True, exact_error=True),
+        condition(
+            "state.prime.tick.value.price <= 10 || state.input.force",
+            {"input": {"force": True}},
+            strict=True,
+        ),
+        # A deciding element of `all`/`exists` wins over an earlier
+        # error; a guarded macro body (map/filter/exists_one) never
+        # lets its own unset read escape past a deciding `||`/`&&`.
+        condition(
+            "state.input.items.all(i, i == 1 && state.input.z.y == 1)",
+            guard_input,
+        ),
+        condition(
+            "true || [1].map(i, state.input.z.y).size() == 1",
+            guard_input,
+        ),
+        condition(
+            "true || state.input.items.filter(i, i > state.input.z.y).size() > 0",
+            guard_input,
+        ),
+        condition(
+            "true || state.input.items.exists_one(i, i == state.input.z.y)",
+            guard_input,
+        ),
     ]
 
     return cases
