@@ -402,6 +402,7 @@ fn draw_overview(
     overview: &oscilloscope_core::screens::Overview,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) {
     if area.height == 0 {
         return;
@@ -428,6 +429,7 @@ fn draw_overview(
             transcript_view,
             ctx,
             true,
+            now,
         );
         draw_cards_summary_line(frame, sections[2], overview, ctx);
         return;
@@ -451,6 +453,7 @@ fn draw_overview(
         transcript_view,
         ctx,
         false,
+        now,
     );
     draw_cards(frame, rows[1], overview, ctx);
 }
@@ -560,6 +563,7 @@ fn draw_now_pane(
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     stacked: bool,
+    now: &str,
 ) {
     if area.height == 0 {
         return;
@@ -569,7 +573,7 @@ fn draw_now_pane(
         .iter()
         .map(|l| Line::from(l.clone()))
         .collect();
-    let focus_raw = focus_lines(&pane.focus, transcript_view, ctx);
+    let focus_raw = focus_lines(&pane.focus, transcript_view, ctx, now);
     let log =
         Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
 
@@ -616,6 +620,7 @@ fn focus_lines(
     focus: &oscilloscope_core::screens::NowFocus,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::NowFocus;
     match focus {
@@ -659,12 +664,14 @@ fn focus_lines(
             // last-finished step's own focus already renders.
             if let Some(agent) = &summary.stopped_agent {
                 lines.push(Line::from(""));
-                lines.extend(focus_step_lines(agent, None, transcript_view, ctx));
+                lines.extend(focus_step_lines(agent, None, transcript_view, ctx, now));
             }
             lines
         }
-        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), transcript_view, ctx),
-        NowFocus::LastFinished(step) => focus_step_lines(step, None, transcript_view, ctx),
+        NowFocus::Running(step, more) => {
+            focus_step_lines(step, Some(*more), transcript_view, ctx, now)
+        }
+        NowFocus::LastFinished(step) => focus_step_lines(step, None, transcript_view, ctx, now),
     }
 }
 
@@ -682,7 +689,12 @@ fn focus_lines(
 /// only from the transcript either way (the engine doesn't publish
 /// it at all), independently of whether `files`/`+/−` has anything to
 /// show -- a session that has only run a test command, with no edit
-/// yet, still gets a `tests` line of its own.
+/// yet, still gets a `tests` line of its own. `now` is read only for
+/// the transcript list's own running calls, each from its own
+/// `call.start_t` -- `current_tool_elapsed_s` is the session's
+/// single `current_tool` time, used only in the no-transcript
+/// fallback below, where there is no per-call start time to read at
+/// all.
 fn agent_live_lines(
     live: &oscilloscope_core::model::AgentLive,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
@@ -690,6 +702,7 @@ fn agent_live_lines(
     show_doing_header: bool,
     stale: bool,
     current_tool_elapsed_s: Option<f64>,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::format::format_tokens;
     let dim = Style::default().fg(ctx.theme.dim);
@@ -767,13 +780,18 @@ fn agent_live_lines(
                     // (the session itself has stopped) is enough to
                     // call this unfinished, not still running.
                     None if call.stopped || stale => text.push_str(" stopped"),
-                    // Issue #647: the session's own elapsed is shown
-                    // next to `since`, but a running call's own time
-                    // wasn't shown anywhere -- `current_tool_elapsed_s`
-                    // is this same call's own time, read from `meta.
-                    // live.current_tool` (the transcript has no
-                    // elapsed of its own to read, only a start time).
-                    None => match current_tool_elapsed_s {
+                    // Issue #647/#647 follow-up: the session's own
+                    // elapsed is shown next to `since`, but each call
+                    // in this list is its own, possibly concurrent,
+                    // tool call -- its own elapsed is `now` minus its
+                    // own `start_t`, not the session's single `meta.
+                    // live.current_tool` time, which two calls
+                    // running at once would otherwise both show.
+                    None => match call
+                        .start_t
+                        .as_deref()
+                        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
+                    {
                         Some(elapsed) => text.push_str(&format!(
                             " running {}",
                             oscilloscope_core::format::format_duration(elapsed)
@@ -882,6 +900,7 @@ fn focus_step_lines(
     more_running: Option<usize>,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
     {
@@ -958,6 +977,7 @@ fn focus_step_lines(
                         true,
                         *stale,
                         *current_tool_elapsed_s,
+                        now,
                     ));
                 }
                 None if more_running.is_some() => lines.push(Line::from(Span::styled(
@@ -2541,7 +2561,7 @@ pub fn draw(
     match app.screen {
         oscilloscope_core::screens::Screen::Overview => {
             if let Some(overview) = overview {
-                draw_overview(frame, body, overview, transcript_view, ctx);
+                draw_overview(frame, body, overview, transcript_view, ctx, now);
             }
         }
         oscilloscope_core::screens::Screen::Cost => {
@@ -2562,6 +2582,7 @@ pub fn draw(
                     app,
                     transcript_view,
                     ctx,
+                    now,
                 );
             }
         }
@@ -3242,6 +3263,7 @@ fn draw_flow_selected_pane(
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) {
     if app.flow_selected_shows_state {
         draw_state(frame, area, state_visible, app, ctx);
@@ -3250,7 +3272,7 @@ fn draw_flow_selected_pane(
     let lines = if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected {
-        flow_selected_step_lines(step, transcript_view, ctx)
+        flow_selected_step_lines(step, transcript_view, ctx, now)
     } else {
         vec![Line::from("nothing selected")]
     };
@@ -3286,6 +3308,7 @@ fn flow_selected_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
     use oscilloscope_core::screens::FocusDetail;
@@ -3382,6 +3405,7 @@ fn flow_selected_step_lines(
                         false,
                         *stale,
                         *current_tool_elapsed_s,
+                        now,
                     ));
                 }
                 None if running => doing.push(Line::styled(*note, dim)),
@@ -3584,6 +3608,7 @@ fn draw_flow_screen(
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) {
     let visible = visible_rows(&state.rows, app);
     let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
@@ -3629,6 +3654,7 @@ fn draw_flow_screen(
             app,
             transcript_view,
             ctx,
+            now,
         );
         draw_flow_story_pane(frame, right[1], screen, log_lines, log_total, app, ctx);
     } else if two_pane {
@@ -3663,6 +3689,7 @@ fn draw_flow_screen(
                 app,
                 transcript_view,
                 ctx,
+                now,
             );
         }
     } else {
@@ -3683,6 +3710,7 @@ fn draw_flow_screen(
             app,
             transcript_view,
             ctx,
+            now,
         );
         draw_flow_pane(
             frame,
@@ -6687,7 +6715,15 @@ mod golden_tests {
             "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"}
         }))
         .unwrap();
-        let lines = agent_live_lines(&live, None, &ctx, true, false, Some(24.0));
+        let lines = agent_live_lines(
+            &live,
+            None,
+            &ctx,
+            true,
+            false,
+            Some(24.0),
+            "2026-01-01T11:52:54Z",
+        );
         let text = lines
             .iter()
             .map(|l| l.to_string())
@@ -6718,7 +6754,7 @@ mod golden_tests {
             "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
         }))
         .unwrap();
-        let lines = agent_live_lines(&live, None, &ctx, true, true, None);
+        let lines = agent_live_lines(&live, None, &ctx, true, true, None, "2026-01-01T11:52:54Z");
         let text = lines
             .iter()
             .map(|l| l.to_string())
@@ -6726,6 +6762,51 @@ mod golden_tests {
             .join("\n");
         assert!(text.contains("last: bash"), "{text}");
         assert!(!text.contains("running:"), "{text}");
+    }
+
+    /// Issue #641: two tool calls genuinely running at once (neither
+    /// has a `tool_end`, and neither is superseded by a later
+    /// `tool_start` with a lower id, so neither reads as `stopped`)
+    /// must each show their own elapsed, from their own `start_t` --
+    /// not the session's single `meta.live.current_tool` time, which
+    /// would otherwise show the same figure for both.
+    #[test]
+    fn agent_live_lines_shows_each_running_calls_own_elapsed_in_a_transcript() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let transcript_lines = vec![
+            json!({"t": "2026-01-01T11:50:00Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k a"}),
+            json!({"t": "2026-01-01T11:51:00Z", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k b"}),
+        ];
+        let view = oscilloscope_core::transcript::build_transcript_view(&transcript_lines, false);
+        let live =
+            oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
+        let lines = agent_live_lines(
+            &live,
+            Some(&view),
+            &ctx,
+            true,
+            false,
+            None,
+            "2026-01-01T11:52:00Z",
+        );
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("pytest -k a running 2m00s"), "{text}");
+        assert!(text.contains("pytest -k b running 1m00s"), "{text}");
     }
 
     /// [`overview_snapshot_at`], with a specific transcript view
