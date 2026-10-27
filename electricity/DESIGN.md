@@ -1175,7 +1175,10 @@ so its own input render already matched cof's live read for the same reason — 
 leaf, `core/use.py` (and `exec::use_`, before and after this lane) resets *both* `node["value"]`
 and every `meta` field at the start of *every* attempt, so a `use` effect's own self-reference never
 survives a retry on either engine — there's no retry-visible divergence for `use` to pin the way the
-tool case above does. Before this lane, `exec::use_::execute_use` still took one `live_ctx` snapshot
+tool case above does. `meta.attempts` (issue #659) is the one deliberate exception: it is written
+before the backoff wait, so a `use`'s own `inputs`/`expect` *can* read it mid-retry
+(`inputs: {earlier: {from: prime.<name>.meta.attempts}}`), on both engines. Pinned by
+`tests/conformance/cases/use-attempts-self-reference`. Before this lane, `exec::use_::execute_use` still took one `live_ctx` snapshot
 up front — not because it needed a full materialized value, simply because it hadn't been converted
 yet. A `use` effect inside a loop (the `each`/`while` body can contain one: `Supported::current`'s
 own `use_: true`) paid the same quadratic cost a tool leaf did. Fixed the same way: `execute_use`

@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "A retried `use` inside an unnamed `each` loop body, over a shared `fs` counter: the first pass needs two attempts, the second passes on its first. `meta.attempts` is cleared at the start of every pass (issue #260's rule), so the reused node's final state -- the second pass's -- carries no `meta.attempts` at all.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

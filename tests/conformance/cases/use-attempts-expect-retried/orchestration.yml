@@ -1,0 +1,56 @@
+name: use-attempts-expect-retried
+effects:
+  - type: use
+    name: third
+    inline: |
+      effects:
+        - type: tool
+          name: bump
+          provider: fs
+          params: {mode: append, path: "scratch/third.txt", content: x}
+        - type: tool
+          name: tally
+          provider: fs
+          params: {mode: read, path: "scratch/third.txt"}
+    outputs:
+      tally: {path: prime.tally.value}
+    retries: {max_attempts: 3, backoff_ms: 0}
+    expect: "value.tally == 'xxx'"
+  - type: use
+    name: first
+    inline: |
+      effects:
+        - type: tool
+          name: bump
+          provider: fs
+          params: {mode: append, path: "scratch/first.txt", content: x}
+        - type: tool
+          name: tally
+          provider: fs
+          params: {mode: read, path: "scratch/first.txt"}
+    outputs:
+      tally: {path: prime.tally.value}
+    retries: {max_attempts: 3, backoff_ms: 0}
+    expect: "value.tally == 'x'"
+  - type: use
+    name: never
+    on_error: continue
+    inline: |
+      effects:
+        - type: tool
+          name: bump
+          provider: fs
+          params: {mode: append, path: "scratch/never.txt", content: x}
+        - type: tool
+          name: tally
+          provider: fs
+          params: {mode: read, path: "scratch/never.txt"}
+    outputs:
+      tally: {path: prime.tally.value}
+    retries: {max_attempts: 2, backoff_ms: 0}
+    expect: "value.tally == 'never matches'"
+finally:
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}

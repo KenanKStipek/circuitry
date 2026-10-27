@@ -1,0 +1,16 @@
+name: use-attempts-self-reference
+effects:
+  - type: use
+    name: theme
+    inline: |
+      effects:
+        - type: tool
+          name: noop
+          provider: json
+          params: {mode: stringify, input: ok}
+    inputs:
+      earlier: {from: prime.theme.meta.attempts}
+    outputs:
+      earlier: {path: input.earlier}
+    retries: {max_attempts: 3, backoff_ms: 0}
+    expect: "value.earlier != null && size(value.earlier) >= 2"

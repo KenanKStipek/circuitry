@@ -1,0 +1,31 @@
+name: use-attempts-loop-reused-node
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '["xx", "xxx"]'}
+  - type: loop
+    flow: chain
+    each: {in: "prime.seed.value", as: item}
+    body:
+      - type: use
+        name: step
+        inline: |
+          effects:
+            - type: tool
+              name: bump
+              provider: fs
+              params: {mode: append, path: "scratch/counter.txt", content: x}
+            - type: tool
+              name: tally
+              provider: fs
+              params: {mode: read, path: "scratch/counter.txt"}
+        outputs:
+          tally: {path: prime.tally.value}
+        retries: {max_attempts: 2, backoff_ms: 0}
+        expect: "value.tally == state.item"
+finally:
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}

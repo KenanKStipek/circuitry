@@ -370,6 +370,35 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
         "    provider: json\n"
         "    params: {mode: stringify, input: ok}\n",
     )
+    # #659: an fs counter that persists across attempts, external to
+    # ctx/state, decides an unnamed `if` that only the first attempt takes
+    # (an unnamed `if` merges its branch's effects into the node itself,
+    # so the stale key -- `stale` -- is a top-level one the next
+    # attempt's graft actually drops, not one nested under a named `if`'s
+    # own node that gets replaced wholesale on every attempt regardless).
+    write_child(
+        tmp,
+        "child_attempts_clean_node.yml",
+        "interface:\n"
+        "  inputs:\n"
+        "    counter: {required: true}\n"
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: bump\n"
+        "    provider: fs\n"
+        "    params: {mode: append, path: '{{input.counter}}', content: x}\n"
+        "  - type: tool\n"
+        "    name: tally\n"
+        "    provider: fs\n"
+        "    params: {mode: read, path: '{{input.counter}}'}\n"
+        "  - type: if\n"
+        "    if: {mode: cel, expr: \"state.prime.tally.value == 'x'\"}\n"
+        "    then:\n"
+        "      - type: tool\n"
+        "        name: stale\n"
+        "        provider: json\n"
+        "        params: {mode: stringify, input: stale}\n",
+    )
 
     cases.append(
         run_use_case(
@@ -434,6 +463,37 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
                 "path": "child_always_fails_expect.yml",
                 "retries": RetryPolicyDef(max_attempts=2, backoff_ms=0),
                 "expect": ExpectDef(mode="cel", expr="false"),
+            },
+        )
+    )
+    cases.append(
+        run_use_case(
+            name="record_children_clean_node",
+            tmp=tmp,
+            defn_kwargs={
+                "path": "child_attempts_clean_node.yml",
+                "inputs": {"counter": str(tmp / "counter_record_children_clean_node.txt")},
+                "outputs": {"tally": "prime.tally.value"},
+                "retries": RetryPolicyDef(max_attempts=2, backoff_ms=0),
+                "expect": ExpectDef(mode="cel", expr="value.tally == 'xx'"),
+            },
+            runtime_config={"state": {"record_children": True}},
+        )
+    )
+    cases.append(
+        run_use_case(
+            name="full_namespace_clean_node",
+            tmp=tmp,
+            defn_kwargs={
+                "path": "child_attempts_clean_node.yml",
+                "inputs": {"counter": str(tmp / "counter_full_namespace_clean_node.txt")},
+                "retries": RetryPolicyDef(max_attempts=2, backoff_ms=0),
+                # Full-namespace mode maps no `value`, so this can't check it
+                # the way `record_children_clean_node` does; `meta.attempts`
+                # is bound directly either way, so `has(meta.attempts)` --
+                # false only before any attempt has finished -- decides the
+                # retry without one.
+                "expect": ExpectDef(mode="cel", expr="has(meta.attempts)"),
             },
         )
     )
