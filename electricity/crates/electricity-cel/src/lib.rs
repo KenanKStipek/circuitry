@@ -1191,7 +1191,10 @@ mod tests {
 
     #[test]
     fn ternary_guard_reaches_the_untaken_branch_instead_of_the_rule() {
-        let present = dict(vec![("input", dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]))]);
+        let present = dict(vec![(
+            "input",
+            dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]),
+        )]);
         let expr = "has(state.input.a.b) ? state.input.a.b.c : 'fallback'";
         assert_eq!(
             evaluate_condition(expr, &present, false),
@@ -1211,7 +1214,10 @@ mod tests {
         let empty = Value::Dict(Dict::new());
         let expr = "state.input.x.y == 1 || state.input.z.w == 1";
         assert_eq!(evaluate_condition(expr, &empty, false), Ok(false));
-        assert_eq!(unset_path(expr, &empty, false), Ok(Some("state.input.z.w".to_string())));
+        assert_eq!(
+            unset_path(expr, &empty, false),
+            Ok(Some("state.input.z.w".to_string()))
+        );
     }
 
     #[test]
@@ -1224,7 +1230,13 @@ mod tests {
 
     #[test]
     fn exists_deciding_element_wins_over_an_errored_one() {
-        let state = dict(vec![("input", dict(vec![("items", Value::List(vec![Value::from(1_i64), Value::from(2_i64)]))]))]);
+        let state = dict(vec![(
+            "input",
+            dict(vec![(
+                "items",
+                Value::List(vec![Value::from(1_i64), Value::from(2_i64)]),
+            )]),
+        )]);
         let expr = "state.input.items.exists(i, i == 2 || state.input.z.y == 1)";
         assert_eq!(evaluate_condition(expr, &state, false), Ok(true));
         assert_eq!(unset_path(expr, &state, false), Ok(None));
@@ -1235,12 +1247,18 @@ mod tests {
         let empty = Value::Dict(Dict::new());
         let expr = "{'k': state.input.missing}";
         assert_eq!(evaluate_condition(expr, &empty, false), Ok(false));
-        assert_eq!(unset_path(expr, &empty, false), Ok(Some("state.input.missing".to_string())));
+        assert_eq!(
+            unset_path(expr, &empty, false),
+            Ok(Some("state.input.missing".to_string()))
+        );
     }
 
     #[test]
     fn strict_ternary_guarded_read_does_not_raise() {
-        let present = dict(vec![("input", dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]))]);
+        let present = dict(vec![(
+            "input",
+            dict(vec![("a", dict(vec![("q", Value::from(1_i64))]))]),
+        )]);
         let expr = "has(state.input.a.b) ? state.input.a.b.c == 1 : true";
         assert_eq!(evaluate_condition(expr, &present, true), Ok(true));
     }
@@ -1263,7 +1281,10 @@ mod tests {
 
     #[test]
     fn free_identifiers_bare_namespace() {
-        assert_eq!(free_identifiers("input.x == 1").unwrap(), vec!["input".to_string()]);
+        assert_eq!(
+            free_identifiers("input.x == 1").unwrap(),
+            vec!["input".to_string()]
+        );
     }
 
     #[test]
@@ -1282,7 +1303,12 @@ mod tests {
         // identifier -- `r`/`i` inside it are, since nothing binds them.
         assert_eq!(
             free_identifiers("[0, 1, 2].reduce(r, i, 0, r + 2 * i + 1)").unwrap(),
-            vec!["r".to_string(), "i".to_string(), "r".to_string(), "i".to_string()]
+            vec![
+                "r".to_string(),
+                "i".to_string(),
+                "r".to_string(),
+                "i".to_string()
+            ]
         );
     }
 
@@ -1302,7 +1328,10 @@ mod tests {
 
     #[test]
     fn free_identifiers_message_construction_type_name_counts() {
-        assert_eq!(free_identifiers("Msg{f: 1} == 1").unwrap(), vec!["Msg".to_string()]);
+        assert_eq!(
+            free_identifiers("Msg{f: 1} == 1").unwrap(),
+            vec!["Msg".to_string()]
+        );
     }
 
     #[test]

@@ -112,7 +112,7 @@ effects:
       template: "Name the docs page that answers this issue."
 ```
 
-One more shape is well-formed YAML that the compiler cannot flag. A template is free text and a missing reference is legal Mustache, and the validator checks the paths written after `state.`, not the names written without it:
+One more shape is well-formed YAML that the compiler cannot flag. A template is free text and a missing reference is legal Mustache, so a typo inside `{{ }}` is invisible to the compiler the way a bare name inside a CEL expression no longer is:
 
 ```yaml
 # ✗ runtime — state. is a CEL binding; in a template it resolves to nothing

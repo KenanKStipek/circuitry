@@ -56,9 +56,9 @@
 //! outright — so replacing `has` alone means not calling
 //! `Env::stdlib()` at all. [`env`] instead builds on
 //! `Env::default().with_stdlib()` (registers every standard *type* and
-//! *function*, no macros: see that method's own docs) and adds five
+//! *function*, no macros: see that method's own docs) and adds six
 //! macros back one at a time — this module's own [`has_macro_expander`]
-//! for `has`, and, for the other four, unchanged copies of `cel`'s own
+//! for `has`, and, for the other five, unchanged copies of `cel`'s own
 //! expanders (`parser/macros.rs`, MIT-licensed; not exported for reuse,
 //! since they're `pub(crate)` there) rather than a reimplementation:
 //! [`all_macro_expander`], [`exists_macro_expander`],
@@ -92,8 +92,8 @@ pub fn is_has_guard(func_name: &str) -> bool {
 }
 
 /// The environment this crate compiles and evaluates every expression
-/// against: `cel`'s own standard types and functions, plus five
-/// standard macros — four of them `cel`'s own, `has` replaced (module
+/// against: `cel`'s own standard types and functions, plus six
+/// standard macros — five of them `cel`'s own, `has` replaced (module
 /// docs). `existsOne` is not one of them.
 pub fn env() -> Env {
     let mut env = Env::default().with_stdlib();

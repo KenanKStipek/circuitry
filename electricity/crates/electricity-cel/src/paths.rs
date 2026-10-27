@@ -7,11 +7,14 @@
 //! ([`crate::macros::is_has_guard`]) to decide what it guards, the same
 //! way it used to recognize a field selection's `test` flag.
 //!
-//! Reading an unset `state.` path is decided *before* evaluation, by
-//! walking the parsed expression for every dotted `state.` read, not by
-//! catching a failure during evaluation — `has(...)` guards one path at a
-//! time, and a genuinely malformed expression must still raise rather
-//! than silently resolve to "absent".
+//! Reading an unset `state.` path is decided *per occurrence*, when
+//! evaluation actually reaches it ([`mark_unset`], issue #657) — not
+//! structurally over every dotted `state.` read before evaluation ever
+//! starts, the way this crate used to decide it. `has(...)`, `?:`,
+//! `&&`/`||` and `all`/`exists` each guard a marked read exactly the
+//! way `cel`'s own evaluator (`objects.rs`) evaluates those constructs;
+//! a genuinely malformed expression must still raise rather than
+//! silently resolve to "absent".
 
 use cel::common::ast::{CallExpr, EntryExpr, Expr, IdedExpr, LiteralValue, operators};
 use cel::common::types::CelString;
