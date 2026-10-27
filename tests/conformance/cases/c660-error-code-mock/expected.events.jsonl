@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-26T22:04:37.335Z","ev":"run_start","run_id":"1d4e763d-f0d3-435d-8c82-490a183a3643","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":82918}
+{"v":1,"seq":1,"ts":"2026-10-26T22:04:37.338Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-26T22:04:37.339Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-26T22:04:37.371Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":32,"error":"All adapter attempts failed: [{'adapter': 'lmstudio', 'model': 'm', 'status': 'failed', 'error': \"OpenAI-compatible request failed (curl exit 22) model='m' url=http://127.0.0.1:<MOCK_PORT>/v1/chat/completions: content policy violation\", 'tokens_sent': None, 'tokens_received': None, 'error_code': 'guardrail_violation', 'http_status': 400}]"}
+{"v":1,"seq":4,"ts":"2026-10-26T22:04:37.371Z","ev":"start","id":2,"path":"prime.guardrail_gate"}
+{"v":1,"seq":5,"ts":"2026-10-26T22:04:37.372Z","ev":"start","id":3,"path":"prime.guardrail_gate.branch"}
+{"v":1,"seq":6,"ts":"2026-10-26T22:04:37.372Z","ev":"end","id":3,"path":"prime.guardrail_gate.branch","ok":true,"ms":0}
+{"v":1,"seq":7,"ts":"2026-10-26T22:04:37.372Z","ev":"end","id":2,"path":"prime.guardrail_gate","ok":true,"ms":1}
+{"v":1,"seq":8,"ts":"2026-10-26T22:04:37.372Z","ev":"end","id":0,"path":"prime","ok":true,"ms":34}
+{"v":1,"seq":9,"ts":"2026-10-26T22:04:37.373Z","ev":"run_end","ok":true}

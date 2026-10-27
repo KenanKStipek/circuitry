@@ -462,6 +462,69 @@ def test_unknown_error_kind_rejected_at_load(tmp_path: Path) -> None:
     assert "nonsense" in (result.message or "")
 
 
+def test_error_code_reaches_the_adapter_call_error(tmp_path: Path) -> None:
+    """#660: an error reply's optional ``code`` becomes
+    ``AdapterCallError.error_code``, read by `core.prompt` into
+    ``meta.error_code``."""
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [_prompt("flaky", on_error="continue")],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(
+        tmp_path,
+        {"prime.flaky": [{"error": {"kind": "invalid_request", "code": "bad_schema"}}]},
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    result = _run(orch_path, adapter)
+
+    assert result.ok, result.error
+    node = result.state["prime"]["flaky"]
+    assert node["meta"]["error_code"] == "bad_schema"
+    assert node["meta"]["http_status"] == 400
+    assert node["meta"]["fallback_attempts"][0]["error_code"] == "bad_schema"
+
+
+def test_error_without_a_code_leaves_the_field_absent(tmp_path: Path) -> None:
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [_prompt("flaky", on_error="continue")],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(
+        tmp_path, {"prime.flaky": [{"error": {"kind": "timeout"}}]}
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    result = _run(orch_path, adapter)
+
+    assert result.ok, result.error
+    node = result.state["prime"]["flaky"]
+    assert "error_code" not in node["meta"]
+    assert "http_status" not in node["meta"]
+
+
+def test_error_code_must_be_a_non_empty_string(tmp_path: Path) -> None:
+    path = _write_replies(
+        tmp_path, {"prime.x": [{"error": {"kind": "invalid_request", "code": ""}}]}
+    )
+    adapter = ScriptedAdapter(replies_file=str(path))
+    result = adapter.check()
+    assert not result.ok
+
+
+def test_error_code_must_be_a_string_not_an_int(tmp_path: Path) -> None:
+    path = _write_replies(
+        tmp_path, {"prime.x": [{"error": {"kind": "invalid_request", "code": 5}}]}
+    )
+    adapter = ScriptedAdapter(replies_file=str(path))
+    result = adapter.check()
+    assert not result.ok
+
+
 @pytest.mark.parametrize(
     "entry",
     [

@@ -1,0 +1,8 @@
+name: c660-anthropic-error-type-mock
+adapter: anthropic
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    on_error: continue

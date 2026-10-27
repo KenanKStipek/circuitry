@@ -86,6 +86,13 @@ pub struct RetryInfo {
     pub retryable: bool,
     pub status: Option<u16>,
     pub retry_after: Option<String>,
+    /// `adapters/_retry.py::AdapterCallError.error_code` -- the
+    /// provider's own error code (`error.code`, else `error.type`,
+    /// each only when a non-empty string). Lives on `RetryInfo` rather
+    /// than a separate field on [`crate::adapter::AdapterError`]
+    /// (issue #660): every construction site here already carries a
+    /// `RetryInfo`, and `AdapterError` has far more of them.
+    pub error_code: Option<String>,
 }
 
 impl RetryInfo {
@@ -330,6 +337,7 @@ mod tests {
             retryable: true,
             status: Some(429),
             retry_after: Some("inf".to_string()),
+            error_code: None,
         };
         assert_eq!(next_backoff_delay_ms(&info, 0, 0), RETRY_BACKOFF_CAP_MS);
     }
@@ -340,6 +348,7 @@ mod tests {
             retryable: true,
             status: Some(429),
             retry_after: Some("120".to_string()),
+            error_code: None,
         };
         assert_eq!(next_backoff_delay_ms(&info, 0, 0), RETRY_BACKOFF_CAP_MS);
     }

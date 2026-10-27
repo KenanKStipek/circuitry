@@ -59,6 +59,7 @@ struct RetryCase {
     /// magnitude of an out-of-range value.
     status: Option<f64>,
     retry_after: Option<String>,
+    error_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -264,6 +265,7 @@ async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
                             if err.retry.retryable != want_retry.retryable
                                 || !status_matches
                                 || err.retry.retry_after != want_retry.retry_after
+                                || err.retry.error_code != want_retry.error_code
                             {
                                 failures.push(format!(
                                     "{}: generate({dotted}) retry mismatch: got {:?}",

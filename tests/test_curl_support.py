@@ -21,8 +21,10 @@ from curl_test_support import RecordingJSONHandler, assert_not_in_argv, local_se
 
 from circuitry.curl_support import (
     _curl_supports_retry_after_header,
+    curl_error_code,
     curl_failure_message,
     extract_retry_after,
+    parse_error_code,
     redact_host_url,
     run_curl,
 )
@@ -578,6 +580,60 @@ def test_curl_supports_retry_after_header_false_when_probe_times_out(
         assert proc.waited is True
     finally:
         _curl_supports_retry_after_header.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# #660 — parse_error_code / curl_error_code.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_error_code_reads_error_code() -> None:
+    body = '{"error": {"code": "guardrail_violation", "message": "nope"}}'
+    assert parse_error_code(body) == "guardrail_violation"
+
+
+def test_parse_error_code_falls_back_to_error_type_when_code_is_null() -> None:
+    body = '{"error": {"code": null, "type": "overloaded_error"}}'
+    assert parse_error_code(body) == "overloaded_error"
+
+
+def test_parse_error_code_ignores_an_integer_code() -> None:
+    body = '{"error": {"code": 5}}'
+    assert parse_error_code(body) is None
+
+
+def test_parse_error_code_is_none_for_a_flat_string_body() -> None:
+    body = '{"error": "model not found"}'
+    assert parse_error_code(body) is None
+
+
+def test_parse_error_code_is_none_for_non_json() -> None:
+    assert parse_error_code("not json at all") is None
+
+
+def test_parse_error_code_is_none_for_an_empty_body() -> None:
+    assert parse_error_code("") is None
+    assert parse_error_code(None) is None  # type: ignore[arg-type]
+
+
+def test_parse_error_code_is_none_when_error_is_a_list() -> None:
+    body = '{"error": [1, 2, 3]}'
+    assert parse_error_code(body) is None
+
+
+def test_parse_error_code_prefers_code_over_type_when_both_are_strings() -> None:
+    body = '{"error": {"code": "invalid_request", "type": "invalid_request_error"}}'
+    assert parse_error_code(body) == "invalid_request"
+
+
+def test_curl_error_code_masks_secrets_before_parsing() -> None:
+    secret = "sk-canary-secret-123"
+    body = f'{{"error": {{"code": "{secret}"}}}}'
+    # The secret is itself the code value here, so masking it changes what
+    # parse_error_code reads -- proving the mask runs before the parse, not
+    # just before some later log line.
+    assert curl_error_code(body, [secret]) == "***"
+    assert secret not in (curl_error_code(body, [secret]) or "")
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")

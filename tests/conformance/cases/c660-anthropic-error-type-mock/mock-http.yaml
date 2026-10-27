@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /v1/messages
+  response:
+    status: 529
+    reason: Overloaded
+    headers:
+      Content-Type: application/json
+    body: '{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}'

@@ -300,7 +300,10 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   waiting_for, retries_used?, answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
-  assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
+  assets?, template_files? (a `file: {from: ...}` source read at dispatch only),
+  error_code? and http_status? (a failed prompt only, from the attempt whose
+  error ended the effect -- the last entry of the final pass's own
+  `fallback_attempts`; issue #660)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
   params_rendered (redacted), stdout, stderr, exit_code, stdout_chars? and
   stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
@@ -918,7 +921,13 @@ fallen-back-from alike, across every retry pass, confirmed live (two attempts
 of 10/5 tokens each in a single-pass success still only shows one attempt;
 a multi-pass retry sums all passes' attempts). Each `fallback_attempts[]`
 entry carries its own `tokens_sent`/`tokens_received` (`None` if the call
-never got a reply at all).
+never got a reply at all), and, for a failed dispatch whose provider reported
+them, its own `error_code`/`http_status` (issue #660) right after
+`tokens_received` -- never alongside a `raw_reply` (a decode/schema failure
+carries that instead, never these). The top-level `meta.error_code`/
+`meta.http_status` mirror whichever is the *last* entry of the final pass's
+own chain -- absent on success, a decode/schema failure, a missing key, a
+timeout/connection failure and an allowlist denial.
 
 **`meta` fields written before vs. after dispatch**: everything *except*
 `value`, `tokens_sent`/`tokens_received` (the winning attempt's own, not the

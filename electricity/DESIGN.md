@@ -2220,6 +2220,15 @@ rule set, reproduced exactly (tools-adapters-plugins §1.4/§3.10, runtime-seman
   is **never** retried, regardless of `retries:` or `on_error` — retrying would just reproduce the
   same structural error (runtime-semantics §6.1).
 
+A failed prompt's adapter record keeps more than the retry classification itself (issue #660):
+`meta.error_code`/`meta.http_status`, from the attempt whose error ended the effect (the last
+entry of the final pass's own `fallback_attempts`), when that attempt's provider reported them
+— `error.code` else `error.type` for `error_code`, each only a non-empty string; absent, never
+`null`, on success, a decode/schema failure, a missing key, a connection failure, and an
+allowlist denial (tools-adapters-plugins §3.10, runtime-semantics's own prompt `meta` section).
+Each failed `fallback_attempts[]` entry carries its own copy, after `tokens_received`, never
+alongside a `raw_reply` entry.
+
 A provider's `Retry-After` response header, when present, **overrides** the computed
 exponential-backoff delay outright, still capped at 60s. Backoff without a header is full-jitter
 exponential. Per-adapter timeouts (`runtime.adapters.<name>.timeout_seconds`) are independent of

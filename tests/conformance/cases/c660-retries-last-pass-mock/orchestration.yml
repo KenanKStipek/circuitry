@@ -1,0 +1,14 @@
+name: c660-retries-last-pass-mock
+adapter: lmstudio
+model: m
+effects:
+  - type: prompt
+    name: p1
+    template: "p1"
+    retries: {max_attempts: 2, backoff_ms: 1}
+    on_error: continue
+  - type: prompt
+    name: p2
+    template: "p2"
+    retries: {max_attempts: 3, backoff_ms: 1}
+    on_error: continue

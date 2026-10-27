@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #660",
+  "description": "p1 (max_attempts: 2): a 503 with error.type overloaded_error, retried, then a 503 with a flat error body -- the final pass's last attempt has no code, so meta.http_status is 503 with no meta.error_code, and retries_used is 1. p2 (max_attempts: 3): a non-retryable 400 sends exactly one request.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

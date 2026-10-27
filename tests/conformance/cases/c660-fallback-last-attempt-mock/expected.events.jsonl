@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-26T22:04:38.214Z","ev":"run_start","run_id":"98bd6592-9258-47d3-bb63-f39a751081f2","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":82981}
+{"v":1,"seq":1,"ts":"2026-10-26T22:04:38.217Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-26T22:04:38.218Z","ev":"start","id":1,"path":"prime.p1"}
+{"v":1,"seq":3,"ts":"2026-10-26T22:04:38.267Z","ev":"end","id":1,"path":"prime.p1","ok":false,"ms":50,"error":"All adapter attempts failed: [{'adapter': 'lmstudio', 'model': 'm', 'status': 'failed', 'error': \"OpenAI-compatible request failed (curl exit 22) model='m' url=http://127.0.0.1:<MOCK_PORT>/v1/chat/completions: nope\", 'tokens_sent': None, 'tokens_received': None, 'error_code': 'guardrail_violation', 'http_status': 400}, {'adapter': 'vllm', 'model': 'm2', 'status': 'failed', 'error': 'OpenAI-compatible request failed (curl exit 22) model=\\'m2\\' url=http://127.0.0.1:<MOCK_PORT>/v1/chat/completions: {\"error\": {"}
+{"v":1,"seq":4,"ts":"2026-10-26T22:04:38.267Z","ev":"start","id":2,"path":"prime.p2"}
+{"v":1,"seq":5,"ts":"2026-10-26T22:04:38.300Z","ev":"end","id":2,"path":"prime.p2","ok":true,"ms":33}
+{"v":1,"seq":6,"ts":"2026-10-26T22:04:38.301Z","ev":"end","id":0,"path":"prime","ok":true,"ms":84}
+{"v":1,"seq":7,"ts":"2026-10-26T22:04:38.301Z","ev":"run_end","ok":true}
