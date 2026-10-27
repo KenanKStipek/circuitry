@@ -1,0 +1,12 @@
+name: c658-check-bare-binding-in-macro
+effects:
+  - type: loop
+    name: hands
+    each: {in: input.units, as: unit}
+    body:
+      - type: if
+        name: gate
+        if:
+          mode: cel
+          expr: "[1, 2].map(i, unit.text) == ['a', 'a']"
+        then: []

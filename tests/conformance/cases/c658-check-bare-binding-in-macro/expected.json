@@ -1,0 +1,3 @@
+{
+  "error": "CEL expression at 'prime.effects[0].body[0]': 'unit' is a loop binding: in CEL, write 'state.unit'."
+}

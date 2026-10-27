@@ -1,0 +1,17 @@
+name: c658-check-allowed-names
+effects:
+  - type: loop
+    name: hands
+    each: {in: input.units, as: unit}
+    body:
+      - type: if
+        name: gate
+        if:
+          mode: cel
+          expr: "type(1) == int && [1, 2].all(i, i > 0)"
+        then: []
+  - type: tool
+    name: result
+    provider: json
+    params: {mode: parse, input: '{"x": 1}'}
+    expect: {mode: cel, expr: "has(value.x) && meta.error == null"}
