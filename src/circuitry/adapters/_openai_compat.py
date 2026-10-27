@@ -22,7 +22,7 @@ import shutil
 from dataclasses import dataclass
 from typing import Any
 
-from ..curl_support import curl_failure_message, run_curl
+from ..curl_support import curl_error_code, curl_failure_message, run_curl
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, last_user_index
@@ -183,6 +183,7 @@ def chat_completion(
                 secrets=secrets,
             ),
             retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+            error_code=curl_error_code(proc.stdout, secrets),
         )
 
     try:

@@ -120,6 +120,7 @@ class _Reply:
     error_kind: str | None = None
     error_message: str | None = None
     error_status: int | None = None
+    error_code: str | None = None
 
 
 def _load_raw(path: Path) -> Any:
@@ -142,7 +143,7 @@ def _load_raw(path: Path) -> Any:
 #: load-time error (a typo like ``token_sent`` must not silently drop the
 #: count it was meant to set).
 _TEXT_REPLY_KEYS = frozenset({"text", "tokens_sent", "tokens_received", "finish_reason"})
-_ERROR_KEYS = frozenset({"kind", "status", "message"})
+_ERROR_KEYS = frozenset({"kind", "status", "message", "code"})
 
 
 def _is_plain_int(value: Any) -> bool:
@@ -196,7 +197,14 @@ def _parse_error(entry: dict[str, Any], *, path: str, index: int, source: Path) 
         raise ScriptedRepliesError(
             f"{source}: reply {index} for path '{path}': 'message' must be a string"
         )
-    return _Reply(error_kind=kind, error_message=message, error_status=status)
+    code = error.get("code")
+    if code is not None and (not isinstance(code, str) or not code):
+        raise ScriptedRepliesError(
+            f"{source}: reply {index} for path '{path}': 'code' must be a non-empty string"
+        )
+    return _Reply(
+        error_kind=kind, error_message=message, error_status=status, error_code=code
+    )
 
 
 def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
@@ -351,7 +359,9 @@ class ScriptedAdapter:
             message = reply.error_message or (
                 f"scripted adapter: {reply.error_kind} at '{path}'"
             )
-            raise AdapterCallError(message, retry_info=_retry_info(reply))
+            raise AdapterCallError(
+                message, retry_info=_retry_info(reply), error_code=reply.error_code
+            )
         return GenerateResult(
             text=reply.text or "",
             raw={"path": path},

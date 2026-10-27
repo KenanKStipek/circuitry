@@ -9,6 +9,17 @@ from ._retry import AdapterCallError, classify_litellm_exception
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
 
+def _litellm_error_code(exc: BaseException) -> str | None:
+    """The exception's own ``code``, else ``type``, each only when a
+    non-empty string -- litellm's exception hierarchy mirrors the OpenAI
+    SDK's, which carries both."""
+    for attr in ("code", "type"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 @dataclass(frozen=True)
 class LiteLLMAdapter:
     """
@@ -81,7 +92,9 @@ class LiteLLMAdapter:
             response = litellm.completion(**kwargs)
         except Exception as e:
             raise AdapterCallError(
-                f"LiteLLM request failed: {e}", retry_info=classify_litellm_exception(e)
+                f"LiteLLM request failed: {e}",
+                retry_info=classify_litellm_exception(e),
+                error_code=_litellm_error_code(e),
             ) from e
 
         # Extract response - litellm returns OpenAI-compatible format

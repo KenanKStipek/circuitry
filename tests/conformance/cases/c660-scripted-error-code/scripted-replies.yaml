@@ -1,0 +1,7 @@
+prime.p1:
+  - error:
+      kind: invalid_request
+      code: bad_schema
+prime.p2:
+  - error:
+      kind: timeout

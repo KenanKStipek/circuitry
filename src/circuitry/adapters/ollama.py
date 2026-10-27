@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from ..core.cancellation import run_tracked
 from ..curl_support import (
+    curl_error_code,
     curl_failure_message,
     parse_error_body,
     redact_host_url,
@@ -144,6 +145,7 @@ class OllamaAdapter:
                     hint=hint,
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+                error_code=curl_error_code(proc.stdout),
             )
 
         try:

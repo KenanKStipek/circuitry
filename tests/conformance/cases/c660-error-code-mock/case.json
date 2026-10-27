@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #660",
+  "description": "A self-hosted lmstudio 400 with error.code guardrail_violation: meta.error_code/meta.http_status land on the failed prompt (on_error: continue), and a CEL `if` guarded with has() branches on the code to run a json tool in its then.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

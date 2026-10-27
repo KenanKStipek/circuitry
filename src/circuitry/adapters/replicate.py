@@ -25,7 +25,7 @@ import os
 import shutil
 from dataclasses import dataclass
 
-from ..curl_support import curl_failure_message, run_curl
+from ..curl_support import curl_error_code, curl_failure_message, run_curl
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
@@ -88,6 +88,7 @@ class ReplicateAdapter:
                     secrets=[api_token],
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+                error_code=curl_error_code(proc.stdout, [api_token]),
             )
         try:
             raw = json.loads(proc.stdout)

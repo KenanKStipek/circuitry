@@ -1201,6 +1201,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                         retryable: true,
                         status: http_status_for_retry,
                         retry_after: retry_after_for_backoff.clone(),
+                        error_code: None,
                     },
                     attempt_index,
                     base_backoff_ms,

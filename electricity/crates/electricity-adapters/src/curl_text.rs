@@ -48,6 +48,38 @@ pub fn parse_error_body(stdout: &str) -> Option<String> {
     Some(truncate_chars(text, 200))
 }
 
+/// `curl_support.py::parse_error_code` -- the provider's own error code
+/// from a JSON error body: `error.code` when that is a non-empty
+/// string, else `error.type` when that is a non-empty string; `None`
+/// otherwise, including an integer code (it duplicates the HTTP
+/// status) or a flat `{"error": "<text>"}` body.
+pub fn parse_error_code(stdout: &str) -> Option<String> {
+    let text = electricity_value::pycompat::py_strip(stdout);
+    if text.is_empty() {
+        return None;
+    }
+    let parsed = electricity_json::loads(text).ok()?;
+    let error_dict = parsed
+        .as_dict()?
+        .get(&Value::Str("error".to_string()))?
+        .as_dict()?;
+    for field in ["code", "type"] {
+        if let Some(Value::Str(value)) = error_dict.get(&Value::Str(field.to_string())) {
+            if !value.is_empty() {
+                return Some(value.clone());
+            }
+        }
+    }
+    None
+}
+
+/// `curl_support.py::curl_error_code` -- [`parse_error_code`] of
+/// *stdout*, with *secrets* masked first.
+pub fn curl_error_code(stdout: &str, secrets: &[&str]) -> Option<String> {
+    let secrets: Vec<&str> = secrets.iter().copied().filter(|s| !s.is_empty()).collect();
+    parse_error_code(&mask_secrets(stdout, &secrets))
+}
+
 /// `%.200s`-equivalent truncation by *character* count, never bytes --
 /// a multi-byte codepoint is never split.
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -256,6 +288,7 @@ pub fn classify_curl_outcome(outcome: &CurlOutcome) -> RetryInfo {
             retryable: true,
             status: None,
             retry_after: outcome.retry_after.clone(),
+            error_code: None,
         };
     }
     if outcome.returncode == 22 {
@@ -264,6 +297,7 @@ pub fn classify_curl_outcome(outcome: &CurlOutcome) -> RetryInfo {
                 retryable: status_is_retryable(status),
                 status: Some(status),
                 retry_after: outcome.retry_after.clone(),
+                error_code: None,
             };
         }
     }
@@ -271,7 +305,20 @@ pub fn classify_curl_outcome(outcome: &CurlOutcome) -> RetryInfo {
         retryable: false,
         status: None,
         retry_after: outcome.retry_after.clone(),
+        error_code: None,
     }
+}
+
+/// [`classify_curl_outcome`] with [`curl_error_code`]'s own
+/// *secrets*-masked `error.code`/`error.type` read filled into the
+/// result -- every real adapter's own failure branch calls this
+/// instead of the two separately, the same way `adapters/_retry.py`'s
+/// `classify_curl_exit` call always sits next to a `curl_error_code`
+/// call at the Python raise site.
+pub fn classify_curl_outcome_with_error_code(outcome: &CurlOutcome, secrets: &[&str]) -> RetryInfo {
+    let mut retry = classify_curl_outcome(outcome);
+    retry.error_code = curl_error_code(&outcome.stdout, secrets);
+    retry
 }
 
 #[cfg(test)]
@@ -291,6 +338,50 @@ mod tests {
             parse_error_body(body),
             Some("model \"m\" not found, try pulling it first".to_string())
         );
+    }
+
+    #[test]
+    fn parse_error_code_reads_error_code() {
+        let body = r#"{"error": {"code": "guardrail_violation", "message": "nope"}}"#;
+        assert_eq!(
+            parse_error_code(body),
+            Some("guardrail_violation".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_error_code_falls_back_to_error_type_when_code_is_null() {
+        let body = r#"{"error": {"code": null, "type": "overloaded_error"}}"#;
+        assert_eq!(parse_error_code(body), Some("overloaded_error".to_string()));
+    }
+
+    #[test]
+    fn parse_error_code_ignores_an_integer_code() {
+        let body = r#"{"error": {"code": 5}}"#;
+        assert_eq!(parse_error_code(body), None);
+    }
+
+    #[test]
+    fn parse_error_code_is_none_for_a_flat_string_body() {
+        let body = r#"{"error": "model not found"}"#;
+        assert_eq!(parse_error_code(body), None);
+    }
+
+    #[test]
+    fn parse_error_code_is_none_for_non_json() {
+        assert_eq!(parse_error_code("not json at all"), None);
+    }
+
+    #[test]
+    fn parse_error_code_is_none_for_an_empty_body() {
+        assert_eq!(parse_error_code(""), None);
+    }
+
+    #[test]
+    fn curl_error_code_masks_secrets_before_parsing() {
+        let secret = "sk-canary-secret-123";
+        let body = format!(r#"{{"error": {{"code": "{secret}"}}}}"#);
+        assert_eq!(curl_error_code(&body, &[secret]), Some("***".to_string()));
     }
 
     #[test]
