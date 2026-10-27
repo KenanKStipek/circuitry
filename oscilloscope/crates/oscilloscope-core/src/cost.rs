@@ -337,8 +337,17 @@ fn pass_number(segment: &str) -> Option<u64> {
 /// the leaf, the one segment that actually told them apart, is kept
 /// even once dropped from the plain path, as `pass N` (the same
 /// label the orchestration pane's own loop passes read) right after
-/// the `…`.
-pub fn shorten_breadcrumb_from_left(label: &str, max_width: usize) -> String {
+/// the `…`. Two rows can also agree on everything from some shared
+/// ancestor down to the leaf with no loop pass involved at all
+/// (`a › check › answers`, `b › check › answers`) -- `all_labels`,
+/// every row's own full, unshortened breadcrumb being drawn
+/// alongside this one, is how the nearest segment that actually
+/// diverges from every one of them is found and kept the same way.
+pub fn shorten_breadcrumb_from_left(
+    label: &str,
+    all_labels: &[String],
+    max_width: usize,
+) -> String {
     if label.chars().count() <= max_width {
         return label.to_string();
     }
@@ -346,27 +355,71 @@ pub fn shorten_breadcrumb_from_left(label: &str, max_width: usize) -> String {
     if segments.len() <= 1 {
         return label.to_string();
     }
-    let pass = segments
+    let mut markers: Vec<(usize, String)> = Vec::new();
+    if let Some((idx, n)) = segments
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(i, seg)| pass_number(seg).map(|n| (i, n)));
-    let with_pass_marker = |drop: usize| -> Vec<String> {
+        .find_map(|(i, seg)| pass_number(seg).map(|n| (i, n)))
+    {
+        markers.push((idx, format!("pass {n}")));
+    }
+    if let Some((idx, text)) = nearest_disambiguating_ancestor(&segments, all_labels) {
+        if !markers.iter().any(|(i, _)| *i == idx) {
+            markers.push((idx, text));
+        }
+    }
+    markers.sort_by_key(|(idx, _)| *idx);
+    let with_markers = |drop: usize| -> Vec<String> {
         let mut kept: Vec<String> = segments[drop..].iter().map(|s| s.to_string()).collect();
-        if let Some((idx, n)) = pass {
-            if idx < drop {
-                kept.insert(0, format!("pass {n}"));
+        for (idx, text) in markers.iter().rev() {
+            if *idx < drop {
+                kept.insert(0, text.clone());
             }
         }
         kept
     };
     for drop in 1..segments.len() {
-        let candidate = format!("… › {}", with_pass_marker(drop).join(" › "));
+        let candidate = format!("… › {}", with_markers(drop).join(" › "));
         if candidate.chars().count() <= max_width {
             return candidate;
         }
     }
-    format!("… › {}", with_pass_marker(segments.len() - 1).join(" › "))
+    format!("… › {}", with_markers(segments.len() - 1).join(" › "))
+}
+
+/// The index and text of the nearest segment (right to left) that
+/// keeps `segments` from reading identically to some *other* label's
+/// own trailing segments once both are shortened down that far
+/// (issue #641, finding on look-alike rows) -- `None` when `segments`
+/// shares no trailing run with any other label in `all_labels` at
+/// all (dropping purely by width already keeps it distinct), or
+/// shares one long enough that no segment of its own is left to show
+/// (one label is itself a trailing match of a longer one).
+fn nearest_disambiguating_ancestor(
+    segments: &[&str],
+    all_labels: &[String],
+) -> Option<(usize, String)> {
+    let own = segments.join(" › ");
+    let mut longest_shared_suffix = 0usize;
+    for other in all_labels {
+        if other == &own {
+            continue;
+        }
+        let other_segments: Vec<&str> = other.split(" › ").collect();
+        let shared = segments
+            .iter()
+            .rev()
+            .zip(other_segments.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        longest_shared_suffix = longest_shared_suffix.max(shared);
+    }
+    if longest_shared_suffix == 0 || longest_shared_suffix >= segments.len() {
+        return None;
+    }
+    let idx = segments.len() - longest_shared_suffix - 1;
+    Some((idx, segments[idx].to_string()))
 }
 
 /// How many equal clock-time buckets the "tokens over time" chart
@@ -785,23 +838,24 @@ mod tests {
 
     #[test]
     fn shorten_breadcrumb_from_left_drops_leading_segments_but_keeps_the_leaf() {
-        // No `iter_N` segment here at all -- nothing to disambiguate
-        // two loop passes with, so this reads exactly as before.
+        // No `iter_N` segment here at all, and no other label drawn
+        // alongside it either -- nothing to disambiguate, so this
+        // reads exactly as before.
         let label = "reviews › check › answers";
-        assert_eq!(shorten_breadcrumb_from_left(label, 100), label);
+        assert_eq!(shorten_breadcrumb_from_left(label, &[], 100), label);
         assert_eq!(
-            shorten_breadcrumb_from_left(label, "… › check › answers".chars().count()),
+            shorten_breadcrumb_from_left(label, &[], "… › check › answers".chars().count()),
             "… › check › answers"
         );
         assert_eq!(
-            shorten_breadcrumb_from_left(label, "… › answers".chars().count()),
+            shorten_breadcrumb_from_left(label, &[], "… › answers".chars().count()),
             "… › answers"
         );
         // Even at an extreme width, the leaf is never dropped.
-        assert_eq!(shorten_breadcrumb_from_left(label, 1), "… › answers");
+        assert_eq!(shorten_breadcrumb_from_left(label, &[], 1), "… › answers");
         // A single segment (no ancestors) is never prefixed with `…` --
         // there is nothing to drop without losing the leaf itself.
-        assert_eq!(shorten_breadcrumb_from_left("answers", 1), "answers");
+        assert_eq!(shorten_breadcrumb_from_left("answers", &[], 1), "answers");
     }
 
     /// Issue #641: two loop passes whose own breadcrumb agrees on
@@ -814,11 +868,12 @@ mod tests {
     fn shorten_breadcrumb_from_left_keeps_the_pass_that_tells_two_loops_apart() {
         let first = "reviews › iter_0 › check › answers";
         let second = "reviews › iter_1 › check › answers";
+        let all = [first.to_string(), second.to_string()];
         // Narrow enough that even the real `iter_N` segment itself
         // has to drop -- only the leaf fits otherwise.
         let narrow = "… › answers".chars().count();
-        let shortened_first = shorten_breadcrumb_from_left(first, narrow);
-        let shortened_second = shorten_breadcrumb_from_left(second, narrow);
+        let shortened_first = shorten_breadcrumb_from_left(first, &all, narrow);
+        let shortened_second = shorten_breadcrumb_from_left(second, &all, narrow);
         assert_ne!(
             shortened_first, shortened_second,
             "two different passes must not read identically once shortened"
@@ -835,9 +890,33 @@ mod tests {
     fn shorten_breadcrumb_from_left_keeps_the_real_iter_segment_when_it_still_fits() {
         let label = "reviews › iter_1 › review";
         assert_eq!(
-            shorten_breadcrumb_from_left(label, "… › iter_1 › review".chars().count()),
+            shorten_breadcrumb_from_left(label, &[], "… › iter_1 › review".chars().count()),
             "… › iter_1 › review"
         );
+    }
+
+    /// Issue #641 (finding on look-alike rows): two rows that agree
+    /// on everything from some shared ancestor down to the leaf, with
+    /// no loop pass involved at all (`a › check › answers`, `b ›
+    /// check › answers`), must not shorten to the exact same text
+    /// either -- the nearest ancestor that actually tells them apart
+    /// (`a`, `b`) is kept the same way a loop pass is.
+    #[test]
+    fn shorten_breadcrumb_from_left_keeps_the_nearest_ancestor_that_tells_two_stores_apart() {
+        let first = "a › check › answers";
+        let second = "b › check › answers";
+        let all = [first.to_string(), second.to_string()];
+        // Narrow enough that even `check` itself has to drop -- only
+        // the leaf fits otherwise.
+        let narrow = "… › answers".chars().count();
+        let shortened_first = shorten_breadcrumb_from_left(first, &all, narrow);
+        let shortened_second = shorten_breadcrumb_from_left(second, &all, narrow);
+        assert_ne!(
+            shortened_first, shortened_second,
+            "two different stores must not read identically once shortened"
+        );
+        assert_eq!(shortened_first, "… › a › answers");
+        assert_eq!(shortened_second, "… › b › answers");
     }
 
     #[test]

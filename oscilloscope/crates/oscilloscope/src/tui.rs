@@ -2236,6 +2236,18 @@ fn draw_cost_table(
     // derives it from the row's own real path instead of trying to
     // strip a prefix back out of an already-built string.
     let zoom_root = app.cost_zoom.last().map(String::as_str);
+    // Issue #641 (finding on look-alike rows): every row's own full,
+    // unshortened label, so shortening one row's own label can tell
+    // whether dropping down to some width would make it read
+    // identically to another's -- and if so, which ancestor segment
+    // actually tells them apart.
+    let all_labels: Vec<String> = rows
+        .iter()
+        .map(|row| match zoom_root {
+            Some(root) => oscilloscope_core::cost::zoomed_row_label(row, root),
+            None => row.label.clone(),
+        })
+        .collect();
     let mut row_lines: Vec<Line> = Vec::new();
     for row in &rows {
         let share = if total_tokens > 0 {
@@ -2303,7 +2315,11 @@ fn draw_cost_table(
         // right: the leaf is the one segment that actually has to
         // stay readable to tell two same-named rows apart.
         let label_budget = (inner.width as usize).saturating_sub(2 + value_text.chars().count());
-        let label = oscilloscope_core::cost::shorten_breadcrumb_from_left(&label, label_budget);
+        let label = oscilloscope_core::cost::shorten_breadcrumb_from_left(
+            &label,
+            &all_labels,
+            label_budget,
+        );
         row_lines.push(Line::styled(format!("{label}  {value_text}"), style));
     }
 
