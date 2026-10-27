@@ -14,6 +14,8 @@ Optional:
   - ``WATSONX_REGION`` (default ``us-south``) — selects the ML endpoint.
     Override ``base_url`` for non-region or staging endpoints.
   - ``WATSONX_API_VERSION`` (default ``2024-03-14``).
+  - ``runtime.adapters.watsonx.api_key_env`` — reads the IBM Cloud API key
+    from a different variable (default ``WATSONX_API_KEY``).
 
 Wire format is watsonx-native (``/ml/v1/text/generation``). The ``model``
 parameter maps to ``model_id`` and the prompt becomes ``input``.
@@ -102,6 +104,7 @@ class WatsonXAdapter:
     base_url: str = ""  # resolved from WATSONX_REGION when empty
     default_model: str = "meta-llama/llama-3-3-70b-instruct"
     api_version: str = "2024-03-14"
+    api_key_env: str = "WATSONX_API_KEY"
 
     def _resolve_base_url(self) -> str:
         if self.base_url:
@@ -117,9 +120,9 @@ class WatsonXAdapter:
         timeout_seconds: int = 120,
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
-        api_key = os.environ.get("WATSONX_API_KEY", "")
+        api_key = os.environ.get(self.api_key_env, "")
         if not api_key:
-            raise RuntimeError("watsonx: WATSONX_API_KEY not set.")
+            raise RuntimeError(f"watsonx: {self.api_key_env} not set.")
         project_id = os.environ.get("WATSONX_PROJECT_ID", "")
         if not project_id:
             raise RuntimeError("watsonx: WATSONX_PROJECT_ID not set.")
@@ -197,8 +200,8 @@ class WatsonXAdapter:
 
     def check(self) -> CheckResult:
         missing: list[str] = []
-        if not os.environ.get("WATSONX_API_KEY"):
-            missing.append("env:WATSONX_API_KEY")
+        if not os.environ.get(self.api_key_env):
+            missing.append(f"env:{self.api_key_env}")
         if not os.environ.get("WATSONX_PROJECT_ID"):
             missing.append("env:WATSONX_PROJECT_ID")
         if shutil.which("curl") is None:

@@ -24,11 +24,12 @@ class AI21Adapter:
     name: str = "ai21"
     base_url: str = "https://api.ai21.com/studio/v1"
     default_model: str = "jamba-large"
+    api_key_env: str = "AI21_API_KEY"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="AI21_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

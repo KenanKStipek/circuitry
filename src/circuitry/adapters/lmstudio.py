@@ -27,10 +27,15 @@ class LMStudioAdapter:
     base_url: str = "http://localhost:1234/v1"
     default_model: str = ""
 
+    #: Self-hosted; no auth by default. ``runtime.adapters.lmstudio.api_key_env``
+    #: can name a variable to send as a Bearer token (a proxy in front of
+    #: LM Studio that does check one).
+    api_key_env: str = ""
+
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

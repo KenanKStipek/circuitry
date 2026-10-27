@@ -29,11 +29,12 @@ class QwenDashScopeAdapter:
     name: str = "qwen-dashscope"
     base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     default_model: str = "qwen-max"
+    api_key_env: str = "DASHSCOPE_API_KEY"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="DASHSCOPE_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

@@ -28,10 +28,15 @@ class VllmAdapter:
     base_url: str = "http://localhost:8000/v1"
     default_model: str = ""
 
+    #: Self-hosted; no auth by default. ``runtime.adapters.vllm.api_key_env``
+    #: can name a variable to send as a Bearer token (a gateway in front of
+    #: vLLM that does check one).
+    api_key_env: str = ""
+
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="",  # self-hosted; no auth
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 

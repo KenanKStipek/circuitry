@@ -55,6 +55,7 @@ def _build_openai(cfg: dict[str, Any], name: str = "openai") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.openai.com/v1",
         default_model=cfg.get("default_model") or "gpt-4o-mini",
+        api_key_env=resolve_api_key_env(cfg, default="OPENAI_API_KEY", adapter_name=name),
     )
 
 
@@ -64,6 +65,7 @@ def _build_anthropic(cfg: dict[str, Any], name: str = "anthropic") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.anthropic.com",
         default_model=cfg.get("default_model") or AnthropicAdapter.default_model,
         max_tokens=int(cfg.get("max_tokens") or 4096),
+        api_key_env=resolve_api_key_env(cfg, default="ANTHROPIC_API_KEY", adapter_name=name),
     )
 
 
@@ -136,6 +138,7 @@ def _build_gemini(cfg: dict[str, Any], name: str = "gemini") -> Adapter:
         base_url=cfg.get("base_url")
         or "https://generativelanguage.googleapis.com/v1beta/openai",
         default_model=cfg.get("default_model") or "gemini-2.5-flash",
+        api_key_env=resolve_api_key_env(cfg, default="GOOGLE_API_KEY", adapter_name=name),
     )
 
 
@@ -147,6 +150,7 @@ def _build_groq(cfg: dict[str, Any], name: str = "groq") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.groq.com/openai/v1",
         default_model=cfg.get("default_model") or "llama-3.3-70b-versatile",
+        api_key_env=resolve_api_key_env(cfg, default="GROQ_API_KEY", adapter_name=name),
     )
 
 
@@ -155,6 +159,7 @@ def _build_openrouter(cfg: dict[str, Any], name: str = "openrouter") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://openrouter.ai/api/v1",
         default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
+        api_key_env=resolve_api_key_env(cfg, default="OPENROUTER_API_KEY", adapter_name=name),
     )
 
 
@@ -163,6 +168,7 @@ def _build_perplexity(cfg: dict[str, Any], name: str = "perplexity") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.perplexity.ai",
         default_model=cfg.get("default_model") or "sonar",
+        api_key_env=resolve_api_key_env(cfg, default="PERPLEXITY_API_KEY", adapter_name=name),
     )
 
 
@@ -171,6 +177,7 @@ def _build_xai(cfg: dict[str, Any], name: str = "xai") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.x.ai/v1",
         default_model=cfg.get("default_model") or "grok-2-latest",
+        api_key_env=resolve_api_key_env(cfg, default="XAI_API_KEY", adapter_name=name),
     )
 
 
@@ -179,6 +186,7 @@ def _build_deepseek(cfg: dict[str, Any], name: str = "deepseek") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.deepseek.com/v1",
         default_model=cfg.get("default_model") or "deepseek-chat",
+        api_key_env=resolve_api_key_env(cfg, default="DEEPSEEK_API_KEY", adapter_name=name),
     )
 
 
@@ -188,6 +196,7 @@ def _build_together(cfg: dict[str, Any], name: str = "together") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.together.xyz/v1",
         default_model=cfg.get("default_model")
         or "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        api_key_env=resolve_api_key_env(cfg, default="TOGETHER_API_KEY", adapter_name=name),
     )
 
 
@@ -197,20 +206,16 @@ def _build_fireworks(cfg: dict[str, Any], name: str = "fireworks") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.fireworks.ai/inference/v1",
         default_model=cfg.get("default_model")
         or "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        api_key_env=resolve_api_key_env(cfg, default="FIREWORKS_API_KEY", adapter_name=name),
     )
 
 
 def _build_nvidia_nim(cfg: dict[str, Any], name: str = "nvidia-nim") -> Adapter:
-    # api_key_env: empty string is a valid explicit override (self-hosted
-    # NIM containers don't need a key); only fall back to the default
-    # when the field is absent entirely. A plain ``or`` would coerce the
-    # intentional empty string back to NIM_API_KEY.
-    api_key_env = cfg.get("api_key_env", "NIM_API_KEY")
     return NvidiaNimAdapter(
         name=name,
         base_url=cfg.get("base_url") or "https://integrate.api.nvidia.com/v1",
         default_model=cfg.get("default_model") or "meta/llama-3.3-70b-instruct",
-        api_key_env=api_key_env if api_key_env is not None else "NIM_API_KEY",
+        api_key_env=resolve_api_key_env(cfg, default="NIM_API_KEY", adapter_name=name),
     )
 
 
@@ -219,6 +224,7 @@ def _build_vllm(cfg: dict[str, Any], name: str = "vllm") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:8000/v1",
         default_model=cfg.get("default_model") or "",
+        api_key_env=resolve_api_key_env(cfg, default="", adapter_name=name),
     )
 
 
@@ -227,6 +233,7 @@ def _build_llamacpp(cfg: dict[str, Any], name: str = "llamacpp") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:8080/v1",
         default_model=cfg.get("default_model") or "",
+        api_key_env=resolve_api_key_env(cfg, default="", adapter_name=name),
     )
 
 
@@ -235,6 +242,7 @@ def _build_lmstudio(cfg: dict[str, Any], name: str = "lmstudio") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:1234/v1",
         default_model=cfg.get("default_model") or "",
+        api_key_env=resolve_api_key_env(cfg, default="", adapter_name=name),
     )
 
 
@@ -243,6 +251,7 @@ def _build_mistral(cfg: dict[str, Any], name: str = "mistral") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.mistral.ai/v1",
         default_model=cfg.get("default_model") or "mistral-large-latest",
+        api_key_env=resolve_api_key_env(cfg, default="MISTRAL_API_KEY", adapter_name=name),
     )
 
 
@@ -251,6 +260,7 @@ def _build_ai21(cfg: dict[str, Any], name: str = "ai21") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.ai21.com/studio/v1",
         default_model=cfg.get("default_model") or "jamba-large",
+        api_key_env=resolve_api_key_env(cfg, default="AI21_API_KEY", adapter_name=name),
     )
 
 
@@ -262,16 +272,16 @@ def _build_huggingface_inference(
         base_url=cfg.get("base_url") or "https://router.huggingface.co/v1",
         default_model=cfg.get("default_model")
         or "meta-llama/Llama-3.3-70B-Instruct",
+        api_key_env=resolve_api_key_env(cfg, default="HF_TOKEN", adapter_name=name),
     )
 
 
 def _build_tgi(cfg: dict[str, Any], name: str = "tgi") -> Adapter:
-    api_key_env = cfg.get("api_key_env", "")
     return TgiAdapter(
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:3000/v1",
         default_model=cfg.get("default_model") or "",
-        api_key_env=api_key_env if api_key_env is not None else "",
+        api_key_env=resolve_api_key_env(cfg, default="", adapter_name=name),
     )
 
 
@@ -299,6 +309,7 @@ def _build_databricks(cfg: dict[str, Any], name: str = "databricks") -> Adapter:
         base_url=cfg.get("base_url") or "",
         default_model=cfg.get("default_model")
         or "databricks-meta-llama-3-3-70b-instruct",
+        api_key_env=resolve_api_key_env(cfg, default="DATABRICKS_TOKEN", adapter_name=name),
     )
 
 
@@ -308,6 +319,7 @@ def _build_qwen_dashscope(cfg: dict[str, Any], name: str = "qwen-dashscope") -> 
         base_url=cfg.get("base_url")
         or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         default_model=cfg.get("default_model") or "qwen-max",
+        api_key_env=resolve_api_key_env(cfg, default="DASHSCOPE_API_KEY", adapter_name=name),
     )
 
 
@@ -316,6 +328,7 @@ def _build_cohere(cfg: dict[str, Any], name: str = "cohere") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.cohere.com",
         default_model=cfg.get("default_model") or "command-r-plus",
+        api_key_env=resolve_api_key_env(cfg, default="COHERE_API_KEY", adapter_name=name),
     )
 
 
@@ -328,6 +341,7 @@ def _build_cloudflare_workers_ai(
         account_id=cfg.get("account_id") or "",
         default_model=cfg.get("default_model")
         or "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        api_key_env=resolve_api_key_env(cfg, default="CF_API_TOKEN", adapter_name=name),
     )
 
 
@@ -337,6 +351,7 @@ def _build_azure_openai(cfg: dict[str, Any], name: str = "azure-openai") -> Adap
         endpoint=cfg.get("endpoint") or cfg.get("base_url") or "",
         api_version=cfg.get("api_version") or "2024-10-21",
         default_model=cfg.get("default_model") or "",
+        api_key_env=resolve_api_key_env(cfg, default="AZURE_OPENAI_API_KEY", adapter_name=name),
     )
 
 
@@ -345,6 +360,7 @@ def _build_replicate(cfg: dict[str, Any], name: str = "replicate") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.replicate.com/v1",
         default_model=cfg.get("default_model") or "meta/meta-llama-3-70b-instruct",
+        api_key_env=resolve_api_key_env(cfg, default="REPLICATE_API_TOKEN", adapter_name=name),
     )
 
 
@@ -355,6 +371,7 @@ def _build_watsonx(cfg: dict[str, Any], name: str = "watsonx") -> Adapter:
         default_model=cfg.get("default_model")
         or "meta-llama/llama-3-3-70b-instruct",
         api_version=cfg.get("api_version") or "2024-03-14",
+        api_key_env=resolve_api_key_env(cfg, default="WATSONX_API_KEY", adapter_name=name),
     )
 
 
@@ -373,8 +390,32 @@ def _string_list(
     return tuple(raw)
 
 
-#: What a variable name in ``env`` must look like.
+#: What a variable name in ``env`` (or ``api_key_env``) must look like.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def resolve_api_key_env(cfg: dict[str, Any], *, default: str, adapter_name: str) -> str:
+    """``cfg["api_key_env"]`` when present, else *default* -- the name of the
+    environment variable an adapter reads its credential from.
+
+    An empty string is a valid, explicit override (self-hosted endpoints
+    that take no key at all); only a present, non-empty value must match
+    an environment-variable name. Only config ever reaches here:
+    ``runtime.adapters.<name>.api_key_env`` from an orchestration document
+    is stripped before merge (see ``cli.effective_settings``), on the
+    security grounds in ``docs/threat-model.md`` -- a document that could
+    choose the variable could point an adapter's Bearer header at any
+    secret in the host's environment, not just that provider's own key.
+    """
+    if "api_key_env" not in cfg:
+        return default
+    raw = cfg["api_key_env"]
+    if not isinstance(raw, str) or (raw != "" and not _ENV_NAME_RE.fullmatch(raw)):
+        raise ValueError(
+            f"runtime.adapters.{adapter_name}.api_key_env must be an environment "
+            f"variable name, got {raw!r}"
+        )
+    return raw
 
 
 def _env_pairs(cfg: dict[str, Any], *, adapter_name: str) -> tuple[tuple[str, str], ...]:
@@ -524,6 +565,25 @@ def alias_config_errors(runtime: dict[str, Any] | None) -> list[str]:
     for name in sorted(alias_names(runtime)):
         try:
             build_adapter(adapter_name=name, runtime=runtime or {})
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def adapter_api_key_env_errors(runtime: dict[str, Any] | None) -> list[str]:
+    """Why each ``runtime.adapters.<name>.api_key_env`` is invalid, in name
+    order; ``[]`` when every one present is a valid environment-variable
+    name (or ``""``, an explicit "no key"). Checked for every adapter
+    entry -- built-in or alias -- whether or not any effect selects it, the
+    same way :func:`alias_config_errors` checks every alias target."""
+    adapters_cfg = (runtime or {}).get("adapters") or {}
+    errors: list[str] = []
+    for name in sorted(adapters_cfg):
+        cfg = adapters_cfg[name]
+        if not isinstance(cfg, dict) or "api_key_env" not in cfg:
+            continue
+        try:
+            resolve_api_key_env(cfg, default="", adapter_name=name)
         except ValueError as exc:
             errors.append(str(exc))
     return errors

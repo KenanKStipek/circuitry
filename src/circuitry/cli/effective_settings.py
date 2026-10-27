@@ -74,6 +74,48 @@ _NOTICE_KEY_DEPTH = 2
 _NOTICE_KEY_DEPTHS: dict[str, int] = {"secrets": 1}
 
 
+def _strip_document_api_key_env(
+    orch_runtime: dict[str, Any],
+    *,
+    document_name: str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop a document's `adapters.<name>.api_key_env`, unconditionally --
+    unlike `_strip_disallowed_adapter_retargets`, not gated on
+    `enabled_adapters`, and not restored by a trusted document either
+    (`trust_document`/`trust_orchestration_runtime`): only config ever
+    chooses which environment variable an adapter's key comes from. A
+    document run by path can already set `base_url`; letting it also choose
+    `api_key_env` would let it point an adapter's Bearer header at any
+    variable in the host's environment, not just that provider's own key
+    (see `docs/threat-model.md`).
+    """
+    adapters = orch_runtime.get("adapters")
+    if not isinstance(adapters, dict):
+        return orch_runtime, []
+    source = document_name or "the orchestration"
+    warnings: list[str] = []
+    filtered: dict[str, Any] = {}
+    for name, entry in adapters.items():
+        if isinstance(entry, dict) and "api_key_env" in entry:
+            warnings.append(
+                f"runtime.adapters.{name}.api_key_env from {source} ignored: only "
+                "config chooses which environment variable an adapter's key comes from"
+            )
+            remainder = {k: v for k, v in entry.items() if k != "api_key_env"}
+            if remainder:
+                filtered[name] = remainder
+        else:
+            filtered[name] = entry
+    if not warnings:
+        return orch_runtime, []
+    result = dict(orch_runtime)
+    if filtered:
+        result["adapters"] = filtered
+    else:
+        result.pop("adapters", None)
+    return result, warnings
+
+
 def _strip_disallowed_adapter_retargets(
     orch_runtime: dict[str, Any],
     *,
@@ -128,11 +170,17 @@ def _split_orchestration_runtime(
     Returns the accepted block and one warning per dropped key. A trusted
     document keeps its whole block, except an adapter-alias retarget
     `enabled_adapters` disallows (see
-    :func:`_strip_disallowed_adapter_retargets`), stripped either way.
+    :func:`_strip_disallowed_adapter_retargets`) and an `api_key_env`
+    override (see :func:`_strip_document_api_key_env`), both stripped
+    either way.
     """
+    orch_runtime, api_key_env_warnings = _strip_document_api_key_env(
+        orch_runtime, document_name=document_name
+    )
     orch_runtime, alias_warnings = _strip_disallowed_adapter_retargets(
         orch_runtime, enabled_adapters=enabled_adapters, document_name=document_name
     )
+    alias_warnings = [*api_key_env_warnings, *alias_warnings]
     if trusted:
         return dict(orch_runtime), alias_warnings
     allowed = ", ".join(f"runtime.{k}" for k in sorted(ORCHESTRATION_RUNTIME_KEYS))
@@ -264,6 +312,9 @@ def orchestration_host_setting_warnings(
     if not isinstance(orch_runtime, dict):
         orch_runtime = {}
     if trust_document or cfg.trust_orchestration_runtime:
+        orch_runtime, api_key_env_warnings = _strip_document_api_key_env(
+            orch_runtime, document_name=document_name
+        )
         orch_runtime, alias_warnings = _strip_disallowed_adapter_retargets(
             orch_runtime, enabled_adapters=cfg.enabled_adapters, document_name=document_name
         )
@@ -271,6 +322,7 @@ def orchestration_host_setting_warnings(
             *_applied_host_settings_notice(
                 orch_runtime, orch_plugins, cfg=cfg, document_name=document_name
             ),
+            *api_key_env_warnings,
             *alias_warnings,
         ]
     return [

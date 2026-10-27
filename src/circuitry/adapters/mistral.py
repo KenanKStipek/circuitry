@@ -24,11 +24,12 @@ class MistralAdapter:
     name: str = "mistral"
     base_url: str = "https://api.mistral.ai/v1"
     default_model: str = "mistral-large-latest"
+    api_key_env: str = "MISTRAL_API_KEY"
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="MISTRAL_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
         )
 
