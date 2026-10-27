@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -90,6 +91,23 @@ def _assert_run_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> N
     )
 
 
+#: Set when `cargo build` failed: the first test that needs the binary
+#: reports it, and every later one skips (#667), so a missing toolchain
+#: shows up as one failure instead of one error per case.
+_BUILD_FAILURE: str | None = None
+_BUILD_FAILURE_REPORTED = False
+
+
+def _no_binary() -> NoReturn:
+    global _BUILD_FAILURE_REPORTED
+    if _BUILD_FAILURE is None:
+        pytest.skip("cargo not available; electricity binary cannot be built")
+    if not _BUILD_FAILURE_REPORTED:
+        _BUILD_FAILURE_REPORTED = True
+        pytest.fail(_BUILD_FAILURE)
+    pytest.skip("electricity binary unavailable: see the build failure reported earlier")
+
+
 @pytest.fixture(scope="session")
 def electricity_binary() -> Path | None:
     """Build the `electricity` binary once per test session. Returns
@@ -102,13 +120,19 @@ def electricity_binary() -> Path | None:
     proc = subprocess.run(
         ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
         cwd=ELECTRICITY_DIR,
+        env=harness.cargo_env(),
         capture_output=True,
         text=True,
         timeout=600,
         check=False,
     )
     if proc.returncode != 0:
-        pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
+        global _BUILD_FAILURE
+        _BUILD_FAILURE = (
+            "cargo build -p electricity-cli failed (if rustup reports no toolchain, set "
+            f"RUSTUP_HOME/CARGO_HOME):\n{proc.stdout}\n{proc.stderr}"
+        )
+        return None
     binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
     assert binary.exists(), f"cargo build succeeded but {binary} is missing"
     return binary
@@ -194,7 +218,7 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     if "electricity" not in metadata["engines"]:
         pytest.skip(f"{case_dir.name}: does not apply to the electricity engine")
     if electricity_binary is None:
-        pytest.skip("cargo not available; electricity binary cannot be built")
+        _no_binary()
 
     home_dir = tmp_path / "home"
     home_dir.mkdir()
@@ -379,7 +403,7 @@ def test_a_date_as_a_dict_key_exits_nonzero_on_both_engines_with_no_out(
     with a stderr message too, never the old `{"error": ...}` placeholder
     on stdout with exit 0."""
     if electricity_binary is None:
-        pytest.skip("cargo not available; electricity binary cannot be built")
+        _no_binary()
 
     doc = tmp_path / "orch.yml"
     doc.write_text(

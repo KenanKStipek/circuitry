@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from . import harness
+
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 
 #: A minimal document both engines already run identically (M0's own
@@ -124,7 +126,8 @@ def electricity_binary() -> Path:
         pytest.skip("cargo not available; electricity binary cannot be built")
     proc = subprocess.run(
         ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
-        cwd=ELECTRICITY_DIR, capture_output=True, text=True, timeout=600, check=False,
+        cwd=ELECTRICITY_DIR, env=harness.cargo_env(), capture_output=True, text=True,
+        timeout=600, check=False,
     )
     if proc.returncode != 0:
         pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
