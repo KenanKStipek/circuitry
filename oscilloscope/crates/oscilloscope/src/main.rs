@@ -1707,6 +1707,7 @@ fn build_cost_screen_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
     state: Option<&serde_json::Value>,
+    model: &oscilloscope_core::model::RunModel,
     now: &str,
 ) -> Option<oscilloscope_core::screens::CostScreen> {
     if app.screen != oscilloscope_core::screens::Screen::Cost {
@@ -1734,7 +1735,9 @@ fn build_cost_screen_if_active(
         &kinds,
         state,
         app.cost_measure,
+        model,
         now,
+        tui::PHASE_GLYPHS.len(),
     ))
 }
 
@@ -1767,6 +1770,7 @@ fn build_flow_screen_if_active(
         story,
         selected_path.as_deref(),
         &LocalZone,
+        render_state.header.run_end_ts.as_deref(),
         now,
     ))
 }
@@ -2118,8 +2122,13 @@ fn run_tui(
         &log_lines,
         &now_str,
     );
-    let mut cost_screen =
-        build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+    let mut cost_screen = build_cost_screen_if_active(
+        &app,
+        &render_state,
+        current_state.as_ref(),
+        &model,
+        &now_str,
+    );
     let mut flow_screen = build_flow_screen_if_active(
         &app,
         &render_state,
@@ -2312,8 +2321,10 @@ fn run_tui(
             last_rebuild = Instant::now();
             needs_rebuild = false;
             if app.follow {
-                if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.select_tree_path_keeping_details(Some(target.to_string()));
+                if let Some(target) =
+                    App::follow_target_or_nearest_visible(&render_state.rows, &app)
+                {
+                    app.select_tree_path_keeping_details(Some(target));
                 }
             }
             app.reconcile_folding(&render_state.rows);
@@ -2335,8 +2346,13 @@ fn run_tui(
                 &log_lines,
                 &now_str,
             );
-            cost_screen =
-                build_cost_screen_if_active(&app, &render_state, current_state.as_ref(), &now_str);
+            cost_screen = build_cost_screen_if_active(
+                &app,
+                &render_state,
+                current_state.as_ref(),
+                &model,
+                &now_str,
+            );
             flow_screen = build_flow_screen_if_active(
                 &app,
                 &render_state,
@@ -2373,10 +2389,24 @@ fn run_tui(
         // single-pass loop row -- `visible_rows_for_flow` narrows the
         // same real-`Row` list every other screen moves over to
         // exactly those. Issue #650: the same rule, for the Time
-        // screen's own collapsed loop rows.
+        // screen's own collapsed loop rows. `visible_rows_for_flow`
+        // returns owned rows (issue #643's first follow-up: an
+        // unnamed `if`'s own synthesised decision has no real `Row`
+        // of its own to borrow), so `flow_owned` holds them for as
+        // long as `visible`'s own references into it need to live.
+        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
+            == oscilloscope_core::screens::Screen::Flow
+        {
+            flow_screen
+                .as_ref()
+                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let visible = match (&flow_screen, &time_screen) {
-            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
@@ -2522,6 +2552,7 @@ fn run_tui(
                             &app,
                             &render_state,
                             current_state.as_ref(),
+                            &model,
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -3365,7 +3396,7 @@ fn run_tui_watch(
         &now_str,
     );
     let mut cost_screen =
-        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &model, &now_str);
     let mut flow_screen = build_flow_screen_if_active(
         &app,
         &render_state,
@@ -3591,8 +3622,10 @@ fn run_tui_watch(
             last_rebuild = Instant::now();
             needs_rebuild = false;
             if app.follow {
-                if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.select_tree_path_keeping_details(Some(target.to_string()));
+                if let Some(target) =
+                    App::follow_target_or_nearest_visible(&render_state.rows, &app)
+                {
+                    app.select_tree_path_keeping_details(Some(target));
                 }
             }
             app.reconcile_folding(&render_state.rows);
@@ -3611,8 +3644,13 @@ fn run_tui_watch(
                 &log_lines,
                 &now_str,
             );
-            cost_screen =
-                build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &now_str);
+            cost_screen = build_cost_screen_if_active(
+                &app,
+                &render_state,
+                last_state.as_ref(),
+                &model,
+                &now_str,
+            );
             flow_screen = build_flow_screen_if_active(
                 &app,
                 &render_state,
@@ -3641,9 +3679,19 @@ fn run_tui_watch(
         }
         // Issue #635/#650: same narrowing as `osi <doc>`'s own main
         // loop -- see the comment there.
+        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
+            == oscilloscope_core::screens::Screen::Flow
+        {
+            flow_screen
+                .as_ref()
+                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let visible = match (&flow_screen, &time_screen) {
-            (Some(screen), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app)
+            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+                flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
@@ -3756,6 +3804,7 @@ fn run_tui_watch(
                             &app,
                             &render_state,
                             last_state.as_ref(),
+                            &model,
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -4134,6 +4183,7 @@ mod tests {
             &[],
             Some("prime.fix"),
             &LocalZone,
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:01Z",
         );
         let time_screen = oscilloscope_core::screens::build_time_screen(
@@ -4740,11 +4790,11 @@ mod tests {
     fn mark_details_highlights_ignores_a_bare_selection_change() {
         let plan = PlanTree::empty();
         let ask_running = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hello"}},
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hello", "prompt_chars": 5}},
             "other": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
         }});
         let ask_done = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hello"}},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hello", "prompt_chars": 5}},
             "other": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
         }});
         let mut highlights = highlight::Tracker::new();

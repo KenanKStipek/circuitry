@@ -313,6 +313,15 @@ pub fn zoomed_row_label(row: &StoreRow, zoom_root: &str) -> String {
     }
 }
 
+/// An `iter_N` segment's own 1-based pass number, same reading
+/// [`crate::render`]'s own (private) loop-pass label uses.
+fn pass_number(segment: &str) -> Option<u64> {
+    segment
+        .strip_prefix("iter_")
+        .and_then(|n| n.parse().ok())
+        .map(|n: u64| n + 1)
+}
+
 /// Shortens a " › "-joined breadcrumb to at most `max_width` columns
 /// by dropping whole leading segments and prefixing `…`, never the
 /// trailing (leaf) segment -- the one part of a row's own path that
@@ -320,7 +329,25 @@ pub fn zoomed_row_label(row: &StoreRow, zoom_root: &str) -> String {
 /// sibling elsewhere in the tree. Returns `label` unchanged if it
 /// already fits, or has only one segment to begin with (nothing to
 /// drop without losing the leaf itself).
-pub fn shorten_breadcrumb_from_left(label: &str, max_width: usize) -> String {
+///
+/// Dropping blindly from the left can still leave two *different*
+/// rows reading identically once shortened -- two loop passes whose
+/// own breadcrumb agrees on everything below their own `iter_N`
+/// (`… › check › answers`, issue #641) -- so the nearest `iter_N` to
+/// the leaf, the one segment that actually told them apart, is kept
+/// even once dropped from the plain path, as `pass N` (the same
+/// label the orchestration pane's own loop passes read) right after
+/// the `…`. Two rows can also agree on everything from some shared
+/// ancestor down to the leaf with no loop pass involved at all
+/// (`a › check › answers`, `b › check › answers`) -- `all_labels`,
+/// every row's own full, unshortened breadcrumb being drawn
+/// alongside this one, is how the nearest segment that actually
+/// diverges from every one of them is found and kept the same way.
+pub fn shorten_breadcrumb_from_left(
+    label: &str,
+    all_labels: &[String],
+    max_width: usize,
+) -> String {
     if label.chars().count() <= max_width {
         return label.to_string();
     }
@@ -328,54 +355,71 @@ pub fn shorten_breadcrumb_from_left(label: &str, max_width: usize) -> String {
     if segments.len() <= 1 {
         return label.to_string();
     }
+    let mut markers: Vec<(usize, String)> = Vec::new();
+    if let Some((idx, n)) = segments
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, seg)| pass_number(seg).map(|n| (i, n)))
+    {
+        markers.push((idx, format!("pass {n}")));
+    }
+    if let Some((idx, text)) = nearest_disambiguating_ancestor(&segments, all_labels) {
+        if !markers.iter().any(|(i, _)| *i == idx) {
+            markers.push((idx, text));
+        }
+    }
+    markers.sort_by_key(|(idx, _)| *idx);
+    let with_markers = |drop: usize| -> Vec<String> {
+        let mut kept: Vec<String> = segments[drop..].iter().map(|s| s.to_string()).collect();
+        for (idx, text) in markers.iter().rev() {
+            if *idx < drop {
+                kept.insert(0, text.clone());
+            }
+        }
+        kept
+    };
     for drop in 1..segments.len() {
-        let candidate = format!("… › {}", segments[drop..].join(" › "));
+        let candidate = format!("… › {}", with_markers(drop).join(" › "));
         if candidate.chars().count() <= max_width {
             return candidate;
         }
     }
-    format!("… › {}", segments[segments.len() - 1])
+    format!("… › {}", with_markers(segments.len() - 1).join(" › "))
 }
 
-/// The overview's own cost card (DESIGN.md: "the overview's cost card
-/// stays as a summary that agrees with the Cost screen's ranking") --
-/// the single largest store by total tokens, read straight from
-/// `flat` without building the by-store tree at all (the performance
-/// rule: the tree is built only while the Cost screen is actually on
-/// display). Every `flat` entry with nonzero tokens of its own is a
-/// store the table also surfaces as a leaf row, whether it is a true
-/// leaf or a `while: mode: model` loop reporting its own tokens
-/// alongside its children's (DESIGN.md's gap note) -- [`largest_
-/// stores`]' own by-store tree gives such a container a leaf tile of
-/// its own for exactly this reason. Ties break the same way the
-/// table's own sort does, lowest path first (`largest_stores`' own
-/// `rows.sort_by`), not merely "the last one found" -- `BTreeMap`'s
-/// ascending iteration order makes those two tie-break rules the
-/// same rule only if this reads it that way explicitly. `root_path`
-/// is excluded the same way [`build_tree_for_measure`] excludes it
-/// from the Cost screen's own top-level tiles -- the run's own root
-/// carries an `adapter`-bearing meta like any other node and, when it
-/// reports tokens of its own, must not surface as "the largest store"
-/// in its own run.
-pub fn top_store(flat: &BTreeMap<String, NodeMeta>, root_path: &str) -> Option<(String, u64)> {
-    flat.iter()
-        .filter(|(path, _)| path.as_str() != root_path)
-        .filter_map(|(path, node)| {
-            let (sent, received) = node_tokens(&node.meta);
-            let total = sent + received;
-            (total > 0).then(|| (path.clone(), total))
-        })
-        .fold(
-            None,
-            |best: Option<(String, u64)>, (path, total)| match &best {
-                Some((best_path, best_total))
-                    if *best_total > total || (*best_total == total && best_path <= &path) =>
-                {
-                    best
-                }
-                _ => Some((path, total)),
-            },
-        )
+/// The index and text of the nearest segment (right to left) that
+/// keeps `segments` from reading identically to some *other* label's
+/// own trailing segments once both are shortened down that far
+/// (issue #641, finding on look-alike rows) -- `None` when `segments`
+/// shares no trailing run with any other label in `all_labels` at
+/// all (dropping purely by width already keeps it distinct), or
+/// shares one long enough that no segment of its own is left to show
+/// (one label is itself a trailing match of a longer one).
+fn nearest_disambiguating_ancestor(
+    segments: &[&str],
+    all_labels: &[String],
+) -> Option<(usize, String)> {
+    let own = segments.join(" › ");
+    let mut longest_shared_suffix = 0usize;
+    for other in all_labels {
+        if other == &own {
+            continue;
+        }
+        let other_segments: Vec<&str> = other.split(" › ").collect();
+        let shared = segments
+            .iter()
+            .rev()
+            .zip(other_segments.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        longest_shared_suffix = longest_shared_suffix.max(shared);
+    }
+    if longest_shared_suffix == 0 || longest_shared_suffix >= segments.len() {
+        return None;
+    }
+    let idx = segments.len() - longest_shared_suffix - 1;
+    Some((idx, segments[idx].to_string()))
 }
 
 /// How many equal clock-time buckets the "tokens over time" chart
@@ -383,20 +427,57 @@ pub fn top_store(flat: &BTreeMap<String, NodeMeta>, root_path: &str) -> Option<(
 /// axis from the run's start to now").
 pub const TOKENS_OVER_TIME_BUCKETS: usize = 24;
 
+/// Whether `meta` belongs to an agent session (issue #641): the same
+/// `provider` rule the token bar's own "agents in flight" count uses
+/// (`render::build_token_bar`) -- unlike `meta.live`, `provider`
+/// persists once the session has actually finished, so this still
+/// reads `true` for a long-finished one.
+fn is_agent_session(meta: &Value) -> bool {
+    meta.get("provider")
+        .and_then(Value::as_str)
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"))
+}
+
 /// Tokens (sent + received) completed in each bucket, one series per
 /// top-level phase (DESIGN.md: "one band per top-level step"),
 /// `phases` in the order they should stack/display. `phases` names
 /// each top-level step by its own dotted path and the label to show
 /// for it (the already breadcrumb-folded label the phase strip uses,
-/// not reimplemented here). Tokens are counted when each effect
-/// completes (`completed_at`), the same rule the overview's own
-/// sparkline (`screens::build_tokens_over_time`) uses, just bucketed
-/// per phase instead of summed across the whole run.
+/// not reimplemented here).
+///
+/// An ordinary effect's tokens are counted in full when it completes
+/// (`completed_at`), the same rule the overview's own sparkline
+/// (`screens::build_tokens_over_time`) uses. An agent session (issue
+/// #641) is different: while osi actually watches it run,
+/// `model.agent_token_observations` has a sample for every distinct
+/// `meta.live` reading it saw, each at the instant osi observed it
+/// (not evenly, and not all dumped into one bucket at the session's
+/// own end) -- each sample's own increase over the one before it is
+/// counted at its own timestamp, except the very first sample of a
+/// watch that started partway through the session, which is itself
+/// spread evenly from the session's own `created_at` rather than
+/// dumped whole at the moment osi happened to start watching. Once
+/// the session completes, any shortfall between what was actually
+/// observed and the session's own final, authoritative token count
+/// (`node_tokens`) is counted at its own `completed_at`, so the
+/// chart's own total for the step always ends up exactly right --
+/// `model` never lets an overshoot happen in the first place, by
+/// dropping an unnamed loop's earlier pass's own samples for a path
+/// the moment a later pass resets that path's running totals back to
+/// zero (`RunModel::record_live_token_observations`). A session
+/// never observed running at all (opened already finished, or
+/// watched only after it ended, so `model` has no samples for it)
+/// instead spreads its own tokens evenly over its own span,
+/// `created_at` to `completed_at` -- or, for an interrupted session's
+/// leftover `meta.live` with no `completed_at` of its own, to its own
+/// last heartbeat (`live.updated_at`) -- proportional to how much of
+/// each chart bucket that span actually overlaps.
 pub fn tokens_over_time_by_phase(
     run_start_ts: Option<&str>,
     now: &str,
     flat: &BTreeMap<String, NodeMeta>,
     phases: &[(String, String)],
+    model: &crate::model::RunModel,
 ) -> Vec<(String, Vec<u64>)> {
     let mut series: Vec<(String, Vec<u64>)> = phases
         .iter()
@@ -409,31 +490,224 @@ pub fn tokens_over_time_by_phase(
         return series;
     };
     let span_ms = (end - start).num_milliseconds().max(1) as f64;
+    let bucket_for = |instant: chrono::DateTime<chrono::FixedOffset>| -> usize {
+        let frac = ((instant - start).num_milliseconds().max(0) as f64 / span_ms).min(0.999_999);
+        ((frac * TOKENS_OVER_TIME_BUCKETS as f64) as usize).min(TOKENS_OVER_TIME_BUCKETS - 1)
+    };
     for (path, node) in flat {
-        let Some(completed) = node
-            .completed_at
-            .as_deref()
-            .and_then(crate::diff::parse_instant)
-        else {
-            continue;
-        };
-        let (sent, received) = node_tokens(&node.meta);
-        let total = sent + received;
-        if total == 0 {
-            continue;
-        }
         let Some(phase_idx) = phases
             .iter()
             .position(|(p, _)| path == p || path.starts_with(&format!("{p}.")))
         else {
             continue;
         };
-        let frac = ((completed - start).num_milliseconds().max(0) as f64 / span_ms).min(0.999_999);
-        let bucket =
-            ((frac * TOKENS_OVER_TIME_BUCKETS as f64) as usize).min(TOKENS_OVER_TIME_BUCKETS - 1);
-        series[phase_idx].1[bucket] += total;
+        if !is_agent_session(&node.meta) {
+            let Some(completed) = node
+                .completed_at
+                .as_deref()
+                .and_then(crate::diff::parse_instant)
+            else {
+                continue;
+            };
+            let total = {
+                let (sent, received) = node_tokens(&node.meta);
+                sent + received
+            };
+            if total > 0 {
+                series[phase_idx].1[bucket_for(completed)] += total;
+            }
+            continue;
+        }
+        let observations = model.agent_token_observations(path);
+        if observations.is_empty() {
+            // An interrupted session's leftover `meta.live` has no
+            // `completed_at` of its own -- its own last heartbeat
+            // (`live.updated_at`) stands in for one, and its own
+            // running totals stand in for `node_tokens` (which stays
+            // at zero until a node actually finishes).
+            let (completed_at, total) = if let Some(completed) = node.completed_at.as_deref() {
+                let (sent, received) = node_tokens(&node.meta);
+                (Some(completed), sent + received)
+            } else if let Some(live) = &node.live {
+                (
+                    live.updated_at.as_deref(),
+                    live.tokens_sent.unwrap_or(0) + live.tokens_received.unwrap_or(0),
+                )
+            } else {
+                (None, 0)
+            };
+            if let (Some(created), Some(completed)) = (&node.created_at, completed_at) {
+                if total > 0 {
+                    spread_evenly(
+                        &mut series[phase_idx].1,
+                        created,
+                        completed,
+                        total,
+                        start,
+                        span_ms,
+                        &bucket_for,
+                    );
+                }
+            }
+            continue;
+        }
+        let mut observed_total = 0u64;
+        let mut prev = (0u64, 0u64);
+        for (i, (ts, sent, received)) in observations.iter().enumerate() {
+            let delta = sent.saturating_sub(prev.0) + received.saturating_sub(prev.1);
+            if delta > 0 {
+                if i == 0 {
+                    // A watch that starts partway through a long
+                    // session sees its own already-accumulated
+                    // tokens on the very first observation --
+                    // spreading them over the time they actually
+                    // took (the session's own start to this first
+                    // observation), not dumping the whole lot into
+                    // one bucket at the moment osi happened to start
+                    // watching.
+                    if let Some(created_at) = node.created_at.as_deref() {
+                        spread_evenly(
+                            &mut series[phase_idx].1,
+                            created_at,
+                            ts,
+                            delta,
+                            start,
+                            span_ms,
+                            &bucket_for,
+                        );
+                    } else if let Some(instant) = crate::diff::parse_instant(ts) {
+                        series[phase_idx].1[bucket_for(instant)] += delta;
+                    }
+                } else if let Some(instant) = crate::diff::parse_instant(ts) {
+                    series[phase_idx].1[bucket_for(instant)] += delta;
+                }
+                observed_total += delta;
+            }
+            prev = (*sent, *received);
+        }
+        if let Some(completed) = node
+            .completed_at
+            .as_deref()
+            .and_then(crate::diff::parse_instant)
+        {
+            let final_total = {
+                let (sent, received) = node_tokens(&node.meta);
+                sent + received
+            };
+            let shortfall = final_total.saturating_sub(observed_total);
+            if shortfall > 0 {
+                series[phase_idx].1[bucket_for(completed)] += shortfall;
+            }
+        }
     }
     series
+}
+
+/// Distributes `total` across `buckets`, proportional to how much of
+/// each one's own clock-time window the `[created_at, completed_at]`
+/// span actually overlaps (issue #641) -- a zero-duration span (both
+/// parse to the same instant, or either fails to parse) puts the
+/// whole total in `completed_at`'s own bucket instead, same as an
+/// ordinary effect. Rounding's own leftover goes to the last bucket
+/// the span actually touched, so the sum added across every bucket
+/// always equals `total` exactly.
+#[allow(clippy::too_many_arguments)]
+fn spread_evenly(
+    buckets: &mut [u64],
+    created_at: &str,
+    completed_at: &str,
+    total: u64,
+    run_start: chrono::DateTime<chrono::FixedOffset>,
+    run_span_ms: f64,
+    bucket_for: &impl Fn(chrono::DateTime<chrono::FixedOffset>) -> usize,
+) {
+    let parsed =
+        crate::diff::parse_instant(created_at).zip(crate::diff::parse_instant(completed_at));
+    let Some((node_start, node_end)) = parsed else {
+        return;
+    };
+    if node_end <= node_start {
+        buckets[bucket_for(node_end)] += total;
+        return;
+    }
+    let node_ms = (node_end - node_start).num_milliseconds() as f64;
+    let bucket_ms = run_span_ms / TOKENS_OVER_TIME_BUCKETS as f64;
+    let mut distributed = 0u64;
+    let mut last_touched = None;
+    for (b, slot) in buckets.iter_mut().enumerate() {
+        let bucket_start =
+            run_start + chrono::Duration::milliseconds((b as f64 * bucket_ms) as i64);
+        let bucket_end =
+            run_start + chrono::Duration::milliseconds(((b + 1) as f64 * bucket_ms) as i64);
+        let overlap_start = node_start.max(bucket_start);
+        let overlap_end = node_end.min(bucket_end);
+        if overlap_end <= overlap_start {
+            continue;
+        }
+        let overlap_ms = (overlap_end - overlap_start).num_milliseconds() as f64;
+        // Floored, never rounded: rounding several shares up could
+        // overshoot `total` before the remainder is even added back,
+        // which flooring can never do.
+        let share = (total as f64 * overlap_ms / node_ms).floor() as u64;
+        *slot += share;
+        distributed += share;
+        last_touched = Some(b);
+    }
+    let remainder = total.saturating_sub(distributed);
+    if remainder > 0 {
+        let idx = last_touched.unwrap_or_else(|| bucket_for(node_end));
+        buckets[idx] += remainder;
+    }
+}
+
+/// Caps [`tokens_over_time_by_phase`]'s own series to `max_bands`
+/// distinct ones (issue #641): a front end has only so many glyphs
+/// to tell bands apart with colour off, and with more real phases
+/// than that, giving every one of them its own band means two
+/// different phases eventually share a glyph in the legend --
+/// impossible to tell apart. Keeps the `max_bands - 1` phases with
+/// the largest total (summed across every bucket) in their original
+/// relative order, and folds everything else into one further
+/// `other` series (bucket-wise summed), appended last. A no-op once
+/// there's already room for every phase (`series.len() <=
+/// max_bands`), or with no room for any real phase at all
+/// (`max_bands == 0`).
+pub fn cap_phase_bands(
+    series: Vec<(String, Vec<u64>)>,
+    max_bands: usize,
+) -> Vec<(String, Vec<u64>)> {
+    if series.len() <= max_bands || max_bands == 0 {
+        return series;
+    }
+    let keep_count = max_bands - 1;
+    let mut by_total: Vec<(usize, u64)> = series
+        .iter()
+        .enumerate()
+        .map(|(i, (_, buckets))| (i, buckets.iter().sum()))
+        .collect();
+    // Largest total first; ties keep the original (document) order,
+    // never a `BTreeSet`'s own path order, which could keep a
+    // smaller-but-later-sorted phase over an earlier, equal one.
+    by_total.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let keep: std::collections::BTreeSet<usize> = by_total
+        .into_iter()
+        .take(keep_count)
+        .map(|(i, _)| i)
+        .collect();
+    let bucket_count = series.first().map_or(0, |(_, b)| b.len());
+    let mut other = vec![0u64; bucket_count];
+    let mut kept = Vec::new();
+    for (i, (label, buckets)) in series.into_iter().enumerate() {
+        if keep.contains(&i) {
+            kept.push((label, buckets));
+        } else {
+            for (sum, value) in other.iter_mut().zip(buckets.iter()) {
+                *sum += value;
+            }
+        }
+    }
+    kept.push(("other".to_string(), other));
+    kept
 }
 
 #[cfg(test)]
@@ -514,46 +788,6 @@ mod tests {
     }
 
     #[test]
-    fn top_store_matches_the_largest_stores_tables_own_first_row() {
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
-            "plan": prompt(100, 50, None, "t1"),
-            "review": prompt(10, 5, None, "t1"),
-        }});
-        let flat = flatten_state(&state);
-        let statuses = BTreeMap::new();
-        let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
-        let table = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
-        let top = top_store(&flat, "prime").expect("a top store");
-        assert_eq!(top.0, table.rows[0].path);
-        assert_eq!(
-            top.1,
-            table.rows[0].tokens_sent + table.rows[0].tokens_received
-        );
-    }
-
-    #[test]
-    fn top_store_never_picks_the_run_root_itself() {
-        // The root carries its own tokens the same way a `while:
-        // mode: model` loop's container does (`cost.rs`'s own gap
-        // note) -- without excluding it by path the way `build_tree_
-        // for_measure` excludes it from the Cost screen's own top-
-        // level tiles, a root reporting more tokens than any real
-        // store would win "the largest store" as itself.
-        let state = json!({"prime": {"value": null, "meta": {
-            "completed_at": "t1", "adapter": "scripted",
-            "tokens_sent_total": 900, "tokens_received_total": 400
-        },
-            "plan": prompt(10, 5, None, "t1"),
-        }});
-        let flat = flatten_state(&state);
-        let top = top_store(&flat, "prime").expect("a top store");
-        assert_eq!(
-            top.0, "prime.plan",
-            "the root itself must never win: {top:?}"
-        );
-    }
-
-    #[test]
     fn two_stores_with_the_same_key_under_different_parents_give_distinct_rows() {
         let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
             "reviews": {"value": null, "meta": {"completed_at": "t1"},
@@ -604,31 +838,93 @@ mod tests {
 
     #[test]
     fn shorten_breadcrumb_from_left_drops_leading_segments_but_keeps_the_leaf() {
-        let label = "reviews › iter_1 › review";
-        assert_eq!(shorten_breadcrumb_from_left(label, 100), label);
+        // No `iter_N` segment here at all, and no other label drawn
+        // alongside it either -- nothing to disambiguate, so this
+        // reads exactly as before.
+        let label = "reviews › check › answers";
+        assert_eq!(shorten_breadcrumb_from_left(label, &[], 100), label);
         assert_eq!(
-            shorten_breadcrumb_from_left(label, "… › iter_1 › review".chars().count()),
-            "… › iter_1 › review"
+            shorten_breadcrumb_from_left(label, &[], "… › check › answers".chars().count()),
+            "… › check › answers"
         );
         assert_eq!(
-            shorten_breadcrumb_from_left(label, "… › review".chars().count()),
-            "… › review"
+            shorten_breadcrumb_from_left(label, &[], "… › answers".chars().count()),
+            "… › answers"
         );
         // Even at an extreme width, the leaf is never dropped.
-        assert_eq!(shorten_breadcrumb_from_left(label, 1), "… › review");
+        assert_eq!(shorten_breadcrumb_from_left(label, &[], 1), "… › answers");
         // A single segment (no ancestors) is never prefixed with `…` --
         // there is nothing to drop without losing the leaf itself.
-        assert_eq!(shorten_breadcrumb_from_left("review", 1), "review");
+        assert_eq!(shorten_breadcrumb_from_left("answers", &[], 1), "answers");
+    }
+
+    /// Issue #641: two loop passes whose own breadcrumb agrees on
+    /// everything below their own `iter_N` (`reviews › iter_0 ›
+    /// check › answers`, `reviews › iter_1 › check › answers`) must
+    /// not shorten to the exact same text -- the nearest `iter_N` is
+    /// kept, as `pass N`, even once the plain path segment itself
+    /// drops away.
+    #[test]
+    fn shorten_breadcrumb_from_left_keeps_the_pass_that_tells_two_loops_apart() {
+        let first = "reviews › iter_0 › check › answers";
+        let second = "reviews › iter_1 › check › answers";
+        let all = [first.to_string(), second.to_string()];
+        // Narrow enough that even the real `iter_N` segment itself
+        // has to drop -- only the leaf fits otherwise.
+        let narrow = "… › answers".chars().count();
+        let shortened_first = shorten_breadcrumb_from_left(first, &all, narrow);
+        let shortened_second = shorten_breadcrumb_from_left(second, &all, narrow);
+        assert_ne!(
+            shortened_first, shortened_second,
+            "two different passes must not read identically once shortened"
+        );
+        assert_eq!(shortened_first, "… › pass 1 › answers");
+        assert_eq!(shortened_second, "… › pass 2 › answers");
+    }
+
+    /// At a width that still fits the real `iter_N` segment itself,
+    /// shortening reads exactly as it did before `pass N` existed --
+    /// the marker only appears once the real segment would otherwise
+    /// have dropped away.
+    #[test]
+    fn shorten_breadcrumb_from_left_keeps_the_real_iter_segment_when_it_still_fits() {
+        let label = "reviews › iter_1 › review";
+        assert_eq!(
+            shorten_breadcrumb_from_left(label, &[], "… › iter_1 › review".chars().count()),
+            "… › iter_1 › review"
+        );
+    }
+
+    /// Issue #641 (finding on look-alike rows): two rows that agree
+    /// on everything from some shared ancestor down to the leaf, with
+    /// no loop pass involved at all (`a › check › answers`, `b ›
+    /// check › answers`), must not shorten to the exact same text
+    /// either -- the nearest ancestor that actually tells them apart
+    /// (`a`, `b`) is kept the same way a loop pass is.
+    #[test]
+    fn shorten_breadcrumb_from_left_keeps_the_nearest_ancestor_that_tells_two_stores_apart() {
+        let first = "a › check › answers";
+        let second = "b › check › answers";
+        let all = [first.to_string(), second.to_string()];
+        // Narrow enough that even `check` itself has to drop -- only
+        // the leaf fits otherwise.
+        let narrow = "… › answers".chars().count();
+        let shortened_first = shorten_breadcrumb_from_left(first, &all, narrow);
+        let shortened_second = shorten_breadcrumb_from_left(second, &all, narrow);
+        assert_ne!(
+            shortened_first, shortened_second,
+            "two different stores must not read identically once shortened"
+        );
+        assert_eq!(shortened_first, "… › a › answers");
+        assert_eq!(shortened_second, "… › b › answers");
     }
 
     #[test]
-    fn a_tie_in_total_tokens_picks_the_same_store_both_ways() {
-        // Two stores with the identical total (150) -- `top_store`'s
-        // own tie-break (`best_path <= &path` keeps the first,
-        // lowest-path winner) and the table's own sort
-        // (`.then_with(|| a.path.cmp(&b.path))`) must agree on which
-        // one that is, not merely agree when there happens to be a
-        // single largest store.
+    fn a_tie_in_total_tokens_picks_the_lowest_path() {
+        // Two stores with the identical total (150) -- the table's
+        // own sort (`.then_with(|| a.path.cmp(&b.path))`) breaks the
+        // tie by path, not merely by whichever `BTreeMap` iteration
+        // happened to visit last.
         let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
             "beta": prompt(100, 50, None, "t1"),
             "alpha": prompt(100, 50, None, "t1"),
@@ -637,9 +933,10 @@ mod tests {
         let statuses = BTreeMap::new();
         let kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
         let table = largest_stores("prime", &flat, &statuses, &kinds_map, Some(&state));
-        let top = top_store(&flat, "prime").expect("a top store");
-        assert_eq!(top.0, "prime.alpha", "the lowest path wins the tie");
-        assert_eq!(top.0, table.rows[0].path);
+        assert_eq!(
+            table.rows[0].path, "prime.alpha",
+            "the lowest path wins the tie"
+        );
     }
 
     #[test]
@@ -653,11 +950,13 @@ mod tests {
             ("prime.plan".to_string(), "plan".to_string()),
             ("prime.review".to_string(), "review".to_string()),
         ];
+        let model = crate::model::RunModel::new();
         let series = tokens_over_time_by_phase(
             Some("2026-01-01T00:00:00Z"),
             "2026-01-01T00:01:00Z",
             &flat,
             &phases,
+            &model,
         );
         assert_eq!(series.len(), 2);
         let (plan_label, plan_buckets) = &series[0];
@@ -671,11 +970,269 @@ mod tests {
         assert_eq!(plan_buckets[0], 100);
     }
 
+    /// Issue #641, first case: while osi watches an agent session
+    /// run, each observed increase in its own running tokens lands
+    /// in the bucket for the moment it was actually observed, not
+    /// all dumped into one bucket at the session's own end -- except
+    /// the very first observation, which is itself spread from the
+    /// session's own `created_at` (the watch here starts two minutes
+    /// into the session, so those first 30 tokens took those two
+    /// minutes, not the single instant they were observed at) -- and
+    /// any difference between what was observed and the session's
+    /// own final, authoritative total is reconciled into the bucket
+    /// at its own `completed_at`.
+    #[test]
+    fn tokens_over_time_by_phase_buckets_a_watched_agent_session_by_observed_instant() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "agent1": {"value": "done", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:10:00Z",
+                "provider": "agent", "tokens_sent_total": 100, "tokens_received_total": 0
+            }}
+        }});
+        let flat = flatten_state(&state);
+        let phases = vec![("prime.agent1".to_string(), "agent1".to_string())];
+        let mut model = crate::model::RunModel::new();
+        model.record_live_token_observations(
+            &flatten_state(
+                &json!({"prime": {"value": null, "meta": {"completed_at": null},
+                    "agent1": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 30, "tokens_received": 0}
+                    }}
+                }}),
+            ),
+            "2026-01-01T00:02:00Z",
+            false,
+        );
+        model.record_live_token_observations(
+            &flatten_state(
+                &json!({"prime": {"value": null, "meta": {"completed_at": null},
+                    "agent1": {"value": null, "meta": {
+                        "created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 70, "tokens_received": 0}
+                    }}
+                }}),
+            ),
+            "2026-01-01T00:05:00Z",
+            false,
+        );
+        let series = tokens_over_time_by_phase(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:24:00Z",
+            &flat,
+            &phases,
+            &model,
+        );
+        let (_, buckets) = &series[0];
+        // The first 30 tokens, observed whole at minute 2, spread
+        // evenly back across minutes 0 and 1 instead; 40 more (70
+        // total) observed at minute 5 land there in full, since that
+        // is a real subsequent observation, not the first one; then
+        // the final 30 (100 total, the state's own authoritative
+        // figure) is reconciled at completion, minute 10.
+        assert_eq!(buckets[0], 15);
+        assert_eq!(buckets[1], 15);
+        assert_eq!(buckets[2], 0);
+        assert_eq!(buckets[5], 40);
+        assert_eq!(buckets[10], 30);
+        assert_eq!(buckets.iter().sum::<u64>(), 100);
+    }
+
+    /// Issue #641: an unnamed loop rerunning the same agent path
+    /// starts that path's own running totals back at zero on each
+    /// pass -- the chart's total for the step must still equal only
+    /// what the final state actually remembers (the last pass's own
+    /// tokens), not every pass's tokens added together.
+    #[test]
+    fn tokens_over_time_by_phase_does_not_overshoot_on_a_rerun_path() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "loop": {"value": null, "meta": {"completed_at": null},
+                "agent": {"value": "done", "meta": {
+                    "created_at": "2026-01-01T00:05:00Z", "completed_at": "2026-01-01T00:08:00Z",
+                    "provider": "agent", "tokens_sent_total": 20, "tokens_received_total": 0
+                }}
+            }
+        }});
+        let flat = flatten_state(&state);
+        let phases = vec![("prime.loop".to_string(), "loop".to_string())];
+        let mut model = crate::model::RunModel::new();
+        // First pass through the loop, watched to its own end: 10
+        // tokens, which the rerun below must not add on top of.
+        model.record_live_token_observations(
+            &flatten_state(&json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "loop": {"value": null, "meta": {"completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 10, "tokens_received": 0}}}
+                }
+            }})),
+            "2026-01-01T00:02:00Z",
+            false,
+        );
+        // Second pass reruns the same path, resetting its own
+        // running totals back to zero before growing to the 20 the
+        // final state alone remembers.
+        model.record_live_token_observations(
+            &flatten_state(&json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "loop": {"value": null, "meta": {"completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T00:05:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 0, "tokens_received": 0}}}
+                }
+            }})),
+            "2026-01-01T00:05:30Z",
+            false,
+        );
+        model.record_live_token_observations(
+            &flatten_state(&json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "loop": {"value": null, "meta": {"completed_at": null},
+                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T00:05:00Z", "completed_at": null,
+                        "live": {"tokens_sent": 20, "tokens_received": 0}}}
+                }
+            }})),
+            "2026-01-01T00:07:00Z",
+            false,
+        );
+        let series = tokens_over_time_by_phase(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:24:00Z",
+            &flat,
+            &phases,
+            &model,
+        );
+        let (_, buckets) = &series[0];
+        assert_eq!(buckets[7], 20);
+        assert_eq!(
+            buckets.iter().sum::<u64>(),
+            20,
+            "the first pass's own 10 tokens must not survive the rerun"
+        );
+    }
+
+    /// Issue #641: an interrupted session's leftover `meta.live`,
+    /// first seen only once the run itself has already ended (osi
+    /// opened fresh afterwards), must spread over its own span --
+    /// `created_at` to its own last heartbeat -- the same as any
+    /// other session never observed running, not land as a single
+    /// observation at whatever `now` happens to be when osi opens it.
+    #[test]
+    fn tokens_over_time_by_phase_spreads_an_interrupted_sessions_leftover_live() {
+        let state = json!({"prime": {"value": null, "meta": {
+                "completed_at": "2026-01-01T00:04:30Z", "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+            "agent1": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": null, "provider": "agent",
+                "live": {
+                    "updated_at": "2026-01-01T00:04:00Z", "tokens_sent": 40, "tokens_received": 0
+                }
+            }}
+        }});
+        let flat = flatten_state(&state);
+        let phases = vec![("prime.agent1".to_string(), "agent1".to_string())];
+        let mut model = crate::model::RunModel::new();
+        // A fresh model, as if osi had just opened this already-dead
+        // run: this path's live summary is seen for the very first
+        // time only once the run is already over.
+        model.record_live_token_observations(&flat, "2026-03-01T00:00:00Z", true);
+        assert!(model.agent_token_observations("prime.agent1").is_empty());
+        let series = tokens_over_time_by_phase(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:24:00Z",
+            &flat,
+            &phases,
+            &model,
+        );
+        let (_, buckets) = &series[0];
+        // A 4-minute session spread evenly, not dumped into one
+        // bucket at some unrelated `now` from opening history long
+        // after the run ended.
+        assert_eq!(&buckets[0..4], &[10, 10, 10, 10]);
+        assert_eq!(buckets.iter().sum::<u64>(), 40);
+    }
+
+    /// Issue #641, second case: an agent session never observed
+    /// running at all (no recorded samples, say a finished run
+    /// opened fresh) spreads its own tokens evenly over its own
+    /// span instead of landing them all in one bucket at its own
+    /// end.
+    #[test]
+    fn tokens_over_time_by_phase_spreads_an_unwatched_agent_session_evenly() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "agent2": {"value": "done", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:04:00Z",
+                "provider": "agent", "tokens_sent_total": 40, "tokens_received_total": 0
+            }}
+        }});
+        let flat = flatten_state(&state);
+        let phases = vec![("prime.agent2".to_string(), "agent2".to_string())];
+        let model = crate::model::RunModel::new();
+        let series = tokens_over_time_by_phase(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:24:00Z",
+            &flat,
+            &phases,
+            &model,
+        );
+        let (_, buckets) = &series[0];
+        // A 4-minute session over a run bucketed one minute at a
+        // time spans exactly 4 buckets -- 10 of its own 40 tokens in
+        // each, not all 40 in one.
+        assert_eq!(&buckets[0..4], &[10, 10, 10, 10]);
+        assert_eq!(buckets.iter().sum::<u64>(), 40);
+    }
+
+    /// Issue #641: with more phases than `max_bands` ever gives a
+    /// distinct glyph to, the smallest ones fold into one `other`
+    /// band instead of two different phases eventually sharing a
+    /// glyph in the legend.
+    #[test]
+    fn cap_phase_bands_keeps_the_largest_and_folds_the_rest_into_other() {
+        let series = vec![
+            ("a".to_string(), vec![10, 0]),
+            ("b".to_string(), vec![0, 5]),
+            ("c".to_string(), vec![1, 0]),
+            ("d".to_string(), vec![0, 2]),
+        ];
+        let capped = cap_phase_bands(series, 3);
+        assert_eq!(
+            capped
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "other"]
+        );
+        assert_eq!(capped[2].1, vec![1, 2]); // c + d, bucket-wise
+    }
+
+    #[test]
+    fn cap_phase_bands_is_a_no_op_with_room_for_every_phase() {
+        let series = vec![("a".to_string(), vec![10]), ("b".to_string(), vec![5])];
+        let capped = cap_phase_bands(series.clone(), 6);
+        assert_eq!(capped, series);
+    }
+
+    #[test]
+    fn cap_phase_bands_breaks_a_tie_by_the_original_order() {
+        let series = vec![
+            ("a".to_string(), vec![5]),
+            ("b".to_string(), vec![5]),
+            ("c".to_string(), vec![5]),
+        ];
+        let capped = cap_phase_bands(series, 2);
+        assert_eq!(
+            capped
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "other"]
+        );
+    }
+
     #[test]
     fn tokens_over_time_by_phase_is_empty_before_the_run_has_a_start_time() {
         let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
         let phases = vec![("prime.plan".to_string(), "plan".to_string())];
-        let series = tokens_over_time_by_phase(None, "2026-01-01T00:01:00Z", &flat, &phases);
+        let model = crate::model::RunModel::new();
+        let series =
+            tokens_over_time_by_phase(None, "2026-01-01T00:01:00Z", &flat, &phases, &model);
         assert_eq!(series.len(), 1);
         assert!(series[0].1.iter().all(|&v| v == 0));
     }

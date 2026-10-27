@@ -1,0 +1,28 @@
+---
+source: crates/oscilloscope/src/tui.rs
+expression: text
+---
+"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · cancelled 11.0s · 11:52:55   0  1  [2]  3               "
+"┌ flow (do-thing · 1/1) ◆ decision ⟲ loop ▶ runn┐┌ selected ───────────────────┐"
+"│✗ prime   11.0s                                ││fix                          │"
+"│  ⊘ fix   11.0s                                ││agent · agent                │"
+"│                                               ││asked:                       │"
+"│                                               ││Fix the bug.                 │"
+"│                                               ││doing:                       │"
+"│                                               ││since 11:46:43 · 11.0s       │"
+"│                                               ││stopped                      │"
+"│                                               ││pi · turn 1 · 1 tools        │"
+"│                                               ││↑2.1 kt ↓40 t · $0.01        │"
+"│                                               ││█                            │"
+"│                                               ││11:46:50 › bash pytest -q sto│"
+"│                                               ││context 2.1 kt               │"
+"│                                               ││tests …                      │"
+"│                                               ││                             │"
+"│                                               ││                             │"
+"│                                               ││                             │"
+"│                                               ││                             │"
+"│                                               ││                             │"
+"│quick steps folded: 0 · 0.0s                   ││                             │"
+"│health: 0 failed · 0 retries · 0 warnings      ││                             │"
+"│                                               ││                             │"
+"└───────────────────────────────────────────────┘└─────────────────────────────┘"

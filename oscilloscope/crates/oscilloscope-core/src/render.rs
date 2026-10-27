@@ -525,6 +525,12 @@ pub fn build(
     let state_ref = state.unwrap_or(&empty);
     let flat = flatten_state(state_ref);
     let statuses = model.observe(state_ref, plan, process.clone());
+    // Issue #641: a new sample of every live agent session's own
+    // running tokens, right alongside `observe` -- the "tokens over
+    // time" chart needs these to attribute a long session's own
+    // tokens to when they actually arrived, not just to its own
+    // `completed_at`.
+    model.record_live_token_observations(&flat, now, crate::model::run_ended(state_ref));
     // Every path either side of a run has ever heard of (hoisted here,
     // issue/finding on `use` accounting): the header's own
     // planned/done counts need the identical view `build_rows`/
@@ -976,14 +982,9 @@ fn build_token_bar(
             continue;
         }
         prompts_running += 1;
-        match node
-            .and_then(|n| n.meta.get("prompt_sent"))
-            .and_then(Value::as_str)
-        {
-            Some(prompt_sent) if !prompt_sent.is_empty() => {
-                estimated_input += estimated_prompt_tokens(prompt_sent);
-            }
-            _ => estimated_input_is_lower_bound = true,
+        match node.and_then(|n| crate::model::prompt_chars_for_estimate(&n.meta)) {
+            Some(chars) => estimated_input += estimated_prompt_tokens(chars),
+            None => estimated_input_is_lower_bound = true,
         }
     }
     // Issue #637's heartbeat rule: a node with `meta.live` whose
@@ -1078,11 +1079,13 @@ pub fn details_for(
     }
 
     let meta = &node.meta;
-    // Issue #535: a node with `prompt_sent` gets the `sent`/`received`
-    // blocks below instead -- their headers already carry the token
-    // counts, so the plain meta list drops them to avoid saying the
-    // same thing twice.
-    let has_prompt_sent = meta.get("prompt_sent").and_then(Value::as_str).is_some();
+    // Issues #535 and #587: a prompt effect's node gets the `sent`/
+    // `received` blocks below instead -- their headers already carry
+    // the token counts, so the plain meta list drops them to avoid
+    // saying the same thing twice. This is `meta.prompt_chars`, not
+    // `meta.prompt_sent`, so it still holds under `runtime.state.
+    // prompt_sent: sha256`, where the text itself is never recorded.
+    let has_prompt_sent = crate::model::is_prompt_node(meta);
 
     let mut meta_summary = root_run_id_summary(path, model);
     for key in [
@@ -1274,24 +1277,22 @@ fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The `sent` block (issue #535): always present for a node with
-/// `prompt_sent`, whether it's still running (the token bar's own
-/// in-flight estimate) or finished (the actual count, [`node_tokens`]
-/// -- the same `*_total`-first rule the header/token bar/state pane/
-/// treemap all use).
+/// The `sent` block (issues #535 and #587): always present for a
+/// prompt effect's node, whether it's still running (the token bar's
+/// own in-flight estimate, from `meta.prompt_chars`) or finished (the
+/// actual count, [`node_tokens`] -- the same `*_total`-first rule the
+/// header/token bar/state pane/treemap all use). The snippet is the
+/// recorded text under `full`/`head:<N>`, or a placeholder naming its
+/// length and hash under `sha256`
+/// ([`crate::model::prompt_sent_or_placeholder`]).
 fn build_sent_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
-    let prompt_sent = meta
-        .get("prompt_sent")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let snippet = Some(preview(
-        &collapse_whitespace(prompt_sent),
-        DETAILS_PREVIEW_CHARS,
-    ));
+    let text = crate::model::prompt_sent_or_placeholder(meta).unwrap_or_default();
+    let snippet = Some(preview(&collapse_whitespace(&text), DETAILS_PREVIEW_CHARS));
     if node.is_running() {
+        let chars = crate::model::prompt_chars_for_estimate(meta).unwrap_or(0);
         TokenBlock {
             snippet,
-            tokens: Some(estimated_prompt_tokens(prompt_sent)),
+            tokens: Some(estimated_prompt_tokens(chars)),
             estimated: true,
             waiting: false,
         }
@@ -1339,17 +1340,16 @@ fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
 }
 
 /// `prompt_sent`/the value, in full — the `v` key's own request
-/// (§6.3), bypassing `Details`' truncated preview.
+/// (§6.3), bypassing `Details`' truncated preview. Under
+/// `runtime.state.prompt_sent: sha256` (#587) `PromptSent` returns
+/// the same placeholder the `sent` block shows, not `None` --
+/// there is no untruncated text to fall through to.
 pub fn full_value(path: &str, field: FullValueField, state: Option<&Value>) -> Option<String> {
     let empty = Value::Null;
     let flat = flatten_state(state.unwrap_or(&empty));
     let node = flat.get(path)?;
     match field {
-        FullValueField::PromptSent => node
-            .meta
-            .get("prompt_sent")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        FullValueField::PromptSent => crate::model::prompt_sent_or_placeholder(&node.meta),
         FullValueField::Value => Some(display_value(&node.value)),
     }
 }
@@ -4209,7 +4209,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "ask": {"value": "the final reply", "meta": {
                 "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
-                "prompt_sent": "what is the answer",
+                "prompt_sent": "what is the answer", "prompt_chars": 19,
                 "tokens_sent": 12, "tokens_received": 34
             }}
         }});
@@ -4240,7 +4240,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "ask": {"value": {"ok": true}, "meta": {
                 "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
-                "prompt_sent": "reply in json",
+                "prompt_sent": "reply in json", "prompt_chars": 13,
                 "tokens_sent_total": 9, "tokens_received_total": 3
             }}
         }});
@@ -4261,7 +4261,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "ask": {"value": null, "meta": {
                 "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
-                "prompt_sent": prompt_sent
+                "prompt_sent": prompt_sent, "prompt_chars": 40
             }}
         }});
         let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
@@ -4280,7 +4280,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "gate": {"value": true, "meta": {
                 "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
-                "prompt_sent": "yes or no?", "answer": "yes, definitely",
+                "prompt_sent": "yes or no?", "prompt_chars": 10, "answer": "yes, definitely",
                 "tokens_sent": 1, "tokens_received": 2
             }}
         }});
@@ -4295,7 +4295,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "ask": {"value": null, "meta": {
                 "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
-                "prompt_sent": "what is the answer", "error": "adapter unreachable"
+                "prompt_sent": "what is the answer", "prompt_chars": 19, "error": "adapter unreachable"
             }}
         }});
         let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
@@ -4313,7 +4313,7 @@ mod tests {
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "gate": {"value": null, "meta": {
                 "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
-                "prompt_sent": "yes or no?", "answer": "maybe",
+                "prompt_sent": "yes or no?", "prompt_chars": 10, "answer": "maybe",
                 "error": "expected a boolean reply, got \"maybe\""
             }}
         }});
@@ -4340,6 +4340,94 @@ mod tests {
         let details = details_for("prime.ls", &plan, &RunModel::new(), Some(&state_json));
         assert!(details.sent.is_none());
         assert!(details.received.is_none());
+    }
+
+    /// Issue #587: `runtime.state.prompt_sent: sha256` leaves `meta.
+    /// prompt_sent` `null`, but the prompt is still running by every
+    /// field that mode keeps -- the token bar must still count it,
+    /// estimated from `meta.prompt_chars`, not read as unknown.
+    #[test]
+    fn running_prompt_under_sha256_is_counted_and_estimated_from_prompt_chars() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": null, "prompt_sent_sha256": "a".repeat(64), "prompt_chars": 40,
+                "waiting_for": null
+            }}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.prompts_running, 1);
+        assert_eq!(rendered.token_bar.estimated_input, 10); // ceil(40 / 4)
+        assert!(!rendered.token_bar.estimated_input_is_lower_bound);
+    }
+
+    /// Issue #587: the details pane's `sent` block shows a placeholder
+    /// under `sha256`, naming the length and the hash's own first 12
+    /// hex characters, estimated from `prompt_chars` while running;
+    /// `v`'s own full-value read ([`full_value`]) shows the same text.
+    #[test]
+    fn details_pane_shows_a_placeholder_for_a_sha256_prompt() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": null, "prompt_sent_sha256": "a".repeat(64), "prompt_chars": 40,
+                "waiting_for": null
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
+        let sent = details
+            .sent
+            .expect("a sha256 prompt still gets a sent block");
+        assert_eq!(
+            sent.snippet.as_deref(),
+            Some("not recorded (40 characters, sha256 aaaaaaaaaaaa)")
+        );
+        assert_eq!(sent.tokens, Some(10)); // ceil(40 / 4)
+        assert!(sent.estimated);
+        let received = details.received.expect("still running");
+        assert!(received.waiting);
+
+        let full = full_value("prime.ask", FullValueField::PromptSent, Some(&state_json));
+        assert_eq!(
+            full.as_deref(),
+            Some("not recorded (40 characters, sha256 aaaaaaaaaaaa)")
+        );
+    }
+
+    /// Issue #587: a `head:<N>` text is already recorded, marker
+    /// included, so it shows as is -- the same as `full` -- with the
+    /// actual (not estimated) token count once the prompt is done.
+    #[test]
+    fn details_pane_shows_the_head_marked_text_as_recorded() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "the reply", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "short\n[… 35 more characters not recorded]",
+                "prompt_chars": 40, "tokens_sent": 12
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
+        let sent = details.sent.expect("a head prompt still gets a sent block");
+        assert_eq!(
+            sent.snippet.as_deref(),
+            Some("short [… 35 more characters not recorded]")
+        );
+        assert_eq!(sent.tokens, Some(12));
+        assert!(!sent.estimated);
     }
 
     #[test]
@@ -4731,10 +4819,10 @@ mod tests {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ready": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "1234567890ABCD", "waiting_for": null}},
-            "queued": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "xx", "waiting_for": "concurrency"}},
+            "ready": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m", "prompt_sent": "1234567890ABCD", "prompt_chars": 14, "waiting_for": null}},
+            "queued": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m", "prompt_sent": "xx", "prompt_chars": 2, "waiting_for": "concurrency"}},
             "not_yet_called": {"value": null, "meta": {"created_at": "t0", "completed_at": null}},
-            "done": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hi"}}
+            "done": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m", "prompt_sent": "hi", "prompt_chars": 2}}
         }});
         let rendered = build(
             "do-thing.yml",
@@ -4768,7 +4856,7 @@ mod tests {
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "review": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "  Agent  "}},
-            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hi", "waiting_for": null}},
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m", "prompt_sent": "hi", "prompt_chars": 2, "waiting_for": null}},
             "not_an_agent": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
         }});
         let rendered = build(
@@ -5203,7 +5291,7 @@ mod tests {
             path: "prime.fan.iter_0.ask".to_string(),
         });
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "ready": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "1234567890ABCD", "waiting_for": null}}
+            "ready": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m", "prompt_sent": "1234567890ABCD", "prompt_chars": 14, "waiting_for": null}}
         }});
         let rendered = build(
             "do-thing.yml",

@@ -1717,4 +1717,40 @@ mod tests {
         assert_eq!(top[0].children.len(), 1);
         assert_eq!(top[0].children[0].key, "iter_0 \u{203a} nap");
     }
+
+    /// Issue #643's sixth follow-up: a named `if`'s own row (`gate`)
+    /// carries the Flow screen's decision glyph and condition, so
+    /// `kind_breadcrumb_eligible` excludes `RowKind::If` -- shared
+    /// with this treemap's own chain folding, so `gate`'s single
+    /// real child (`chosen`) must stay its own tile too, never
+    /// folded into one `gate › chosen` tile.
+    #[test]
+    fn a_named_ifs_single_child_does_not_fold_into_a_breadcrumb() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "gate": {"value": {"branch": "then"}, "meta": {"completed_at": "t1", "branch": "then"},
+                "chosen": prompt_node(10, 5, None, false)
+            }
+        }});
+        let flat = flatten_state(&state);
+        let mut statuses = BTreeMap::new();
+        let done = crate::model::RowStatus {
+            kind: StatusKind::Done,
+            skip_reason: None,
+            retrying: false,
+        };
+        statuses.insert("prime.gate".to_string(), done.clone());
+        statuses.insert("prime.gate.chosen".to_string(), done);
+        let mut kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
+        kinds_map.insert("prime.gate".to_string(), RowKind::If);
+        kinds_map.insert("prime.gate.chosen".to_string(), RowKind::Prompt);
+        let (top, _) =
+            build_tree_for_measure("prime", &flat, &statuses, &kinds_map, Measure::Total);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].key, "gate");
+        assert_eq!(top[0].children.len(), 1);
+        assert_eq!(top[0].children[0].key, "chosen");
+    }
 }

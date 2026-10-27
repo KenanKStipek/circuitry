@@ -130,6 +130,7 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
         &story,
         None,
         &Utc,
+        rendered.header.run_end_ts.as_deref(),
         "2026-01-01T00:10:00Z",
     )
 }

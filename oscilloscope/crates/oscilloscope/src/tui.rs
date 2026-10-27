@@ -158,9 +158,19 @@ mod thresholds {
 
 /// A scroll position suffix for a pane's own border title (issue
 /// #527: "show a scroll indicator or a position ... in the border"),
-/// only when some row is actually hidden above or below.
-fn scroll_indicator(selected: Option<usize>, total: usize, viewport: usize) -> Option<String> {
-    if total <= viewport {
+/// only when some row is actually hidden above or below --
+/// `hides_something` is the caller's own call, not `total >
+/// viewport` here: issue #643's fifth follow-up is exactly that
+/// comparing a plain row count against a *line* budget drifts once
+/// some rows draw as more than one line apiece (the Flow pane's own
+/// decision rows, with their own condition line) -- the caller sums
+/// each row's real line count instead.
+fn scroll_indicator(
+    selected: Option<usize>,
+    total: usize,
+    hides_something: bool,
+) -> Option<String> {
+    if !hides_something {
         return None;
     }
     let position = selected.map(|idx| idx + 1).unwrap_or(1);
@@ -175,17 +185,34 @@ mod scroll_tests {
 
     #[test]
     fn scroll_indicator_is_none_when_everything_already_fits() {
-        assert_eq!(scroll_indicator(Some(0), 4, 4), None);
+        assert_eq!(scroll_indicator(Some(0), 4, false), None);
     }
 
     #[test]
     fn scroll_indicator_shows_a_one_based_position_and_the_total() {
-        assert_eq!(scroll_indicator(Some(6), 10, 4), Some(" 7/10 ".to_string()));
+        assert_eq!(
+            scroll_indicator(Some(6), 10, true),
+            Some(" 7/10 ".to_string())
+        );
     }
 
     #[test]
     fn scroll_indicator_defaults_the_position_to_one_with_no_selection() {
-        assert_eq!(scroll_indicator(None, 10, 4), Some(" 1/10 ".to_string()));
+        assert_eq!(scroll_indicator(None, 10, true), Some(" 1/10 ".to_string()));
+    }
+
+    /// Issue #643's fifth follow-up: `hides_something` is the
+    /// caller's own call, decoupled from the row `total` shown --
+    /// a row count that would alone read as "everything fits" must
+    /// still show the indicator once the caller (comparing real
+    /// line counts, for a pane with multi-line rows) says something
+    /// is hidden.
+    #[test]
+    fn scroll_indicator_follows_hides_something_not_the_row_count() {
+        assert_eq!(
+            scroll_indicator(Some(2), 4, true),
+            Some(" 3/4 ".to_string())
+        );
     }
 
     #[test]
@@ -375,6 +402,7 @@ fn draw_overview(
     overview: &oscilloscope_core::screens::Overview,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) {
     if area.height == 0 {
         return;
@@ -401,6 +429,7 @@ fn draw_overview(
             transcript_view,
             ctx,
             true,
+            now,
         );
         draw_cards_summary_line(frame, sections[2], overview, ctx);
         return;
@@ -424,6 +453,7 @@ fn draw_overview(
         transcript_view,
         ctx,
         false,
+        now,
     );
     draw_cards(frame, rows[1], overview, ctx);
 }
@@ -533,6 +563,7 @@ fn draw_now_pane(
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     stacked: bool,
+    now: &str,
 ) {
     if area.height == 0 {
         return;
@@ -542,7 +573,7 @@ fn draw_now_pane(
         .iter()
         .map(|l| Line::from(l.clone()))
         .collect();
-    let focus_raw = focus_lines(&pane.focus, transcript_view, ctx);
+    let focus_raw = focus_lines(&pane.focus, transcript_view, ctx, now);
     let log =
         Paragraph::new(log_lines).block(Block::default().borders(Borders::ALL).title(" now "));
 
@@ -589,6 +620,7 @@ fn focus_lines(
     focus: &oscilloscope_core::screens::NowFocus,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::NowFocus;
     match focus {
@@ -632,12 +664,14 @@ fn focus_lines(
             // last-finished step's own focus already renders.
             if let Some(agent) = &summary.stopped_agent {
                 lines.push(Line::from(""));
-                lines.extend(focus_step_lines(agent, None, transcript_view, ctx));
+                lines.extend(focus_step_lines(agent, None, transcript_view, ctx, now));
             }
             lines
         }
-        NowFocus::Running(step, more) => focus_step_lines(step, Some(*more), transcript_view, ctx),
-        NowFocus::LastFinished(step) => focus_step_lines(step, None, transcript_view, ctx),
+        NowFocus::Running(step, more) => {
+            focus_step_lines(step, Some(*more), transcript_view, ctx, now)
+        }
+        NowFocus::LastFinished(step) => focus_step_lines(step, None, transcript_view, ctx, now),
     }
 }
 
@@ -655,12 +689,20 @@ fn focus_lines(
 /// only from the transcript either way (the engine doesn't publish
 /// it at all), independently of whether `files`/`+/−` has anything to
 /// show -- a session that has only run a test command, with no edit
-/// yet, still gets a `tests` line of its own.
+/// yet, still gets a `tests` line of its own. `now` is read only for
+/// the transcript list's own running calls, each from its own
+/// `call.start_t` -- `current_tool_elapsed_s` is the session's
+/// single `current_tool` time, used only in the no-transcript
+/// fallback below, where there is no per-call start time to read at
+/// all.
 fn agent_live_lines(
     live: &oscilloscope_core::model::AgentLive,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     show_doing_header: bool,
+    stale: bool,
+    current_tool_elapsed_s: Option<f64>,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::format::format_tokens;
     let dim = Style::default().fg(ctx.theme.dim);
@@ -732,8 +774,30 @@ fn agent_live_lines(
                 match call.ok {
                     Some(true) => text.push_str(" ✓"),
                     Some(false) => text.push_str(" ✗"),
-                    None if call.stopped => text.push_str(" stopped"),
-                    None => text.push_str(" running"),
+                    // Issue #647: a stopped session's own transcript
+                    // can end mid-call, with no later `tool_start` to
+                    // ever mark it `call.stopped` -- `stale` alone
+                    // (the session itself has stopped) is enough to
+                    // call this unfinished, not still running.
+                    None if call.stopped || stale => text.push_str(" stopped"),
+                    // Issue #647/#647 follow-up: the session's own
+                    // elapsed is shown next to `since`, but each call
+                    // in this list is its own, possibly concurrent,
+                    // tool call -- its own elapsed is `now` minus its
+                    // own `start_t`, not the session's single `meta.
+                    // live.current_tool` time, which two calls
+                    // running at once would otherwise both show.
+                    None => match call
+                        .start_t
+                        .as_deref()
+                        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
+                    {
+                        Some(elapsed) => text.push_str(&format!(
+                            " running {}",
+                            oscilloscope_core::format::format_duration(elapsed)
+                        )),
+                        None => text.push_str(" running"),
+                    },
                 }
                 if call.lines_added.is_some() || call.lines_removed.is_some() {
                     text.push_str(&format!(
@@ -764,7 +828,22 @@ fn agent_live_lines(
                 lines.push(Line::from(counts));
             }
             if let Some(current) = &live.current_tool {
-                lines.push(Line::from(format!("running: {}", current.name)));
+                // Issue #647: a stopped agent's last tool was never
+                // finished, so it never actually matched the running
+                // label in the first place -- it is the last thing
+                // the session was doing, not something still running.
+                if stale {
+                    lines.push(Line::from(format!("last: {}", current.name)));
+                } else {
+                    match current_tool_elapsed_s {
+                        Some(elapsed) => lines.push(Line::from(format!(
+                            "running: {} · {}",
+                            current.name,
+                            oscilloscope_core::format::format_duration(elapsed)
+                        ))),
+                        None => lines.push(Line::from(format!("running: {}", current.name))),
+                    }
+                }
             }
         }
     }
@@ -821,6 +900,7 @@ fn focus_step_lines(
     more_running: Option<usize>,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
     {
@@ -874,7 +954,11 @@ fn focus_step_lines(
             // step here, nothing extra, since `live` is always `None`
             // by then (`meta.live` is removed once the attempt ends).
             FocusDetail::Agent {
-                live, note, stale, ..
+                live,
+                note,
+                stale,
+                current_tool_elapsed_s,
+                ..
             } => match live.as_deref() {
                 Some(live) => {
                     // An interrupted run's own leftover `meta.live`
@@ -886,7 +970,15 @@ fn focus_step_lines(
                     if *stale {
                         lines.push(Line::styled("stopped", Style::default().fg(ctx.theme.dim)));
                     }
-                    lines.extend(agent_live_lines(live, transcript_view, ctx, true));
+                    lines.extend(agent_live_lines(
+                        live,
+                        transcript_view,
+                        ctx,
+                        true,
+                        *stale,
+                        *current_tool_elapsed_s,
+                        now,
+                    ));
                 }
                 None if more_running.is_some() => lines.push(Line::from(Span::styled(
                     *note,
@@ -1880,14 +1972,26 @@ fn draw_cost_treemap(
     }
 }
 
+/// The tokens-over-time chart's own fixed cycle of glyphs (DESIGN.md:
+/// "one band per top-level step"), paired one-for-one with
+/// [`phase_color`]'s own cycle -- DESIGN.md's "still reads from
+/// glyphs and modifiers, never colour alone" rule applies here same
+/// as everywhere else: two adjacent bands must still read apart with
+/// colour turned off. Its own length is `crate::screens::build_cost_
+/// screen`'s own `max_phase_bands` (issue #641): with more real
+/// phases than this, `cost::cap_phase_bands` folds the smallest ones
+/// into one further `other` band rather than ever reusing a glyph
+/// in the legend.
+pub(crate) const PHASE_GLYPHS: [char; 6] = ['█', '▓', '▒', '░', '▐', '▌'];
+
 /// One of a small, fixed cycle of theme colours for the tokens-over-
-/// time chart's own bands (DESIGN.md: "one band per top-level step")
-/// -- there is no per-phase colour role in `Theme` itself (phases are
-/// document-specific, unlike a fixed status), so this cycles through
-/// roles that are already visually distinct from one another.
+/// time chart's own bands -- there is no per-phase colour role in
+/// `Theme` itself (phases are document-specific, unlike a fixed
+/// status), so this cycles through roles that are already visually
+/// distinct from one another, the same cycle length as
+/// [`PHASE_GLYPHS`].
 fn phase_color(index: usize, theme: &Theme) -> Color {
-    const PALETTE_SIZE: usize = 6;
-    match index % PALETTE_SIZE {
+    match index % PHASE_GLYPHS.len() {
         0 => theme.token_in,
         1 => theme.token_out,
         2 => theme.status_running,
@@ -1898,13 +2002,9 @@ fn phase_color(index: usize, theme: &Theme) -> Color {
 }
 
 /// A fill glyph for one of the chart's own bands, paired with
-/// [`phase_color`] (same index, same cycle length) -- DESIGN.md's
-/// "still reads from glyphs and modifiers, never colour alone" rule
-/// applies here same as everywhere else: two adjacent bands must
-/// still read apart with colour turned off.
+/// [`phase_color`] (same index, same cycle length).
 fn phase_glyph(index: usize) -> char {
-    const GLYPHS: [char; 6] = ['█', '▓', '▒', '░', '▐', '▌'];
-    GLYPHS[index % GLYPHS.len()]
+    PHASE_GLYPHS[index % PHASE_GLYPHS.len()]
 }
 
 /// The "tokens over time" stacked chart's own clock axis (DESIGN.md:
@@ -2136,6 +2236,18 @@ fn draw_cost_table(
     // derives it from the row's own real path instead of trying to
     // strip a prefix back out of an already-built string.
     let zoom_root = app.cost_zoom.last().map(String::as_str);
+    // Issue #641 (finding on look-alike rows): every row's own full,
+    // unshortened label, so shortening one row's own label can tell
+    // whether dropping down to some width would make it read
+    // identically to another's -- and if so, which ancestor segment
+    // actually tells them apart.
+    let all_labels: Vec<String> = rows
+        .iter()
+        .map(|row| match zoom_root {
+            Some(root) => oscilloscope_core::cost::zoomed_row_label(row, root),
+            None => row.label.clone(),
+        })
+        .collect();
     let mut row_lines: Vec<Line> = Vec::new();
     for row in &rows {
         let share = if total_tokens > 0 {
@@ -2175,9 +2287,10 @@ fn draw_cost_table(
         // ended-without-finishing) row with nothing reported shows
         // the same placeholder text its tile does, never `↑0 t ↓0 t
         // 0%` read back as if it meant something.
+        let share_text = oscilloscope_core::format::format_share_pct(share);
         let value_text = if row.tokens_sent + row.tokens_received > 0 {
             format!(
-                "↑{} ↓{}{cost}  {share:.0}%",
+                "↑{} ↓{}{cost}  {share_text}",
                 oscilloscope_core::format::format_tokens(row.tokens_sent),
                 oscilloscope_core::format::format_tokens(row.tokens_received),
             )
@@ -2188,7 +2301,7 @@ fn draw_cost_table(
                     "no tokens reported".to_string()
                 }
                 _ => format!(
-                    "↑{} ↓{}{cost}  {share:.0}%",
+                    "↑{} ↓{}{cost}  {share_text}",
                     oscilloscope_core::format::format_tokens(row.tokens_sent),
                     oscilloscope_core::format::format_tokens(row.tokens_received),
                 ),
@@ -2202,7 +2315,11 @@ fn draw_cost_table(
         // right: the leaf is the one segment that actually has to
         // stay readable to tell two same-named rows apart.
         let label_budget = (inner.width as usize).saturating_sub(2 + value_text.chars().count());
-        let label = oscilloscope_core::cost::shorten_breadcrumb_from_left(&label, label_budget);
+        let label = oscilloscope_core::cost::shorten_breadcrumb_from_left(
+            &label,
+            &all_labels,
+            label_budget,
+        );
         row_lines.push(Line::styled(format!("{label}  {value_text}"), style));
     }
 
@@ -2460,7 +2577,7 @@ pub fn draw(
     match app.screen {
         oscilloscope_core::screens::Screen::Overview => {
             if let Some(overview) = overview {
-                draw_overview(frame, body, overview, transcript_view, ctx);
+                draw_overview(frame, body, overview, transcript_view, ctx, now);
             }
         }
         oscilloscope_core::screens::Screen::Cost => {
@@ -2481,6 +2598,7 @@ pub fn draw(
                     app,
                     transcript_view,
                     ctx,
+                    now,
                 );
             }
         }
@@ -2589,13 +2707,19 @@ fn flow_row_lines(
     let mut spans = Vec::new();
     match &row.kind {
         FlowRowKind::Row(_) => {
-            let glyph = if row.merged_pass {
-                '⟲'
+            // Issue #643's seventh follow-up: a loop row's own status
+            // glyph is never replaced by `⟲` -- merged (a single
+            // observed pass) or not (`loop_progress` still set, more
+            // than one pass), it always shows both, the same order
+            // the Time screen's own loop rows already do.
+            let is_loop_row = row.merged_pass || row.loop_progress.is_some();
+            let prefix = if is_loop_row {
+                format!("{indent}{} ⟲ ", status_glyph(row.status.kind))
             } else {
-                status_glyph(row.status.kind)
+                format!("{indent}{} ", status_glyph(row.status.kind))
             };
             spans.push(Span::styled(
-                format!("{indent}{glyph} "),
+                prefix,
                 status_style(row.status.kind, ctx.theme),
             ));
             spans.push(Span::raw(row.label.clone()));
@@ -2862,6 +2986,90 @@ mod flow_selected_row_path_tests {
     }
 }
 
+/// Issue #643's seventh follow-up: one rule for every loop row's own
+/// glyph, merged or not.
+#[cfg(test)]
+mod flow_row_lines_tests {
+    use super::*;
+    use oscilloscope_core::flow::{FlowRow, FlowRowKind};
+    use oscilloscope_core::model::{RowStatus, StatusKind};
+    use oscilloscope_core::render::{LoopProgress, RowKind};
+
+    fn render_label(row: &FlowRow) -> String {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let columns = FlowColumns {
+            cost: false,
+            start: false,
+            tokens: false,
+        };
+        let lines = flow_row_lines(row, columns, false, false, &ctx);
+        lines[0].to_string()
+    }
+
+    fn base_row(merged_pass: bool, loop_progress: Option<LoopProgress>) -> FlowRow {
+        FlowRow {
+            path: "prime.fan".to_string(),
+            depth: 0,
+            label: "fan".to_string(),
+            kind: FlowRowKind::Row(RowKind::Loop),
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            start_ts: None,
+            duration_s: None,
+            tokens: None,
+            cost_usd: None,
+            condition: None,
+            loop_progress,
+            has_children: false,
+            merged_pass,
+        }
+    }
+
+    #[test]
+    fn a_merged_single_pass_loop_row_shows_its_status_glyph_and_the_loop_glyph() {
+        let row = base_row(true, None);
+        let text = render_label(&row);
+        assert!(text.contains("◐ ⟲ fan"), "{text}");
+    }
+
+    #[test]
+    fn a_multi_pass_loop_row_also_shows_both_glyphs() {
+        let row = base_row(
+            false,
+            Some(LoopProgress {
+                done: 1,
+                total: Some(4),
+                eta_s: None,
+            }),
+        );
+        let text = render_label(&row);
+        assert!(text.contains("◐ ⟲ fan"), "{text}");
+    }
+
+    #[test]
+    fn an_ordinary_non_loop_row_gets_no_loop_glyph() {
+        let mut row = base_row(false, None);
+        row.kind = FlowRowKind::Row(RowKind::Tool);
+        let text = render_label(&row);
+        assert!(!text.contains('⟲'), "{text}");
+        assert!(text.contains("◐ fan"), "{text}");
+    }
+}
+
 /// The flow pane (issue #635's left pane): today's orchestration-pane
 /// keys (`↑↓`/`jk`, `PgUp`/`PgDn`, collapse, follow, `z`, `e`, `/`,
 /// `⏎` on a quick-steps row) still act on the real `Row`s
@@ -2954,7 +3162,7 @@ fn draw_flow_pane(
 
     let selectable: Vec<&oscilloscope_core::flow::FlowRow> = drawable
         .iter()
-        .filter(|r| oscilloscope_core::flow::is_real_flow_row(&r.kind))
+        .filter(|r| oscilloscope_core::flow::is_selectable_flow_row(&r.kind))
         .copied()
         .collect();
     let selectable_idx = selected_key
@@ -2990,7 +3198,8 @@ fn draw_flow_pane(
         title.push_str("(following) ");
     }
     title.push_str("◆ decision ⟲ loop ▶ running");
-    match scroll_indicator(selectable_idx, selectable.len(), viewport) {
+    let total_lines: usize = line_counts.iter().sum();
+    match scroll_indicator(selectable_idx, selectable.len(), total_lines > viewport) {
         Some(indicator) => title.push_str(&indicator),
         None => title.push(' '),
     }
@@ -3070,6 +3279,7 @@ fn draw_flow_selected_pane(
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) {
     if app.flow_selected_shows_state {
         draw_state(frame, area, state_visible, app, ctx);
@@ -3078,7 +3288,7 @@ fn draw_flow_selected_pane(
     let lines = if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected {
-        flow_selected_step_lines(step, transcript_view, ctx)
+        flow_selected_step_lines(step, transcript_view, ctx, now)
     } else {
         vec![Line::from("nothing selected")]
     };
@@ -3114,6 +3324,7 @@ fn flow_selected_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
     use oscilloscope_core::screens::FocusDetail;
@@ -3178,7 +3389,11 @@ fn flow_selected_step_lines(
         // this never reads as running -- only `stopped`, with
         // whatever figures the session last reported.
         FocusDetail::Agent {
-            live, note, stale, ..
+            live,
+            note,
+            stale,
+            current_tool_elapsed_s,
+            ..
         } if running || live.is_some() => {
             if let (Some(since), Some(elapsed)) = (
                 step.since_ts
@@ -3199,7 +3414,15 @@ fn flow_selected_step_lines(
                     // `false`: Flow's own `doing:` header below
                     // already covers this content -- `agent_live_
                     // lines` must not print a second one.
-                    doing.extend(agent_live_lines(live, transcript_view, ctx, false));
+                    doing.extend(agent_live_lines(
+                        live,
+                        transcript_view,
+                        ctx,
+                        false,
+                        *stale,
+                        *current_tool_elapsed_s,
+                        now,
+                    ));
                 }
                 None if running => doing.push(Line::styled(*note, dim)),
                 None => {}
@@ -3401,6 +3624,7 @@ fn draw_flow_screen(
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    now: &str,
 ) {
     let visible = visible_rows(&state.rows, app);
     let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
@@ -3446,6 +3670,7 @@ fn draw_flow_screen(
             app,
             transcript_view,
             ctx,
+            now,
         );
         draw_flow_story_pane(frame, right[1], screen, log_lines, log_total, app, ctx);
     } else if two_pane {
@@ -3480,6 +3705,7 @@ fn draw_flow_screen(
                 app,
                 transcript_view,
                 ctx,
+                now,
             );
         }
     } else {
@@ -3500,6 +3726,7 @@ fn draw_flow_screen(
             app,
             transcript_view,
             ctx,
+            now,
         );
         draw_flow_pane(
             frame,
@@ -4440,7 +4667,7 @@ fn draw_time_timeline(
             }
         }
     }
-    let title = scroll_indicator(selected_idx, drawable.len(), viewport)
+    let title = scroll_indicator(selected_idx, drawable.len(), drawable.len() > viewport)
         .map(|s| format!(" timeline{s}"))
         .unwrap_or_else(|| " timeline ".to_string());
     frame.render_widget(
@@ -4743,13 +4970,40 @@ fn draw_time_zoom_pane(
                     // at` the same as a running one does.
                     let running = step.status.kind == StatusKind::Running && live.is_some();
                     // The session's own end: `now` while it's still
-                    // running, else the row's own real (frozen) span.
+                    // running, else the row's own real (frozen) span,
+                    // else the run's own end (issue #654: a stopped
+                    // agent's row with no resolvable duration must not
+                    // keep reaching for `now` either) -- falling back
+                    // further still to the leftover live summary's own
+                    // last heartbeat when the run itself hasn't ended
+                    // yet (an interrupted session, the rest of the run
+                    // still going elsewhere).
                     let axis_end_s = if running {
                         now_s
                     } else {
                         selected_row
                             .and_then(|row| row.start_s.zip(row.duration_s))
-                            .map_or(now_s, |(s, d)| s + d)
+                            .map(|(s, d)| s + d)
+                            .or_else(|| {
+                                (!screen.axis.show_now)
+                                    .then_some(run_start_ts.as_deref())
+                                    .flatten()
+                                    .and_then(|rs| {
+                                        oscilloscope_core::observe::duration_seconds(
+                                            rs,
+                                            &screen.axis.end_ts,
+                                        )
+                                    })
+                            })
+                            .or_else(|| {
+                                live.as_deref()
+                                    .and_then(|l| l.updated_at.as_deref())
+                                    .zip(run_start_ts.as_deref())
+                                    .and_then(|(u, rs)| {
+                                        oscilloscope_core::observe::duration_seconds(rs, u)
+                                    })
+                            })
+                            .unwrap_or(now_s)
                     };
                     if let (Some(view), Some(run_start_ts)) =
                         (transcript_view, run_start_ts.as_deref())
@@ -5096,7 +5350,25 @@ fn draw_time_vs_usual_pane(
         ) {
             footer.push(format!("usual {low}–{high}"));
         }
-        if let Some(runs) = screen.vs_usual.from_runs {
+        // Issue #654: `screen.vs_usual.from_runs` pools across
+        // every row `build_vs_usual_pane` ever computed, collapsed
+        // or filtered out or not -- recomputed here from only the
+        // rows actually drawn above, the same `visible_paths` filter,
+        // whenever it's a per-row pooled figure at all (`earlier_
+        // versions`; otherwise it's the whole run's own current-hash
+        // count, which no row filtering could ever change).
+        let from_runs = if screen.vs_usual.earlier_versions {
+            screen
+                .vs_usual
+                .rows
+                .iter()
+                .filter(|r| visible_paths.contains(r.path.as_str()))
+                .map(|r| r.pooled_count)
+                .max()
+        } else {
+            screen.vs_usual.from_runs
+        };
+        if let Some(runs) = from_runs {
             footer.push(format!("from {runs} runs"));
         }
         // Drops whole parts from the end (`from N runs` first, then
@@ -5574,6 +5846,7 @@ mod golden_tests {
             &[],
             Some(selected),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let mut app = App::new(engine == "watch");
@@ -6067,6 +6340,130 @@ mod golden_tests {
         );
     }
 
+    /// Issue #654: "earlier versions" pools a different run count per
+    /// step -- the footer's own `from N runs` must come only from the
+    /// rows actually shown, same as the row list right above it, not
+    /// from a row collapsed away even though it has the larger
+    /// pooled count.
+    #[test]
+    fn time_vs_usual_pane_from_runs_excludes_a_filtered_rows_own_pooled_count() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = overview_running_state();
+        let now = "2026-01-01T00:05:00Z";
+        let mut rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            300.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        // Below the same-hash threshold, with pooled history -- "earlier
+        // versions" applies, and `from_runs` pools per step.
+        rendered.header.history_same_hash_count = Some(1);
+        rendered.header.history_step_usual.insert(
+            "a".to_string(),
+            oscilloscope_core::history::StepStats {
+                // `vs_usual_mark` needs at least 3 runs to produce a
+                // mark at all; 3 is still fewer than `b`'s 5, so the
+                // visible-only max below has to actually come from
+                // this row, not `b`'s.
+                count: 3,
+                busy_p50_s: Some(60.0),
+                busy_p10_s: Some(50.0),
+                busy_p90_s: Some(70.0),
+                ..Default::default()
+            },
+        );
+        rendered.header.history_step_usual.insert(
+            "b".to_string(),
+            oscilloscope_core::history::StepStats {
+                count: 5,
+                busy_p50_s: Some(300.0),
+                busy_p10_s: Some(240.0),
+                busy_p90_s: Some(360.0),
+                ..Default::default()
+            },
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let time_screen = oscilloscope_core::screens::build_time_screen(
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            None,
+            &Default::default(),
+            now,
+        );
+        assert!(time_screen.vs_usual.earlier_versions);
+        assert_eq!(
+            time_screen
+                .vs_usual
+                .rows
+                .iter()
+                .map(|r| (r.path.as_str(), r.pooled_count))
+                .collect::<Vec<_>>(),
+            vec![("prime.a", 3), ("prime.b", 5)]
+        );
+        // The pane's own pre-pooled figure (across both rows) would
+        // read 5 -- the point of this test is that the front end must
+        // not just use it as-is once `b` is collapsed away.
+        assert_eq!(time_screen.vs_usual.from_runs, Some(5));
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        // `a`/`b` are both leaves, so collapsing either hides nothing
+        // of its own -- the filter, matching `a`'s own path/label but
+        // not `b`'s, is what actually removes `b` from the timeline.
+        app.filter = Some("a".to_string());
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&time_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("from 3 runs"), "{text}");
+        assert!(!text.contains("from 5 runs"), "{text}");
+    }
+
     fn many_steps_plan(n: usize) -> PlanTree {
         let root_path = EffectPath::root();
         let ops: Vec<Op> = (0..n)
@@ -6312,6 +6709,122 @@ mod golden_tests {
         oscilloscope_core::transcript::build_transcript_view(&lines, false)
     }
 
+    /// Issue #647: with no transcript tailed yet, a running tool's
+    /// own elapsed shows right next to `running:`, from `meta.live.
+    /// current_tool.started_at` -- not just the session's own total.
+    #[test]
+    fn agent_live_lines_shows_the_running_tools_own_elapsed() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let live = oscilloscope_core::model::AgentLive::from_value(&json!({
+            "engine": "pi",
+            "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"}
+        }))
+        .unwrap();
+        let lines = agent_live_lines(
+            &live,
+            None,
+            &ctx,
+            true,
+            false,
+            Some(24.0),
+            "2026-01-01T11:52:54Z",
+        );
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("running: bash · 24.0s"), "{text}");
+    }
+
+    /// Issue #647: once stale (the session has stopped), the last
+    /// tool it ran is labelled `last:`, never `running:` -- it never
+    /// finished, but it is not running any more either.
+    #[test]
+    fn agent_live_lines_labels_a_stale_current_tool_as_last_not_running() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let live = oscilloscope_core::model::AgentLive::from_value(&json!({
+            "engine": "pi",
+            "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+        }))
+        .unwrap();
+        let lines = agent_live_lines(&live, None, &ctx, true, true, None, "2026-01-01T11:52:54Z");
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("last: bash"), "{text}");
+        assert!(!text.contains("running:"), "{text}");
+    }
+
+    /// Issue #641: two tool calls genuinely running at once (neither
+    /// has a `tool_end`, and neither is superseded by a later
+    /// `tool_start` with a lower id, so neither reads as `stopped`)
+    /// must each show their own elapsed, from their own `start_t` --
+    /// not the session's single `meta.live.current_tool` time, which
+    /// would otherwise show the same figure for both.
+    #[test]
+    fn agent_live_lines_shows_each_running_calls_own_elapsed_in_a_transcript() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let transcript_lines = vec![
+            json!({"t": "2026-01-01T11:50:00Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -k a"}),
+            json!({"t": "2026-01-01T11:51:00Z", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k b"}),
+        ];
+        let view = oscilloscope_core::transcript::build_transcript_view(&transcript_lines, false);
+        let live =
+            oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
+        let lines = agent_live_lines(
+            &live,
+            Some(&view),
+            &ctx,
+            true,
+            false,
+            None,
+            "2026-01-01T11:52:00Z",
+        );
+        let text = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("pytest -k a running 2m00s"), "{text}");
+        assert!(text.contains("pytest -k b running 1m00s"), "{text}");
+    }
+
     /// [`overview_snapshot_at`], with a specific transcript view
     /// attached the way `main.rs`'s own `tail_focused_transcript`
     /// would feed `draw` -- issue #637's own now-pane goldens for a
@@ -6426,6 +6939,7 @@ mod golden_tests {
             &[],
             Some("prime.fix"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T11:52:55Z",
         );
         let mut app = App::new(false);
@@ -6919,6 +7433,25 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Issue #647: a stopped agent's transcript can end in a
+    /// `tool_start` with no later `tool_end` or lower-id
+    /// `tool_start` to ever flag it `stopped` -- that last call must
+    /// still read "stopped", never "running", once the session
+    /// itself has stopped.
+    #[test]
+    fn flow_selected_pane_cancelled_agent_with_transcript_at_80x24() {
+        let state = agent_cancelled_state();
+        let process = ProcessState::exited(true);
+        let lines = vec![
+            json!({"t": "2026-01-01T11:46:50Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -q"}),
+        ];
+        let transcript = oscilloscope_core::transcript::build_transcript_view(&lines, false);
+        let text = flow_agent_snapshot_at(80, 24, &state, Some(&transcript), process);
+        assert!(text.contains("stopped"), "{text}");
+        assert!(!text.contains("running"), "{text}");
+        insta::assert_snapshot!(text);
+    }
+
     #[test]
     fn overview_failed_at_120x40() {
         let plan = sample_plan();
@@ -7092,7 +7625,9 @@ mod golden_tests {
             &kinds,
             state,
             Measure::Total,
+            model,
             "2026-01-01T00:05:00Z",
+            PHASE_GLYPHS.len(),
         );
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -7359,6 +7894,35 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Issue #641: a store with well under 1% of the run's total
+    /// tokens must read `<1%` in the largest-stores table, never a
+    /// plain `0%` that looks the same as an actual zero share.
+    #[test]
+    fn the_table_shows_a_small_nonzero_share_as_under_one_percent() {
+        use oscilloscope_core::plan::PlanTree;
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "big": {"value": "y", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
+                "tokens_sent_total": 10000, "tokens_received_total": 0
+            }},
+            "tiny": {"value": "y", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
+                "tokens_sent_total": 30, "tokens_received_total": 0
+            }}
+        }});
+        let text = cost_snapshot_at(
+            120,
+            40,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(true),
+        );
+        assert!(text.contains("<1%"), "{text}");
+    }
+
     #[test]
     fn cost_finished_at_80x20() {
         let plan = sample_plan();
@@ -7437,7 +8001,9 @@ mod golden_tests {
             &kinds,
             Some(&state),
             Measure::Total,
+            &model,
             "2026-01-01T00:05:00Z",
+            PHASE_GLYPHS.len(),
         );
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -7610,6 +8176,7 @@ mod golden_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(100, 24);
@@ -7815,6 +8382,7 @@ mod golden_tests {
             &[],
             Some("prime.q1"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T11:46:50.000Z",
         );
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
@@ -8116,6 +8684,7 @@ mod golden_tests {
             &story_lines,
             Some("prime.a"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(100, 30);
@@ -8468,7 +9037,7 @@ mod golden_tests {
         let mut model = RunModel::new();
         let long_prompt = "summarize the quarterly report and call out every risk factor you can find in the appendix tables, in plain prose, no bullet points";
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "prompt_sent": long_prompt, "tokens_sent_total": 120, "tokens_received_total": 340}},
+            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "prompt_sent": long_prompt, "prompt_chars": 131, "tokens_sent_total": 120, "tokens_received_total": 340}},
             "b": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}}
         }});
         let text = snapshot_full_layout(
@@ -8494,7 +9063,7 @@ mod golden_tests {
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "adapter": "scripted",
-                "prompt_sent": "summarize the quarterly report", "tokens_sent_total": 42}}
+                "prompt_sent": "summarize the quarterly report", "prompt_chars": 30, "tokens_sent_total": 42}}
         }});
         let text = snapshot_full_layout(
             &plan,
@@ -8639,6 +9208,7 @@ mod golden_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(120, 40);
@@ -8802,6 +9372,7 @@ mod golden_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(70, 20);
@@ -9021,6 +9592,7 @@ mod golden_tests {
             &story_2000,
             Some("prime.n0"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "t2001",
         );
         // Issue #637: the step on screen (`n0`, Flow's own selection
@@ -9144,7 +9716,9 @@ mod golden_tests {
             &kinds,
             Some(&state),
             Measure::Total,
+            &model,
             "t2001",
+            PHASE_GLYPHS.len(),
         );
         let mut cost_app = App::new(false);
         cost_app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -9497,6 +10071,188 @@ mod golden_tests {
         assert!(
             elapsed < std::time::Duration::from_secs(5),
             "building the strips and drawing three times over a 50,000-interval log took {elapsed:?}, a generous bound even for a debug build"
+        );
+    }
+
+    fn unnamed_loop_plan_for_tui() -> PlanTree {
+        use electricity_bytecode::{LoopFlow, LoopSpec, Region};
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone();
+        let body_path = loop_path.clone().push_name("nap");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path,
+                    name: None,
+                    kind: NodeKind::Control(Region::Loop {
+                        name: None,
+                        spec: LoopSpec::Each {
+                            in_path: "prime.items".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool(body_path, "nap", OnError::Fail)],
+                            overlay: true,
+                        }),
+                        flow: LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        PlanTree::from_program(&Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        })
+    }
+
+    /// The same 50,000-interval log as the test above, but logged at
+    /// an unnamed loop's own body path on a real compiled plan --
+    /// `build_time_rows`'s own loop-progress count
+    /// (`is_unnamed_loop_body_path`, `step_intervals` filtered by
+    /// path) must stay as cheap as a plain leaf's, not re-scan the
+    /// whole log on every redraw.
+    #[test]
+    fn time_screen_performance_with_50_000_logged_intervals_on_an_unnamed_loop() {
+        let plan = unnamed_loop_plan_for_tui();
+        let mut model = RunModel::new();
+        let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap();
+        for i in 0..50_000i64 {
+            let start = (base + chrono::Duration::milliseconds(10 * i))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let end = (base + chrono::Duration::milliseconds(10 * i + 5))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            model.observe_event(&Event::Start {
+                ts: start,
+                id: Some(i),
+                path: "prime.nap".to_string(),
+            });
+            model.observe_event(&Event::End {
+                ts: end,
+                id: Some(i),
+                path: "prime.nap".to_string(),
+                ok: true,
+                ms: Some(5),
+                error: None,
+            });
+        }
+        assert_eq!(model.step_intervals().len(), 50_000);
+        let state = json!({"prime": {"value": null, "meta": {
+            "created_at": "2026-01-01T00:00:00Z", "completed_at": null
+        }}});
+        let now = (base + chrono::Duration::milliseconds(10 * 50_000))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let rendered = render::build_folded(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            500.0,
+            &now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        {
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                None,
+                &Default::default(),
+                &now,
+            );
+            assert!(
+                time_screen.rows.iter().any(|r| matches!(
+                    r,
+                    oscilloscope_core::screens::TimeDisplayRow::Row(row)
+                        if row.loop_progress.is_some()
+                )),
+                "the unnamed loop's own body row must carry a real pass count"
+            );
+        }
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Time;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let start_time = std::time::Instant::now();
+        for _ in 0..3 {
+            let time_screen = oscilloscope_core::screens::build_time_screen(
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(&state),
+                &[],
+                None,
+                &Default::default(),
+                &now,
+            );
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        0,
+                        &mut app,
+                        Some(&state),
+                        &test_ctx,
+                        0,
+                        &now,
+                        None,
+                        None,
+                        None,
+                        Some(&time_screen),
+                        None,
+                        &mut CostLayoutCache::default(),
+                    )
+                })
+                .unwrap();
+        }
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "building the strips and drawing three times over a 50,000-interval unnamed-loop log took {elapsed:?}, a generous bound even for a debug build"
         );
     }
 
@@ -10051,7 +10807,9 @@ mod golden_tests {
             &kinds,
             Some(&state),
             Measure::Total,
+            &model,
             "2026-01-01T00:05:00Z",
+            PHASE_GLYPHS.len(),
         );
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
@@ -10354,6 +11112,7 @@ mod golden_tests {
             story,
             Some(selected),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:02Z",
         );
         let mut app = App::new(false);
@@ -10577,6 +11336,7 @@ mod golden_tests {
             &story,
             Some("prime.fan.iter_0"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:02Z",
         );
         let mut app = App::new(false);
@@ -11711,6 +12471,139 @@ mod golden_tests {
         );
     }
 
+    /// Issue #654: a stopped agent's own row can have no resolvable
+    /// `duration_s` at all (known only from `--events`, with no
+    /// matching end event before the run was killed) -- its zoom
+    /// axis must still end at the run's own end, never at `now`.
+    #[test]
+    fn time_agent_zoom_pane_with_no_resolvable_duration_ends_its_axis_at_the_runs_end() {
+        use oscilloscope_core::model::{AgentLiveToolUsage, RowStatus};
+        use oscilloscope_core::render::RowKind;
+        use oscilloscope_core::screens::{
+            FocusDetail, FocusedStep, TimeDisplayRow, TimeScreen, TimeStrips, TimeVsUsualPane,
+        };
+        use oscilloscope_core::time::{AxisSpan, TimeRow};
+
+        let run_start_ts = "2026-01-01T11:46:43Z";
+        let run_end_ts = "2026-01-01T11:46:54Z";
+        let status = RowStatus {
+            kind: StatusKind::Cancelled,
+            skip_reason: None,
+            retrying: false,
+        };
+        let row = TimeRow {
+            path: "prime.fan.iter_1".to_string(),
+            depth: 1,
+            label: "iter_1".to_string(),
+            kind: RowKind::Tool,
+            status: status.clone(),
+            start_s: Some(0.0),
+            duration_s: None,
+            loop_progress: None,
+            has_children: false,
+            loop_expandable: false,
+            ghost: None,
+        };
+        let mut tools = std::collections::BTreeMap::new();
+        tools.insert(
+            "bash".to_string(),
+            AgentLiveToolUsage {
+                calls: 1,
+                ms: 2_000,
+            },
+        );
+        let selected = FocusedStep {
+            path: row.path.clone(),
+            breadcrumb: "fan › iter_1".to_string(),
+            kind_label: "agent",
+            provider_or_model: Some("agent".to_string()),
+            since_ts: Some(run_start_ts.to_string()),
+            elapsed_s: Some(11.0),
+            detail: FocusDetail::Agent {
+                asked: Some("Fix the bug.".to_string()),
+                live: None,
+                stale: true,
+                current_tool_elapsed_s: None,
+                note: "",
+                raw_transcript: None,
+                raw_files_changed: None,
+                raw_turns: Some(1),
+                raw_tool_calls: Some(1),
+                raw_tool_counts: tools,
+            },
+            status,
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        };
+        let footer_line = |now: &str| -> String {
+            let screen = TimeScreen {
+                rows: vec![TimeDisplayRow::Row(row.clone())],
+                axis: AxisSpan {
+                    start_ts: Some(run_start_ts.to_string()),
+                    end_ts: run_end_ts.to_string(),
+                    show_now: false,
+                },
+                now_s: None,
+                planned: None,
+                strips: TimeStrips {
+                    events_points: Vec::new(),
+                    events_from_state: false,
+                    decisions: Vec::new(),
+                    in_flight_intervals: Vec::new(),
+                    queued: 0,
+                    quiet_agent: false,
+                },
+                selected: Some(selected.clone()),
+                zoom_extra: None,
+                vs_usual: TimeVsUsualPane::default(),
+            };
+            let mut app = App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Time;
+            app.selected_path = Some(row.path.clone());
+            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+            let test_tracker = crate::highlight::Tracker::new();
+            let test_ctx = DrawCtx {
+                theme: &test_theme,
+                highlights: &test_tracker,
+                now: Instant::now(),
+                color_mode: ColorMode::TrueColor,
+                theme_banner: None,
+                zone: &test_zone(),
+                no_animation: false,
+            };
+            let backend = TestBackend::new(100, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    draw_time_zoom_pane(f, area, &screen, &mut app, None, &test_ctx, now);
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .to_string()
+                .lines()
+                .find(|l| l.contains("tools"))
+                .unwrap()
+                .to_string()
+        };
+        let right_after = footer_line("2026-01-01T11:46:55Z");
+        let hours_later = footer_line("2026-01-01T13:00:00Z");
+        assert_eq!(
+            right_after, hours_later,
+            "the zoom axis must not keep reaching for `now` once the run has ended"
+        );
+        assert!(
+            right_after.contains("18%"),
+            "the footer must read the fixed 2s/11s share, not a share against `now`: {right_after:?}"
+        );
+    }
+
     /// DESIGN.md's zoom pane: "With no transcript, the footer and a
     /// `running: <tool>` line (from `current_tool`) are all it
     /// shows" -- `time_snapshot_at` never attaches a transcript at
@@ -11951,6 +12844,7 @@ mod highlight_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
 

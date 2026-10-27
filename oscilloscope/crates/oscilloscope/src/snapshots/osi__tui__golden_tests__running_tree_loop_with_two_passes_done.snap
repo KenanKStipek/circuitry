@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 5688
 expression: text
 ---
 "⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:00 · loop ETA ~00:00   0  1  [2]  3                  "
@@ -8,7 +7,7 @@ expression: text
 "│◐ prime                                                     ││fan                                 │"
 "│  ✓ a                                                       ││loop                                │"
 "│  ✓ b                                                       ││produced:                           │"
-"│  ◐ fan  2/4                                                ││(when done)                         │"
+"│  ◐ ⟲ fan  2/4                                              ││(when done)                         │"
 "│    ✓ pass 1 of 4                                           ││                                    │"
 "│    ✓ pass 2 of 4                                           ││                                    │"
 "│                                                            ││                                    │"
