@@ -5770,6 +5770,7 @@ mod golden_tests {
             &[],
             Some(selected),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let mut app = App::new(engine == "watch");
@@ -6809,6 +6810,7 @@ mod golden_tests {
             &[],
             Some("prime.fix"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T11:52:55Z",
         );
         let mut app = App::new(false);
@@ -8026,6 +8028,7 @@ mod golden_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(100, 24);
@@ -8231,6 +8234,7 @@ mod golden_tests {
             &[],
             Some("prime.q1"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T11:46:50.000Z",
         );
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
@@ -8532,6 +8536,7 @@ mod golden_tests {
             &story_lines,
             Some("prime.a"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(100, 30);
@@ -9055,6 +9060,7 @@ mod golden_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(120, 40);
@@ -9218,6 +9224,7 @@ mod golden_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
         let backend = TestBackend::new(70, 20);
@@ -9437,6 +9444,7 @@ mod golden_tests {
             &story_2000,
             Some("prime.n0"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "t2001",
         );
         // Issue #637: the step on screen (`n0`, Flow's own selection
@@ -10956,6 +10964,7 @@ mod golden_tests {
             story,
             Some(selected),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:02Z",
         );
         let mut app = App::new(false);
@@ -11179,6 +11188,7 @@ mod golden_tests {
             &story,
             Some("prime.fan.iter_0"),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:02Z",
         );
         let mut app = App::new(false);
@@ -12553,6 +12563,7 @@ mod highlight_tests {
             &[],
             app.selected_path.as_deref(),
             &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
 

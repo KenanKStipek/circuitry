@@ -1444,6 +1444,7 @@ pub fn build_flow_screen(
     story_lines: &[crate::diff::LogLine],
     selected_path: Option<&str>,
     zone: &dyn ClockZone,
+    run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
     let (flow_rows, footer) =
@@ -1475,7 +1476,15 @@ pub fn build_flow_screen(
             }
             _ => {
                 if let Some(row) = rows.iter().find(|r| r.path == path) {
-                    selected = Some(build_focused_step(row, flat, plan, model, state, now, None));
+                    selected = Some(build_focused_step(
+                        row,
+                        flat,
+                        plan,
+                        model,
+                        state,
+                        now,
+                        run_ended_at,
+                    ));
                 }
             }
         }
@@ -2693,6 +2702,72 @@ mod tests {
         );
     }
 
+    /// Issue #647: Flow's own selected pane, not only the overview's
+    /// now pane, must freeze a stopped agent's elapsed at the run's
+    /// end -- `build_flow_screen` has its own `build_focused_step`
+    /// call, which must get `run_ended_at` too.
+    #[test]
+    fn flow_screens_stopped_agents_elapsed_freezes_at_the_runs_end_not_osis_wall_clock() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
+                "error": "Interrupted (Ctrl-C/SIGINT)"
+            },
+            "fix": {"value": null, "meta": {
+                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
+                "live": {
+                    "engine": "pi", "updated_at": "2026-01-01T11:46:50Z",
+                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
+                }
+            }}
+        }});
+        let flat = flat_from(state.clone());
+        let statuses = model.observe(&state, &plan, ProcessState::exited(true));
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-01-01T11:52:55Z",
+            &model,
+            None,
+        );
+
+        let elapsed_at = |now: &str| {
+            let screen = build_flow_screen(
+                &rows,
+                &rows,
+                &flat,
+                &plan,
+                &model,
+                Some(&state),
+                &[],
+                Some("prime.fix"),
+                &utc(),
+                Some("2026-01-01T11:46:54Z"),
+                now,
+            );
+            screen
+                .selected
+                .expect("prime.fix is selectable")
+                .elapsed_s
+                .expect("since_ts is known")
+        };
+        let soon = elapsed_at("2026-01-01T11:46:55Z");
+        let long_after = elapsed_at("2026-02-01T00:00:00Z");
+        assert!((soon - 11.0).abs() < 1e-9); // 11:46:43 -> 11:46:54
+        assert_eq!(
+            soon, long_after,
+            "a stopped agent's own elapsed must not tick with osi's wall clock"
+        );
+    }
+
     /// Issue #647: `running: <tool>` must not survive past the
     /// session itself stopping -- `current_tool_elapsed_s` is `None`
     /// once stale, which is what tells `agent_live_lines` to show
@@ -2852,6 +2927,7 @@ mod tests {
             &[],
             Some("prime.check"),
             &utc(),
+            None,
             "2026-10-08T11:00:10Z",
         );
         assert!(screen.selected.is_none());
@@ -2918,6 +2994,7 @@ mod tests {
             &[],
             Some(inferred.path.as_str()),
             &utc(),
+            None,
             "2026-10-08T11:00:10Z",
         );
         assert!(screen.selected.is_none());

@@ -1770,6 +1770,7 @@ fn build_flow_screen_if_active(
         story,
         selected_path.as_deref(),
         &LocalZone,
+        render_state.header.run_end_ts.as_deref(),
         now,
     ))
 }
@@ -4182,6 +4183,7 @@ mod tests {
             &[],
             Some("prime.fix"),
             &LocalZone,
+            rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:01Z",
         );
         let time_screen = oscilloscope_core::screens::build_time_screen(
