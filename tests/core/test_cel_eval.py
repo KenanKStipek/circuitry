@@ -761,12 +761,22 @@ class TestAllExistsDecisiveElement:
 
 class TestNestingErrorWinsOverUnsetPath:
     def test_unset_read_past_the_nesting_cap_is_the_nesting_error_not_false(self):
-        # Well past electricity's own 53-deep paren/call nesting cap,
-        # comfortably on the "rejected" side for this shape.
-        depth = 60
-        expr = "(" * depth + "state.input.missing" + ")" * depth + " == 1"
-        with pytest.raises(CelEvaluationError):
-            evaluate_cel(expr, {"input": {}})
+        # cof's nesting limit is Python's recursion limit, so the depth at
+        # which evaluation fails depends on the interpreter (3.12 moved it).
+        # Find it rather than assume one: below it, the unset read gives the
+        # unset-path rule's False; at it, the failure is the nesting error,
+        # never that False, as it was when the rule ran before evaluation.
+        def expr(depth: int) -> str:
+            return "(" * depth + "state.input.missing" + ")" * depth + " == 1"
+
+        for depth in range(40, 141):
+            try:
+                result = evaluate_cel(expr(depth), {"input": {}})
+            except CelEvaluationError as exc:
+                assert "reads unset state path" not in str(exc)
+                return
+            assert result is False
+        pytest.fail("no depth up to 140 reached the nesting limit")
 
 
 # ---------------------------------------------------------------------------
