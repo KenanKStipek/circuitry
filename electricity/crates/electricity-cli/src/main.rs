@@ -786,9 +786,10 @@ fn register_test_only_scripted_adapter() {
         electricity_value::Value::Str("replies_file".to_string()),
         electricity_value::Value::Str(replies_file.to_string_lossy().into_owned()),
     );
-    let Ok(adapter) =
-        electricity_adapters::scripted::build_scripted(&electricity_value::Value::Dict(cfg))
-    else {
+    let Ok(adapter) = electricity_adapters::scripted::build_scripted(
+        "scripted",
+        &electricity_value::Value::Dict(cfg),
+    ) else {
         return;
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

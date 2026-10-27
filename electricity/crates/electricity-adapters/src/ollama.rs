@@ -165,6 +165,7 @@ pub fn build_request(
 /// `adapters/ollama.py::_curl_json`'s own hint selection
 /// (`:112-130`).
 fn ollama_hint(
+    name: &str,
     returncode: i32,
     timeout_seconds: u32,
     model: &str,
@@ -174,12 +175,12 @@ fn ollama_hint(
     match returncode {
         7 => format!(
             "Ollama at {base_url} is not reachable. Start it (`ollama serve`), or set \
-             `runtime.adapters.ollama.base_url` in your config. Run `cof doctor` to verify \
+             `runtime.adapters.{name}.base_url` in your config. Run `cof doctor` to verify \
              connectivity."
         ),
         28 => format!(
             "The model didn't finish within {timeout_seconds}s. Raise \
-             `runtime.adapters.ollama.timeout_seconds` in your config (a prompt's \
+             `runtime.adapters.{name}.timeout_seconds` in your config (a prompt's \
              `timeout_ms` can only shorten it), or use a smaller/faster model."
         ),
         22 => {
@@ -228,6 +229,7 @@ fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
 /// own scripted `(returncode, stdout, stderr)` triples
 /// (`tests/adapter_corpus.rs`).
 pub fn interpret_outcome(
+    name: &str,
     outcome: &CurlOutcome,
     model: &str,
     timeout_seconds: u32,
@@ -236,6 +238,7 @@ pub fn interpret_outcome(
 ) -> Result<GenerateResult, AdapterError> {
     if outcome.returncode != 0 {
         let hint = ollama_hint(
+            name,
             outcome.returncode,
             timeout_seconds,
             model,
@@ -329,6 +332,8 @@ fn transport_failure_error(failure: TransportFailure) -> AdapterError {
 
 /// `adapters/ollama.py::OllamaAdapter`.
 pub struct OllamaAdapter {
+    /// `ollama`, or an alias's own name (#656).
+    pub name: String,
     /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
     /// comment. Unlike the curl-based adapters,
     /// `generate()` has no earlier check to run first: Python's own
@@ -340,7 +345,7 @@ pub struct OllamaAdapter {
 #[async_trait(?Send)]
 impl Adapter for OllamaAdapter {
     fn name(&self) -> &str {
-        "ollama"
+        &self.name
     }
 
     async fn generate(
@@ -374,7 +379,14 @@ impl Adapter for OllamaAdapter {
         let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
             .await
             .map_err(transport_failure_error)?;
-        interpret_outcome(&outcome, model, call.timeout_seconds, &raw_base_url, &url)
+        interpret_outcome(
+            &self.name,
+            &outcome,
+            model,
+            call.timeout_seconds,
+            &raw_base_url,
+            &url,
+        )
     }
 
     async fn check(&self) -> CheckResult {
@@ -424,8 +436,9 @@ impl Adapter for OllamaAdapter {
 }
 
 /// `adapters/factory.py::_build_ollama`.
-pub fn build_ollama(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+pub fn build_ollama(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(OllamaAdapter {
+        name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "http://localhost:11434"),
     }))
 }
@@ -618,7 +631,7 @@ mod tests {
 
     #[test]
     fn build_ollama_defaults_the_base_url() {
-        let adapter = build_ollama(&Value::None).unwrap();
+        let adapter = build_ollama("ollama", &Value::None).unwrap();
         assert_eq!(adapter.name(), "ollama");
     }
 
@@ -631,6 +644,7 @@ mod tests {
         // runs, inside `generate()` (ollama has no API key to check
         // first) -- never at build time.
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::from(5i64),
         };
         let token = CancellationToken::new();
@@ -659,6 +673,7 @@ mod tests {
         // `call_check`'s own "check() raised ..." text (unlike
         // `cyberdiner`'s own `check()`, which has no such guard).
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::from(5i64),
         };
         let result = adapter.check().await;
@@ -708,6 +723,7 @@ mod tests {
             "{\"response\": \" hi \", \"prompt_eval_count\": 3, \"eval_count\": 5, \"done_reason\": \"stop\"}",
         );
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
         };
         let token = CancellationToken::new();
@@ -734,6 +750,7 @@ mod tests {
             "{\"error\": \"model \\\"m\\\" not found, pull it\"}",
         );
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
         };
         let token = CancellationToken::new();
@@ -756,6 +773,7 @@ mod tests {
     async fn generate_raises_runtime_error_for_a_non_json_success_body() {
         let addr = spawn_ollama_server_body("<html>");
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
         };
         let token = CancellationToken::new();
@@ -785,6 +803,7 @@ mod tests {
             ..GenerateOptions::default()
         };
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str("http://127.0.0.1:1".to_string()),
         };
         let token = CancellationToken::new();
@@ -803,6 +822,7 @@ mod tests {
     async fn check_reports_missing_host_for_a_closed_port() {
         let addr = crate::test_support::closed_port();
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
         };
         let result = adapter.check().await;
@@ -814,6 +834,7 @@ mod tests {
     async fn check_masks_userinfo_in_the_missing_host_text() {
         let addr = crate::test_support::closed_port();
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str(format!("http://user:secret@{addr}")),
         };
         let result = adapter.check().await;
@@ -826,6 +847,7 @@ mod tests {
     async fn check_is_reachable_for_any_http_response_including_404() {
         let addr = spawn_ollama_server_status("HTTP/1.1 404 Not Found", "");
         let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
         };
         let result = adapter.check().await;

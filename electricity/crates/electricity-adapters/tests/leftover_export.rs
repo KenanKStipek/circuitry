@@ -134,7 +134,7 @@ async fn the_leftover_export_behaves_per_scripted_replies_md_7() {
     let export_path = dir.join("export-real.json");
     unsafe { set_export_var(&export_path.to_string_lossy()) };
 
-    let a = electricity_adapters::scripted::build_scripted(&{
+    let a = electricity_adapters::scripted::build_scripted("scripted", &{
         let mut cfg = electricity_value::Dict::new();
         cfg.insert(
             Value::Str("replies_file".to_string()),
@@ -143,7 +143,7 @@ async fn the_leftover_export_behaves_per_scripted_replies_md_7() {
         Value::Dict(cfg)
     })
     .unwrap();
-    let b = electricity_adapters::scripted::build_scripted(&{
+    let b = electricity_adapters::scripted::build_scripted("scripted", &{
         let mut cfg = electricity_value::Dict::new();
         cfg.insert(Value::Str("replies_file".to_string()), Value::Str(replies));
         Value::Dict(cfg)

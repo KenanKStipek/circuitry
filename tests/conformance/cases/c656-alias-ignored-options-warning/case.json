@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #656: an alias of any adapter, the ignored-options warning",
+  "description": "A `scripted` alias with `temperature` set: the ignored-options warning names the alias, not `scripted`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -1,0 +1,6 @@
+name: c656-alias-config-errors
+model: m
+effects:
+  - type: prompt
+    name: e
+    template: "x"

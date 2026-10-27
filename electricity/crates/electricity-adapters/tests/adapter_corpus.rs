@@ -357,7 +357,8 @@ fn ollama_outcome_interpretation_matches_circuitry() {
         let timeout_seconds = u32_val(get(case, "timeout_seconds"));
         let base_url = get(case, "base_url").as_str().unwrap();
         let url = format!("{base_url}/api/generate");
-        let actual = ollama::interpret_outcome(&outcome, model, timeout_seconds, base_url, &url);
+        let actual =
+            ollama::interpret_outcome("ollama", &outcome, model, timeout_seconds, base_url, &url);
         let expected = expected_from_result(get(case, "result"));
         assert_matches_expected(actual, &expected, &format!("ollama outcome {case:?}"));
     }
@@ -550,6 +551,7 @@ fn replicate_outcome_interpretation_matches_circuitry() {
         let wait = i64_opt(get(case, "wait")).unwrap();
         let options = GenerateOptions::default();
         let actual = replicate::interpret_outcome(
+            "replicate",
             &outcome,
             model,
             "https://api.replicate.com/v1/models/meta/llama/predictions",

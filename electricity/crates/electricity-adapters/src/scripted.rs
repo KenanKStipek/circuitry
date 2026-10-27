@@ -642,13 +642,16 @@ struct Inner {
 /// chain, or more than one `runtime.adapters.*` block naming
 /// `scripted`) each load their own, independent copy.
 pub struct ScriptedAdapter {
+    /// `scripted`, or an alias's own name (#656).
+    name: String,
     replies_file: Value,
     inner: Mutex<Inner>,
 }
 
 impl ScriptedAdapter {
-    fn new(replies_file: Value) -> Self {
+    fn new(name: &str, replies_file: Value) -> Self {
         ScriptedAdapter {
+            name: name.to_string(),
             replies_file,
             inner: Mutex::new(Inner {
                 queues: None,
@@ -704,7 +707,7 @@ impl ScriptedAdapter {
 #[async_trait(?Send)]
 impl Adapter for ScriptedAdapter {
     fn name(&self) -> &str {
-        "scripted"
+        &self.name
     }
 
     async fn generate(
@@ -758,7 +761,7 @@ impl Adapter for ScriptedAdapter {
                     tokens_sent,
                     tokens_received,
                     finish_reason,
-                    warnings: crate::ignored_options_warning("scripted", options, &[]),
+                    warnings: crate::ignored_options_warning(&self.name, options, &[]),
                     cost_usd: None,
                 })
             }
@@ -802,8 +805,11 @@ impl Adapter for ScriptedAdapter {
 }
 
 /// `adapters/factory.py::_build_scripted`.
-pub fn build_scripted(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(Box::new(ScriptedAdapter::new(resolved_replies_file(cfg))))
+pub fn build_scripted(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+    Ok(Box::new(ScriptedAdapter::new(
+        name,
+        resolved_replies_file(cfg),
+    )))
 }
 
 #[cfg(test)]
@@ -862,7 +868,8 @@ mod tests {
     async fn the_spec_example_answers_three_paths_in_order() {
         let yaml = "prime.left:\n  - text: \"left reply\"\n    tokens_sent: 3\n    tokens_received: 1\nprime.right:\n  - text: \"right reply\"\n    tokens_sent: 5\n    tokens_received: 2\nprime.flaky:\n  - error:\n      kind: server_error\n  - text: \"recovered\"\n    tokens_sent: 4\n    tokens_received: 6\n";
         let (_dir, file) = write_replies(yaml, ".yaml");
-        let adapter = ScriptedAdapter::new(Value::Str(file.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
         let token = CancellationToken::new();
 
         let left_path = EffectPath::root().push_name("left");
@@ -913,7 +920,8 @@ mod tests {
      {
         let yaml = "prime.shots.iter_2.describe:\n  - text: \"a cat sitting on a mat\"\nprime.first.answer:\n  - text: \"nested\"\n";
         let (_dir, file) = write_replies(yaml, ".yaml");
-        let adapter = ScriptedAdapter::new(Value::Str(file.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
         let token = CancellationToken::new();
 
         let mut pass_indices = std::collections::HashMap::new();
@@ -951,7 +959,8 @@ mod tests {
     #[tokio::test]
     async fn an_unmatched_path_fails_without_naming_the_replies_file() {
         let (_dir, file) = write_replies("prime.known:\n  - text: \"x\"\n", ".yaml");
-        let adapter = ScriptedAdapter::new(Value::Str(file.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
         let token = CancellationToken::new();
         let path = EffectPath::root().push_name("unknown");
         let err = adapter
@@ -976,8 +985,8 @@ mod tests {
         let (_dir, file) =
             write_replies("prime.x:\n  - text: \"one\"\n  - text: \"two\"\n", ".yaml");
         let path_str = file.to_string_lossy().into_owned();
-        let a = ScriptedAdapter::new(Value::Str(path_str.clone()));
-        let b = ScriptedAdapter::new(Value::Str(path_str));
+        let a = ScriptedAdapter::new("scripted", Value::Str(path_str.clone()));
+        let b = ScriptedAdapter::new("scripted", Value::Str(path_str));
         let token = CancellationToken::new();
         let path = EffectPath::root().push_name("x");
 
@@ -1008,7 +1017,8 @@ mod tests {
     #[tokio::test]
     async fn ignored_options_warning_lists_every_set_field_scripted_honours_none_of() {
         let (_dir, file) = write_replies("prime.x:\n  - text: \"ok\"\n", ".yaml");
-        let adapter = ScriptedAdapter::new(Value::Str(file.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
         let token = CancellationToken::new();
         let path = EffectPath::root().push_name("x");
         let options = GenerateOptions {
@@ -1028,7 +1038,8 @@ mod tests {
     #[tokio::test]
     async fn check_succeeds_on_a_well_formed_file_and_fails_on_a_malformed_one() {
         let (_good_dir, good) = write_replies("prime.x:\n  - text: \"ok\"\n", ".yaml");
-        let adapter = ScriptedAdapter::new(Value::Str(good.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(good.to_string_lossy().into_owned()));
         let result = adapter.check().await;
         assert!(result.ok);
         assert!(result.message.is_none());
@@ -1036,7 +1047,8 @@ mod tests {
         let (_bad_dir, bad) = write_replies("not a mapping\n", ".yaml");
         // A plain scalar document parses as a YAML string, not a
         // mapping -- `_parse_replies` rejects it.
-        let adapter = ScriptedAdapter::new(Value::Str(bad.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(bad.to_string_lossy().into_owned()));
         let result = adapter.check().await;
         assert!(!result.ok);
         assert!(result.missing.is_empty());
@@ -1057,7 +1069,7 @@ mod tests {
         // `check() raised {type(exc).__name__}: {exc}` text `call_check`
         // builds, rather than leaving it indistinguishable from an
         // ordinary `ScriptedRepliesError` result.
-        let adapter = ScriptedAdapter::new(Value::Int(IntValue::Small(5)));
+        let adapter = ScriptedAdapter::new("scripted", Value::Int(IntValue::Small(5)));
         let result = adapter.check().await;
         assert!(!result.ok);
         assert!(result.missing.is_empty());
@@ -1071,7 +1083,8 @@ mod tests {
     async fn check_folds_a_unicode_decode_error_the_way_preflights_call_check_does() {
         let (_dir, file) = write_replies("placeholder", ".yaml");
         std::fs::write(&file, [0xffu8, 0xfe]).unwrap();
-        let adapter = ScriptedAdapter::new(Value::Str(file.to_string_lossy().into_owned()));
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
         let result = adapter.check().await;
         assert!(!result.ok);
         assert!(result.missing.is_empty());
@@ -1081,8 +1094,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_replies_file_is_a_scripted_replies_error_naming_the_errno() {
-        let adapter =
-            ScriptedAdapter::new(Value::Str("/nonexistent/path/to/replies.yaml".to_string()));
+        let adapter = ScriptedAdapter::new(
+            "scripted",
+            Value::Str("/nonexistent/path/to/replies.yaml".to_string()),
+        );
         let token = CancellationToken::new();
         let path = EffectPath::root().push_name("x");
         let err = adapter
@@ -1101,7 +1116,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_truthy_non_string_replies_file_fails_at_load_time_not_build_time() {
-        let adapter = ScriptedAdapter::new(Value::Int(IntValue::Small(5)));
+        let adapter = ScriptedAdapter::new("scripted", Value::Int(IntValue::Small(5)));
         let token = CancellationToken::new();
         let path = EffectPath::root().push_name("x");
         let err = adapter
@@ -1122,7 +1137,7 @@ mod tests {
 
     #[test]
     fn build_scripted_defaults_a_falsy_replies_file_to_the_conventional_name() {
-        let adapter = build_scripted(&Value::Dict(Dict::new())).unwrap();
+        let adapter = build_scripted("scripted", &Value::Dict(Dict::new())).unwrap();
         // Only observable indirectly: `name()` is stable regardless.
         assert_eq!(adapter.name(), "scripted");
     }

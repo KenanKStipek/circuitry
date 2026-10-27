@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import re
@@ -40,50 +41,58 @@ from .vllm import VllmAdapter
 from .watsonx import WatsonXAdapter
 from .xai import XaiAdapter
 
-AdapterBuilder = Callable[[dict[str, Any]], Adapter]
+#: A builder takes the per-adapter config dict and the name the built
+#: instance should report (its own registry name, or an alias's).
+AdapterBuilder = Callable[..., Adapter]
 
 
-def _build_ollama(cfg: dict[str, Any]) -> Adapter:
-    return OllamaAdapter(base_url=cfg.get("base_url") or "http://localhost:11434")
+def _build_ollama(cfg: dict[str, Any], name: str = "ollama") -> Adapter:
+    return OllamaAdapter(name=name, base_url=cfg.get("base_url") or "http://localhost:11434")
 
 
-def _build_openai(cfg: dict[str, Any]) -> Adapter:
+def _build_openai(cfg: dict[str, Any], name: str = "openai") -> Adapter:
     return OpenAIAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.openai.com/v1",
         default_model=cfg.get("default_model") or "gpt-4o-mini",
     )
 
 
-def _build_anthropic(cfg: dict[str, Any]) -> Adapter:
+def _build_anthropic(cfg: dict[str, Any], name: str = "anthropic") -> Adapter:
     return AnthropicAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.anthropic.com",
         default_model=cfg.get("default_model") or AnthropicAdapter.default_model,
         max_tokens=int(cfg.get("max_tokens") or 4096),
     )
 
 
-def _litellm_timeout_raw(cfg: dict[str, Any]) -> Any:
+def _litellm_timeout_raw(cfg: dict[str, Any], *, adapter_name: str = "litellm") -> Any:
     """``cfg["timeout_seconds"]``, falling back to the deprecated ``timeout``
     alias (warns once per call site) so an existing config keeps working.
     Shared between :func:`_build_litellm` and
     :func:`configured_timeout_seconds` — a per-attempt dispatch
     (``core.prompt._attempt_timeout_seconds``) and the run default
     (``cli.runtime_shim``) both need the same alias resolved, not just the
-    adapter instance's own default.
+    adapter instance's own default. ``adapter_name`` names whichever block
+    *cfg* came from — an alias of litellm names its own block, not litellm's.
     """
     raw = cfg.get("timeout_seconds")
     if raw is None and cfg.get("timeout") is not None:
         raw = cfg.get("timeout")
         logging.getLogger(__name__).warning(
-            "runtime.adapters.litellm.timeout is deprecated; use "
-            "runtime.adapters.litellm.timeout_seconds instead."
+            "runtime.adapters.%s.timeout is deprecated; use "
+            "runtime.adapters.%s.timeout_seconds instead.",
+            adapter_name,
+            adapter_name,
         )
     return raw
 
 
-def _build_litellm(cfg: dict[str, Any]) -> Adapter:
-    timeout_raw = _litellm_timeout_raw(cfg)
+def _build_litellm(cfg: dict[str, Any], name: str = "litellm") -> Adapter:
+    timeout_raw = _litellm_timeout_raw(cfg, adapter_name=name)
     return LiteLLMAdapter(
+        name=name,
         default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
         api_base=cfg.get("api_base") or "",
         timeout=int(timeout_raw or 120),
@@ -108,8 +117,10 @@ def configured_timeout_seconds(adapter_name: str, runtime: dict[str, Any] | None
     adapters_cfg = (runtime or {}).get("adapters") or {}
     cfg = adapters_cfg.get(name) or {}
     raw = cfg.get("timeout_seconds")
-    if raw is None and name == "litellm":
-        raw = _litellm_timeout_raw(cfg)
+    target = cfg.get("adapter")
+    effective_name = target.strip().lower() if isinstance(target, str) else name
+    if raw is None and effective_name == "litellm":
+        raw = _litellm_timeout_raw(cfg, adapter_name=name)
     if raw is None:
         return None
     try:
@@ -119,8 +130,9 @@ def configured_timeout_seconds(adapter_name: str, runtime: dict[str, Any] | None
     return value if value > 0 else None
 
 
-def _build_gemini(cfg: dict[str, Any]) -> Adapter:
+def _build_gemini(cfg: dict[str, Any], name: str = "gemini") -> Adapter:
     return GeminiAdapter(
+        name=name,
         base_url=cfg.get("base_url")
         or "https://generativelanguage.googleapis.com/v1beta/openai",
         default_model=cfg.get("default_model") or "gemini-2.5-flash",
@@ -130,127 +142,145 @@ def _build_gemini(cfg: dict[str, Any]) -> Adapter:
 # OpenAI-compatible adapters share the same shape: per-provider defaults
 # baked into the dataclass, runtime config can override base_url and
 # default_model. Network transport is in adapters/_openai_compat.py.
-def _build_groq(cfg: dict[str, Any]) -> Adapter:
+def _build_groq(cfg: dict[str, Any], name: str = "groq") -> Adapter:
     return GroqAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.groq.com/openai/v1",
         default_model=cfg.get("default_model") or "llama-3.3-70b-versatile",
     )
 
 
-def _build_openrouter(cfg: dict[str, Any]) -> Adapter:
+def _build_openrouter(cfg: dict[str, Any], name: str = "openrouter") -> Adapter:
     return OpenRouterAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://openrouter.ai/api/v1",
         default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
     )
 
 
-def _build_perplexity(cfg: dict[str, Any]) -> Adapter:
+def _build_perplexity(cfg: dict[str, Any], name: str = "perplexity") -> Adapter:
     return PerplexityAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.perplexity.ai",
         default_model=cfg.get("default_model") or "sonar",
     )
 
 
-def _build_xai(cfg: dict[str, Any]) -> Adapter:
+def _build_xai(cfg: dict[str, Any], name: str = "xai") -> Adapter:
     return XaiAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.x.ai/v1",
         default_model=cfg.get("default_model") or "grok-2-latest",
     )
 
 
-def _build_deepseek(cfg: dict[str, Any]) -> Adapter:
+def _build_deepseek(cfg: dict[str, Any], name: str = "deepseek") -> Adapter:
     return DeepSeekAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.deepseek.com/v1",
         default_model=cfg.get("default_model") or "deepseek-chat",
     )
 
 
-def _build_together(cfg: dict[str, Any]) -> Adapter:
+def _build_together(cfg: dict[str, Any], name: str = "together") -> Adapter:
     return TogetherAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.together.xyz/v1",
         default_model=cfg.get("default_model")
         or "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     )
 
 
-def _build_fireworks(cfg: dict[str, Any]) -> Adapter:
+def _build_fireworks(cfg: dict[str, Any], name: str = "fireworks") -> Adapter:
     return FireworksAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.fireworks.ai/inference/v1",
         default_model=cfg.get("default_model")
         or "accounts/fireworks/models/llama-v3p3-70b-instruct",
     )
 
 
-def _build_nvidia_nim(cfg: dict[str, Any]) -> Adapter:
+def _build_nvidia_nim(cfg: dict[str, Any], name: str = "nvidia-nim") -> Adapter:
     # api_key_env: empty string is a valid explicit override (self-hosted
     # NIM containers don't need a key); only fall back to the default
     # when the field is absent entirely. A plain ``or`` would coerce the
     # intentional empty string back to NIM_API_KEY.
     api_key_env = cfg.get("api_key_env", "NIM_API_KEY")
     return NvidiaNimAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://integrate.api.nvidia.com/v1",
         default_model=cfg.get("default_model") or "meta/llama-3.3-70b-instruct",
         api_key_env=api_key_env if api_key_env is not None else "NIM_API_KEY",
     )
 
 
-def _build_vllm(cfg: dict[str, Any]) -> Adapter:
+def _build_vllm(cfg: dict[str, Any], name: str = "vllm") -> Adapter:
     return VllmAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "http://localhost:8000/v1",
         default_model=cfg.get("default_model") or "",
     )
 
 
-def _build_llamacpp(cfg: dict[str, Any]) -> Adapter:
+def _build_llamacpp(cfg: dict[str, Any], name: str = "llamacpp") -> Adapter:
     return LlamaCppAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "http://localhost:8080/v1",
         default_model=cfg.get("default_model") or "",
     )
 
 
-def _build_lmstudio(cfg: dict[str, Any]) -> Adapter:
+def _build_lmstudio(cfg: dict[str, Any], name: str = "lmstudio") -> Adapter:
     return LMStudioAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "http://localhost:1234/v1",
         default_model=cfg.get("default_model") or "",
     )
 
 
-def _build_mistral(cfg: dict[str, Any]) -> Adapter:
+def _build_mistral(cfg: dict[str, Any], name: str = "mistral") -> Adapter:
     return MistralAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.mistral.ai/v1",
         default_model=cfg.get("default_model") or "mistral-large-latest",
     )
 
 
-def _build_ai21(cfg: dict[str, Any]) -> Adapter:
+def _build_ai21(cfg: dict[str, Any], name: str = "ai21") -> Adapter:
     return AI21Adapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.ai21.com/studio/v1",
         default_model=cfg.get("default_model") or "jamba-large",
     )
 
 
-def _build_huggingface_inference(cfg: dict[str, Any]) -> Adapter:
+def _build_huggingface_inference(
+    cfg: dict[str, Any], name: str = "huggingface-inference"
+) -> Adapter:
     return HuggingFaceInferenceAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://router.huggingface.co/v1",
         default_model=cfg.get("default_model")
         or "meta-llama/Llama-3.3-70B-Instruct",
     )
 
 
-def _build_tgi(cfg: dict[str, Any]) -> Adapter:
+def _build_tgi(cfg: dict[str, Any], name: str = "tgi") -> Adapter:
     api_key_env = cfg.get("api_key_env", "")
     return TgiAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "http://localhost:3000/v1",
         default_model=cfg.get("default_model") or "",
         api_key_env=api_key_env if api_key_env is not None else "",
     )
 
 
-def _build_cyberdiner(cfg: dict[str, Any]) -> Adapter:
+def _build_cyberdiner(cfg: dict[str, Any], name: str = "cyberdiner") -> Adapter:
     raw_valid_tiers = cfg.get("valid_tiers") or ()
     if isinstance(raw_valid_tiers, str):
         raw_valid_tiers = (raw_valid_tiers,)
     return CyberdinerAdapter(
+        name=name,
         expo_url=cfg.get("expo_url") or "",
         token=cfg.get("token") or "",
         default_tier=cfg.get("default_tier") or "cheap",
@@ -263,31 +293,37 @@ def _build_cyberdiner(cfg: dict[str, Any]) -> Adapter:
     )
 
 
-def _build_databricks(cfg: dict[str, Any]) -> Adapter:
+def _build_databricks(cfg: dict[str, Any], name: str = "databricks") -> Adapter:
     return DatabricksAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "",
         default_model=cfg.get("default_model")
         or "databricks-meta-llama-3-3-70b-instruct",
     )
 
 
-def _build_qwen_dashscope(cfg: dict[str, Any]) -> Adapter:
+def _build_qwen_dashscope(cfg: dict[str, Any], name: str = "qwen-dashscope") -> Adapter:
     return QwenDashScopeAdapter(
+        name=name,
         base_url=cfg.get("base_url")
         or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         default_model=cfg.get("default_model") or "qwen-max",
     )
 
 
-def _build_cohere(cfg: dict[str, Any]) -> Adapter:
+def _build_cohere(cfg: dict[str, Any], name: str = "cohere") -> Adapter:
     return CohereAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.cohere.com",
         default_model=cfg.get("default_model") or "command-r-plus",
     )
 
 
-def _build_cloudflare_workers_ai(cfg: dict[str, Any]) -> Adapter:
+def _build_cloudflare_workers_ai(
+    cfg: dict[str, Any], name: str = "cloudflare-workers-ai"
+) -> Adapter:
     return CloudflareWorkersAIAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "",
         account_id=cfg.get("account_id") or "",
         default_model=cfg.get("default_model")
@@ -295,23 +331,26 @@ def _build_cloudflare_workers_ai(cfg: dict[str, Any]) -> Adapter:
     )
 
 
-def _build_azure_openai(cfg: dict[str, Any]) -> Adapter:
+def _build_azure_openai(cfg: dict[str, Any], name: str = "azure-openai") -> Adapter:
     return AzureOpenAIAdapter(
+        name=name,
         endpoint=cfg.get("endpoint") or cfg.get("base_url") or "",
         api_version=cfg.get("api_version") or "2024-10-21",
         default_model=cfg.get("default_model") or "",
     )
 
 
-def _build_replicate(cfg: dict[str, Any]) -> Adapter:
+def _build_replicate(cfg: dict[str, Any], name: str = "replicate") -> Adapter:
     return ReplicateAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "https://api.replicate.com/v1",
         default_model=cfg.get("default_model") or "meta/meta-llama-3-70b-instruct",
     )
 
 
-def _build_watsonx(cfg: dict[str, Any]) -> Adapter:
+def _build_watsonx(cfg: dict[str, Any], name: str = "watsonx") -> Adapter:
     return WatsonXAdapter(
+        name=name,
         base_url=cfg.get("base_url") or "",
         default_model=cfg.get("default_model")
         or "meta-llama/llama-3-3-70b-instruct",
@@ -336,9 +375,6 @@ def _string_list(
 
 #: What a variable name in ``env`` must look like.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-#: The adapters an alias may be based on: the coding-agent CLIs.
-CLI_ALIAS_BASES: tuple[str, ...] = ("claude_code", "pi")
 
 
 def _env_pairs(cfg: dict[str, Any], *, adapter_name: str) -> tuple[tuple[str, str], ...]:
@@ -395,13 +431,14 @@ def _build_claude_code(cfg: dict[str, Any], name: str = "claude_code") -> Adapte
     )
 
 
-def _build_scripted(cfg: dict[str, Any]) -> Adapter:
+def _build_scripted(cfg: dict[str, Any], name: str = "scripted") -> Adapter:
     return ScriptedAdapter(
-        replies_file=cfg.get("replies_file") or "scripted-replies.yaml"
+        name=name,
+        replies_file=cfg.get("replies_file") or "scripted-replies.yaml",
     )
 
 
-def _build_host_claude(cfg: dict[str, Any]) -> Adapter:
+def _build_host_claude(cfg: dict[str, Any], name: str = "host_claude") -> Adapter:
     raise RuntimeError(
         "host_claude cannot be built from config; it requires a "
         "request_handler injected at runtime via RunRequest.adapter "
@@ -454,13 +491,6 @@ def _supported_names() -> tuple[str, ...]:
     return tuple(sorted(ADAPTER_REGISTRY.keys()))
 
 
-#: What builds an alias, by its base: the base's own builder, given the alias's name.
-_ALIAS_BUILDERS: dict[str, Callable[[dict[str, Any], str], Adapter]] = {
-    "claude_code": _build_claude_code,
-    "pi": _build_pi,
-}
-
-
 def alias_names(runtime: dict[str, Any] | None) -> tuple[str, ...]:
     """Every ``runtime.adapters`` entry that sets ``adapter``, whether or not it is
     a valid alias (building it reports what is wrong)."""
@@ -486,11 +516,25 @@ def is_known_adapter(adapter_name: str, runtime: dict[str, Any] | None) -> bool:
     return True
 
 
-def _build_alias(name: str, cfg: dict[str, Any], adapters_cfg: dict[str, Any]) -> Adapter:
-    """The base adapter built from the alias's own settings, under the alias's name.
+def alias_config_errors(runtime: dict[str, Any] | None) -> list[str]:
+    """Why each alias in *runtime* does not build, in name order; ``[]`` when
+    all do. Every alias in the merged runtime is checked up front here,
+    whether or not any effect actually selects it."""
+    errors: list[str] = []
+    for name in sorted(alias_names(runtime)):
+        try:
+            build_adapter(adapter_name=name, runtime=runtime or {})
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors
 
-    The base's own ``runtime.adapters`` entry is not consulted: an alias
-    starts from nothing, so it never touches the base's config or another
+
+def _build_alias(name: str, cfg: dict[str, Any], adapters_cfg: dict[str, Any]) -> Adapter:
+    """The target adapter built from the alias's own settings, under the
+    alias's name.
+
+    The target's own ``runtime.adapters`` entry is not consulted: an alias
+    starts from nothing, so it never touches the target's config or another
     alias's.
     """
     if name in ADAPTER_REGISTRY:
@@ -498,19 +542,36 @@ def _build_alias(name: str, cfg: dict[str, Any], adapters_cfg: dict[str, Any]) -
             f"runtime.adapters.{name}.adapter is set, but {name!r} is a built-in "
             "adapter; an alias needs a name of its own"
         )
-    raw_base = cfg.get("adapter")
-    base = raw_base.strip().lower() if isinstance(raw_base, str) else None
-    if base not in CLI_ALIAS_BASES:
-        base_entry = adapters_cfg.get(base) if base is not None else None
-        itself_alias = (
-            base not in ADAPTER_REGISTRY and isinstance(base_entry, dict) and "adapter" in base_entry
-        )
+    raw_target = cfg.get("adapter")
+    target = raw_target.strip().lower() if isinstance(raw_target, str) else None
+    if target not in ADAPTER_REGISTRY:
+        target_entry = adapters_cfg.get(target) if target is not None else None
+        itself_alias = isinstance(target_entry, dict) and "adapter" in target_entry
         raise ValueError(
-            f"runtime.adapters.{name}.adapter must be claude_code or pi, got {raw_base!r}"
+            f"runtime.adapters.{name}.adapter must name a built-in adapter, got {raw_target!r}"
             + (", which is itself an alias" if itself_alias else "")
         )
+    if target == "host_claude":
+        raise ValueError(
+            f"runtime.adapters.{name}.adapter cannot be 'host_claude': it is "
+            "supplied at run time by circuitry-mcp, never built from config"
+        )
     settings = {key: value for key, value in cfg.items() if key != "adapter"}
-    return _ALIAS_BUILDERS[base](settings, name)
+    builder = ADAPTER_REGISTRY[target]
+    if "name" not in inspect.signature(builder).parameters:
+        raise ValueError(
+            f"runtime.adapters.{name}.adapter targets {target!r}, which cannot be aliased"
+        )
+    try:
+        return builder(settings, name=name)
+    except (ValueError, TypeError) as exc:
+        message = str(exc)
+        prefix = f"runtime.adapters.{name}"
+        # The CLI builders' own env/unset_env/extra_args errors already
+        # name the alias's block (they take adapter_name=name); only a
+        # builder's unlabelled error (e.g. int()'s own message) needs it
+        # added.
+        raise ValueError(message if message.startswith(prefix) else f"{prefix}: {message}") from exc
 
 
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
@@ -519,10 +580,11 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
 
     Adapters register themselves in ADAPTER_REGISTRY: a dict from canonical
     lower-case name to a builder callable that takes the per-adapter config
-    dict (read from runtime.adapters.<adapter_name>) and returns an Adapter.
+    dict (read from runtime.adapters.<adapter_name>) and the name the built
+    instance should report, and returns an Adapter.
 
     A ``runtime.adapters.<name>`` entry that sets ``adapter`` is an alias of
-    ``claude_code`` or ``pi``: see :func:`_build_alias`.
+    any built-in adapter except host_claude: see :func:`_build_alias`.
 
     host_claude is a registered name but its builder raises RuntimeError —
     it can only be supplied via RunRequest.adapter at runtime.

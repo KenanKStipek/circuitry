@@ -190,14 +190,17 @@ fn build_attempts(
     attempts
 }
 
-/// Issue #498 ruling 4: *name* is Circuitry-known (`electricity_vm::
+/// Issue #498 ruling 4: *name* (already resolved through its alias
+/// target, if any -- #656) is Circuitry-known (`electricity_vm::
 /// adapter_names::ADAPTER_NAMES`) but this build has no builder for it
 /// at all -- never an ordinary "unknown adapter" failure, a fatal
 /// refusal instead.
 fn is_unbuildable(name: &str, run_ctx: &RunContext<'_>) -> bool {
-    let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
-    crate::adapter_names::ADAPTER_NAMES.contains(&normalized.as_str())
-        && !run_ctx.adapters.supported_names().contains(&normalized)
+    crate::adapter_names::ADAPTER_NAMES.contains(&name)
+        && !run_ctx
+            .adapters
+            .supported_names()
+            .contains(&name.to_string())
 }
 
 /// `allowlist_gate.py::allowed_adapters` -- the run's `enabled_adapters`,
@@ -483,13 +486,17 @@ async fn generate_with_fallbacks(
         if token.is_set() {
             return Err(HardStop::Refused(VmError::Cancelled));
         }
-        if is_unbuildable(adapter_name, run_ctx) {
+        // Resolved alias -> target before the check (#656): a used
+        // alias of `litellm` gets the same refusal a direct `provider:
+        // litellm` gets, naming `litellm`, not the alias.
+        let normalized_name = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
+        let resolved_name = crate::adapter::alias_target(&normalized_name, run_ctx.runtime_config)
+            .unwrap_or(normalized_name);
+        if is_unbuildable(&resolved_name, run_ctx) {
             return Err(HardStop::Refused(VmError::Refused {
                 refusal: electricity_bytecode::Refusal {
                     path: op_path.clone(),
-                    reason: electricity_bytecode::RefusalReason::UnsupportedAdapter(
-                        adapter_name.clone(),
-                    ),
+                    reason: electricity_bytecode::RefusalReason::UnsupportedAdapter(resolved_name),
                 },
                 child_label: None,
             }));

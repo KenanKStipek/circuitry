@@ -193,10 +193,18 @@ the model. Which binary runs is
 set (see [What a document can set](guidebook/04-configuration.md#what-a-document-can-set)).
 An alias of either adapter (`runtime.adapters.<alias>.adapter`) can add
 variables to that child's environment (`env`), for instance a config
-directory that selects another login. That is the same host-setting
-boundary: a limited document cannot define an alias, and `env` values are
-blanked in the saved `effective_settings` and kept out of events, logs,
-error messages and the "Applied host settings" notice.
+directory that selects another login. An alias's target is not limited to
+`claude_code`/`pi` — it can name any adapter except `host_claude` (supplied
+at run time by `circuitry-mcp`, never built from config), so the same
+boundary covers an alias of, say, `openai` pointed at a different
+`base_url`. That is the same host-setting boundary: a limited document
+cannot define or retarget an alias, and `env` values are blanked in the
+saved `effective_settings` and kept out of events, logs, error messages
+and the "Applied host settings" notice. With `enabled_adapters` set, a
+document — trusted or not — cannot define or retarget an adapter alias at
+all, even one already on the allowlist: without that rule, a trusted
+document could point an allowlisted alias at an adapter the allowlist
+doesn't list, such as `openai` with its own credential.
 
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s

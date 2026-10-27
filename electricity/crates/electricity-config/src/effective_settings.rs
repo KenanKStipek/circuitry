@@ -134,6 +134,61 @@ fn ceiling_intersected_paths(cfg: &CircuitryConfig) -> Vec<String> {
         .collect()
 }
 
+/// `_strip_disallowed_adapter_retargets` (#656): drop a document's
+/// `adapters.<name>.adapter` key when `enabled_adapters` is set --
+/// only config may then define or retarget an adapter alias, or a
+/// trusted document (every document electricity runs is trusted --
+/// this module's own doc comment) could point an allowlisted alias at
+/// an adapter the allowlist doesn't list. Without `enabled_adapters`,
+/// a document keeps its current power. Other keys in the same block
+/// (a `base_url` override, say) are untouched.
+fn strip_disallowed_adapter_retargets(
+    orch_runtime: &Dict,
+    enabled_adapters: Option<&[String]>,
+    document_name: Option<&str>,
+) -> (Dict, Vec<String>) {
+    if enabled_adapters.is_none() {
+        return (orch_runtime.clone(), Vec::new());
+    }
+    let Some(adapters) = orch_runtime
+        .get(&Value::Str("adapters".to_string()))
+        .and_then(Value::as_dict)
+    else {
+        return (orch_runtime.clone(), Vec::new());
+    };
+    let source = document_name.unwrap_or("the orchestration");
+    let mut warnings = Vec::new();
+    let mut filtered = Dict::new();
+    for (name, entry) in adapters {
+        let name_str = name.as_str().unwrap_or_default();
+        if let Some(entry_dict) = entry.as_dict() {
+            if entry_dict.contains_key(&Value::Str("adapter".to_string())) {
+                warnings.push(format!(
+                    "runtime.adapters.{name_str}.adapter from {source} ignored: with \
+                     enabled_adapters set, only config defines adapter aliases"
+                ));
+                let mut remainder = entry_dict.clone();
+                remainder.shift_remove(&Value::Str("adapter".to_string()));
+                if !remainder.is_empty() {
+                    filtered.insert(name.clone(), Value::Dict(remainder));
+                }
+                continue;
+            }
+        }
+        filtered.insert(name.clone(), entry.clone());
+    }
+    if warnings.is_empty() {
+        return (orch_runtime.clone(), Vec::new());
+    }
+    let mut result = orch_runtime.clone();
+    if filtered.is_empty() {
+        result.shift_remove(&Value::Str("adapters".to_string()));
+    } else {
+        result.insert(Value::Str("adapters".to_string()), Value::Dict(filtered));
+    }
+    (result, warnings)
+}
+
 /// `_applied_host_settings_notice`.
 fn applied_host_settings_notice(
     orch_runtime: &Dict,
@@ -411,16 +466,24 @@ pub fn effective_settings_with_profile(
 
     let orch_plugins = orchestration_plugins(doc_dict)?;
     let orch_runtime = orchestration_runtime(doc_dict)?;
+    let (orch_runtime, alias_retarget_warnings) = strip_disallowed_adapter_retargets(
+        &orch_runtime,
+        config.enabled_adapters.as_deref(),
+        document_name,
+    );
 
     // Every document electricity runs is trusted (this module's own doc
     // comment) -- the "Applied host settings" notice, never the dropped-
-    // key warnings an untrusted document would add.
+    // key warnings an untrusted document would add. Ahead of the alias-
+    // retarget warnings below, matching `resolve_effective_settings`'s
+    // own order.
     warnings.extend(applied_host_settings_notice(
         &orch_runtime,
         &orch_plugins,
         config,
         document_name,
     ));
+    warnings.extend(alias_retarget_warnings);
 
     // plugins: config's own list, then the orchestration's (trusted, so
     // kept whole), deduplicated in that order; every entry must be a

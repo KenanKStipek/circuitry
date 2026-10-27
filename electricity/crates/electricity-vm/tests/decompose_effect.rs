@@ -138,7 +138,9 @@ fn registry_with_scripted() -> AdapterRegistry {
     let mut adapters = AdapterRegistry::new();
     adapters.register(
         "scripted",
-        Box::new(|_cfg| Ok(Box::new(FakeAdapter::new("scripted", Vec::new())) as Box<dyn Adapter>)),
+        Box::new(|_name, _cfg| {
+            Ok(Box::new(FakeAdapter::new("scripted", Vec::new())) as Box<dyn Adapter>)
+        }),
     );
     adapters
 }

@@ -1,0 +1,8 @@
+name: c656-alias-preflight-soft
+adapter: groq_alt
+model: m
+effects:
+  - type: prompt
+    name: ask
+    on_error: skip
+    template: "hi"
