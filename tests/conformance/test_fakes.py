@@ -155,6 +155,10 @@ def test_sleep_exits_by_itself_once_orphaned() -> None:
     fake_pid = int(parent.stdout.readline())
     exited = False
     try:
+        # Let the fake reach its sleep loop first: one that starts after its
+        # parent died would be adopted by a subreaper on some systems and
+        # could then only stop at its deadline.
+        time.sleep(0.5)
         parent.kill()  # SIGKILL: the parent never gets to stop its child
         parent.wait(timeout=5)
         deadline = time.monotonic() + 5
