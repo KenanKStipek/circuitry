@@ -353,11 +353,30 @@ class _StateEvaluator(Evaluator):
                 return member_list
             name = method_name_token.value
             if name == "map":
-                sub_expr = self.build_macro_eval(tree)
-                return celtypes.ListType(map(sub_expr, member_list))
+                # build_ss_macro_eval (not build_macro_eval), matching all/exists
+                # below: the base build_macro_eval's sub_expr *raises* a
+                # CELEvalError, which would escape list construction as a
+                # Python exception instead of a value, bypassing the
+                # enclosing &&/|| and reaching strict/the unset-path rule
+                # directly rather than letting the operator decide.
+                sub_expr = self.build_ss_macro_eval(tree)
+                mapped: list[Any] = []
+                for item in member_list:
+                    value = sub_expr(item)
+                    if isinstance(value, CELEvalError):
+                        return value
+                    mapped.append(value)
+                return celtypes.ListType(mapped)
             if name == "filter":
-                sub_expr = self.build_macro_eval(tree)
-                return celtypes.ListType(filter(sub_expr, member_list))
+                sub_expr = self.build_ss_macro_eval(tree)
+                filtered: list[Any] = []
+                for item in member_list:
+                    value = sub_expr(item)
+                    if isinstance(value, CELEvalError):
+                        return value
+                    if value:
+                        filtered.append(item)
+                return celtypes.ListType(filtered)
             if name in ("all", "exists"):
                 sub_expr = self.build_ss_macro_eval(tree)
                 decisive = name == "exists"
@@ -376,8 +395,14 @@ class _StateEvaluator(Evaluator):
                     return last_error
                 return celtypes.BoolType(not decisive)
             if name == "exists_one":
-                sub_expr = self.build_macro_eval(tree)
-                count = sum(1 for value in member_list if bool(sub_expr(value)))
+                sub_expr = self.build_ss_macro_eval(tree)
+                count = 0
+                for item in member_list:
+                    value = sub_expr(item)
+                    if isinstance(value, CELEvalError):
+                        return value
+                    if bool(value):
+                        count += 1
                 return celtypes.BoolType(count == 1)
             if name == "reduce":
                 reduce_expr, init_expr_tree = self.build_reduce_macro_eval(tree)

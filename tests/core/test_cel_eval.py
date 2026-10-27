@@ -709,14 +709,44 @@ class TestUnsetPathFollowsEvaluation:
         ctx = {"input": {"force": True}}
         assert evaluate_cel(expr, ctx, strict=True) is True
 
+    def test_true_or_with_an_errored_map_body_wins_without_a_warning(self, caplog):
+        expr = "true || [1].map(i, state.input.z.y).size() == 1"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_true_or_with_an_errored_filter_body_wins_without_a_warning(self, caplog):
+        expr = "true || state.input.items.filter(i, i > state.input.z.y).size() > 0"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_true_or_with_an_errored_exists_one_body_wins_without_a_warning(self, caplog):
+        expr = "true || state.input.items.exists_one(i, i == state.input.z.y)"
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, self.CTX) is True
+        assert caplog.text == ""
+
+    def test_guarded_filter_body_evaluates_properly(self):
+        expr = (
+            "!has(state.input.a.b) || "
+            "state.input.items.filter(i, i > state.input.a.b.min).size() > 0"
+        )
+        assert evaluate_cel(expr, self.CTX) is True
+
 
 class TestAllExistsDecisiveElement:
-    def test_all_false_element_wins_over_an_earlier_error(self):
+    def test_all_false_element_wins_over_an_earlier_error(self, caplog):
         ctx = {"input": {"items": [1, 2]}}
-        expr = "state.input.items.all(i, i == 1 || state.input.z.y == 1)"
-        # i=1: True (decides "all" nothing); i=2: 2==1 is False, then
-        # state.input.z.y errors (unset) -- False decides "all" overall.
-        assert evaluate_cel(expr, ctx) is False
+        expr = "state.input.items.all(i, i == 1 && state.input.z.y == 1)"
+        # i=1: i == 1 is True, which doesn't decide "&&", so the errored
+        # right-hand side is the element's own result; i=2: i == 1 is
+        # False, which decides "&&" to False without reading the right
+        # side at all -- that decided False wins "all" over the earlier
+        # error, with no warning (the unset read never decided anything).
+        with caplog.at_level("WARNING", logger="circuitry.core.cel_eval"):
+            assert evaluate_cel(expr, ctx) is False
+        assert caplog.text == ""
 
     def test_all_vacuous_true_with_no_elements_errored(self):
         assert evaluate_cel("state.input.empty.all(i, i > 0)", {"input": {"empty": []}}) is True
