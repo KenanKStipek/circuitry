@@ -6341,14 +6341,23 @@ fn flow_lane_window<'a>(fork: &'a Fork, app: &App) -> &'a [Lane] {
     if fork.kind == ForkKind::Decision || fork.lanes.len() <= VISIBLE {
         return &fork.lanes;
     }
+    // The selection is usually one of this lane's own *children*
+    // (a pass's own step, say), never the lane's own path itself --
+    // matching only `s.path == selected` against the stations
+    // already inside it missed every pass but the one holding the
+    // exact leaf selected, which a bare pass selection (issue #691's
+    // own follow-up) never is at all, so the window never moved.
     let anchor = app
         .selected_path
         .as_deref()
         .and_then(|selected| {
             fork.lanes.iter().position(|lane| {
-                lane.items
-                    .iter()
-                    .any(|it| matches!(it, RailItem::Station(s) if s.path == selected))
+                lane.path.as_deref().is_some_and(|p| {
+                    selected == p
+                        || selected
+                            .strip_prefix(p)
+                            .is_some_and(|rest| rest.starts_with('.'))
+                })
             })
         })
         .or_else(|| fork.lanes.iter().position(|l| l.running))
@@ -7504,6 +7513,7 @@ mod flow_layout_tests {
             ghost: None,
             running,
             waiting,
+            path: None,
         }
     }
 
@@ -7595,12 +7605,14 @@ mod flow_layout_tests {
                     ghost: None,
                     running: false,
                     waiting: false,
+                    path: None,
                 },
                 Lane {
                     items: Vec::new(),
                     ghost: Some("many".to_string()),
                     running: false,
                     waiting: false,
+                    path: None,
                 },
             ],
         };
@@ -7624,12 +7636,14 @@ mod flow_layout_tests {
                     ghost: Some("then_step".to_string()),
                     running: false,
                     waiting: false,
+                    path: None,
                 },
                 Lane {
                     items: Vec::new(),
                     ghost: Some("else_step".to_string()),
                     running: false,
                     waiting: false,
+                    path: None,
                 },
             ],
         };
@@ -7655,12 +7669,14 @@ mod flow_layout_tests {
                     ghost: Some("then_step".to_string()),
                     running: false,
                     waiting: false,
+                    path: None,
                 },
                 Lane {
                     items: Vec::new(),
                     ghost: Some("else_step".to_string()),
                     running: false,
                     waiting: false,
+                    path: None,
                 },
             ],
         };
@@ -7669,6 +7685,7 @@ mod flow_layout_tests {
             ghost: None,
             running: false,
             waiting: false,
+            path: Some("prime.fan.iter_0".to_string()),
         };
         let outer = Fork {
             path: "prime.fan".to_string(),
@@ -7871,6 +7888,45 @@ mod flow_layout_tests {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.chars().filter(|&c| c == '━').count(), 50);
         assert_eq!(text.chars().filter(|&c| c == '─').count(), 0);
+    }
+
+    /// Issue #691's own follow-up: the selection is a *pass* path
+    /// (`iter_4`), never a station inside its own lane (the pass's
+    /// own children) -- selecting pass 5 of 6 must still slide the
+    /// window to show its own lane, matching the lane's own `path`
+    /// (DESIGN.md's own frames never select the pass container's
+    /// bare station, only a child, so the match is a prefix, not
+    /// equality).
+    #[test]
+    fn flow_lane_window_slides_to_the_lane_whose_path_the_selection_is_inside() {
+        let lanes: Vec<Lane> = (0..6)
+            .map(|i| Lane {
+                items: vec![station(
+                    &format!("prime.fan.iter_{i}.nap"),
+                    StatusKind::Done,
+                )],
+                ghost: None,
+                running: false,
+                waiting: false,
+                path: Some(format!("prime.fan.iter_{i}")),
+            })
+            .collect();
+        let fork = Fork {
+            path: "prime.fan".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Done,
+            lanes,
+        };
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.fan.iter_4.nap".to_string());
+        let visible = flow_lane_window(&fork, &app);
+        assert_eq!(visible.len(), 3, "{visible:?}");
+        assert!(
+            visible
+                .iter()
+                .any(|l| l.path.as_deref() == Some("prime.fan.iter_4")),
+            "pass 5 (iter_4) must be in the visible window: {visible:?}"
+        );
     }
 
     #[test]

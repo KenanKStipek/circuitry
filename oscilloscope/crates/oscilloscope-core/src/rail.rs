@@ -155,6 +155,14 @@ pub struct Lane {
     pub ghost: Option<String>,
     pub running: bool,
     pub waiting: bool,
+    /// This lane's own path on the rail -- a loop pass's real or
+    /// ahead `iter_N` path, a parallel `dynamic`'s named child path,
+    /// or `None` for a decision's two lanes (never windowed, so
+    /// nothing ever needs to anchor on one of them). The current
+    /// selection is usually a *child* of this path, never this path
+    /// itself, so a caller anchoring a window on it (`tui::
+    /// flow_lane_window`) must match a prefix, not equality.
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -642,6 +650,7 @@ fn build_unnamed_decision(
             ghost: None,
             running: taken_running,
             waiting: false,
+            path: None,
         }];
         let untaken_paths = match branch.as_deref() {
             Some("then") => Some(&decision.else_paths),
@@ -655,6 +664,7 @@ fn build_unnamed_decision(
                     ghost: Some(step_label(first)),
                     running: false,
                     waiting: false,
+                    path: None,
                 });
             }
             hide.extend(untaken.iter().filter(|p| !taken_paths.contains(p)).cloned());
@@ -675,6 +685,7 @@ fn build_unnamed_decision(
                     ghost: Some(step_label(first)),
                     running: false,
                     waiting: false,
+                    path: None,
                 });
                 hide.extend(side.iter().cloned());
             }
@@ -692,6 +703,7 @@ fn build_unnamed_decision(
                 ghost: Some(step_label(first)),
                 running: false,
                 waiting: false,
+                path: None,
             })
             .collect()
     };
@@ -875,6 +887,7 @@ fn build_decision_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
         ghost: None,
         running: edge_style(row.status.kind) == EdgeStyle::Live,
         waiting: false,
+        path: None,
     }];
     // The untaken branch's own rows are siblings of the taken
     // branch's at the same depth, never drawn of their own accord
@@ -889,6 +902,7 @@ fn build_decision_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
                 ghost: Some(step_label(first)),
                 running: false,
                 waiting: false,
+                path: None,
             });
         }
         while next < rows.len() && rows[next].depth > depth {
@@ -949,6 +963,7 @@ fn build_parallel_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
                 ghost: None,
                 running,
                 waiting,
+                path: Some(rows[j].path.clone()),
             });
             j = end;
         } else {
@@ -1079,6 +1094,12 @@ fn ahead_pass_lane(template: &[RailItem], loop_path: &str, index: u64, ctx: &Ctx
         ghost: None,
         running: false,
         waiting: true,
+        // The real path this pass will have once it starts (never
+        // the synthetic `iter_ahead_{index}` its own stations use),
+        // so a future selection of it -- or `flow_lane_window`'s own
+        // prefix match -- resolves the same way a real pass's lane
+        // already does.
+        path: Some(format!("{loop_path}.iter_{index}")),
     }
 }
 
@@ -1141,6 +1162,7 @@ fn ahead_template_item(item: &RailItem, loop_path: &str, index: u64, ctx: &Ctx<'
                     ghost: lane.ghost.clone(),
                     running: false,
                     waiting: true,
+                    path: lane.path.as_deref().map(|p| ahead_fork_path(p, index)),
                 })
                 .collect();
             RailItem::Fork(Fork {
@@ -1260,6 +1282,7 @@ fn build_loop_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
                 ghost: None,
                 running,
                 waiting: false,
+                path: Some(rows[j].path.clone()),
             });
             observed += 1;
             j = next;
@@ -1513,12 +1536,14 @@ mod tests {
                     ghost: None,
                     running: false,
                     waiting: false,
+                    path: None,
                 },
                 Lane {
                     items: Vec::new(),
                     ghost: Some("untaken".to_string()),
                     running: false,
                     waiting: false,
+                    path: None,
                 },
             ],
         };
@@ -1537,6 +1562,7 @@ mod tests {
                     ghost: None,
                     running: false,
                     waiting: false,
+                    path: None,
                 },
                 Lane {
                     items: vec![
@@ -1546,6 +1572,7 @@ mod tests {
                     ghost: None,
                     running: false,
                     waiting: false,
+                    path: None,
                 },
             ],
         };
