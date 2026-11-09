@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 1: a text prompt over budget splits and joins",
+  "description": "runtime.complexity.splitting.max_input_tokens: 20. The rendered input (98 chars, 25 estimated tokens) exceeds it, so the single reference (input.doc) is sliced into two whole parts, each part's prompt_sent within the budget, and the parts' texts joined with the default blank-line separator at the effect's own path. Pins meta.decomposition (trigger: size, estimated_tokens, budget, split.{path, kind, parts, sizes}, chunk_count, merge, result_path, yaml) and the merged value.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

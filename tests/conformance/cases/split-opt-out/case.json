@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 9: split.enabled: false opts an effect out even with the runtime switch on",
+  "description": "runtime.complexity.splitting.enabled: true with a budget this prompt's input would otherwise cross, but the effect's own split: {enabled: false} opts it out -- no meta.decomposition key at all, the prompt dispatches whole.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

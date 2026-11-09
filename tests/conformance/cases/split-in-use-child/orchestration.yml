@@ -1,0 +1,15 @@
+name: split-in-use-child
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+    inputs:
+      doc: "{{input.doc}}"
+    outputs:
+      value:
+        path: prime.big.value

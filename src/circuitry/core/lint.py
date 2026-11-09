@@ -36,6 +36,7 @@ __all__ = [
     "DEPRECATED_FLOW_ALIASES",
     "TYPE_KEYWORDS",
     "lint_orchestration",
+    "splitting_merge_warnings",
 ]
 
 #: Effect types as the docs, rules, and examples spell them.
@@ -113,6 +114,91 @@ def _walk(
         _check_effect(effect, where=here, warnings=warnings, loops=inner)
         for key in _CHILD_KEYS:
             _walk(effect.get(key), path=f"{here}.{key}", warnings=warnings, loops=inner)
+
+
+def splitting_merge_warnings(orch: Any, runtime: Mapping[str, Any] | None) -> list[str]:
+    """Warn when a prompt's output type needs ``split.merge.template`` but
+    has none, and splitting could actually fire for it (#672): either the
+    resolved runtime enables the size trigger, or the prompt carries its
+    own ``split.budget_tokens`` (which splits even with the runtime switch
+    off — :func:`circuitry.core.decompose._resolve_split_budget`'s own
+    precedence). A prompt that opts itself out with ``split.enabled:
+    false`` is never warned about, either way.
+
+    Runtime-aware, unlike the rest of this module: needs the *resolved*
+    ``runtime.complexity.splitting.enabled``, not just the document's own
+    text, so it is checked separately from :func:`lint_orchestration` by a
+    caller that has already merged config and orchestration runtime
+    (``cli.runtime_shim.validate``).
+    """
+    from ..cli.complexity_config import resolve_complexity_settings
+
+    try:
+        settings = resolve_complexity_settings(runtime)
+    except Exception:
+        return []
+    if not isinstance(orch, Mapping):
+        return []
+    runtime_enabled = settings.splitting.enabled
+
+    warnings: list[str] = []
+
+    def _walk_prompts(effects: Any, *, path: str) -> None:
+        if not isinstance(effects, Sequence) or isinstance(effects, (str, bytes)):
+            return
+        for index, effect in enumerate(effects):
+            if not isinstance(effect, Mapping):
+                continue
+            here = f"{path}[{index}]"
+            if str(effect.get("type") or "").strip().lower() == "prompt":
+                _check_prompt_needs_merge_template(
+                    effect, where=here, warnings=warnings, runtime_enabled=runtime_enabled
+                )
+            for key in _CHILD_KEYS:
+                _walk_prompts(effect.get(key), path=f"{here}.{key}")
+
+    effects = orch.get("effects")
+    if not isinstance(effects, Sequence) or isinstance(effects, (str, bytes)):
+        effects = orch.get("steps")
+    _walk_prompts(effects, path="effects")
+    _walk_prompts(orch.get("finally"), path="finally")
+    return warnings
+
+
+def _check_prompt_needs_merge_template(
+    effect: Mapping[str, Any], *, where: str, warnings: list[str], runtime_enabled: bool
+) -> None:
+    split = effect.get("split")
+    split_enabled = split.get("enabled") if isinstance(split, Mapping) else None
+    if split_enabled is False:
+        return
+    own_budget = isinstance(split, Mapping) and split.get("budget_tokens") is not None
+    if not runtime_enabled and not own_budget:
+        return
+
+    prompt_type = str(effect.get("prompt_type") or "text").strip().lower()
+    schema = effect.get("schema")
+    native = prompt_type in ("text", "array") or (
+        prompt_type == "json" and isinstance(schema, Mapping) and schema.get("type") == "array"
+    )
+    if native:
+        return
+    merge = split.get("merge") if isinstance(split, Mapping) else None
+    template = merge.get("template") if isinstance(merge, Mapping) else None
+    if isinstance(template, str) and template.strip():
+        return
+    name = effect.get("name")
+    label = f"{where} ('{name}')" if isinstance(name, str) and name else where
+    reason = (
+        "runtime.complexity.splitting is enabled"
+        if runtime_enabled
+        else "this prompt's own split.budget_tokens splits it"
+    )
+    warnings.append(
+        f"{label}: {reason} and prompt_type "
+        f"'{prompt_type}' has no split.merge.template — a split over budget will "
+        "record no_merge and run as-is (or fail under on_failure: fail)."
+    )
 
 
 def _is_loop(effect: Mapping[str, Any]) -> bool:

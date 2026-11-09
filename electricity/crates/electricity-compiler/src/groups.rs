@@ -157,6 +157,7 @@ mod tests {
                 retries: None,
                 description: None,
                 group: group.map(|s| s.to_string()),
+                split_budget_tokens: None,
             }))),
             on_error: OnError::Fail,
             labels: None,

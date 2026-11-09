@@ -126,6 +126,7 @@ fn plan_prompt(name: &str) -> Op {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
         }))),
         on_error: OnError::Fail,
         labels: None,

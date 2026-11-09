@@ -1,0 +1,11 @@
+name: split-prompt-budget
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    split: {budget_tokens: 20}
+    template: "Summarize: {{input.doc}}"

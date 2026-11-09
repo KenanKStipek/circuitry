@@ -1,0 +1,13 @@
+name: split-reduce-text
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    split:
+      merge:
+        template: "Combine: {{#parts}}<{{.}}>{{/parts}}"
+    template: "Summarize: {{input.doc}}"

@@ -54,6 +54,7 @@
                                             "retries": null,
                                             "routing_override": null,
                                             "schema": null,
+                                            "split_budget_tokens": null,
                                             "timeout_ms": null
                                           }
                                         }

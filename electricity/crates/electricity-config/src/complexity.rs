@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 pub const SCORE_MIN: f64 = 0.0;
 pub const SCORE_MAX: f64 = 100.0;
 
-const COMPLEXITY_KEYS: [&str; 3] = ["scoring", "routing", "decomposition"];
+const COMPLEXITY_KEYS: [&str; 4] = ["scoring", "routing", "decomposition", "splitting"];
 const SCORING_KEYS: [&str; 3] = ["enabled", "weights", "keywords"];
 const ROUTING_KEYS: [&str; 3] = ["enabled", "bands", "respect_explicit"];
 const DECOMPOSITION_KEYS: [&str; 5] = [
@@ -27,8 +27,18 @@ const DECOMPOSITION_KEYS: [&str; 5] = [
     "max_chunks",
     "on_failure",
 ];
+const SPLITTING_KEYS: [&str; 7] = [
+    "enabled",
+    "max_input_tokens",
+    "models",
+    "max_parts",
+    "max_depth",
+    "max_concurrency",
+    "on_failure",
+];
 const BAND_KEYS: [&str; 3] = ["max", "model", "name"];
 const ON_FAILURE_CHOICES: [&str; 2] = ["route_up", "fail"];
+const SPLIT_ON_FAILURE_CHOICES: [&str; 2] = ["run_as_is", "fail"];
 
 /// `core/complexity.py::SIGNAL_NAMES` -- the only names
 /// `scoring.weights` may set (`cli/complexity_config.py`'s own
@@ -70,6 +80,10 @@ const DEFAULT_THRESHOLD: f64 = 80.0;
 const DEFAULT_MAX_DEPTH: i64 = 2;
 const DEFAULT_MAX_CHUNKS: i64 = 8;
 const DEFAULT_ON_FAILURE: &str = "route_up";
+
+const DEFAULT_SPLIT_MAX_PARTS: i64 = 16;
+const DEFAULT_SPLIT_MAX_DEPTH: i64 = 2;
+const DEFAULT_SPLIT_ON_FAILURE: &str = "run_as_is";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoringSettings {
@@ -171,16 +185,51 @@ impl Default for DecompositionSettings {
     }
 }
 
+/// `cli/complexity_config.py::SplittingSettings` -- the size trigger for
+/// decomposition (issue #672). electricity parses this block (so a
+/// document/config that sets it gets the same validation and error texts)
+/// but does not run the feature: a run whose effective config enables
+/// splitting, or whose prompt sets `split.budget_tokens`, is refused up
+/// front, the standard preview posture (`electricity_bytecode::refusal`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplittingSettings {
+    pub enabled: bool,
+    pub max_input_tokens: Option<i64>,
+    pub models: IndexMap<String, i64>,
+    pub max_parts: i64,
+    pub max_depth: i64,
+    pub max_concurrency: Option<i64>,
+    pub on_failure: String,
+}
+
+impl Default for SplittingSettings {
+    fn default() -> Self {
+        SplittingSettings {
+            enabled: false,
+            max_input_tokens: None,
+            models: IndexMap::new(),
+            max_parts: DEFAULT_SPLIT_MAX_PARTS,
+            max_depth: DEFAULT_SPLIT_MAX_DEPTH,
+            max_concurrency: None,
+            on_failure: DEFAULT_SPLIT_ON_FAILURE.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ComplexitySettings {
     pub scoring: ScoringSettings,
     pub routing: RoutingSettings,
     pub decomposition: DecompositionSettings,
+    pub splitting: SplittingSettings,
 }
 
 impl ComplexitySettings {
     pub fn enabled(&self) -> bool {
-        self.scoring.enabled || self.routing.enabled || self.decomposition.enabled
+        self.scoring.enabled
+            || self.routing.enabled
+            || self.decomposition.enabled
+            || self.splitting.enabled
     }
 }
 
@@ -520,6 +569,78 @@ fn parse_decomposition(raw: &Value, path: &str) -> Result<DecompositionSettings,
     })
 }
 
+fn parse_splitting(raw: &Value, path: &str) -> Result<SplittingSettings, ConfigError> {
+    let block = as_mapping(raw, path)?;
+    reject_unknown_keys(block, &SPLITTING_KEYS, path)?;
+
+    let enabled = as_bool(block, "enabled", path, false)?;
+
+    let max_input_tokens = match get(block, "max_input_tokens") {
+        None | Some(Value::None) => None,
+        Some(value) => Some(as_int(value, &format!("{path}.max_input_tokens"), 1)?),
+    };
+
+    let mut models: IndexMap<String, i64> = IndexMap::new();
+    if let Some(raw_models) = get(block, "models").filter(|v| !matches!(v, Value::None)) {
+        let models_block = as_mapping(raw_models, &format!("{path}.models"))?;
+        for (name, value) in models_block {
+            let name = name.as_str().expect("as_mapping guarantees string keys");
+            let model_name =
+                as_non_empty_str(&Value::Str(name.to_string()), &format!("{path}.models key"))?;
+            let budget = as_int(value, &format!("{path}.models.{name}"), 1)?;
+            models.insert(model_name, budget);
+        }
+    }
+
+    if enabled && max_input_tokens.is_none() && models.is_empty() {
+        return Err(ConfigError(format!(
+            "{path}.enabled is true but neither {path}.max_input_tokens nor a non-empty \
+             {path}.models is set. Splitting needs a budget to compare the prompt's \
+             estimated size against."
+        )));
+    }
+
+    let max_parts = match get(block, "max_parts") {
+        None | Some(Value::None) => DEFAULT_SPLIT_MAX_PARTS,
+        Some(value) => as_int(value, &format!("{path}.max_parts"), 2)?,
+    };
+
+    let max_depth = match get(block, "max_depth") {
+        None | Some(Value::None) => DEFAULT_SPLIT_MAX_DEPTH,
+        Some(value) => as_int(value, &format!("{path}.max_depth"), 0)?,
+    };
+
+    let max_concurrency = match get(block, "max_concurrency") {
+        None | Some(Value::None) => None,
+        Some(value) => Some(as_int(value, &format!("{path}.max_concurrency"), 1)?),
+    };
+
+    let on_failure = match get(block, "on_failure") {
+        None | Some(Value::None) => DEFAULT_SPLIT_ON_FAILURE.to_string(),
+        Some(value) => {
+            let text = as_non_empty_str(value, &format!("{path}.on_failure"))?;
+            if !SPLIT_ON_FAILURE_CHOICES.contains(&text.as_str()) {
+                return Err(ConfigError(format!(
+                    "{path}.on_failure must be one of {}; found {}.",
+                    SPLIT_ON_FAILURE_CHOICES.join(", "),
+                    Value::Str(text.clone()).py_repr()
+                )));
+            }
+            text
+        }
+    };
+
+    Ok(SplittingSettings {
+        enabled,
+        max_input_tokens,
+        models,
+        max_parts,
+        max_depth,
+        max_concurrency,
+        on_failure,
+    })
+}
+
 fn check_prerequisites(settings: &ComplexitySettings, path: &str) -> Result<(), ConfigError> {
     if settings.scoring.enabled {
         return Ok(());
@@ -571,6 +692,7 @@ pub fn parse_complexity_settings(raw: Option<&Value>) -> Result<ComplexitySettin
             &sub_block("decomposition"),
             &format!("{path}.decomposition"),
         )?,
+        splitting: parse_splitting(&sub_block("splitting"), &format!("{path}.splitting"))?,
     };
     check_prerequisites(&settings, path)?;
     Ok(settings)
@@ -763,6 +885,124 @@ mod tests {
         assert_eq!(
             settings.keywords.keys().collect::<Vec<_>>(),
             vec!["analyze", "compare"]
+        );
+    }
+
+    // -- splitting (issue #672): exact Python error texts -----------------
+
+    #[test]
+    fn splitting_defaults() {
+        let settings = resolve_complexity_settings(None).unwrap();
+        assert_eq!(settings.splitting, SplittingSettings::default());
+    }
+
+    #[test]
+    fn splitting_needs_no_scoring_prerequisite() {
+        let mut splitting = Dict::new();
+        splitting.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        splitting.insert(
+            Value::Str("max_input_tokens".to_string()),
+            Value::from(1000i64),
+        );
+        let mut complexity = Dict::new();
+        complexity.insert(Value::Str("splitting".to_string()), Value::Dict(splitting));
+        let settings =
+            resolve_complexity_settings(Some(&runtime_with(Value::Dict(complexity)))).unwrap();
+        assert!(!settings.scoring.enabled);
+        assert!(settings.splitting.enabled);
+    }
+
+    #[test]
+    fn splitting_enabled_without_a_budget_is_an_error() {
+        let mut splitting = Dict::new();
+        splitting.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        let mut complexity = Dict::new();
+        complexity.insert(Value::Str("splitting".to_string()), Value::Dict(splitting));
+        let err =
+            resolve_complexity_settings(Some(&runtime_with(Value::Dict(complexity)))).unwrap_err();
+        assert_eq!(
+            err.0,
+            "runtime.complexity.splitting.enabled is true but neither \
+             runtime.complexity.splitting.max_input_tokens nor a non-empty \
+             runtime.complexity.splitting.models is set. Splitting needs a budget to \
+             compare the prompt's estimated size against."
+        );
+    }
+
+    #[test]
+    fn splitting_enabled_with_only_models_is_valid() {
+        let mut models = Dict::new();
+        models.insert(Value::Str("llama3.1:8b".to_string()), Value::from(24000i64));
+        let mut splitting = Dict::new();
+        splitting.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        splitting.insert(Value::Str("models".to_string()), Value::Dict(models));
+        let settings =
+            parse_splitting(&Value::Dict(splitting), "runtime.complexity.splitting").unwrap();
+        assert_eq!(settings.models.get("llama3.1:8b"), Some(&24000i64));
+    }
+
+    #[test]
+    fn splitting_max_input_tokens_must_be_positive() {
+        let mut splitting = Dict::new();
+        splitting.insert(
+            Value::Str("max_input_tokens".to_string()),
+            Value::from(0i64),
+        );
+        let err =
+            parse_splitting(&Value::Dict(splitting), "runtime.complexity.splitting").unwrap_err();
+        assert_eq!(
+            err.0,
+            "runtime.complexity.splitting.max_input_tokens must be 1 or greater; found 0."
+        );
+    }
+
+    #[test]
+    fn splitting_max_parts_must_be_at_least_two() {
+        let mut splitting = Dict::new();
+        splitting.insert(Value::Str("max_parts".to_string()), Value::from(1i64));
+        let err =
+            parse_splitting(&Value::Dict(splitting), "runtime.complexity.splitting").unwrap_err();
+        assert_eq!(
+            err.0,
+            "runtime.complexity.splitting.max_parts must be 2 or greater; found 1."
+        );
+    }
+
+    #[test]
+    fn splitting_on_failure_must_be_a_valid_choice() {
+        let mut splitting = Dict::new();
+        splitting.insert(
+            Value::Str("on_failure".to_string()),
+            Value::Str("retry".to_string()),
+        );
+        let err =
+            parse_splitting(&Value::Dict(splitting), "runtime.complexity.splitting").unwrap_err();
+        assert_eq!(
+            err.0,
+            "runtime.complexity.splitting.on_failure must be one of run_as_is, fail; found \
+             'retry'."
+        );
+    }
+
+    #[test]
+    fn splitting_unknown_key_is_rejected() {
+        let mut splitting = Dict::new();
+        splitting.insert(Value::Str("budget".to_string()), Value::from(100i64));
+        let err =
+            parse_splitting(&Value::Dict(splitting), "runtime.complexity.splitting").unwrap_err();
+        assert!(err.0.contains("unknown key 'budget'"));
+    }
+
+    #[test]
+    fn top_level_valid_keys_list_includes_splitting() {
+        let mut complexity = Dict::new();
+        complexity.insert(Value::Str("bogus".to_string()), Value::Bool(true));
+        let err =
+            resolve_complexity_settings(Some(&runtime_with(Value::Dict(complexity)))).unwrap_err();
+        assert_eq!(
+            err.0,
+            "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, \
+             scoring, splitting."
         );
     }
 }

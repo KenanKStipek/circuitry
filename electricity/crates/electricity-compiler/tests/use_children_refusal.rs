@@ -61,7 +61,7 @@ fn use_is_still_refused_while_its_own_flag_is_off() {
     let program = compile_document(&document, &origin).unwrap();
 
     let refusal =
-        electricity_bytecode::first_unsupported(&program, false, &Supported::m0(&["json"]))
+        electricity_bytecode::first_unsupported(&program, false, false, &Supported::m0(&["json"]))
             .expect("a use effect must still be refused while use_ is false");
     assert_eq!(refusal.reason, RefusalReason::Use);
 
@@ -98,7 +98,7 @@ fn a_loaded_childs_own_unsupported_tool_is_found_before_any_run_reaches_it() {
     // The parent alone, with `use_` on, is accepted -- its own `use`
     // effect names no unsupported content of its own.
     assert_eq!(
-        electricity_bytecode::first_unsupported(&program, false, &supported_with_use_only()),
+        electricity_bytecode::first_unsupported(&program, false, false, &supported_with_use_only()),
         None
     );
 
@@ -115,9 +115,13 @@ fn a_loaded_childs_own_unsupported_tool_is_found_before_any_run_reaches_it() {
         confinement_root: dir.clone(),
     };
     let child_program = compile_document(child_document, &child_origin).unwrap();
-    let child_refusal =
-        electricity_bytecode::first_unsupported(&child_program, false, &supported_with_use_only())
-            .expect("the child's own shell tool must still be refused");
+    let child_refusal = electricity_bytecode::first_unsupported(
+        &child_program,
+        false,
+        false,
+        &supported_with_use_only(),
+    )
+    .expect("the child's own shell tool must still be refused");
     assert_eq!(
         child_refusal.reason,
         RefusalReason::UnsupportedToolProvider("shell".to_string())

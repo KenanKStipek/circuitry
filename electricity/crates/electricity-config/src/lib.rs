@@ -60,7 +60,7 @@ pub use capability_gate::{
 };
 pub use complexity::{
     ComplexityBand, ComplexitySettings, DecompositionSettings, RoutingSettings, SCORE_MAX,
-    SCORE_MIN, ScoringSettings, resolve_complexity_settings,
+    SCORE_MIN, ScoringSettings, SplittingSettings, resolve_complexity_settings,
 };
 pub use config::{CircuitryConfig, ConfigError, resolve_config};
 pub use effective_settings::{

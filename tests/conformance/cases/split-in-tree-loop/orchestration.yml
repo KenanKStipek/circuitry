@@ -1,0 +1,19 @@
+name: split-in-tree-loop
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: tool
+    name: sides
+    provider: json
+    params: {mode: parse, input: '["left", "right"]'}
+  - type: loop
+    name: per
+    flow: tree
+    each: {in: prime.sides.value, as: side}
+    body:
+      - type: prompt
+        name: big
+        template: "Side {{side}}: {{input.doc}}"

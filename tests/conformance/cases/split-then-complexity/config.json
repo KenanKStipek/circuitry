@@ -1,0 +1,13 @@
+{
+  "runtime": {
+    "state": {"record_children": true},
+    "complexity": {
+      "scoring": {"enabled": true},
+      "decomposition": {"enabled": true, "threshold": 10, "max_depth": 2, "max_chunks": 5},
+      "splitting": {"enabled": true, "max_input_tokens": 55, "max_depth": 2}
+    },
+    "adapters": {
+      "scripted": {"replies_file": "scripted-replies.yaml"}
+    }
+  }
+}
