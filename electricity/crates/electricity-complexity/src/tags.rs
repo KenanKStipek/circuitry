@@ -194,4 +194,78 @@ mod tests {
     fn delimiter_change_tags_count_as_a_reference() {
         assert_eq!(extract_references("{{=<% %>=}}").unwrap(), (1, 0));
     }
+
+    #[test]
+    fn reference_names_sorted_dedupes_and_sorts() {
+        assert_eq!(
+            reference_names_sorted("{{b}} {{a}} {{b}} {{{a.c}}}").unwrap(),
+            vec!["a".to_string(), "a.c".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn reference_names_sorted_drops_comments_partials_and_closing_tags() {
+        assert_eq!(
+            reference_names_sorted("{{! c }}{{> p}}{{#x}}{{/x}}").unwrap(),
+            vec!["x".to_string()]
+        );
+    }
+
+    #[test]
+    fn find_tags_keeps_every_occurrence_with_its_own_sigil() {
+        assert_eq!(
+            find_tags("{{{a}}} {{&b}} {{#c}} {{a}}").unwrap(),
+            vec![
+                ("".to_string(), "a".to_string()),
+                ("&".to_string(), "b".to_string()),
+                ("#".to_string(), "c".to_string()),
+                ("".to_string(), "a".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_tags_drops_comments_partials_and_closing_tags() {
+        assert_eq!(
+            find_tags("{{! c }}{{> p}}{{/x}}").unwrap(),
+            Vec::<(String, String)>::new()
+        );
+    }
+
+    #[test]
+    fn rewrite_tag_prefix_rewrites_the_exact_name_and_every_extension() {
+        assert_eq!(
+            rewrite_tag_prefix(
+                "{{{parts}}} {{#parts.0}}x{{/parts.0}}",
+                "parts",
+                "prime.p.value"
+            )
+            .unwrap(),
+            "{{{prime.p.value}}} {{#prime.p.value.0}}x{{/prime.p.value.0}}"
+        );
+    }
+
+    #[test]
+    fn rewrite_tag_prefix_preserves_every_sigil_shape() {
+        assert_eq!(
+            rewrite_tag_prefix("{{parts}} {{&parts}} {{{parts}}}", "parts", "new").unwrap(),
+            "{{new}} {{&new}} {{{new}}}"
+        );
+    }
+
+    #[test]
+    fn rewrite_tag_prefix_leaves_an_unrelated_name_alone() {
+        assert_eq!(
+            rewrite_tag_prefix("{{other}} {{partskin}}", "parts", "new").unwrap(),
+            "{{other}} {{partskin}}"
+        );
+    }
+
+    #[test]
+    fn rewrite_tag_prefix_never_rewrites_a_comment_or_partial() {
+        assert_eq!(
+            rewrite_tag_prefix("{{! parts }}{{> parts}}", "parts", "new").unwrap(),
+            "{{! parts }}{{> parts}}"
+        );
+    }
 }
