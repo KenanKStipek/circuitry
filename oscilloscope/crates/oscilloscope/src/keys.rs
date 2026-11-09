@@ -178,6 +178,13 @@ pub struct App {
     /// `tree_viewport` is, so `signal_scrub`'s own first press off
     /// Now has something to clamp and seed against.
     pub signal_now_col: Option<usize>,
+    /// Whether the latest redraw's own Signal screen has a step
+    /// under its cursor at all, cached the same way `signal_now_col`
+    /// is -- `enter` on Signal only opens one when this is true, so
+    /// it can never toggle `tape_fullscreen_step` on with nothing
+    /// for the full-screen view to show yet, only to spring open
+    /// once a step finally appears.
+    pub signal_has_step: bool,
     /// The Tape's own previews toggle (issue #678, §4's `p`): on by
     /// default at 120 columns and up (§9's settled point 4).
     pub tape_previews_on: bool,
@@ -223,6 +230,7 @@ impl App {
             signal_cursor_col: None,
             signal_column_ms: 100,
             signal_now_col: None,
+            signal_has_step: false,
             tape_previews_on: true,
             tape_tokens_view: false,
             tape_fullscreen_step: false,
@@ -241,6 +249,11 @@ impl App {
             .unwrap_or(1);
         if idx > 0 {
             self.signal_column_ms = Self::SIGNAL_ZOOM_LEVELS_MS[idx - 1];
+            // A column's own width just changed, so a scrubbed
+            // cursor's own column index no longer points at the
+            // same moment it did -- back to following Now, the same
+            // as `n`, rather than silently pointing somewhere else.
+            self.signal_cursor_col = None;
         }
     }
 
@@ -251,6 +264,7 @@ impl App {
             .unwrap_or(1);
         if idx + 1 < Self::SIGNAL_ZOOM_LEVELS_MS.len() {
             self.signal_column_ms = Self::SIGNAL_ZOOM_LEVELS_MS[idx + 1];
+            self.signal_cursor_col = None;
         }
     }
 
@@ -437,9 +451,9 @@ impl App {
             }
             KeyCode::Home | KeyCode::Char('g') => self.jump(rows, state_rows, true),
             KeyCode::End | KeyCode::Char('G') => self.jump(rows, state_rows, false),
-            // Not on the Tape's own key bar (§4) -- its rows are
-            // already flat, with no collapsed state of their own to
-            // toggle; still live on Flow/Time/Cost.
+            // Not on the Tape's or Signal's own key bar (§4) --
+            // their rows are already flat, with no collapsed state
+            // of their own to toggle; still live on Flow/Cost.
             KeyCode::Left
                 if self.pane == Pane::Tree
                     && self.screen != Screen::Tape
@@ -491,11 +505,18 @@ impl App {
             KeyCode::Char('n') if self.screen == Screen::Signal => self.signal_now(),
             KeyCode::Char('+') if self.screen == Screen::Signal => self.signal_zoom_in(),
             KeyCode::Char('-') if self.screen == Screen::Signal => self.signal_zoom_out(),
-            // Issue #678 (design v1 §4): ⏎ on the Tape, or on Signal
-            // (R5: "opens the step under the cursor"), opens the
-            // selected row's own step full-screen -- `esc` or ⏎
-            // again returns to the list.
-            KeyCode::Enter if self.screen == Screen::Tape || self.screen == Screen::Signal => {
+            // Issue #678 (design v1 §4): ⏎ on the Tape, or on Signal,
+            // opens the selected row's own step full-screen -- `esc`
+            // or ⏎ again returns to the list. Signal only toggles
+            // this on while there's actually a step under the
+            // cursor to show (`signal_has_step`, the latest redraw's
+            // own answer) -- otherwise the toggle would stay armed
+            // with nothing to open yet, and spring the full-screen
+            // view open later, unasked, the moment a step appears.
+            KeyCode::Enter if self.screen == Screen::Tape => {
+                self.tape_fullscreen_step = !self.tape_fullscreen_step;
+            }
+            KeyCode::Enter if self.screen == Screen::Signal && self.signal_has_step => {
                 self.tape_fullscreen_step = !self.tape_fullscreen_step;
             }
             KeyCode::Esc if self.tape_fullscreen_step => {
@@ -572,6 +593,13 @@ impl App {
             // here.
             KeyCode::Char(c @ '0'..='3') => {
                 if let Some(screen) = Screen::from_key(c) {
+                    // The Tape's and Signal's own ⏎ toggle is shared
+                    // state, not per-screen -- without this, opening
+                    // it on one and switching screens opens the
+                    // other's full-screen view too.
+                    if screen != self.screen {
+                        self.tape_fullscreen_step = false;
+                    }
                     self.screen = screen;
                 }
             }
@@ -611,10 +639,10 @@ impl App {
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #613: `z` turns folding off to show the full,
             // unfolded tree, and back on again -- gone from the Tape
-            // (§4 has no fold key there; the design's own rows are
-            // already flat), still live on Flow/Time/Cost until their
-            // own redesign.
-            KeyCode::Char('z') if self.screen != Screen::Tape => {
+            // and Signal (§4 has no fold key on either; both screens'
+            // own rows are already flat), still live on Flow/Cost
+            // until their own redesign.
+            KeyCode::Char('z') if self.screen != Screen::Tape && self.screen != Screen::Signal => {
                 self.fold_enabled = !self.fold_enabled;
             }
             KeyCode::Char('e') => self.errors_only = !self.errors_only,
@@ -2470,10 +2498,36 @@ mod tests {
     fn enter_opens_and_closes_the_signal_fullscreen_step_the_same_as_the_tapes() {
         let mut app = App::new(false);
         app.screen = Screen::Signal;
+        app.signal_has_step = true;
         assert!(!app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
         assert!(app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
         assert!(!app.tape_fullscreen_step);
+    }
+
+    #[test]
+    fn enter_on_signal_is_a_no_op_with_no_step_under_the_cursor() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_has_step = false;
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(
+            !app.tape_fullscreen_step,
+            "nothing to open yet, so the toggle must not arm itself for later"
+        );
+    }
+
+    #[test]
+    fn switching_screens_resets_the_shared_fullscreen_step_toggle() {
+        let mut app = App::new(false);
+        app.screen = Screen::Tape;
+        app.tape_fullscreen_step = true;
+        app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
+        assert_eq!(app.screen, Screen::Signal);
+        assert!(
+            !app.tape_fullscreen_step,
+            "the Tape's own open step view must not reappear as Signal's"
+        );
     }
 }
