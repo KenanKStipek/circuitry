@@ -91,6 +91,22 @@ impl AgentLive {
     /// a stuck display.
     pub fn from_value(v: &Value) -> Option<Self> {
         let obj = v.as_object()?;
+        // A streamed prompt effect's own `meta.live` (issue #674) has
+        // its own `adapter` key (the adapter name) where the agent
+        // tool's own live summary has `engine` (the CLI name) instead --
+        // `AgentLive` has no `adapter` field at all, so a plain
+        // field-by-field read would otherwise just leave it unread
+        // rather than refusing a shape that was never an agent's. Both
+        // shapes do carry a `v` key, `model`, `attempt`, `started_at`,
+        // `updated_at`, `tokens_sent` and `tokens_received`, so none of
+        // those distinguish them; this checks the *live record's own*
+        // `adapter` key specifically, never the surrounding node's
+        // `meta.adapter`/`meta.provider` (a node can carry either in any
+        // combination with the other, e.g. a fixture setting `adapter`
+        // on every node for the Cost screen's own token-bearing rule).
+        if obj.contains_key("adapter") {
+            return None;
+        }
         let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
         let u64_field = |k: &str| obj.get(k).and_then(Value::as_u64);
         let f64_field = |k: &str| obj.get(k).and_then(Value::as_f64);
@@ -1962,6 +1978,25 @@ mod tests {
     fn a_non_object_meta_live_value_parses_as_none() {
         assert_eq!(AgentLive::from_value(&Value::Null), None);
         assert_eq!(AgentLive::from_value(&json!([1, 2])), None);
+    }
+
+    /// Issue #674: a streamed prompt's own `meta.live` carries a `v`
+    /// schema-version key the agent tool's own live summary never has,
+    /// and several of its other field names (`model`, `attempt`,
+    /// `started_at`, `updated_at`, `tokens_sent`, `tokens_received`)
+    /// collide with this struct's own -- without the `v` check, this
+    /// would silently half-parse into a bogus agent summary rather than
+    /// returning `None`.
+    #[test]
+    fn a_prompt_effects_own_live_record_parses_as_none() {
+        let value = json!({
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "t0", "updated_at": "t1", "streaming": true,
+            "first_token_at": "t0", "tokens_sent": null, "tokens_sent_estimate": 3,
+            "tokens_received": null, "tokens_received_estimate": 2,
+            "chars_received": 11, "tokens_per_second": null
+        });
+        assert_eq!(AgentLive::from_value(&value), None);
     }
 
     /// Table-driven: every branch of `run_status` (DESIGN.md §2.1
