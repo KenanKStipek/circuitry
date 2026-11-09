@@ -2375,4 +2375,105 @@ mod tests {
             "must move one row past the loop, not jump to prime"
         );
     }
+
+    // -------------------------------------------------------------
+    // Signal (issue #688)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn signal_zoom_in_and_out_step_through_the_five_levels_and_clamp_at_the_ends() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        assert_eq!(app.signal_column_ms, 100);
+        app.signal_zoom_in();
+        assert_eq!(app.signal_column_ms, 50);
+        app.signal_zoom_in();
+        assert_eq!(app.signal_column_ms, 50, "already the finest level");
+        app.signal_zoom_out();
+        app.signal_zoom_out();
+        app.signal_zoom_out();
+        app.signal_zoom_out();
+        assert_eq!(app.signal_column_ms, 1000);
+        app.signal_zoom_out();
+        assert_eq!(app.signal_column_ms, 1000, "already the coarsest level");
+    }
+
+    #[test]
+    fn plus_minus_zoom_the_signal_screen_and_are_no_ops_elsewhere() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], true, false, &[]);
+        assert_eq!(app.signal_column_ms, 50);
+        app.handle_key(key(KeyCode::Char('-')), &[], &[], true, false, &[]);
+        assert_eq!(app.signal_column_ms, 100);
+        app.screen = Screen::Tape;
+        app.handle_key(key(KeyCode::Char('+')), &[], &[], true, false, &[]);
+        assert_eq!(
+            app.signal_column_ms, 100,
+            "+/- do nothing off the Signal screen"
+        );
+    }
+
+    #[test]
+    fn signal_scrub_moves_one_column_at_a_time_and_clamps_to_now_and_zero() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(3);
+        app.signal_scrub(-1);
+        assert_eq!(
+            app.signal_cursor_col,
+            Some(2),
+            "the first press off Now seeds from it"
+        );
+        app.signal_scrub(-1);
+        app.signal_scrub(-1);
+        assert_eq!(app.signal_cursor_col, Some(0));
+        app.signal_scrub(-1);
+        assert_eq!(app.signal_cursor_col, Some(0), "never below zero");
+        app.signal_scrub(1);
+        app.signal_scrub(1);
+        app.signal_scrub(1);
+        app.signal_scrub(1);
+        assert_eq!(app.signal_cursor_col, Some(3), "never past Now");
+    }
+
+    #[test]
+    fn n_returns_the_signal_cursor_to_now() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(5);
+        app.signal_scrub(-2);
+        assert_eq!(app.signal_cursor_col, Some(3));
+        app.handle_key(key(KeyCode::Char('n')), &[], &[], true, false, &[]);
+        assert_eq!(app.signal_cursor_col, None);
+    }
+
+    #[test]
+    fn left_right_scrub_the_signal_screen_and_move_the_tree_selection_elsewhere() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(2);
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
+        assert_eq!(app.signal_cursor_col, Some(1));
+        app.screen = Screen::Tape;
+        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
+        assert_eq!(
+            app.signal_cursor_col,
+            Some(1),
+            "← on another screen never touches the Signal's own cursor"
+        );
+    }
+
+    #[test]
+    fn enter_opens_and_closes_the_signal_fullscreen_step_the_same_as_the_tapes() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        assert!(!app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert!(!app.tape_fullscreen_step);
+    }
 }

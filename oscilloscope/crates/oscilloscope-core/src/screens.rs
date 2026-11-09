@@ -5002,4 +5002,242 @@ mod tests {
             other => panic!("expected a populated Agent detail, got {other:?}"),
         }
     }
+
+    // -------------------------------------------------------------
+    // Signal (issue #688)
+    // -------------------------------------------------------------
+
+    fn signal_node(
+        created_at: &str,
+        completed_at: Option<&str>,
+        sent: u64,
+        received: u64,
+    ) -> NodeMeta {
+        let mut n = tape_node(created_at, completed_at);
+        n.meta = json!({"tokens_sent": sent, "tokens_received": received, "adapter": "scripted", "model": "scripted-model"});
+        n
+    }
+
+    #[test]
+    fn signal_axis_top_with_history_holds_1_5x_the_usual_largest_step() {
+        // 1.5 * 390 = 585, the smallest of 300/600/1200/... at or
+        // above it is 600 -- the design's own `run2` fixture (R3).
+        assert_eq!(signal_axis_top(Some(390), 0, 600), 600);
+        // 1.5 * 30 = 45, the smallest of 40/80/160/... at or above
+        // it is 80.
+        assert_eq!(signal_axis_top(Some(30), 0, 40), 80);
+        assert_eq!(signal_axis_top(Some(0), 0, 600), 600);
+    }
+
+    #[test]
+    fn signal_axis_top_without_history_doubles_once_never_again() {
+        assert_eq!(signal_axis_top(None, 0, 600), 600);
+        assert_eq!(signal_axis_top(None, 600, 600), 600);
+        assert_eq!(signal_axis_top(None, 601, 600), 1200);
+        // Never a second doubling, however far over the run goes.
+        assert_eq!(signal_axis_top(None, 100_000, 600), 1200);
+    }
+
+    /// Two top-level prompts ending in the same 100 ms column (R3:
+    /// "a prompt's tokens land in the bucket of its end time") sum
+    /// into that one column rather than each getting their own.
+    #[test]
+    fn build_signal_sums_two_prompts_ending_in_the_same_column() {
+        let rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.b", 1, "b", RowKind::Prompt, StatusKind::Done),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:03.050Z"),
+                100,
+                10,
+            ),
+        );
+        flat.insert(
+            "prime.b".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:03.070Z"),
+                50,
+                5,
+            ),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.tokens_sent = 150;
+        header.tokens_received = 15;
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            "2026-01-01T00:00:03.100Z",
+        );
+        // Bucket 30 spans [3.0s, 3.1s) -- both ends land there.
+        let bucket = &signal.buckets[30];
+        assert_eq!(bucket.sent, 150);
+        assert_eq!(bucket.received, 15);
+        assert_eq!(bucket.prompt_count, 2);
+        assert!(
+            !signal.buckets[0..30]
+                .iter()
+                .any(|b| b.sent > 0 || b.received > 0)
+        );
+    }
+
+    /// A decision's own mark wins over a finished prompt's `✓` when
+    /// both land in the same column (R3, matching `run2`'s own
+    /// frame: `◆` at the column three prompts and a decision
+    /// share).
+    #[test]
+    fn build_signal_a_decision_mark_wins_over_a_prompt_mark_in_the_same_column() {
+        let mut gate = tape_row("prime.gate", 1, "gate", RowKind::If, StatusKind::Done);
+        let mut reply = tape_row(
+            "prime.gate.reply",
+            2,
+            "reply",
+            RowKind::Prompt,
+            StatusKind::Done,
+        );
+        gate.depth = 1;
+        reply.depth = 2;
+        let rows = vec![gate, reply];
+        let mut flat = BTreeMap::new();
+        let mut gate_node = signal_node(
+            "2026-01-01T00:00:03.000Z",
+            Some("2026-01-01T00:00:03.010Z"),
+            0,
+            0,
+        );
+        gate_node.branch = Some("then".to_string());
+        flat.insert("prime.gate".to_string(), gate_node);
+        flat.insert(
+            "prime.gate.reply".to_string(),
+            signal_node(
+                "2026-01-01T00:00:03.000Z",
+                Some("2026-01-01T00:00:03.050Z"),
+                10,
+                2,
+            ),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            "2026-01-01T00:00:03.100Z",
+        );
+        let mark = signal
+            .marks
+            .iter()
+            .find(|(col, _)| *col == 30)
+            .map(|(_, m)| *m);
+        assert_eq!(mark, Some(SignalMark::Decision));
+    }
+
+    /// A running prompt's own live estimate grows the Now column
+    /// (R3: "grows its column at Now, marked ≈"), never the column
+    /// its own start time would otherwise place it at.
+    #[test]
+    fn build_signal_a_running_prompts_live_estimate_lands_in_the_now_column() {
+        let rows = vec![tape_row(
+            "prime.a",
+            1,
+            "a",
+            RowKind::Prompt,
+            StatusKind::Running,
+        )];
+        let mut flat = BTreeMap::new();
+        let mut node = tape_node("2026-01-01T00:00:00.000Z", None);
+        node.meta = json!({
+            "adapter": "scripted", "model": "scripted-model",
+            "live": {
+                "adapter": "scripted", "attempt": 0, "streaming": true,
+                "started_at": "2026-01-01T00:00:00.000Z",
+                "tokens_sent": 40, "tokens_received_estimate": 7,
+            }
+        });
+        node.prompt_live = crate::model::PromptLive::from_value(&node.meta["live"]);
+        flat.insert("prime.a".to_string(), node);
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:00.650Z";
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        assert_eq!(signal.now_col, Some(6));
+        let bucket = &signal.buckets[6];
+        assert_eq!(bucket.sent, 40);
+        assert_eq!(bucket.received, 7);
+        assert!(bucket.received_live);
+    }
+
+    /// Readings' own ratio (to one decimal) and peak (the largest
+    /// column's own sent figure and clock) -- §2.2's `11.5 : 1` and
+    /// `584 t at 12:50:50`.
+    #[test]
+    fn build_signal_readings_ratio_and_peak() {
+        let rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.b", 1, "b", RowKind::Prompt, StatusKind::Done),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:01.000Z"),
+                100,
+                10,
+            ),
+        );
+        flat.insert(
+            "prime.b".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:03.000Z"),
+                584,
+                66,
+            ),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.tokens_sent = 684;
+        header.tokens_received = 76;
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            "2026-01-01T00:00:03.100Z",
+        );
+        assert_eq!(signal.readings.ratio, Some(9.0));
+        let (peak_tokens, peak_ts) = signal.readings.peak.expect("a peak column");
+        assert_eq!(peak_tokens, 584);
+        assert_eq!(peak_ts, "2026-01-01T00:00:03.000Z");
+    }
 }
