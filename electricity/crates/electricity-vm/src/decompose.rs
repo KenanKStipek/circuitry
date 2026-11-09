@@ -3272,4 +3272,186 @@ mod tests {
         let plan_frame = child_frame(&frame, &op_path).push_use("inline:abc".to_string());
         assert_eq!(plan_frame.use_call_stack(), &["inline:abc".to_string()]);
     }
+
+    // -- size trigger (issue #682) --------------------------------------
+
+    #[test]
+    fn resolve_split_budget_prefers_the_prompts_own_budget_even_with_the_switch_off() {
+        let mut prompt = template_op("hi");
+        prompt.split_budget_tokens = Some(42);
+        let sset = SplittingSettings {
+            enabled: false,
+            ..SplittingSettings::default()
+        };
+        assert_eq!(resolve_split_budget(&prompt, &sset, "m"), Some(42));
+    }
+
+    #[test]
+    fn resolve_split_budget_is_none_with_the_switch_off_and_no_own_budget() {
+        let prompt = template_op("hi");
+        let sset = SplittingSettings::default();
+        assert_eq!(resolve_split_budget(&prompt, &sset, "m"), None);
+    }
+
+    #[test]
+    fn resolve_split_budget_prefers_the_models_table_over_max_input_tokens() {
+        let prompt = template_op("hi");
+        let mut models = indexmap::IndexMap::new();
+        models.insert("m".to_string(), 10);
+        let sset = SplittingSettings {
+            enabled: true,
+            models,
+            max_input_tokens: Some(99),
+            ..SplittingSettings::default()
+        };
+        assert_eq!(resolve_split_budget(&prompt, &sset, "m"), Some(10));
+        assert_eq!(resolve_split_budget(&prompt, &sset, "other"), Some(99));
+    }
+
+    #[test]
+    fn native_merge_mode_covers_text_array_and_array_shaped_json() {
+        let mut text_prompt = template_op("hi");
+        text_prompt.prompt_type = PromptType::Text;
+        assert_eq!(native_merge_mode(&text_prompt), Some("join"));
+
+        let mut array_prompt = template_op("hi");
+        array_prompt.prompt_type = PromptType::Array;
+        assert_eq!(native_merge_mode(&array_prompt), Some("concat"));
+
+        let mut json_array_prompt = template_op("hi");
+        json_array_prompt.prompt_type = PromptType::Json;
+        let mut schema = Dict::new();
+        schema.insert(key("type"), Value::Str("array".to_string()));
+        json_array_prompt.schema = Some(Value::Dict(schema));
+        assert_eq!(native_merge_mode(&json_array_prompt), Some("concat"));
+
+        let mut json_object_prompt = template_op("hi");
+        json_object_prompt.prompt_type = PromptType::Json;
+        let mut object_schema = Dict::new();
+        object_schema.insert(key("type"), Value::Str("object".to_string()));
+        json_object_prompt.schema = Some(Value::Dict(object_schema));
+        assert_eq!(native_merge_mode(&json_object_prompt), None);
+
+        let mut boolean_prompt = template_op("hi");
+        boolean_prompt.prompt_type = PromptType::Boolean;
+        assert_eq!(native_merge_mode(&boolean_prompt), None);
+    }
+
+    #[test]
+    fn pick_parts_key_appends_underscores_until_no_collision() {
+        let input_ns = {
+            let mut d = Dict::new();
+            d.insert(key("split_parts"), Value::Bool(true));
+            d.insert(key("split_parts_"), Value::Bool(true));
+            Value::Dict(d)
+        };
+        let ctx = {
+            let mut d = Dict::new();
+            d.insert(key("input"), input_ns);
+            Value::Dict(d)
+        };
+        assert_eq!(pick_parts_key(&ctx), "split_parts__");
+        assert_eq!(pick_parts_key(&Value::Dict(Dict::new())), "split_parts");
+    }
+
+    #[test]
+    fn pick_effect_name_appends_underscores_until_no_collision() {
+        let prime = {
+            let mut d = Dict::new();
+            d.insert(key("parts"), Value::Bool(true));
+            Value::Dict(d)
+        };
+        let ctx = {
+            let mut d = Dict::new();
+            d.insert(key("prime"), prime);
+            Value::Dict(d)
+        };
+        assert_eq!(pick_effect_name("parts", &ctx), "parts_");
+        assert_eq!(pick_effect_name("merge", &ctx), "merge");
+    }
+
+    #[test]
+    fn rewrite_exact_rewrites_every_sigil_but_leaves_other_names_alone() {
+        let text = "{{input.doc}} {{{input.doc}}} {{&input.doc}} {{#input.doc}}x{{/input.doc}} \
+                    {{^input.doc}}y{{/input.doc}} {{other}}";
+        let rewritten = rewrite_exact(text, "input.doc", "part");
+        assert_eq!(
+            rewritten,
+            "{{part}} {{{part}}} {{&part}} {{#part}}x{{/part}} {{^part}}y{{/part}} {{other}}"
+        );
+    }
+
+    #[test]
+    fn apply_native_merge_joins_text_parts_with_the_default_or_given_separator() {
+        let parts = Value::List(vec![
+            Value::Str("a".to_string()),
+            Value::Str("b".to_string()),
+        ]);
+        assert_eq!(
+            apply_native_merge("join", &parts, None, None).unwrap(),
+            Value::Str("a\n\nb".to_string())
+        );
+        assert_eq!(
+            apply_native_merge("join", &parts, None, Some("-")).unwrap(),
+            Value::Str("a-b".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_native_merge_join_rejects_a_non_string_part() {
+        let parts = Value::List(vec![Value::from(1i64)]);
+        let err = apply_native_merge("join", &parts, None, None).unwrap_err();
+        assert!(err.contains("not a string"), "{err}");
+    }
+
+    #[test]
+    fn apply_native_merge_concat_flattens_and_validates_against_the_schema() {
+        let parts = Value::List(vec![
+            Value::List(vec![Value::from(1i64)]),
+            Value::List(vec![Value::from(2i64)]),
+        ]);
+        let mut schema = Dict::new();
+        schema.insert(key("type"), Value::Str("array".to_string()));
+        schema.insert(
+            key("items"),
+            Value::Dict({
+                let mut d = Dict::new();
+                d.insert(key("type"), Value::Str("string".to_string()));
+                d
+            }),
+        );
+        let schema = Value::Dict(schema);
+        let err = apply_native_merge("concat", &parts, Some(&schema), None).unwrap_err();
+        assert!(err.contains("failed its schema"), "{err}");
+    }
+
+    #[test]
+    fn apply_native_merge_concat_accepts_a_matching_schema() {
+        let parts = Value::List(vec![
+            Value::List(vec![Value::from(1i64)]),
+            Value::List(vec![Value::from(2i64)]),
+        ]);
+        let mut schema = Dict::new();
+        schema.insert(key("type"), Value::Str("array".to_string()));
+        let schema = Value::Dict(schema);
+        assert_eq!(
+            apply_native_merge("concat", &parts, Some(&schema), None).unwrap(),
+            Value::List(vec![Value::from(1i64), Value::from(2i64)])
+        );
+    }
+
+    #[test]
+    fn alias_shared_merge_block_anchors_the_first_and_aliases_the_second() {
+        let text = "effects:\n- type: prompt\n  split:\n    merge:\n      template: x\n- type: prompt\n  split:\n    merge:\n      template: x\n";
+        let aliased = alias_shared_merge_block(text);
+        assert!(aliased.contains("merge: &id001\n"));
+        assert!(aliased.contains("merge: *id001\n"));
+        assert_eq!(aliased.matches("template: x").count(), 1);
+    }
+
+    #[test]
+    fn alias_shared_merge_block_is_a_no_op_with_fewer_than_two_occurrences() {
+        let text = "split:\n  merge:\n    template: x\n";
+        assert_eq!(alias_shared_merge_block(text), text);
+    }
 }
