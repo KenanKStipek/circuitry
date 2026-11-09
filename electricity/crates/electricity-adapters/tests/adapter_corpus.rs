@@ -431,7 +431,7 @@ fn openai_request_building_matches_circuitry() {
         let prompt = get(spec, "prompt").as_str().unwrap();
         let options = options_from_json(get(spec, "options"));
         let model = get(spec, "model").as_str().unwrap();
-        let payload = openai::build_request(model, prompt, &options);
+        let payload = openai::build_request(model, prompt, &options, false);
         assert_eq!(
             dumps(&Value::Dict(payload)),
             get(case, "data").as_str().unwrap(),
