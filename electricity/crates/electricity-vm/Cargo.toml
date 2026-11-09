@@ -67,6 +67,10 @@ sha2 = "0.10"
 # `core/use.py::_load_child_orch`) -- the same parser
 # `electricity-compiler::load` uses for a file-based child.
 electricity-yaml = { path = "../electricity-yaml" }
+# `split`'s own text-structure cascade (blank lines, sentence ends, ...,
+# issue #682) -- the same crate `electricity-complexity::tags` already
+# uses for its own fixed `_TAG_RE`.
+fancy-regex = "0.14"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
