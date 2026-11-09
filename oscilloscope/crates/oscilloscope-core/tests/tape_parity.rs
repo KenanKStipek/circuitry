@@ -90,6 +90,7 @@ fn normalize(mut tape: TapeScreen) -> TapeScreen {
                 *eta_ts = None;
             }
             TapeItem::SlotsRule { .. } => {}
+            TapeItem::HeadRule => {}
         }
     }
     if let TapeHead::Ended { duration_s, .. } = &mut tape.head {

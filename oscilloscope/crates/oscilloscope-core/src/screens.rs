@@ -833,6 +833,11 @@ pub enum TapeItem {
         slots: u64,
         queued: u64,
     },
+    /// The Starting/Ended/Failed head rule (§2.1), drawn as a full-
+    /// width rule in the head's own colour (read straight off
+    /// [`TapeScreen::head`], never carried here) -- replaces the Now
+    /// band in every state but `Normal`, where it is never pushed.
+    HeadRule,
     RunEnd {
         usual_total_tokens: Option<u64>,
         usual_wall_s: Option<f64>,
@@ -1233,7 +1238,12 @@ pub fn build_tape(
             );
         if is_active_leaf {
             bucket2.push(row);
-        } else if row.status.kind == StatusKind::Pending {
+        } else if matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped) {
+            // A failed run's own untaken rows (§2.1: "unreached rows
+            // as skipped") draw exactly like a row ahead -- faint,
+            // with "skipped · not reached · prompt" -- never in finish
+            // order, which is bucket1's own place for anything that
+            // actually ran, finished or not.
             bucket3.push(row);
         } else {
             bucket1.push(row);
@@ -1258,19 +1268,61 @@ pub fn build_tape(
         .copied()
         .collect();
 
+    let head = if run_start.is_none() {
+        TapeHead::Starting
+    } else {
+        match header.status {
+            RunStatus::Running => TapeHead::Normal,
+            RunStatus::Failed => {
+                let failing = rows.iter().find(|r| r.status.kind == StatusKind::Failed);
+                let error = failing
+                    .and_then(|r| flat.get(&r.path))
+                    .and_then(|n| n.error.clone())
+                    .unwrap_or_default();
+                TapeHead::Failed {
+                    error,
+                    failing_path: failing.map(|r| r.path.clone()),
+                }
+            }
+            _ => {
+                let handled = rows
+                    .iter()
+                    .find(|r| r.status.kind == StatusKind::FailedHandled)
+                    .map(|r| {
+                        let error = flat
+                            .get(&r.path)
+                            .and_then(|n| n.error.clone())
+                            .unwrap_or_default();
+                        (r.label.clone(), error)
+                    });
+                TapeHead::Ended {
+                    ok: matches!(header.status, RunStatus::Ok),
+                    duration_s: header.elapsed_s,
+                    handled_failure: handled,
+                }
+            }
+        }
+    };
+
     let mut items: Vec<TapeItem> = Vec::new();
-    items.push(TapeItem::RunStarted {
-        ts: run_start.map(str::to_string),
-        document: header.document.clone(),
-        // `--events`' own `run_start.engine` carries the version
-        // (`cof 0.1.0`), unlike `header.engine` (the bare adapter
-        // name every other screen's chip uses) -- §2.1's own Run
-        // Started row wants the version.
-        engine: model
-            .run_start_engine()
-            .map(str::to_string)
-            .unwrap_or_else(|| header.engine.clone()),
-    });
+    if matches!(head, TapeHead::Starting) {
+        // §2.1: the Starting state has no Run Started row at all yet
+        // -- the head rule itself is the list's own first line.
+        items.push(TapeItem::HeadRule);
+    } else {
+        items.push(TapeItem::RunStarted {
+            ts: run_start.map(str::to_string),
+            document: header.document.clone(),
+            // `--events`' own `run_start.engine` carries the version
+            // (`cof 0.1.0`), unlike `header.engine` (the bare adapter
+            // name every other screen's chip uses) -- §2.1's own Run
+            // Started row wants the version.
+            engine: model
+                .run_start_engine()
+                .map(str::to_string)
+                .unwrap_or_else(|| header.engine.clone()),
+        });
+    }
 
     for row in &bucket1 {
         let (what, preview, mut tokens) =
@@ -1291,11 +1343,13 @@ pub fn build_tape(
         }));
     }
 
-    if matches!(header.status, RunStatus::Running) {
-        items.push(TapeItem::NowBand {
+    match head {
+        TapeHead::Normal => items.push(TapeItem::NowBand {
             ts: Some(now.to_string()),
             elapsed_s: header.elapsed_s,
-        });
+        }),
+        TapeHead::Failed { .. } | TapeHead::Ended { .. } => items.push(TapeItem::HeadRule),
+        TapeHead::Starting => {}
     }
 
     for row in &bucket2 {
@@ -1357,12 +1411,14 @@ pub fn build_tape(
         }));
     }
 
-    items.push(TapeItem::RunEnd {
-        usual_total_tokens: header.history_usual_total_tokens,
-        usual_wall_s: header.history_usual_total_s,
-        duration_s: header.run_end_ts.as_deref().and_then(elapsed_offset),
-        eta_ts: header.history_eta_ts.clone(),
-    });
+    if matches!(head, TapeHead::Starting | TapeHead::Normal) {
+        items.push(TapeItem::RunEnd {
+            usual_total_tokens: header.history_usual_total_tokens,
+            usual_wall_s: header.history_usual_total_s,
+            duration_s: header.run_end_ts.as_deref().and_then(elapsed_offset),
+            eta_ts: header.history_eta_ts.clone(),
+        });
+    }
 
     let largest = tape_largest_tokens(&items);
     for item in &mut items {
@@ -1382,48 +1438,16 @@ pub fn build_tape(
         .max();
     let unit = tape_unit(largest_usual);
 
+    // §2.1's Tape title counts a finished decision too (`gate →
+    // then`), not leaves alone -- only a loop container's own row is
+    // excluded, since its passes are each already counted on their
+    // own.
     let done = bucket1
         .iter()
-        .filter(|r| r.kind.is_leaf() && r.status.kind == StatusKind::Done)
+        .filter(|r| r.kind != RowKind::Loop && r.status.kind == StatusKind::Done)
         .count() as u64;
     let running = bucket2.len() as u64;
     let ahead = bucket3.iter().filter(|r| r.kind.is_leaf()).count() as u64;
-
-    let head = if run_start.is_none() {
-        TapeHead::Starting
-    } else {
-        match header.status {
-            RunStatus::Running => TapeHead::Normal,
-            RunStatus::Failed => {
-                let failing = rows.iter().find(|r| r.status.kind == StatusKind::Failed);
-                let error = failing
-                    .and_then(|r| flat.get(&r.path))
-                    .and_then(|n| n.error.clone())
-                    .unwrap_or_default();
-                TapeHead::Failed {
-                    error,
-                    failing_path: failing.map(|r| r.path.clone()),
-                }
-            }
-            _ => {
-                let handled = rows
-                    .iter()
-                    .find(|r| r.status.kind == StatusKind::FailedHandled)
-                    .map(|r| {
-                        let error = flat
-                            .get(&r.path)
-                            .and_then(|n| n.error.clone())
-                            .unwrap_or_default();
-                        (r.label.clone(), error)
-                    });
-                TapeHead::Ended {
-                    ok: matches!(header.status, RunStatus::Ok),
-                    duration_s: header.elapsed_s,
-                    handled_failure: handled,
-                }
-            }
-        }
-    };
 
     let selected = selected_path
         .and_then(|p| rows.iter().find(|r| r.path == p))

@@ -422,10 +422,75 @@ fn draw_tape_status_line(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
+    header: &oscilloscope_core::render::Header,
     ctx: &DrawCtx,
     now: &str,
 ) {
-    use oscilloscope_core::screens::TapeItem;
+    use oscilloscope_core::screens::{TapeHead, TapeItem};
+    match &screen.head {
+        TapeHead::Starting => {
+            let text = format!(
+                "engine launching · waiting for the first event · {}",
+                header.engine
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!(" {text}"),
+                    Style::default().fg(ctx.theme.fg_muted),
+                ))),
+                area,
+            );
+            return;
+        }
+        TapeHead::Ended { handled_failure, .. } => {
+            let total = header.tokens_sent + header.tokens_received;
+            let mut spans = vec![
+                Span::styled(
+                    " ✓ run ok ",
+                    Style::default()
+                        .fg(ctx.theme.status_done)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "· {} t · {}",
+                        oscilloscope_core::format::format_tokens_thousands(total),
+                        oscilloscope_core::format::format_duration(header.elapsed_s)
+                    ),
+                    Style::default().fg(ctx.theme.text),
+                ),
+            ];
+            if let Some((label, _)) = handled_failure {
+                spans.push(Span::styled(
+                    format!(" · 1 handled failure · {label}"),
+                    Style::default().fg(ctx.theme.warning),
+                ));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+        TapeHead::Failed { error, failing_path } => {
+            let label = failing_path
+                .as_deref()
+                .map(|p| p.rsplit('.').next().unwrap_or(p).to_string())
+                .unwrap_or_default();
+            let spans = vec![
+                Span::styled(
+                    " ✗ run failed ",
+                    Style::default()
+                        .fg(ctx.theme.status_failed)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("· {label} · {error}"),
+                    Style::default().fg(ctx.theme.text),
+                ),
+            ];
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+        TapeHead::Normal => {}
+    }
     let last = screen.items.iter().rev().find_map(|item| match item {
         TapeItem::Row(row)
             if matches!(
@@ -540,6 +605,28 @@ fn tape_token_bar(total: u64, unit: u64, bold: bool, ctx: &DrawCtx) -> Vec<Span<
     spans
 }
 
+/// §2.1's head rule: `━━ <label> ━━━━...`, filled to `width` -- the Now
+/// band, the slots rule and the Starting/Ended/Failed head rules all
+/// share this one full-width shape, differing only in colour and
+/// whether the outer `━━`/fill and the inner label share one colour
+/// (Now, the slots rule) or not (Starting's `border.default` rule
+/// around a `fg.muted` label).
+fn tape_rule_line(label: &str, outer: Color, inner: Color, bold_inner: bool, width: usize) -> Line<'static> {
+    let prefix = "━━ ";
+    let suffix_text = format!("{label} ");
+    let used = prefix.chars().count() + suffix_text.chars().count();
+    let fill = width.saturating_sub(used);
+    let mut inner_style = Style::default().fg(inner);
+    if bold_inner {
+        inner_style = inner_style.add_modifier(Modifier::BOLD);
+    }
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(outer)),
+        Span::styled(suffix_text, inner_style),
+        Span::styled("━".repeat(fill), Style::default().fg(outer)),
+    ])
+}
+
 /// §3.6's deviation colour band.
 fn tape_deviation_style(pct: f64, theme: &Theme) -> Style {
     if pct >= 50.0 {
@@ -569,11 +656,15 @@ fn tape_token_column(
     ctx: &DrawCtx,
 ) -> Option<Line<'static>> {
     if !tokens.loop_pass_tokens.is_empty() {
+        // Each pass's own level is its tokens in whole bar units
+        // (the same `unit` the fixed-scale bar uses), not a fraction
+        // of a wider range -- a 130-token pass at the 50-token unit
+        // reads ▃ (level 2), not a near-full block.
         let spark: String = tokens
             .loop_pass_tokens
             .iter()
             .map(|&t| {
-                let level = ((t as f64 / (unit as f64 * 2.0)).clamp(0.0, 1.0) * 7.0) as u32;
+                let level = ((t / unit.max(1)) as u32).min(7);
                 char::from_u32(0x2581 + level).unwrap_or('▁')
             })
             .collect();
@@ -581,7 +672,10 @@ fn tape_token_column(
             tokens.loop_pass_tokens.iter().sum::<u64>() / tokens.loop_pass_tokens.len() as u64;
         return Some(Line::from(vec![
             Span::styled(spark, Style::default().fg(ctx.theme.accent_secondary)),
-            Span::styled(format!("   {avg} t/p"), Style::default().fg(ctx.theme.dim)),
+            Span::styled(
+                format!("   {} t/p", oscilloscope_core::format::format_tokens_thousands(avg)),
+                Style::default().fg(ctx.theme.fg_muted),
+            ),
         ]));
     }
     match tokens.total() {
@@ -628,6 +722,7 @@ fn tape_row_line(
     tokens_view_usual: bool,
     name_width: usize,
     what_width: usize,
+    token_width: usize,
     ctx: &DrawCtx,
 ) -> Line<'static> {
     let name_style = if row.bold {
@@ -666,14 +761,37 @@ fn tape_row_line(
         ),
     ];
     if let Some(token_line) = tape_token_column(&row.tokens, unit, tokens_view_usual, ctx) {
+        // The token column is right-aligned flush to the pane's own
+        // inner edge (§3.5: "numbers are always printed next to a
+        // bar"), not left-padded by a fixed gap -- a bar and a loop's
+        // own sparkline end up the same number of printed characters
+        // apart from the right border even though the bar is always
+        // 8 cells and a sparkline is as wide as its own pass count.
+        let printed: usize = token_line
+            .spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        if token_width > printed {
+            spans.push(Span::raw(" ".repeat(token_width - printed)));
+        }
         spans.extend(token_line.spans);
     }
     let mut line = Line::from(spans);
     if selected {
+        // A span's own foreground always wins over a line-level
+        // `patch_style`'s colour (ratatui patches a span's `Some`
+        // fields over the line's), so the background/foreground pair
+        // above never actually reaches a row ahead's own dim text --
+        // `REVERSED` is a modifier, not a colour, and modifiers from
+        // a line's own patch always combine into every span
+        // regardless, which is what makes the selection visible on
+        // every row in every theme and under `NO_COLOR` alike.
         line = line.patch_style(
             Style::default()
                 .bg(ctx.theme.selection_bg)
-                .fg(ctx.theme.selection_fg),
+                .fg(ctx.theme.selection_fg)
+                .add_modifier(Modifier::REVERSED),
         );
     }
     line
@@ -723,6 +841,7 @@ fn draw_tape_list(
     };
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
         .title(Span::styled(
             format!(" {title} "),
             Style::default()
@@ -742,6 +861,10 @@ fn draw_tape_list(
     } else {
         (inner.width as usize).saturating_sub(40).min(28)
     };
+    // 9 for the clock, 2 for the glyph and its own trailing space --
+    // whatever's left of the pane's own inner width is the token
+    // column's, right-aligned flush to its far edge.
+    let token_width = (inner.width as usize).saturating_sub(9 + 2 + name_width + what_width);
 
     let mut lines: Vec<(Option<String>, Line<'static>)> = Vec::new();
     let mut now_band_idx: Option<usize> = None;
@@ -783,6 +906,7 @@ fn draw_tape_list(
                         app.tape_tokens_view,
                         name_width,
                         what_width,
+                        token_width,
                         ctx,
                     ),
                 ));
@@ -804,15 +928,19 @@ fn draw_tape_list(
                     .as_deref()
                     .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
                     .unwrap_or_default();
+                let label = format!(
+                    "Now {ts_text} · {}",
+                    oscilloscope_core::format::format_duration(*elapsed_s)
+                );
                 lines.push((
                     None,
-                    Line::from(Span::styled(
-                        format!(
-                            "── Now {ts_text} · {} ───────────────────────────────────────────────────────────────",
-                            oscilloscope_core::format::format_duration(*elapsed_s)
-                        ),
-                        Style::default().fg(ctx.theme.accent_primary).add_modifier(Modifier::BOLD),
-                    )),
+                    tape_rule_line(
+                        &label,
+                        ctx.theme.accent_primary,
+                        ctx.theme.accent_primary,
+                        true,
+                        inner.width as usize,
+                    ),
                 ));
             }
             TapeItem::SlotsRule {
@@ -820,12 +948,64 @@ fn draw_tape_list(
                 slots,
                 queued,
             } => {
+                let label = format!("{busy} of {slots} Slots Busy · {queued} Pass Queued");
                 lines.push((
                     None,
-                    Line::from(Span::styled(
-                        format!("── {busy} of {slots} Slots Busy · {queued} Pass Queued ──"),
-                        Style::default().fg(ctx.theme.accent_primary),
-                    )),
+                    tape_rule_line(
+                        &label,
+                        ctx.theme.accent_primary,
+                        ctx.theme.accent_primary,
+                        false,
+                        inner.width as usize,
+                    ),
+                ));
+            }
+            TapeItem::HeadRule => {
+                let (outer, inner_color, bold, label) = match &screen.head {
+                    oscilloscope_core::screens::TapeHead::Starting => (
+                        ctx.theme.border,
+                        ctx.theme.fg_muted,
+                        true,
+                        format!("Starting · {} launching · no events yet", header.engine),
+                    ),
+                    oscilloscope_core::screens::TapeHead::Ended { duration_s, .. } => {
+                        let end = header
+                            .run_end_ts
+                            .as_deref()
+                            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                            .unwrap_or_default();
+                        (
+                            ctx.theme.status_done,
+                            ctx.theme.status_done,
+                            true,
+                            format!(
+                                "Run Ended · {} · {} · {end}",
+                                tape_status_text(header.status),
+                                oscilloscope_core::format::format_duration(*duration_s)
+                            ),
+                        )
+                    }
+                    oscilloscope_core::screens::TapeHead::Failed { .. } => {
+                        let end = header
+                            .run_end_ts
+                            .as_deref()
+                            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                            .unwrap_or_default();
+                        (
+                            ctx.theme.status_failed,
+                            ctx.theme.status_failed,
+                            true,
+                            format!(
+                                "Run Failed · {} · {end}",
+                                oscilloscope_core::format::format_duration(header.elapsed_s)
+                            ),
+                        )
+                    }
+                    oscilloscope_core::screens::TapeHead::Normal => continue,
+                };
+                lines.push((
+                    None,
+                    tape_rule_line(&label, outer, inner_color, bold, inner.width as usize),
                 ));
             }
             TapeItem::RunEnd {
@@ -914,12 +1094,8 @@ fn draw_tape_list(
             width: inner.width,
             height: 1,
         };
-        let dev_pct = header.history_usual_total_s.map(|_| 0.0); // placeholder when no run-level usual tokens tracked separately
-        let _ = dev_pct;
         let usual_pct = header
-            .history_step_usual
-            .get("_total")
-            .and_then(|s| s.tokens_p50)
+            .history_usual_total_tokens
             .filter(|_| header.tokens_sent + header.tokens_received > 0)
             .map(|usual| {
                 let total = header.tokens_sent + header.tokens_received;
@@ -927,7 +1103,7 @@ fn draw_tape_list(
             });
         let mut spans = vec![
             Span::styled(
-                "Totals ",
+                " Totals ",
                 Style::default()
                     .fg(ctx.theme.text)
                     .add_modifier(Modifier::BOLD),
@@ -974,20 +1150,18 @@ fn draw_tape_list(
             "Effects  ",
             Style::default().fg(ctx.theme.fg_muted),
         ));
-        if let Some(eta) = header
+        let eta_text = header
             .history_eta_ts
             .as_deref()
-            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-        {
-            spans.push(Span::styled(
-                "ETA ",
-                Style::default().fg(ctx.theme.fg_muted),
-            ));
-            spans.push(Span::styled(
-                format!("{eta}  "),
-                Style::default().fg(ctx.theme.text),
-            ));
-        }
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+        spans.push(Span::styled(
+            "ETA ",
+            Style::default().fg(ctx.theme.fg_muted),
+        ));
+        spans.push(Span::styled(
+            format!("{}  ", eta_text.as_deref().unwrap_or("—")),
+            Style::default().fg(ctx.theme.text),
+        ));
         spans.push(Span::styled(
             "Cost ",
             Style::default().fg(ctx.theme.fg_muted),
@@ -1019,6 +1193,7 @@ fn draw_tape_detail(
     };
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
         .title(Span::styled(
             title,
             Style::default()
@@ -1096,7 +1271,7 @@ fn draw_tape(
         ])
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "TAPE", now, ctx);
-    draw_tape_status_line(frame, sections[2], screen, ctx, now);
+    draw_tape_status_line(frame, sections[2], screen, header, ctx, now);
     draw_tape_key_bar(frame, sections[3], full_area.width >= 80, ctx);
 
     let body = sections[1];
