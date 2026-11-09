@@ -71,6 +71,50 @@ def test_json_with_object_schema_warns() -> None:
     assert len(warnings) == 1
 
 
+def test_own_budget_tokens_warns_even_with_the_runtime_switch_off() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "a",
+                "prompt_type": "object",
+                "split": {"budget_tokens": 500},
+            }
+        ]
+    }
+    warnings = splitting_merge_warnings(orch, {})
+    assert len(warnings) == 1
+    assert "split.budget_tokens" in warnings[0]
+
+
+def test_split_enabled_false_is_never_warned_about_even_with_the_switch_on() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "a",
+                "prompt_type": "object",
+                "split": {"enabled": False},
+            }
+        ]
+    }
+    assert splitting_merge_warnings(orch, _SPLITTING_ON) == []
+
+
+def test_split_enabled_false_is_never_warned_about_even_with_its_own_budget_tokens() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "prompt",
+                "name": "a",
+                "prompt_type": "object",
+                "split": {"enabled": False, "budget_tokens": 500},
+            }
+        ]
+    }
+    assert splitting_merge_warnings(orch, _SPLITTING_ON) == []
+
+
 def test_walks_nested_effects() -> None:
     orch = {
         "effects": [

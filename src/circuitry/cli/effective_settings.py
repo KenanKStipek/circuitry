@@ -841,6 +841,9 @@ def _record_complexity_sources(
     sources["complexity.splitting.max_depth"] = _field_source(
         "splitting", "max_depth"
     )
+    sources["complexity.splitting.max_concurrency"] = _field_source(
+        "splitting", "max_concurrency"
+    )
     sources["complexity.splitting.on_failure"] = _field_source(
         "splitting", "on_failure"
     )

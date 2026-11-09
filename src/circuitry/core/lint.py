@@ -117,8 +117,13 @@ def _walk(
 
 
 def splitting_merge_warnings(orch: Any, runtime: Mapping[str, Any] | None) -> list[str]:
-    """Warn when the resolved runtime enables the size trigger and a prompt's
-    output type needs ``split.merge.template`` but has none (#672).
+    """Warn when a prompt's output type needs ``split.merge.template`` but
+    has none, and splitting could actually fire for it (#672): either the
+    resolved runtime enables the size trigger, or the prompt carries its
+    own ``split.budget_tokens`` (which splits even with the runtime switch
+    off — :func:`circuitry.core.decompose._resolve_split_budget`'s own
+    precedence). A prompt that opts itself out with ``split.enabled:
+    false`` is never warned about, either way.
 
     Runtime-aware, unlike the rest of this module: needs the *resolved*
     ``runtime.complexity.splitting.enabled``, not just the document's own
@@ -132,8 +137,9 @@ def splitting_merge_warnings(orch: Any, runtime: Mapping[str, Any] | None) -> li
         settings = resolve_complexity_settings(runtime)
     except Exception:
         return []
-    if not settings.splitting.enabled or not isinstance(orch, Mapping):
+    if not isinstance(orch, Mapping):
         return []
+    runtime_enabled = settings.splitting.enabled
 
     warnings: list[str] = []
 
@@ -145,7 +151,9 @@ def splitting_merge_warnings(orch: Any, runtime: Mapping[str, Any] | None) -> li
                 continue
             here = f"{path}[{index}]"
             if str(effect.get("type") or "").strip().lower() == "prompt":
-                _check_prompt_needs_merge_template(effect, where=here, warnings=warnings)
+                _check_prompt_needs_merge_template(
+                    effect, where=here, warnings=warnings, runtime_enabled=runtime_enabled
+                )
             for key in _CHILD_KEYS:
                 _walk_prompts(effect.get(key), path=f"{here}.{key}")
 
@@ -158,8 +166,16 @@ def splitting_merge_warnings(orch: Any, runtime: Mapping[str, Any] | None) -> li
 
 
 def _check_prompt_needs_merge_template(
-    effect: Mapping[str, Any], *, where: str, warnings: list[str]
+    effect: Mapping[str, Any], *, where: str, warnings: list[str], runtime_enabled: bool
 ) -> None:
+    split = effect.get("split")
+    split_enabled = split.get("enabled") if isinstance(split, Mapping) else None
+    if split_enabled is False:
+        return
+    own_budget = isinstance(split, Mapping) and split.get("budget_tokens") is not None
+    if not runtime_enabled and not own_budget:
+        return
+
     prompt_type = str(effect.get("prompt_type") or "text").strip().lower()
     schema = effect.get("schema")
     native = prompt_type in ("text", "array") or (
@@ -167,15 +183,19 @@ def _check_prompt_needs_merge_template(
     )
     if native:
         return
-    split = effect.get("split")
     merge = split.get("merge") if isinstance(split, Mapping) else None
     template = merge.get("template") if isinstance(merge, Mapping) else None
     if isinstance(template, str) and template.strip():
         return
     name = effect.get("name")
     label = f"{where} ('{name}')" if isinstance(name, str) and name else where
+    reason = (
+        "runtime.complexity.splitting is enabled"
+        if runtime_enabled
+        else "this prompt's own split.budget_tokens splits it"
+    )
     warnings.append(
-        f"{label}: runtime.complexity.splitting is enabled and prompt_type "
+        f"{label}: {reason} and prompt_type "
         f"'{prompt_type}' has no split.merge.template — a split over budget will "
         "record no_merge and run as-is (or fail under on_failure: fail)."
     )

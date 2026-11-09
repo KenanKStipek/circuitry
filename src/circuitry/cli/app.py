@@ -1078,8 +1078,9 @@ def run_cmd(
         help=(
             "Force runtime.complexity.splitting on/off for this run. Beats "
             "--profile and the orchestration/config. Needs no scoring: an "
-            "effect's own split.budget_tokens still splits with this off, "
-            "and splitting.enabled: false here always opts a run out."
+            "effect's own split.budget_tokens still splits even with this "
+            "off, and --no-split does not stop it either — only an effect's "
+            "own split.enabled: false opts it out."
         ),
     ),
 ):
@@ -1678,8 +1679,9 @@ def run_library_cmd(
         help=(
             "Force runtime.complexity.splitting on/off for this run. Beats "
             "--profile and the orchestration/config. Needs no scoring: an "
-            "effect's own split.budget_tokens still splits with this off, "
-            "and splitting.enabled: false here always opts a run out."
+            "effect's own split.budget_tokens still splits even with this "
+            "off, and --no-split does not stop it either — only an effect's "
+            "own split.enabled: false opts it out."
         ),
     ),
 ):
@@ -2339,6 +2341,13 @@ def _render_complexity_info(
             "Max depth",
             "complexity.splitting.max_depth",
             str(complexity.splitting.max_depth),
+        ),
+        (
+            "Max concurrency",
+            "complexity.splitting.max_concurrency",
+            str(complexity.splitting.max_concurrency)
+            if complexity.splitting.max_concurrency is not None
+            else "—",
         ),
         (
             "On failure",
