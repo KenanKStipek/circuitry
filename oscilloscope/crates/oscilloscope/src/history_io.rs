@@ -227,10 +227,15 @@ impl HistoryHandle {
         // before preflight runs), which would otherwise offset this
         // run's own figures from every recorded one by however long
         // that takes.
+        // Before the run has even started (issue #678's Starting
+        // state: no `run_start` event yet either), the ETA is "if it
+        // started right now" -- `now` itself, rather than bailing
+        // out with no anchor at all to measure elapsed time from.
         let eta_start_ts = state
             .pointer("/runtime/last_run/started_at")
             .and_then(serde_json::Value::as_str)
-            .or(run_start_ts)?;
+            .or(run_start_ts)
+            .unwrap_or(now);
         let current_hash = state
             .pointer("/runtime/last_run/document_hash")
             .and_then(serde_json::Value::as_str);
@@ -308,6 +313,7 @@ pub fn apply_history_eta(
     header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
     header.history_vs_usual_s = eta.vs_usual_s;
     header.history_usual_total_s = eta.usual_total_s;
+    header.history_usual_total_tokens = stats.whole_run.and_then(|r| r.tokens_p50);
     // Issue #649's "history: N of 3 runs": `stats.same_hash_ok_count`
     // is the real count at any count, including the very first ok
     // run (`0`) -- `eta` itself only carries a whole-run ETA once

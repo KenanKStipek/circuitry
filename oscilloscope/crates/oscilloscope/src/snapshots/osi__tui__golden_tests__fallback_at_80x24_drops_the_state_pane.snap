@@ -1,9 +1,8 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 6331
 expression: text
 ---
-"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5.0s · 00:00:00   0  1  [2]  3                "
+" ⠔⠒⠒⠤⠤⠔⠒⠒  do-thing.yml · ● Running 5.0s                       FLOW    00:00:00 "
 "┌ flow (do-thing · 1/5+) ◆ decision ⟲ loop ▶ run┐┌ selected ───────────────────┐"
 "│◐ prime                                        ││a                            │"
 "│  ✓ a                                          ││tool · shell                 │"
@@ -20,10 +19,10 @@ expression: text
 "│                                               ││                             │"
 "│                                               ││                             │"
 "│                                               ││                             │"
-"│                                               ││                             │"
-"│                                               ││                             │"
-"│                                               ││                             │"
 "│quick steps folded: 0 · 0.0s                   ││                             │"
 "│health: 0 failed · 0 retries · 0 warnings      ││                             │"
 "│                                               ││                             │"
 "└───────────────────────────────────────────────┘└─────────────────────────────┘"
+" Totals ↑0 ↓0 · 0 t  1/5 Effects  ETA —  Cost —                                 "
+"                                                                                "
+" ↑↓ Select  tab Pane  s State  l Log  z Fold  v Full Value  ⋯    ? Help  q Quit "

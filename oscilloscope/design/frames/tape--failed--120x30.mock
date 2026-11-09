@@ -1,0 +1,46 @@
+#! tui-mockup 1
+#! size: 120x30
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — tape · run failed
+#! state: failed
+#! theme: catppuccin-mocha
+#! note: craft-ok CR1 the bracketed text is the engine's own error message, quoted verbatim
+#! note: data: osi-spike/demo/run2 (events.jsonl, state.json), frozen 3.62 s after run_start; cof 0.1.0 + scripted adapter, so prompts finish instantly and tokens arrive as bursts
+#! note: invented: nothing. ETA reads — because this document has no run history
+#! note: craft-ok CR6 a 14-effect demo run leaves rows free; a real run fills them
+#! note: usual = median of 3 real history runs (demo/hist); ETA = run start + usual wall time
+#! region r1 header 0,0,120,1
+#! region r2 list 0,1,76,27 Tape · 1 Done · 0 Running · 11 Ahead · ▰ = 50 t
+#! region r3 detail 76,1,44,27 Run · Failed
+#! region r4 keybar 0,29,120,1
+#! focus r2
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{status.error bold on:statusbar.bg}✗ Failed {/}{fg.default on:statusbar.bg}0.0s                                                                       {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:48:49 {/}
+{border.focus}╭─ {/}{fg.title bold}Tape · 1 Done · 0 Running · 11 Ahead · ▰ = 50 t {/}{border.focus}────────────────────────╮{/}{border.default}╭─ {/}{fg.title bold}Run · Failed {/}{border.default}───────────────────────────╮{/}
+{border.focus}│{/}{fg.faint}12:48:49 {/}{fg.muted}■ Run Started        {/}{fg.faint}demo.yml · cof 0.1.0                        {/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Outcome {/}{status.error bold}✗ Failed  {/}{fg.default}0.0s · 12:48:49        {/}{border.default}│{/}
+{border.focus}│{/}{fg.faint}12:48:49 {/}{status.success}✓ {/}{fg.default}kind               {/}{fg.muted}↑212 ↓3 · Bug.              {/}{accent.primary}▰▰▰▰{/}{fg.faint}▱▱▱▱   {/}{fg.default bold}215 t{/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Step    {/}{fg.default}tests · tool · shell             {/}{border.default}│{/}
+{border.focus}│{/}{fg.faint on:selection.bg}12:48:49 {/}{status.error bold on:selection.bg}✗ {/}{selection.fg bold on:selection.bg}tests              {/}{fg.muted on:selection.bg}✗ shell: command 'sleep' n⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Tokens  {/}{fg.default}↑212 ↓3 · {/}{fg.default bold}215 t                  {/}{border.default}│{/}
+{border.focus}│{/}{status.error}━━ {/}{status.error bold}Run Failed · 0.0s · 12:48:49 {/}{status.error}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Usual   {/}{fg.default}203 t {/}{fg.default bold}+6%                        {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· gate               skipped · not reached · if⋯                 {/}{border.focus}│{/}{border.default}│                                          │{/}
+{border.focus}│         {/}{fg.faint}· gate › reply       skipped · not reached · pr⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.title bold}Error                                    {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· drafts             skipped · not reached · lo⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.default}shell: command 'sleep' not in allowlist  {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_0 › draft     skipped · not reached · pr⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.default}['cat', 'date', 'echo', 'head', 'ls',    {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_0 › pause     skipped · not reached · to⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.default}'pwd', 'tail', 'wc']. Add it via         {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_1 › draft     skipped · not reached · pr⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.default}params['allowed_commands'] or pick a     {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_1 › pause     skipped · not reached · to⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.default}different command.                       {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_2 › draft     skipped · not reached · pr⋯                 {/}{border.focus}│{/}{border.default}│                                          │{/}
+{border.focus}│         {/}{fg.faint}· iter_2 › pause     skipped · not reached · to⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.title bold}Not Reached                              {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· flaky              skipped · not reached · to⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.faint}· gate → then or else                    {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· summary            skipped · not reached · pr⋯                 {/}{border.focus}│{/}{border.default}│ {/}{fg.faint}· drafts · 3 passes                      {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│ {/}{fg.faint}· flaky                                  {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│ {/}{fg.faint}· summary                                {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│                                          │{/}
+{border.focus}│                                                                          │{/}{border.default}│                                          │{/}
+{border.focus}│                                                                          │{/}{border.default}│                                          │{/}
+{border.focus}│                                                                          │{/}{border.default}│                                          │{/}
+{border.focus}│                                                                          │{/}{border.default}│                                          │{/}
+{border.focus}│                                                                          │{/}{border.default}│                                          │{/}
+{border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}{border.default}│                                          │{/}
+{border.focus}│ {/}{fg.title bold}Totals {/}{fg.default}↑212 ↓3 · {/}{fg.default bold}215 t  +6% {/}{fg.muted}Usual  {/}{fg.default}3/14 {/}{fg.muted}Effects  ETA {/}{fg.faint}—  {/}{fg.muted}Cost {/}{fg.faint}—           {/}{border.focus}│{/}{border.default}│                                          │{/}
+{border.focus}╰──────────────────────────────────────────────────────────────────────────╯{/}{border.default}╰──────────────────────────────────────────╯{/}
+{status.error} ✗ {/}{fg.default}run failed · tests {/}{fg.faint}· shell: command 'sleep' not in allowlist{/}
+{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open  {/}{keyhint.key bold on:statusbar.bg}p {/}{keyhint.desc on:statusbar.bg}Previews  {/}{keyhint.key bold on:statusbar.bg}t {/}{keyhint.desc on:statusbar.bg}Tokens  {/}{keyhint.key bold on:statusbar.bg}0-3 {/}{keyhint.desc on:statusbar.bg}Screens                                                {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}

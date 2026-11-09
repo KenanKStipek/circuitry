@@ -1,0 +1,58 @@
+{
+ "prime.drafts.iter_0.draft": {
+  "runs": [
+   154,
+   162,
+   150
+  ],
+  "usual": 154
+ },
+ "prime.drafts.iter_1.draft": {
+  "runs": [
+   153,
+   161,
+   147
+  ],
+  "usual": 153
+ },
+ "prime.drafts.iter_2.draft": {
+  "runs": [
+   155,
+   164,
+   152
+  ],
+  "usual": 155
+ },
+ "prime.gate.reply": {
+  "runs": [
+   265,
+   270,
+   253
+  ],
+  "usual": 265
+ },
+ "prime.kind": {
+  "runs": [
+   203,
+   214,
+   192
+  ],
+  "usual": 203
+ },
+ "prime.summary": {
+  "runs": [
+   394,
+   415,
+   402
+  ],
+  "usual": 402
+ },
+ "_total": {
+  "runs": [
+   1324,
+   1386,
+   1296
+  ],
+  "usual": 1324
+ }
+}

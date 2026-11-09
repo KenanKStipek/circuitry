@@ -1,0 +1,38 @@
+#! tui-mockup 1
+#! size: 80x24
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — tape at the 80x24 floor
+#! state: normal
+#! theme: catppuccin-mocha
+#! note: data: osi-spike/demo/run2 (events.jsonl, state.json), frozen 3.62 s after run_start; cof 0.1.0 + scripted adapter, so prompts finish instantly and tokens arrive as bursts
+#! note: invented: nothing. ETA reads — because this document has no run history
+#! note: craft-ok CR6 a 14-effect demo run leaves rows free; a real run fills them
+#! note: usual = median of 3 real history runs (demo/hist)
+#! region r1 header 0,0,80,1
+#! region r2 list 0,1,80,21 Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t
+#! region r3 keybar 0,23,80,1
+#! focus r2
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                              {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{border.focus}╭─ {/}{fg.title bold}Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t {/}{border.focus}─────────────────────────────╮{/}
+{border.focus}│{/}{fg.faint}12:50:47 {/}{status.success}✓ {/}{fg.default}kind               {/}{fg.muted}↑212 ↓3 · Bug.                  {/}{accent.primary}▰▰▰▰{/}{fg.faint}▱▱▱▱   {/}{fg.default}215 t{/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{status.success}✓ {/}{fg.default}tests              {/}{fg.muted}3.0s · sleep 3                                  {/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{accent.secondary bold}◆ {/}{fg.default}gate → then        {/}{fg.muted}kind != ""                                      {/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint on:selection.bg}12:50:50 {/}{status.success on:selection.bg}✓ {/}{selection.fg bold on:selection.bg}gate › reply       {/}{fg.muted on:selection.bg}↑348 ↓41 · Thanks for the repo⋯ {/}{accent.primary on:selection.bg}▰▰▰▰▰▰▰▰   {/}{fg.default bold on:selection.bg}389 t{/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{accent.secondary bold}⟳ {/}{fg.default}drafts             {/}{fg.muted}3 passes · 2 wide               {/}{accent.secondary}▃▃       {/}{fg.muted}130 t/p{/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{status.success}✓ {/}{fg.default}iter_0 › draft     {/}{fg.muted}↑118 ↓12 · Cats nap in sunbeam⋯ {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}130 t{/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{status.success}✓ {/}{fg.default}iter_1 › draft     {/}{fg.muted}↑118 ↓13 · Dogs greet the mail⋯ {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}131 t{/}{border.focus}│{/}
+{border.focus}│{/}{accent.primary}━━ {/}{accent.primary bold}Now 12:50:50 · 3.6s {/}{accent.primary}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{accent.primary bold}● {/}{fg.default bold}iter_0 › pause     {/}{fg.muted}0.6s · sleep 1                                  {/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}12:50:50 {/}{accent.primary bold}● {/}{fg.default bold}iter_1 › pause     {/}{fg.muted}0.6s · sleep 1                                  {/}{border.focus}│{/}
+{border.focus}│{/}{accent.primary}━━ 2 of 2 Slots Busy · 1 Pass Queued ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}
+{border.focus}│         {/}{fg.faint}· iter_2 › draft     prompt · queued                 usually 155 t   {/}{border.focus}│{/}
+{border.focus}│         {/}{fg.faint}· iter_2 › pause     tool · sleep 1 · queued                         {/}{border.focus}│{/}
+{border.focus}│         {/}{fg.faint}· flaky              tool · ls /nonexistent-osi-dem⋯                 {/}{border.focus}│{/}
+{border.focus}│         {/}{fg.faint}· summary            prompt                          usually 402 t   {/}{border.focus}│{/}
+{border.focus}│         {/}{fg.muted}■ {/}{fg.faint}Run End            usually 1,324 t · ETA 12:50:52                  {/}{border.focus}│{/}
+{border.focus}│                                                                              │{/}
+{border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}
+{border.focus}│ {/}{fg.title bold}Totals {/}{fg.default}↑796 ↓69 · {/}{fg.default bold}865 t  +12% {/}{fg.muted}Usual  {/}{fg.default}6/14 {/}{fg.muted}Effects  ETA {/}{fg.default}12:50:52  {/}{fg.muted}Cost {/}{fg.faint}—      {/}{border.focus}│{/}
+{border.focus}╰──────────────────────────────────────────────────────────────────────────────╯{/}
+{status.success} ✓ {/}{fg.default}gate › reply finished {/}{fg.faint}· ↑348 ↓41 · 0.6s ago{/}
+{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open  {/}{keyhint.key bold on:statusbar.bg}p {/}{keyhint.desc on:statusbar.bg}Previews  {/}{keyhint.key bold on:statusbar.bg}t {/}{keyhint.desc on:statusbar.bg}Tokens  {/}{keyhint.key bold on:statusbar.bg}0-3 {/}{keyhint.desc on:statusbar.bg}Screens        {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}

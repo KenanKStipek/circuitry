@@ -1,0 +1,14 @@
+prime.kind:
+  - {text: "Bug.", tokens_sent: 210, tokens_received: 4}
+prime.gate.reply:
+  - {text: "Thanks for the report. We will look into why 1h30m fails while 90m works and fix it in the next release.", tokens_sent: 240, tokens_received: 30}
+prime.reply:
+  - {text: "Thanks for the report. We will look into why 1h30m fails while 90m works and fix it in the next release.", tokens_sent: 240, tokens_received: 30}
+prime.drafts.iter_0.draft:
+  - {text: "Cats nap in sunbeams and judge you quietly.", tokens_sent: 150, tokens_received: 12}
+prime.drafts.iter_1.draft:
+  - {text: "Dogs greet the mail carrier like a long-lost friend.", tokens_sent: 148, tokens_received: 13}
+prime.drafts.iter_2.draft:
+  - {text: "Birds trade songs across the fence at dawn.", tokens_sent: 152, tokens_received: 12}
+prime.summary:
+  - {text: "Three animal sentences, one issue triaged as a bug.", tokens_sent: 400, tokens_received: 15}

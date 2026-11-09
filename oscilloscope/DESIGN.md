@@ -1049,21 +1049,26 @@ every existing test, sees the full, unfolded tree): on by default,
   `iter_N` key, and the details pane's own title shows both
   (`pass 3 of 8 (iter_2)`).
 
-**Keys:**
+**Keys** (issue #678: `←→`, `z` and `v` are gone from the Tape, which
+has no pane or fold state of its own for them to act on; `tab` only
+cycles its own pane focus there, with no effect on `↑↓`'s own
+movement -- the table below still applies to Flow/Time/Cost as
+shipped. `t` moved to `T`; the Tape's own keys, including its own
+`t`/`p`, are §6.3e's):
 
 | Key | Action |
 |---|---|
 | `↑↓`/`jk` | move (the focused pane's own selection, or the details pane's scroll) |
 | `PgUp`/`PgDn` | move a page (the focused pane's own last-rendered interior height) |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
-| `←→` | collapse / expand (orchestration pane) |
+| `←→` | collapse / expand (orchestration pane; Flow/Time/Cost only) |
 | `⏎` | expand a quick-steps row (issue #613) in place; `←` folds it again |
-| `z` | fold on/off (issue #613: breadcrumbs and quick-steps summaries); on by default |
+| `z` | fold on/off (issue #613: breadcrumbs and quick-steps summaries); on by default; Flow/Time/Cost only |
 | `f` | follow the running row (on by default) |
 | `e` | errors only (keeps a failed leaf's own ancestors so there's still a tree to show it under) |
 | `/` | filter (substring, on path or label; same ancestor-keeping rule) |
 | `tab` | orchestration → details → state |
-| `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it |
+| `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it; Flow/Time/Cost only |
 | `c` | cancel, with a confirm — the same as a *confirmed* `c`/`q` always has (`do_run`'s own signal-forwarding/kill-escalation path, not a separate one) |
 | `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`, and leaves the instant the engine exits — see "the finished screen" below); with nothing running, quits at once, no confirm; in `osi watch`, always just detaches, with no confirm — watch owns no engine to cancel |
 | Ctrl-C | checked before any dialog, and never merely dismisses one: forwards SIGINT at once with no confirm while something's running (a second Ctrl-C starts the same 10s kill deadline a real repeated SIGINT would), quits at once with nothing running, and in `osi watch` always just detaches |
@@ -1233,10 +1238,12 @@ background — documented, per role, in `theme.rs` itself.
 
 `--theme <name>` (both `osi <doc>` and `osi watch`) chooses a theme;
 with neither flag, `OSI_THEME` applies; with neither, `terminal`. An
-unknown name from either is a usage error listing the valid ones. `t`
-cycles live through the eleven names in listed order, wrapping, without
-rebuilding the render state; the header shows the new name for about 2
-seconds, and the log pane gets a `theme: <name>` line. `ColorMode`
+unknown name from either is a usage error listing the valid ones. `T`
+(issue #678 moved it from `t`, which the Tape now uses for its own
+token column) cycles live through the eleven names in listed order,
+wrapping, without rebuilding the render state; the header band shows
+the new name for about 2 seconds, and the log pane gets a
+`theme: <name>` line. `ColorMode`
 (`theme::ColorMode::from_env`) is detected once at startup from
 `NO_COLOR`/`COLORTERM`/`TERM`, in that priority order, and shared by
 every theme choice for the run: truecolour keeps a named theme's RGB as
@@ -1247,144 +1254,15 @@ greyscale ramp, picking whichever is closer); 16 colours falls back to
 theme, resetting every role to the terminal's own default — structure
 still reads from glyphs and modifiers, never colour alone.
 
-### 6.3a Screens, the overview and `--glance` (issue #626)
+### 6.3a Screens and `--glance` (issue #626; screen 0 superseded by §6.3e, issue #678)
 
 `oscilloscope_core::screens::Screen` names the four screens osi
-switches between with `0`-`3`: `Overview` (`0`, the default for both
-`osi <doc>` and `osi watch`), `Time` (`1`), `Flow` (`2`, §6.3's own
-layout above, issue #635) and `Cost` (`3`, §6.3b
-below). `Time` has no screen built yet — `Screen::is_available` says
-so, `Screen::from_key` refuses `1` on that basis alone, and it gets no
-tab in the header line. Selection, follow, folding, filters and
+switches between with `0`-`3`: `Tape` (`0`, the default for both
+`osi <doc>` and `osi watch` -- §6.3e, replacing the old Overview),
+`Time` (`1`), `Flow` (`2`, §6.3's own layout above, issue #635) and
+`Cost` (`3`, §6.3b below). Selection, follow, folding, filters and
 collapsed rows all live on `keys::App` outside the `screen` field, so
 switching never touches any of them.
-
-**The overview's model** (`oscilloscope_core::screens::Overview`,
-`build_overview`) is built from exactly the same inputs `render::build`
-already has — the live state, `--events` (through `RunModel`), the
-compiled plan and `runtime.last_run.totals` — no engine change needed.
-A caller builds it only while the overview is actually on display
-(`main.rs`'s own `build_overview_if_active`), right after the existing
-rebuild: one rebuild of a 2,000-node state stays well under the redraw
-interval, and nothing here is built at all for a screen not shown.
-
-- **Phase strip:** the document's own top-level rows (depth 1 in the
-  already-folded `rows` `render::build_folded` produced, so a single-
-  child wrapper chain is already one breadcrumb row by the time this
-  sees it), each with its own status, start time (`created_at`) and
-  duration (ticking while it runs, same as an orchestration-pane row).
-  How many fit a given width, and the `○ N more` for the rest, is
-  `tui.rs`'s own `draw_phase_strip`, not this model — core stays
-  width-agnostic.
-- **Now pane:** the step follow selects — the row matching the shared
-  `selected_path` if it's running, else the deepest running row (the
-  same tie-break `keys::App::follow_target` uses; the document root
-  itself is excluded from both this pick and the "+N more running"
-  count, since it's running for the whole run and would otherwise
-  inflate that count by one permanently). A prompt's own focus detail
-  carries its `sent` token count (actual or the in-flight estimate)
-  and a snippet; a tool's its rendered command; an agent's (a tool
-  whose own `meta.provider` is `"agent"`) its `engine`/`model` when the
-  node happens to carry them, plus a fixed note
-  (`AGENT_LIVE_DATA_NOTE`) that live session data isn't available yet
-  — #612's live-agent-data lane is a later issue. A step known only
-  from `--events` (a tree-loop pass's prompt, confirmed running
-  before it ever gets a state node of its own, §1.4) has no
-  `created_at`/`meta.model`/`meta.adapter` to read `since`/the
-  model-or-adapter line from yet — issue #631's own fix:
-  `RunModel::event_started_at` gives `since` from the step's own
-  `start` event, and `PlanTree::prompt_model_or_provider` gives the
-  model or adapter from the compiled plan's own prompt op, the same
-  two sources the token bar's own running-prompt count and "agents in
-  flight" already trust for exactly this case. With nothing
-  running, the last finished row (by `completed_at`); once the run has
-  ended (`header.status != Running`), the outcome, start/end and
-  totals, plus (issue #637) the run's own stopped agent if it has
-  one -- a `meta.live` node left behind by an interruption, with no
-  `completed_at` of its own, since an ended run otherwise has no
-  step left to focus on at all. It is named, with its last-known
-  live block shown the same way a running or last-finished step's
-  own already is, never as running. Its own `since`/elapsed line
-  (issue #647) freezes at the run's own end (`header.run_end_ts`,
-  passed into `screens::build_focused_step` as `run_ended_at`) rather
-  than ticking against osi's wall clock at render time -- the session
-  ended with the run, however long ago that now is; `stale` itself
-  (`AgentLive::is_recent`) stays keyed on the real wall clock,
-  unaffected, since a leftover `meta.live` reads as stale forever
-  once the run has ended, no matter when it's actually viewed. The
-  same leftover's last tool (`meta.live.current_tool`) is labelled
-  `last: <tool>`, never `running: <tool>` -- it is the last thing the
-  session was doing, not something still running, now that the
-  session itself has stopped. While a session genuinely is still
-  running, that same line instead reads `running: <tool> · <elapsed>`,
-  the tool's own time from `current_tool.started_at` to `now`
-  (`FocusDetail::Agent::current_tool_elapsed_s`) -- separate from
-  `FocusedStep::elapsed_s`, the session's own total.
-- **Time card:** the run's own start/end, elapsed, ETA, a bar of the
-  phase strip's own durations (drawn as blocks scaled to the longest
-  one, `tui.rs`'s own `draw_time_card`) and its slowest *finished*
-  entry.
-- **Flow card:** `header.effects_done`/`effects_planned` (moved here
-  from the header line) and a failure count; the latest two decisions
-  (a named `if`'s own `meta.branch`, keyed by its own path's last
-  segment, sorted by `completed_at`/`created_at` descending) padded
-  with the latest report when fewer than two decisions exist; every
-  named loop row's own progress; the first `Pending` row in document
-  order; and the count/total duration of every `fold::is_quick_step`
-  row in the *unfolded* tree (not however this frame's own folding
-  happened to group them).
-- **Cost card:** tokens (moved here from the header line too); cost,
-  shown only once it's actually positive
-  (`screens::effective_cost_usd`, shared with the now pane's own
-  ended summary) — `runtime.last_run.totals.cost_usd` once cof has
-  written it, summed across every effect's own `meta.cost_usd`
-  before that (so it shows the moment any effect reports one, not
-  only once the run has ended); a sparkline
-  (`screens::build_tokens_over_time`) bucketing each effect's own
-  sent-plus-received tokens by its own `completed_at` into twelve
-  equal spans across the run so far; the highest-token store, folded and made
-  relative the same way §6.3b's own largest-stores table shows it
-  (`cost::largest_stores`' own first row, issue #641 -- never the
-  full dotted path, and the two can't disagree about which store is
-  the run's biggest, since both read the same by-store tree); once the run has ended, the
-  run's own stopped agent's last-known tokens (issue #637), as
-  `stopped <label>` with its sent/received figures -- `runtime.
-  last_run.totals` (the figures above) never includes a session that
-  never completed, so its last report lives only in its own
-  `meta.live`; and `render::token_bar_in_
-  flight_line`'s own text (shared with the Cost screen's own data,
-  so the two can't disagree about what's running either).
-
-Issue #649: the time card's own `eta_ts` is the same whole-run ETA
-history gives the header, in place of the header's own fallback to
-the innermost loop's ETA once there's enough history -- `eta_from_
-history` carries the same three-way choice (history / past usual /
-loop) the header line makes, so the two never disagree. Once it's
-from history, the card also shows `eta_remaining_s` (`(12m)`),
-`vs_usual_s` and `usual_total_s` (`vs usual +3m (p50 45m)`, the gap
-between this run's own elapsed time at its anchor step and the usual
-elapsed time to reach the same point) and the p10/p90 range as clock
-times (`usual 11:58–12:09`); below the run-count threshold it shows
-`history_count` instead (`history: 1 of 3 runs`). The now pane's own
-p50/p90 bar (a running step's elapsed busy time against
-`Header::history_step_usual`, pooled across every hash the same way
-per-step figures always are) is `FocusedStep::usual_busy_p50_s`/
-`usual_busy_p90_s`, filled in by `build_now_pane`'s own `NowFocus::
-Running` branch only -- a ghost-bar history of passes, which needs
-the bounded interval log below, is the Time screen's own addition
-(issue #650). Below
-[`tui::thresholds::TWO_COLUMN_MIN_WIDTH`]/`_MIN_HEIGHT` (80×20, the
-same line screen 2's own two-column layout collapses at) the overview
-restacks instead of just shrinking: the phase strip drops to one
-line (status and label only, no start time or duration), the now
-pane stacks the step over the log lines instead of splitting them
-side by side, and the three cards become one plain summary line
-(elapsed, effects, failures, tokens and cost) in place of their own
-three bordered boxes. Below 100×30 with the three cards still shown
-separately, each card keeps its own order and loses lines from the
-bottom as height runs out, same as any other bordered pane here; a
-value too long for its own card's width ends in `…` rather than
-being clipped mid-word (`tui.rs`'s own `truncate_lines`).
 
 **`--glance`.** `osi <doc> --glance` and `osi watch <dir> --glance`
 show only the header line (`current: None` in `header_line`, so no
@@ -2155,6 +2033,245 @@ start/duration columns additionally dropped below 90 columns. Below
 80×20, a plain list (status, step, start, duration), indented by
 depth the same way the overview's and Flow's own small-terminal
 lists are, no axis at all.
+
+### 6.3e The Tape and the shared language (shipped, issue #678)
+
+`design/tui-design.md` is the intent for osi's screens; this section
+describes what has actually shipped of it so far -- part 1 of the
+epic (#677): colour roles, the shared chrome, the history median-
+tokens query, and the Tape (`0`), replacing the Overview. Signal
+(`1`), Flow as a rail (`2`) and Store (`3`) are not built yet;
+screens `1`-`3` still render as Time, Flow and Cost, §6.3/§6.3b/
+§6.3d above, under their own chip names.
+
+**Colour roles.** `theme::Theme` grows the design's token set (its
+§6 table) for every shipped theme: `bg_inset`/`bg_surface`,
+`fg_muted` (`fg.faint` stays `dim`), `accent_primary`/
+`accent_secondary`, `selection_bg`/`_fg`, `status_info`,
+`statusbar_bg`/`_fg`, `keyhint_key`/`_desc`. Two changes apply to
+every theme: `status_running` now equals `accent_primary` (running
+is the primary accent, not yellow), and `status_pending`/
+`status_skipped` both equal `dim` (pending, queued and skipped share
+`fg.faint`); `status_failed_handled` equals `warning`, and
+`status_cancelled`/`status_aborted` equal `error`.
+Catppuccin Mocha, the theme the design's frames are drawn in, is
+pinned field-for-field to `design/theme-catppuccin-mocha.rs`
+(`theme::tests::mocha_matches_the_design_reference`); the other ten
+themes take the same roles from their own published palettes by the
+same table, with a theme that has no obvious value for a role taking
+Mocha's own ratio to a value it does have (`bg.inset` 0.8× `bg.base`,
+for one). 256- and 16-colour degradation and `NO_COLOR` cover every
+new role the same way they already covered every existing one.
+
+**History's median tokens.** `history::StepStats`/`RunStats` grow
+`tokens_p50`, the median of tokens sent plus received -- per step
+path (pooled the same "earlier versions" way `busy_p50_s` already
+is) and for the whole run, over the same runs and the same 3-run
+threshold as every other `_p50` figure here. A loop pass is also
+kept by its own literal, un-stripped path (`history::display_key_
+literal`), alongside the existing pass-stripped one the Time
+screen's ghost bars read: the stripped key's own per-run sample is
+now that run's own tokens *divided by that run's own pass count*
+before the median is taken across runs, so it reads as one typical
+pass's size whether a loop pass's own literal key has three runs to
+go on yet or the Tape falls back to the stripped key for it; a
+non-loop step's own pass count is always 1, so this changes nothing
+for it. A literal key is capped at the first 8 passes a loop records
+in any one run -- past that, a pass keeps contributing to the
+stripped key's own sum, it just never earns a literal key of its
+own -- and an evicted literal key's own tokens are never folded into
+`(other)` a second time on top of its already-counted stripped
+sibling's; both guard a loop long enough to otherwise grow one
+record past its own 64 KiB line cap. Pinned against the design's own
+fixture history (`design/fixtures/hist`): the non-loop steps, the
+whole run's own total, and each of a tree loop's own three passes
+individually, all match the design builders' own summary (`hist/
+history.json`) exactly. The whole-run figure reaches the header
+through a new `Header::history_usual_total_tokens`, set in
+`history_io::apply_history_eta` from `DocumentStats::whole_run`'s
+own `tokens_p50` -- the Tape's `+12%` Totals deviation and `usually
+1,324 t` Run End both read it from there, not a `_total` step key
+that never existed.
+
+**The Tape** (`screens::TapeScreen`, `build_tape`) replaces the
+Overview as screen 0. Built from the same inputs `render::build`
+already has, same as the Overview's own model was: no engine change.
+Its own list (`screens::TapeItem`) is, top to bottom: `RunStarted`;
+every row that has either finished or (a decision or loop) been
+dispatched, in finish order (a container ties with its own child at
+the same instant, broken by the plan's own depth-first order, the
+same order `render::build_folded` already returns rows in); the Now
+band while the run is live; every leaf actually running right now,
+bold; the slots rule for a loop with a busy pass; every row still
+ahead, in plan order, with `usually N t` from history when it has
+enough; `RunEnd`. A row's own text is read straight off its own
+flattened node (`model::NodeMeta`) and the compiled plan, never
+through `render::details_for` (which re-flattens the *whole* state on
+every call) -- the Tape asks for one row's worth of text for every
+row on screen, not only the selected one, so paying `details_for`'s
+own cost per row would turn one redraw of a long run back into the
+O(n²) walk issue #637's own budget test exists to catch. The token
+unit (`screens::tape_unit`) is the smallest of 10/20/50/100/200/500
+that keeps the usual largest step's own history inside eight bar
+cells by the same rounding the bar itself draws with, `50` without
+enough of it -- the design's own fixture history gives the largest
+step (`summary`) a usual 402 t, which still rounds to a full 8-cell
+bar at 50 t/cell, so every frame's own `▰ = 50 t` title is this
+derivation's real result for that history, not a separate fixed
+default kept alongside it. The detail pane reuses
+`screens::build_focused_step`/`FocusedStep` -- the same model Flow's
+and Time's own selected panes already build theirs from -- plus the
+selected row's own Usual (history's median and the run count behind
+it) and Share (percent of the run's own tokens so far) lines, which
+neither of those two needs.
+
+**Keys.** `0`-`3`, `?`, `q`/`c`/`esc` are unchanged. Theme cycling
+moves from `t` to `T` (issue #535's own key); the Tape's own `t`
+swaps its token column for the deviation-from-usual view instead,
+and `p` toggles prompt previews (`keys::App::tape_tokens_view`/
+`tape_previews_on`). `enter` on the Tape opens the selected row's own
+step full-screen (`tape_fullscreen_step`), in place of the
+Overview's old "open Flow with the running step selected". Every
+movement key (`j`/`k`, the arrows, `PageUp`/`PageDown`, `Home`/`End`,
+`g`/`G`, `/`, `e`, `f`) moves over `keys::visible_rows_for_tape`'s own
+list -- the Tape's own draw order (finish order, then running, then
+rows ahead), never the plan's depth-first order `visible_rows`
+returns for everything else, which put a loop's later passes and the
+plan's own root in places the Tape never draws them. On the Tape
+only, a manual move that lands the selection right back on the row
+follow would itself have picked turns follow back on, rather than
+needing `f`; the design names no key for this on the Tape, so it
+reuses the shared `f` toggle every screen already has, and every
+other screen's plain "any move turns follow off" is unchanged. `Tab`, `z`
+(fold) and `v` (full value) go from the Tape entirely -- they
+reached a pane or a fold state the design gives it no key for at
+all -- as do `Left`/`Right` (collapse/expand), since its rows have
+no collapsed state of their own; `s`/`l` were already scoped to
+Flow. All five stay live on Flow/Time/Cost, which keep their own
+shipped panes, until their own part of the redesign; each of those
+three screens' own Help overlay (`tui::screen_help_text`) lists its
+own keys, since the Tape's no longer does.
+
+**Sizes.** 100 columns and up: the list beside its detail pane,
+preview rows on by default (off at 24–29 rows, to leave more height
+for the Now band and what's ahead of it); §5 also asks for a
+shortened title at 100–119, which this build does not yet give it
+-- the full title still draws there, ratatui's own border truncating
+it if it runs long, a cosmetic gap from the design rather than a
+broken layout. 80–99: the list alone, full width, previews always
+off. 60–79: the list without its
+clock column, with the name column absorbing the freed width and a
+fixed 16-cell token field, a shortened `Tape · done/planned · ▰ =
+unit t` title, and the Run Started/Run End rows, the status line and
+the Totals row all dropped to their own bare figures. Below 60×24:
+`tui::draw_tape_too_small` -- the `osi` word, `Terminal too small`,
+a Width/Height row each against what the terminal needs with a
+check or a cross, the plain-language line naming both and
+`osi --log`, and a `q Quit` key bar, matching `design/frames/tape--
+toosmall--60x16.mock` cell for cell. The existing screens' own
+breakpoints (§6.3's `tui::thresholds`) are unchanged.
+
+**Header band, status line, key bar, Totals row.** This chrome
+(`tui::draw_tape_header_band`/`draw_tape_status_line`/`draw_key_bar`/
+`draw_totals_row`) now wraps every screen, not only the Tape: `osi
+<document> · <status> <elapsed>` on the left of a `statusbar.bg`
+band, with the scope icon's own trace taking the `osi` word's cells
+while it animates (issue #677's settled §9 point 1) and the screen's
+own chip (`TAPE`/`TIME`/`FLOW`/`COST`) and the clock on the right; a
+status line (the run's own latest report when there is one, in its
+level's colour and collapsing to a bare `▸` when it would not fit,
+else the newest line already in the run's own log, until Flow/Time/
+Cost get a bespoke one of their own); a key bar in `keyhint.key`/
+`keyhint.desc`, each screen's own keys, right-aligned so `? Help  q
+Quit` always sits flush against the bar's own right edge and a left
+item that would not fit is dropped whole (never cut mid-word) with a
+trailing `⋯`; a Totals row (tokens sent/received and the total, its
+own deviation from the whole run's usual tokens once history has
+one, effects done of planned, the ETA and --- not yet wired to a
+real figure on any screen --- the run's own cost). Flow/Time/Cost
+keep their own inner panels and their own keys exactly as shipped;
+`tui::draw`'s own outer `Layout` just gives them 4 fewer rows of
+body than before to draw them in, and their own small-terminal
+thresholds (`tui::thresholds`) are 4 rows lower than their own named
+size to compensate -- a panel still named "80×20" is still checked
+against an 80×20 terminal, not 80×24. Below 60×24, every screen
+now reads the Tape's own too-small notice (`tui::draw_too_small`,
+renamed from `draw_tape_too_small`), not only the Tape; several of
+Flow/Time/Cost's own narrower-terminal goldens (`_at_70x20`,
+`_at_80x20`) now pin that notice instead of the sub-24-row layout
+they used to, since nothing renders below the shared floor on any
+screen any more.
+
+**Goldens and allow-listed cells.** Every `tape--*` frame in
+`design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
+symbol, fg, bg, bold and dim per cell). The design's fixture run
+(`design/fixtures/run2`) is replayed to the frames' frozen instant,
+3.62 s after its `run_start`, in the frames' zone, with history built
+from `design/fixtures/hist/run-h1..3`, for the Normal, Usual, Help,
+80×24 and 60×24 frames; the Starting state, the Ended state (`run2`
+at its end) and the Failed state (`design/fixtures/run`) have their
+own frames, as does the too-small screen. The three states' detail
+panes are built: Engine, Plan, Shape, Usual, ETA and the first step
+before the first event; Outcome, Tokens, Usual, Effects, Decision,
+Largest, the handled failure and the run's summary at the end; the
+error in full and what was not reached after a failure. A loop whose
+`each.in` is a document literal counts its passes from the plan
+before any of them runs (`plan::resolve_each_len`), so the effects
+count reads `/14` from the first frame. A few cells are skipped by
+coordinate, each documented at the test's call site: the three history
+runs' own median wall time reads differently depending on which clock
+measures it -- osi's own history records `last_run.started_at` to
+`completed_at` (5.0565 s median, rounding to `5.1s` under
+`format_duration`'s round-half-up rule), while the design's own
+fixture summary pools the runs' `run_start`/`run_end` *event*
+timestamps instead (5.049 s median, rounding to `5.0s`, what the
+frames read); one figure in each of the Starting, Ended, Normal and
+Usual frames. The status line's own row, in the Normal, Usual,
+80×24 and 60×24 frames (and the Help frame's own copy of it, below
+the modal): §3.2 reads the newest finished step, loop passes
+included, and `drafts.iter_1.draft` finishes 2 ms after `gate.reply`
+in `run2/events.jsonl`, so the renderer now reads that pass as the
+newest -- the frame still reads `gate › reply finished`, the step
+that finished 2 ms earlier. Also skipped: the Help overlay's `0 1 2
+3` row, where the frames name the Signal and Store screens that
+parts 2 and 4 of the design introduce while this build still has
+Time and Cost; and the last column of the header and key bar in the
+Help frame, where the `.mock` parser pads a trimmed line's own rest
+out with a bare `fg.default` span rather than this renderer's dimmed
+base fill. Everything else matches exactly.
+
+**From the frames, not from the design text.** A few behaviours the
+design document's own prose never states, read off the frames
+themselves instead, so a later frame change could change them: the
+80–119 column floor keeps one row of slack at the bottom of its own
+scrollable list that 60–79 and 120 + do not (both fit `Run Started`
+through `Run End` in the same height; only 80–119 draws a trailing
+blank line before it); rows read in plan order, not real finish
+order, once a run has ended (finish order would scramble a loop's
+own passes by whichever of two near-simultaneous steps the engine
+happened to write first); and prompt previews are off for the
+Starting, Ended and Failed states. The Help overlay's own six blank
+rows (`design/frames/tape--help--120x30.mock` rows 15-20) are left
+blank here too, rather than given the movement aliases, `/`, `e`,
+`T`, `c` and `f` §4 also names as Tape keys: populating them changes
+over 300 of the frame's own cells at once, the kind of change this
+repository's own goldens ask to be reported rather than allow-listed
+away.
+
+**Not yet shipped.** The Totals row's cost figure reads `—` on every
+screen until a run reports one (`meta.cost_usd`,
+`runtime.last_run.totals.cost_usd`); the frames' scripted adapter
+never does, so every frame reads `—` too. The Help overlay's own six
+blank rows stay blank (above, "from the frames, not the design
+text"), and §3.5's own "100–119 columns shorten long titles and
+labels" is not yet given its own title-shortening rule at that
+width specifically -- the detail pane does show there, same as
+120 +, just with whichever title ratatui's own border truncation
+gives a long one. Below three finished runs, the Run End row reads
+`ETA — · no history yet` (§3.5); the Help overlay's own "Tokens"
+legend states the run's own actual unit and, once there have been
+enough runs to pool, the real count pooled, not fixed `50 t`/`3`
+figures.
 
 ### 6.4 Tests
 

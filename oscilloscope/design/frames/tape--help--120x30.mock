@@ -1,0 +1,46 @@
+#! tui-mockup 1
+#! size: 120x30
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — tape · help overlay
+#! state: help
+#! theme: catppuccin-mocha
+#! note: data: osi-spike/demo/run2 (events.jsonl, state.json), frozen 3.62 s after run_start; cof 0.1.0 + scripted adapter, so prompts finish instantly and tokens arrive as bursts
+#! note: invented: nothing. ETA reads — because this document has no run history
+#! note: craft-ok CR6 a 14-effect demo run leaves rows free; a real run fills them
+#! note: usual = median of 3 real history runs (demo/hist); ETA = run start + usual wall time
+#! region r1 header 0,0,120,1
+#! region r2 list 0,1,76,27 Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t
+#! region r3 detail 76,1,44,27 gate › reply · Selected
+#! region r4 keybar 0,29,120,1
+#! region r5 modal 2,5,72,18 Help · Tape
+#! focus r5
+{fg.faint} osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50{/}
+{fg.faint}╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t ─────────────────────────╮╭─ gate › reply · Selected ────────────────╮{/}
+{fg.faint}│12:50:47 ■ Run Started        demo.yml · cof 0.1.0                        ││                                          │{/}
+{fg.faint}│12:50:47 ✓ kind               ↑212 ↓3 · Bug.              ▰▰▰▰▱▱▱▱   215 t││                                          │{/}
+{fg.faint}│12:50:50 ✓ tests              3.0s · sleep 3                              ││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}╭─ {/}{fg.title bold on:bg.overlay}Help · Tape {/}{border.focus on:bg.overlay}────────────────────────────────────────────────────────╮{/}{fg.faint} ││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}↑ ↓    {/}{fg.default on:bg.overlay}select a row                {/}{fg.muted on:bg.overlay}0 1 2 3 {/}{fg.default on:bg.overlay}Tape Signal Flow Store    {/}{border.focus on:bg.overlay}│{/}{fg.faint}t││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}enter  {/}{fg.default on:bg.overlay}open the step               {/}{fg.muted on:bg.overlay}?       {/}{fg.default on:bg.overlay}this help                 {/}{border.focus on:bg.overlay}│{/}{fg.faint}p││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}p      {/}{fg.default on:bg.overlay}prompt previews on or off   {/}{fg.muted on:bg.overlay}esc     {/}{fg.default on:bg.overlay}close · back              {/}{border.focus on:bg.overlay}│{/}{fg.faint}t││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}t      {/}{fg.default on:bg.overlay}tokens: units or vs usual   {/}{fg.muted on:bg.overlay}q       {/}{fg.default on:bg.overlay}quit · confirms if running{/}{border.focus on:bg.overlay}│{/}{fg.faint}t││                                          │{/}
+{fg.faint}│━{/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint}━││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}Tokens                             Glyphs                            {/}{border.focus on:bg.overlay}│{/}{fg.faint} ││                                          │{/}
+{fg.faint}│1{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}▰      {/}{fg.default on:bg.overlay}= 50 t · fixed scale        {/}{fg.muted on:bg.overlay}✓ ✗     {/}{fg.default on:bg.overlay}done · failed             {/}{border.focus on:bg.overlay}│{/}{fg.faint} ││                                          │{/}
+{fg.faint}│━{/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}usual  {/}{fg.default on:bg.overlay}median of 3 past runs       {/}{fg.muted on:bg.overlay}● ·     {/}{fg.default on:bg.overlay}running · ahead           {/}{border.focus on:bg.overlay}│{/}{fg.faint}━││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│ {/}{fg.muted on:bg.overlay}+25%   {/}{fg.default on:bg.overlay}above usual · red past +50% {/}{fg.muted on:bg.overlay}◆ ⟳ ■   {/}{fg.default on:bg.overlay}decision · loop · run     {/}{border.focus on:bg.overlay}│{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│                                                                      │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}│ {/}{keyhint.key bold on:bg.overlay}esc {/}{keyhint.desc on:bg.overlay}Close  {/}{keyhint.key bold on:bg.overlay}? {/}{keyhint.desc on:bg.overlay}Close                                                   {/}{border.focus on:bg.overlay}│{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.overlay}╰──────────────────────────────────────────────────────────────────────╯{/}{fg.faint} ││                                          │{/}
+{fg.faint}│                                                                          ││                                          │{/}
+{fg.faint}│                                                                          ││                                          │{/}
+{fg.faint}│──────────────────────────────────────────────────────────────────────────││                                          │{/}
+{fg.faint}│ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │{/}
+{fg.faint}╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯{/}
+{fg.faint} ✓ gate › reply finished · ↑348 ↓41 · 0.6s ago{/}
+{fg.faint} ↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens                                                ? Help  q Quit{/}

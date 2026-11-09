@@ -6,6 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 use electricity_bytecode::{
     EffectPath, LeafKind, NodeKind, OnError, Op, PathSegment, Program, Region, UseSource,
 };
@@ -182,6 +184,15 @@ pub enum PlanEntryKind {
         max_concurrency: Option<u32>,
         flow: Flow,
         named: bool,
+        /// `each.in`'s own literal dotted path (`"input.topics"`) --
+        /// issue #678's Starting state needs a named loop's own pass
+        /// count before any event at all, resolved against the run's
+        /// own input rather than a state node's `progress.total`
+        /// (which doesn't exist yet). `None` for a `while` loop.
+        each_in_path: Option<String>,
+        /// `each.as`'s own name (`"topic"`), alongside `each_in_path`
+        /// above -- `None` under the same condition.
+        each_as: Option<String>,
     },
     If {
         named: bool,
@@ -283,6 +294,16 @@ pub struct PlanEntry {
     /// for a prompt with none set) — issue #631's now pane, same
     /// reasoning as `provider` above.
     pub model: Option<String>,
+    /// A prompt leaf's own template source, verbatim and unrendered
+    /// (`None` for every other kind) — the Tape's own preview line
+    /// for a queued prompt (issue #678), which has no `meta.
+    /// prompt_sent` of its own yet to preview instead.
+    pub prompt_template: Option<String>,
+    /// A tool leaf's own command and args, when every one of them is
+    /// a plain literal (no templating) and so already known before
+    /// any run at all -- `None` for every other kind, or a tool
+    /// whose own `params` needs a run's state to resolve.
+    pub tool_command: Option<String>,
 }
 
 /// One pass index resolved while matching a concrete path against a
@@ -416,6 +437,29 @@ impl PlanTree {
     /// count needs instead of [`leaf_paths`](Self::leaf_paths) alone.
     pub fn countable_paths(&self) -> &[String] {
         &self.countable_paths
+    }
+
+    /// A named loop's own `each.in` pass count, resolved against
+    /// `root` (the run's own input/state, since `in_path` is always
+    /// relative to it, e.g. `"input.topics"`) -- issue #678's
+    /// Starting state needs this before any event at all, when a
+    /// state node's own `progress.total` doesn't exist yet. `None`
+    /// for a `while` loop, a `path` with no such loop entry, or an
+    /// `in_path` that doesn't resolve to a JSON array in `root`.
+    pub fn resolve_each_len(&self, path: &str, root: &Value) -> Option<u64> {
+        let in_path = self
+            .match_path(path)?
+            .entries
+            .iter()
+            .find_map(|e| match &e.kind {
+                PlanEntryKind::Loop {
+                    each_in_path: Some(p),
+                    ..
+                } => Some(p.as_str()),
+                _ => None,
+            })?;
+        let pointer = format!("/{}", in_path.replace('.', "/"));
+        root.pointer(&pointer)?.as_array().map(|a| a.len() as u64)
     }
 
     /// `path`'s earlier siblings in declaration order within its own
@@ -581,6 +625,18 @@ impl PlanTree {
         entry.model.clone().or_else(|| entry.provider.clone())
     }
 
+    /// A queued prompt's own template source, verbatim and
+    /// unrendered (issue #678's Tape preview line for a row ahead,
+    /// which has no `meta.prompt_sent` of its own yet). `None` for
+    /// any other kind, or a path the plan has nothing to say about.
+    pub fn prompt_template(&self, path: &str) -> Option<String> {
+        let entry = self.match_path(path)?.entries.first()?;
+        if !matches!(entry.kind, PlanEntryKind::Leaf(LeafEffectKind::Prompt)) {
+            return None;
+        }
+        entry.prompt_template.clone()
+    }
+
     /// Whether `path` is a report's own (#605/#610): resolved the
     /// same way `match_path` resolves a `Pass` placeholder against a
     /// concrete `iter_N` segment, so a report inside a named loop's
@@ -722,15 +778,26 @@ fn region_kind(region: &Region, graft: Option<&EffectPath>) -> PlanEntryKind {
         Region::Loop {
             flow,
             max_concurrency,
+            spec,
             ..
-        } => PlanEntryKind::Loop {
-            max_concurrency: *max_concurrency,
-            flow: match flow {
-                electricity_bytecode::LoopFlow::Chain => Flow::Chain,
-                electricity_bytecode::LoopFlow::Tree => Flow::Tree,
-            },
-            named: true,
-        },
+        } => {
+            let (each_in_path, each_as) = match spec {
+                electricity_bytecode::LoopSpec::Each {
+                    in_path, as_name, ..
+                } => (Some(in_path.clone()), Some(as_name.clone())),
+                electricity_bytecode::LoopSpec::While(_) => (None, None),
+            };
+            PlanEntryKind::Loop {
+                max_concurrency: *max_concurrency,
+                flow: match flow {
+                    electricity_bytecode::LoopFlow::Chain => Flow::Chain,
+                    electricity_bytecode::LoopFlow::Tree => Flow::Tree,
+                },
+                named: true,
+                each_in_path,
+                each_as,
+            }
+        }
         Region::TryFinally { .. } => PlanEntryKind::TryFinally,
     }
 }
@@ -878,16 +945,26 @@ fn record_op_entry(
     }
     let mut provider = None;
     let mut model = None;
+    let mut prompt_template = None;
+    let mut tool_command = None;
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
             LeafKind::Tool(tool) => {
                 provider = Some(tool.provider.clone());
+                tool_command = static_tool_command(&tool.params);
                 PlanEntryKind::Leaf(LeafEffectKind::Tool)
             }
             LeafKind::Prompt(prompt) => {
                 provider = prompt.provider.clone();
                 model = prompt.model.clone();
+                prompt_template = if let electricity_bytecode::PromptContent::Template(template) =
+                    &prompt.content
+                {
+                    Some(template.source.clone())
+                } else {
+                    None
+                };
                 PlanEntryKind::Leaf(LeafEffectKind::Prompt)
             }
             LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
@@ -968,9 +1045,50 @@ fn record_op_entry(
             parent_flow,
             provider,
             model,
+            prompt_template,
+            tool_command,
         },
     );
     path
+}
+
+/// [`PlanEntry::tool_command`]: `command` and `args` read straight
+/// off the compiled `params`, when every one of them is a plain
+/// literal -- `None` the moment any part needs a run's own state
+/// (a `{{...}}` template, a `{from: ...}` reference).
+fn static_tool_command(params: &electricity_bytecode::ParamNode) -> Option<String> {
+    use electricity_bytecode::ParamNode;
+    use electricity_value::Value;
+    let ParamNode::Map(map) = params else {
+        return None;
+    };
+    // Every string leaf compiles to a `ParamNode::Template`, even one
+    // with no `{{...}}` of its own (`compile::params::build_param_
+    // node`'s own "every other string leaf ... becomes `ParamNode::
+    // Template`") -- its own source is already the real value in
+    // that case, never rendered mustache syntax.
+    let literal_str = |node: &ParamNode| match node {
+        ParamNode::Literal(Value::Str(s)) => Some(s.clone()),
+        ParamNode::Template(t) if !t.source.contains("{{") => Some(t.source.clone()),
+        _ => None,
+    };
+    let command = map
+        .iter()
+        .find(|(k, _)| matches!(k, Value::Str(s) if s == "command"))
+        .and_then(|(_, v)| literal_str(v))?;
+    let args = map
+        .iter()
+        .find(|(k, _)| matches!(k, Value::Str(s) if s == "args"))
+        .and_then(|(_, v)| match v {
+            ParamNode::List(items) => items.iter().map(literal_str).collect::<Option<Vec<_>>>(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    if args.is_empty() {
+        Some(command)
+    } else {
+        Some(format!("{command} {}", args.join(" ")))
+    }
 }
 
 fn walk_op(
