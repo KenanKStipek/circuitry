@@ -2740,6 +2740,51 @@ const HELP_TEXT: &[&str] = &[
 const HELP_OVERLAY_WIDTH: u16 = 72;
 const HELP_OVERLAY_HEIGHT: u16 = 18;
 
+/// Flow/Time/Cost's own Help (issue #678): unlike the Tape, these
+/// keep `s`/`l`/`z`/`v`/`Tab` live until their own part of the
+/// redesign, so their own Help lists them rather than the Tape's
+/// key bar.
+fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<&'static str>) {
+    use oscilloscope_core::screens::Screen;
+    let (title, screen_lines): (&str, &[&str]) = match screen {
+        Screen::Flow => (
+            " Help · Flow ",
+            &[
+                "tab       cycle flow / selected / story",
+                "s         selected pane: step vs state",
+                "l         story pane: story vs log",
+                "← →       collapse / expand a row",
+            ],
+        ),
+        Screen::Time => (
+            " Help · Time ",
+            &[
+                "tab       cycle timeline / zoom / vs usual",
+                "+ -       zoom the axis in / out",
+                "=         fit the whole run",
+                "← →       collapse / expand a row",
+            ],
+        ),
+        Screen::Cost => (
+            " Help · Cost ",
+            &["i o $     measure: tokens in / out / cost"],
+        ),
+        Screen::Tape => (" Help ", &[]),
+    };
+    let mut lines = vec!["↑ ↓       select a row               0-3     Tape Time Flow Cost"];
+    lines.extend_from_slice(screen_lines);
+    lines.extend_from_slice(&[
+        "v         full value overlay          z       fold on/off",
+        "j k       same as ↑ ↓                   PgUp PgDn move a page",
+        "Home End  first / last row            g G     same as Home/End",
+        "/         filter rows                 e       errors only",
+        "f         follow the running row      T       cycle the colour theme",
+        "?         this help                   esc     close · back",
+        "q         quit · confirms if running   c       cancel · confirms",
+    ]);
+    (title.to_string(), lines)
+}
+
 /// One redraw's whole layout (issue #626): a one-line header, shared
 /// by every screen (replacing the old three-row one), then the
 /// screen currently on display (`app.screen`) — screen 2 (`Flow`,
@@ -2964,7 +3009,7 @@ fn draw_dialog_overlay(
     ctx: &DrawCtx,
 ) {
     match &app.dialog {
-        Dialog::Help => {
+        Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
             let text = HELP_TEXT.iter().map(|l| Line::from(*l)).collect();
             draw_overlay(
                 frame,
@@ -2975,6 +3020,12 @@ fn draw_dialog_overlay(
                 HELP_OVERLAY_HEIGHT,
                 ctx,
             );
+        }
+        Dialog::Help => {
+            let (title, lines) = screen_help_text(app.screen);
+            let height = (lines.len() as u16 + 2).max(HELP_OVERLAY_HEIGHT);
+            let text = lines.into_iter().map(Line::from).collect();
+            draw_overlay(frame, area, &title, text, HELP_OVERLAY_WIDTH, height, ctx);
         }
         Dialog::ConfirmCancel { .. } => {
             let text = vec![
