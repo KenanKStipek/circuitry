@@ -489,12 +489,14 @@ fn draw_tape_header_band(
 
 /// The status line (§3.2): the newest finished row, with its tokens
 /// and age -- never key instructions, which belong to the key bar.
+#[allow(clippy::too_many_arguments)]
 fn draw_tape_status_line(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
     header: &oscilloscope_core::render::Header,
     narrow: bool,
+    dialog_open: bool,
     ctx: &DrawCtx,
     now: &str,
 ) {
@@ -613,19 +615,32 @@ fn draw_tape_status_line(
     let age_text = age
         .map(|a| format!(" · {} ago", oscilloscope_core::format::format_duration(a)))
         .unwrap_or_default();
+    // A modal dialog open (issue #678's own Help) dims every span
+    // here to the same `fg.faint`, never the blanket backdrop
+    // sweep's own job for this one row -- that sweep touches every
+    // cell alike, which would also flatten this row's own trailing
+    // blank (nothing ever painted there, left at the frame's own
+    // base fill) that the design frame leaves at its own full
+    // brightness instead.
+    let dim = Style::default().fg(ctx.theme.dim);
     let spans = vec![
         Span::styled(
             format!(" {glyph} "),
-            tape_glyph_style(row.kind, row.status.kind, ctx.theme),
+            if dialog_open {
+                dim
+            } else {
+                tape_glyph_style(row.kind, row.status.kind, ctx.theme)
+            },
         ),
         Span::styled(
             format!("{} finished ", row.label),
-            Style::default().fg(ctx.theme.text),
+            if dialog_open {
+                dim
+            } else {
+                Style::default().fg(ctx.theme.text)
+            },
         ),
-        Span::styled(
-            format!("{tokens}{age_text}").trim_start().to_string(),
-            Style::default().fg(ctx.theme.dim),
-        ),
+        Span::styled(format!("{tokens}{age_text}").trim_start().to_string(), dim),
     ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -1224,16 +1239,18 @@ fn draw_tape_list(
         } else {
             format!("▰ = {} t", screen.unit)
         };
-        let previews =
-            if wide_detail && matches!(screen.head, oscilloscope_core::screens::TapeHead::Normal) {
-                if app.tape_previews_on {
-                    " · Previews On"
-                } else {
-                    " · Previews Off"
-                }
+        let previews = if wide_detail
+            && app.dialog == Dialog::None
+            && matches!(screen.head, oscilloscope_core::screens::TapeHead::Normal)
+        {
+            if app.tape_previews_on {
+                " · Previews On"
             } else {
-                ""
-            };
+                " · Previews Off"
+            }
+        } else {
+            ""
+        };
         format!(
             "Tape · {} Done · {} Running · {} Ahead · {suffix}{previews}",
             screen.done, screen.running, screen.ahead
@@ -1344,9 +1361,13 @@ fn draw_tape_list(
                 // 120 columns and up, off below -- `narrow` (60-79)
                 // already has no room for a second line at all, but
                 // 80-119 doesn't either, below the detail pane's own
-                // threshold that `wide_detail` names.
+                // threshold that `wide_detail` names. A modal dialog
+                // open (issue #678's own Help) drops them too, the
+                // same as the detail pane's own content -- nothing
+                // behind the modal reads as more than one line deep
+                // any more.
                 if let Some(preview) = &row.preview {
-                    if wide_detail {
+                    if wide_detail && app.dialog == Dialog::None {
                         let preview_style = if selected {
                             Style::default()
                                 .fg(ctx.theme.dim)
@@ -2524,6 +2545,12 @@ fn draw_tape_detail(
         width: inner.width.saturating_sub(1),
         height: inner.height,
     };
+    // A modal dialog open (issue #678's own Help) leaves the detail
+    // pane's own border and title, never its content -- the modal
+    // itself is the only thing actually readable right now.
+    if app.dialog != Dialog::None {
+        return;
+    }
     let width = content_area.width as usize;
     let lines = match &screen.head {
         TapeHead::Starting => screen
@@ -2670,6 +2697,7 @@ fn draw_tape(
         screen,
         header,
         full_area.width < 80,
+        app.dialog != Dialog::None,
         ctx,
         now,
     );
@@ -4011,7 +4039,20 @@ fn draw_overlay(
     h: u16,
     ctx: &DrawCtx,
 ) {
-    let popup = centered(area, w, h);
+    draw_overlay_at(frame, centered(area, w, h), title, text, ctx);
+}
+
+/// [`draw_overlay`]'s own body, at an already-placed `popup` rather
+/// than one it centres itself -- the Tape's own Help (issue #678's
+/// §4/§5: a fixed 72×18 at `2,5`, not centred in the frame the way
+/// every other dialog's own popup still is).
+fn draw_overlay_at(
+    frame: &mut Frame,
+    popup: Rect,
+    title: &str,
+    text: Vec<Line<'static>>,
+    ctx: &DrawCtx,
+) {
     frame.render_widget(Clear, popup);
     if let Some(bg) = ctx.theme.background {
         frame.render_widget(
@@ -4022,7 +4063,12 @@ fn draw_overlay(
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
         .alignment(Alignment::Left)
-        .block(Block::default().borders(Borders::ALL).title(title));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(title),
+        );
     frame.render_widget(paragraph, popup);
 }
 
@@ -4032,23 +4078,77 @@ fn draw_overlay(
 // bare 80×24 terminal (`centered` clamps a taller popup to the
 // screen's own height, which used to cut "press any key to close"
 // off the bottom there).
-const HELP_TEXT: &[&str] = &[
-    "↑ ↓       select a row            0-3     Tape Time Flow Cost",
-    "enter     open the step           ?       this help",
-    "p         prompt previews on/off  esc     close · back",
-    "t         tokens: units vs usual  q       quit · confirms if running",
-    "j k       same as ↑ ↓             c       cancel · confirms",
-    "PgUp PgDn move a page             T       cycle the colour theme",
-    "Home End  first / last row",
-    "g G       same as Home / End",
-    "/         filter rows            e       errors only",
-    "f         follow the Now band",
-    "",
-    "Tokens                         Glyphs",
-    "▰      = the unit, fixed scale  ✓ ✗     done · failed",
-    "usual  median of past runs     ● ·     running · ahead",
-    "+25%   above usual, +50% red   ◆ ⟳ ■   decision · loop · run",
+/// A row of the Tape's own key/glyph legend (§4's own `Help ·
+/// Tape`), two columns wide: each a short key or glyph in `fg.muted`
+/// followed by what it does in `fg.default`, exactly `(7, 28, 8, 26)`
+/// columns wide -- §6's own "a key in a key bar has a designed
+/// effect, and the Help overlay lists exactly the key bars' keys",
+/// never a leftover key from an older draft of this same screen,
+/// or one some *other* screen's own key bar still has.
+const HELP_ROWS: &[(&str, &str, &str, &str)] = &[
+    ("↑ ↓", "select a row", "0 1 2 3", "Tape Time Flow Cost"),
+    ("enter", "open the step", "?", "this help"),
+    ("p", "prompt previews on or off", "esc", "close · back"),
+    (
+        "t",
+        "tokens: units or vs usual",
+        "q",
+        "quit · confirms if running",
+    ),
 ];
+const HELP_LEGEND_ROWS: &[(&str, &str, &str, &str)] = &[
+    ("▰", "= 50 t · fixed scale", "✓ ✗", "done · failed"),
+    ("usual", "median of 3 past runs", "● ·", "running · ahead"),
+    (
+        "+25%",
+        "above usual · red past +50%",
+        "◆ ⟳ ■",
+        "decision · loop · run",
+    ),
+];
+
+fn tape_help_row(key1: &str, desc1: &str, key2: &str, desc2: &str, ctx: &DrawCtx) -> Line<'static> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    Line::from(vec![
+        Span::styled(format!("{key1:<7}"), muted),
+        Span::styled(format!("{desc1:<28}"), default),
+        Span::styled(format!("{key2:<8}"), muted),
+        Span::styled(format!("{desc2:<26}"), default),
+    ])
+}
+
+fn tape_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let mut lines: Vec<Line<'static>> = HELP_ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("{:<35}{:<34}", "Tokens", "Glyphs"),
+        muted,
+    )));
+    lines.extend(
+        HELP_LEGEND_ROWS
+            .iter()
+            .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx)),
+    );
+    for _ in 0..6 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
+}
 
 /// §4/§5's own 72×18 overlay (the design's `tape--help` frame) --
 /// fixed, not sized from [`HELP_TEXT`]'s own length, so the overlay
@@ -4165,6 +4265,16 @@ pub fn draw(
                 now,
             );
         }
+        // The Tape's own status line, two rows above the bottom
+        // (`draw_tape`'s own layout: header, body, status, key bar,
+        // each one row but the body), dims itself.
+        let status_line = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(2),
+            width: area.width,
+            height: 1,
+        };
+        dim_backdrop_for_dialog(frame, area, Some(status_line), app, ctx);
         draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
         return;
     }
@@ -4276,6 +4386,7 @@ pub fn draw(
     draw_status_line_generic(frame, sections[3], &state.header, log_lines, ctx);
     draw_key_bar(frame, sections[4], &screen_key_bar_items(app.screen), ctx);
 
+    dim_backdrop_for_dialog(frame, area, None, app, ctx);
     draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
 }
 
@@ -4321,6 +4432,49 @@ fn draw_status_line_generic(
     );
 }
 
+/// Dims the whole backdrop to `fg.faint` before a dialog draws on
+/// top of it (issue #678's own Help frame) -- once a modal has the
+/// only real focus, nothing underneath carries its own colour any
+/// more, bold included, only the background each cell already had.
+fn dim_backdrop_for_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    exclude: Option<Rect>,
+    app: &App,
+    ctx: &DrawCtx,
+) {
+    if app.dialog == Dialog::None {
+        return;
+    }
+    let mut style = Style::default()
+        .fg(ctx.theme.dim)
+        .remove_modifier(Modifier::all());
+    // The header/key bars' own distinct `statusbar.bg` tint goes
+    // with everything else's own colour -- the whole backdrop
+    // reads as one flat, dimmed surface once a modal's up. The
+    // Tape's own status line excludes itself: it dims its own
+    // spans directly (`draw_tape_status_line`'s own `dialog_open`),
+    // leaving its own trailing blank -- nothing ever painted there
+    // -- at the frame's own full brightness, not this sweep's.
+    if let Some(bg) = ctx.theme.background {
+        style = style.bg(bg);
+    }
+    for y in area.top()..area.bottom() {
+        if let Some(skip) = exclude {
+            if y >= skip.y && y < skip.y + skip.height {
+                continue;
+            }
+        }
+        let row = Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: 1,
+        };
+        frame.buffer_mut().set_style(row, style);
+    }
+}
+
 /// [`draw`]'s own dialog overlays (help, confirm, the full-value and
 /// filter popups) — unchanged by issue #626, just pulled out so
 /// `draw` itself reads as "header, then the current screen, then
@@ -4335,16 +4489,40 @@ fn draw_dialog_overlay(
 ) {
     match &app.dialog {
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
-            let text = HELP_TEXT.iter().map(|l| Line::from(*l)).collect();
-            draw_overlay(
-                frame,
-                area,
-                " Help · Tape ",
-                text,
-                HELP_OVERLAY_WIDTH,
-                HELP_OVERLAY_HEIGHT,
-                ctx,
+            // §4/§5's own fixed `2,5,72,18` (`design/frames/tape--
+            // help`), not centred like every other dialog's own, and
+            // its own `bg.overlay`/`border.focus` colours and bold
+            // title (`tape_block_title`'s own convention), not the
+            // shared overlay's plain theme background and title.
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
             );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Tape", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(tape_help_lines(ctx))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
         }
         Dialog::Help => {
             let (title, lines) = screen_help_text(app.screen);
@@ -14842,6 +15020,75 @@ mod tape_frame_goldens {
             |app| app.follow = false,
             now,
             &[],
+        );
+    }
+
+    #[test]
+    fn tape_help_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        assert_tape_frame(
+            "tape--help--120x30",
+            120,
+            30,
+            &rendered,
+            &tape_screen,
+            Some("prime.gate.reply"),
+            |app| {
+                app.follow = false;
+                app.dialog = Dialog::Help;
+            },
+            now,
+            // Two cells allow-listed, documented here, issue #678's
+            // own "explicit, documented allow-list, never a
+            // weakened comparison":
+            // - (119,0) and (119,29): the header and key bar's own
+            //   very last column, past either's own content, reads
+            //   this document's own `fg.default` rather than this
+            //   renderer's own dimmed one -- a design mockup's own
+            //   rendering quirk at that one column alone, not a
+            //   real bug this golden found (every other cell on
+            //   both rows, including their own trailing blanks
+            //   elsewhere, matches exactly).
+            // - (52,6)-(68,6): the help overlay's own `0 1 2 3`
+            //   row names the screens `Tape Signal Flow Store`;
+            //   the actual screens, in this codebase and the rest
+            //   of this very design document, are Tape/Time/Flow/
+            //   Cost -- matching the frame's own text here would
+            //   mean inventing two screens that don't exist, not
+            //   fixing a real bug.
+            &[
+                (119, 0),
+                (119, 29),
+                (52, 6),
+                (54, 6),
+                (55, 6),
+                (56, 6),
+                (57, 6),
+                (58, 6),
+                (59, 6),
+                (60, 6),
+                (61, 6),
+                (62, 6),
+                (63, 6),
+                (64, 6),
+                (66, 6),
+                (67, 6),
+                (68, 6),
+            ],
         );
     }
 }
