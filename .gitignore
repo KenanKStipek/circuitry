@@ -60,6 +60,8 @@ out.json
 *.key
 *.pem
 config.json
+# The osi design's fixture run config is a committed test fixture, not a user config.
+!oscilloscope/design/fixtures/config.json
 !tests/conformance/cases/*/config.json
 
 # ================================
