@@ -1222,19 +1222,25 @@ pub(crate) async fn execute_prompt(
         set_leaf(store, &meta_node, "decomposition", result.meta);
         // `runtime.state.record_children` (issue #672):
         // `decompose::maybe_decompose` already filtered this to the
-        // child's own declared effects; grafted here, once `value` is
-        // written, the same `Slot`-preserving copy a `use` child's own
-        // `graft_child_record` gives.
+        // child's own declared effects, the same `Slot`-preserving copy
+        // a `use` child's own `graft_child_record` gives -- grafted
+        // here, before the posture match, since `core/decompose.py::
+        // _execute_plan`/`_execute_split_plan` grafts in a `finally`
+        // regardless of what the child run comes to: a fallback
+        // dispatch (`Posture::Dispatch`) or a `Posture::Fail` only ever
+        // touches `value`/`meta` on this same node, never a sibling key
+        // a graft wrote, so grafting first and letting either posture's
+        // own write happen after leaves both intact (issue #682).
         let child_record = result.child_record;
+        if !child_record.is_empty() {
+            let mut node_map = effect_node.borrow_mut();
+            for (key, slot) in child_record {
+                node_map.insert(key, slot);
+            }
+        }
         match result.posture {
             crate::decompose::Posture::Decomposed(value) => {
                 set_leaf(store, &effect_node, "value", value);
-                if !child_record.is_empty() {
-                    let mut node_map = effect_node.borrow_mut();
-                    for (key, slot) in child_record {
-                        node_map.insert(key, slot);
-                    }
-                }
                 set_leaf(store, &meta_node, "completed_at", now_iso());
                 observer.record_totals(&store.snapshot(&meta_node));
                 observer.effect_complete(

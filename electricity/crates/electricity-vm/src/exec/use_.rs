@@ -1797,6 +1797,14 @@ async fn run_isolated_inner(
 /// `core/use.py::_run_isolated` to port this from: `UseRuntime.execute`
 /// builds its own child `Store` inline, with no separate function of
 /// its own. Shared by `use` (this lane) and decomposition (lane L2).
+///
+/// Returns the [`Store`] *and* the run's own result, always, rather
+/// than discarding the store on an `Err` the way a plain `Result<Store,
+/// VmError>` would: `core/decompose.py::_execute_plan`/
+/// `_execute_split_plan` both graft `runtime.state.record_children`
+/// onto the decomposing node in a `finally`, grafting whatever the
+/// child got to even mid-failure -- the caller needs the store back on
+/// every path to do the same.
 pub async fn run_isolated(
     program: &Program,
     initial_state: Value,
@@ -1804,13 +1812,13 @@ pub async fn run_isolated(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
-) -> Result<Store, VmError> {
+) -> (Store, Result<(), VmError>) {
     // `false`: never forwards a `dispatch` announcement -- the one
     // difference from `use`'s own direct call to `run_isolated_inner`
     // (`ChildObserver::forward_dispatch`'s own doc comment), matching
     // `core/decompose.py::_build_child_store`'s own omission of
     // `concurrent_dispatch` (issue #682).
-    let (store, result) = run_isolated_inner(
+    run_isolated_inner(
         program,
         initial_state,
         frame,
@@ -1819,8 +1827,7 @@ pub async fn run_isolated(
         token,
         false,
     )
-    .await;
-    result.map(|()| store)
+    .await
 }
 
 #[cfg(test)]

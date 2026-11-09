@@ -99,14 +99,17 @@ pub struct DecompositionResult {
     pub posture: Posture,
     /// `runtime.state.record_children`'s own filtered copy of the
     /// child's declared effects (issue #672, `core/decompose.py::
-    /// _graft_declared_children`): empty unless the setting is on AND
-    /// the plan actually ran and succeeded (never set on a `max_depth`
-    /// route-up/run-as-is, or any failure path, which never leaves a
-    /// child's effects on the node at all). The caller
+    /// _graft_declared_children`): empty unless the setting is on and
+    /// the plan's own child store actually ran (so still empty on a
+    /// `max_depth` route-up, which never builds a child store at all --
+    /// nothing to graft). Set on a failure that *did* reach a child
+    /// store too, whatever it got to before failing (`core/decompose.
+    /// py::_execute_plan`/`_execute_split_plan`'s own `finally`,
+    /// issue #682) -- not only on success. The caller
     /// (`exec::prompt::execute_prompt`) grafts these onto the
-    /// decomposing effect's own node once it writes `value`, the same
-    /// `Slot`-preserving copy `exec::use_::graft_child_record` gives a
-    /// `use` child.
+    /// decomposing effect's own node once it writes `value`/records
+    /// the failure, the same `Slot`-preserving copy `exec::use_::
+    /// graft_child_record` gives a `use` child.
     pub child_record: Vec<(Value, Slot)>,
 }
 
@@ -714,6 +717,28 @@ fn declared_children_entries(
         .collect()
 }
 
+/// `core/decompose.py::_execute_plan`/`_execute_split_plan`'s own
+/// `finally`: grafts `runtime.state.record_children`'s filtered copy
+/// of the child's declared effects onto the decomposing node whatever
+/// the child run got to, success or failure -- `child_store` is always
+/// available to call this with (even after a failed [`run_isolated`],
+/// which now returns the store alongside its own result for exactly
+/// this), so every return point below can graft, not only the success
+/// one.
+fn child_record_from(
+    child_store: &Store,
+    run_ctx: &RunContext,
+    declared: &[String],
+) -> Vec<(Value, Slot)> {
+    if !record_children_enabled(run_ctx.runtime_config) {
+        return Vec::new();
+    }
+    match child_store.child(&child_store.root, &Value::Str("prime".to_string())) {
+        Ok(Some(child_prime)) => declared_children_entries(&child_prime, declared),
+        _ => Vec::new(),
+    }
+}
+
 /// `core/decompose.py::_execute_plan`'s own missing-result text
 /// (`:729-734`).
 pub fn missing_result_error(result_path: &str) -> String {
@@ -954,7 +979,7 @@ pub(crate) async fn maybe_decompose(
         &planner_program.effect_names,
     );
 
-    let planner_store = match run_isolated(
+    let (planner_store, planner_result) = run_isolated(
         &planner_program,
         planner_initial_state,
         &planner_frame,
@@ -962,23 +987,22 @@ pub(crate) async fn maybe_decompose(
         observer,
         token,
     )
-    .await
-    {
-        Err(err) if err.is_fatal() => return Err(err),
-        Err(err) => {
-            planner_warning();
-            let raw_payload = rejected_payload_text(&err);
-            return Ok(Some(failure_result(
-                base,
-                dset,
-                "planner_failed",
-                err.to_string(),
-                fallback,
-                raw_payload,
-            )));
+    .await;
+    if let Err(err) = planner_result {
+        if err.is_fatal() {
+            return Err(err);
         }
-        Ok(store) => store,
-    };
+        planner_warning();
+        let raw_payload = rejected_payload_text(&err);
+        return Ok(Some(failure_result(
+            base,
+            dset,
+            "planner_failed",
+            err.to_string(),
+            fallback,
+            raw_payload,
+        )));
+    }
 
     let plan = read_plan(&planner_store.snapshot(&planner_store.root));
     with_plan(&mut base, &plan);
@@ -1090,8 +1114,9 @@ pub(crate) async fn maybe_decompose(
         &plan_program.prompts,
         &plan_program.effect_names,
     );
+    let declared = declared_effect_names(&parsed);
 
-    let child_store = match run_isolated(
+    let (child_store, run_result) = run_isolated(
         &plan_program,
         seed_state,
         &plan_frame,
@@ -1099,8 +1124,8 @@ pub(crate) async fn maybe_decompose(
         observer,
         token,
     )
-    .await
-    {
+    .await;
+    match run_result {
         Err(VmError::Refused {
             refusal,
             child_label,
@@ -1114,29 +1139,33 @@ pub(crate) async fn maybe_decompose(
         Err(err) if err.is_fatal() => return Err(err),
         Err(err) => {
             child_warning();
-            return Ok(Some(failure_result(
+            let mut result = failure_result(
                 base,
                 dset,
                 "execution_failed",
                 err.to_string(),
                 fallback,
                 None,
-            )));
+            );
+            result.child_record = child_record_from(&child_store, run_ctx, &declared);
+            return Ok(Some(result));
         }
-        Ok(store) => store,
-    };
+        Ok(()) => {}
+    }
 
     let value = resolve_dot_path(&child_store.snapshot(&child_store.root), &plan.result_path);
     if matches!(value, Value::None) {
         child_warning();
-        return Ok(Some(failure_result(
+        let mut result = failure_result(
             base,
             dset,
             "execution_failed",
             missing_result_error(&plan.result_path),
             fallback,
             None,
-        )));
+        );
+        result.child_record = child_record_from(&child_store, run_ctx, &declared);
+        return Ok(Some(result));
     }
 
     let mut result = success_result(base, value);
@@ -1144,14 +1173,7 @@ pub(crate) async fn maybe_decompose(
     // declared effects, grafted alongside `value`/`meta` on the
     // decomposing node -- the caller (`exec::prompt::execute_prompt`)
     // does the actual graft, once it knows `value` is being written.
-    if record_children_enabled(run_ctx.runtime_config) {
-        if let Ok(Some(child_prime)) =
-            child_store.child(&child_store.root, &Value::Str("prime".to_string()))
-        {
-            let declared = declared_effect_names(&parsed);
-            result.child_record = declared_children_entries(&child_prime, &declared);
-        }
-    }
+    result.child_record = child_record_from(&child_store, run_ctx, &declared);
     Ok(Some(result))
 }
 
@@ -2401,7 +2423,7 @@ async fn maybe_split(
         &plan_program.effect_names,
     );
 
-    let child_store = match run_isolated(
+    let (child_store, run_result) = run_isolated(
         &plan_program,
         seed_state,
         &plan_frame,
@@ -2409,8 +2431,8 @@ async fn maybe_split(
         observer,
         token,
     )
-    .await
-    {
+    .await;
+    match run_result {
         Err(VmError::Refused {
             refusal,
             child_label,
@@ -2426,15 +2448,12 @@ async fn maybe_split(
                 "Decomposition (size trigger) child failed for prompt {}",
                 Value::Str(name.to_string()).py_repr()
             );
-            return Ok(Some(split_failure_result(
-                base,
-                sset,
-                "execution_failed",
-                err.to_string(),
-            )));
+            let mut result = split_failure_result(base, sset, "execution_failed", err.to_string());
+            result.child_record = child_record_from(&child_store, run_ctx, &declared);
+            return Ok(Some(result));
         }
-        Ok(store) => store,
-    };
+        Ok(()) => {}
+    }
 
     let collected = resolve_dot_path(&child_store.snapshot(&child_store.root), &result_path);
     if matches!(collected, Value::None) {
@@ -2442,12 +2461,14 @@ async fn maybe_split(
             "Decomposition (size trigger) child failed for prompt {}",
             Value::Str(name.to_string()).py_repr()
         );
-        return Ok(Some(split_failure_result(
+        let mut result = split_failure_result(
             base,
             sset,
             "execution_failed",
             split_missing_result_error(&result_path),
-        )));
+        );
+        result.child_record = child_record_from(&child_store, run_ctx, &declared);
+        return Ok(Some(result));
     }
 
     let value = if merge_mode == "reduce" {
@@ -2461,24 +2482,15 @@ async fn maybe_split(
         ) {
             Ok(value) => value,
             Err(message) => {
-                return Ok(Some(split_failure_result(
-                    base,
-                    sset,
-                    "merge_invalid",
-                    message,
-                )));
+                let mut result = split_failure_result(base, sset, "merge_invalid", message);
+                result.child_record = child_record_from(&child_store, run_ctx, &declared);
+                return Ok(Some(result));
             }
         }
     };
 
     let mut result = success_result(base, value);
-    if record_children_enabled(run_ctx.runtime_config) {
-        if let Ok(Some(child_prime)) =
-            child_store.child(&child_store.root, &Value::Str("prime".to_string()))
-        {
-            result.child_record = declared_children_entries(&child_prime, &declared);
-        }
-    }
+    result.child_record = child_record_from(&child_store, run_ctx, &declared);
     Ok(Some(result))
 }
 
