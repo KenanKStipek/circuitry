@@ -1,0 +1,32 @@
+prime.big.parts.iter_0.map.plan:
+  - text: '{"say": "Split into two chunks plus a merge step.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A instructions.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B instructions.\"\n  - type: prompt\n    name: merge\n    template: \"Combine the chunks.\"\n"}'
+prime.big.parts.iter_0.map.a:
+  - text: "chunk a0 result"
+prime.big.parts.iter_0.map.b:
+  - text: "chunk b0 result"
+prime.big.parts.iter_0.map.merge:
+  - text: "merged0 result"
+prime.big.parts.iter_1.map.plan:
+  - text: '{"say": "Split into two chunks plus a merge step.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A instructions.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B instructions.\"\n  - type: prompt\n    name: merge\n    template: \"Combine the chunks.\"\n"}'
+prime.big.parts.iter_1.map.a:
+  - text: "chunk a1 result"
+prime.big.parts.iter_1.map.b:
+  - text: "chunk b1 result"
+prime.big.parts.iter_1.map.merge:
+  - text: "merged1 result"
+prime.big.parts.iter_2.map.plan:
+  - text: '{"say": "Split into two chunks plus a merge step.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A instructions.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B instructions.\"\n  - type: prompt\n    name: merge\n    template: \"Combine the chunks.\"\n"}'
+prime.big.parts.iter_2.map.a:
+  - text: "chunk a2 result"
+prime.big.parts.iter_2.map.b:
+  - text: "chunk b2 result"
+prime.big.parts.iter_2.map.merge:
+  - text: "merged2 result"
+prime.big.parts.iter_3.map.plan:
+  - text: '{"say": "Split into two chunks plus a merge step.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A instructions.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B instructions.\"\n  - type: prompt\n    name: merge\n    template: \"Combine the chunks.\"\n"}'
+prime.big.parts.iter_3.map.a:
+  - text: "chunk a3 result"
+prime.big.parts.iter_3.map.b:
+  - text: "chunk b3 result"
+prime.big.parts.iter_3.map.merge:
+  - text: "merged3 result"
