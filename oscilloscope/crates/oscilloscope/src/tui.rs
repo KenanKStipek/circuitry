@@ -998,6 +998,7 @@ fn tape_row_line(
     unit: u64,
     tokens_view_usual: bool,
     narrow: bool,
+    wide_detail: bool,
     name_width: usize,
     what_width: usize,
     token_width: usize,
@@ -1020,7 +1021,18 @@ fn tape_row_line(
         Style::default()
             .fg(ctx.theme.selection_fg)
             .add_modifier(Modifier::BOLD)
-    } else if row.bold {
+    } else if row.bold
+        || (narrow
+            && matches!(
+                row.status.kind,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            ))
+    {
+        // A running loop container's own name (never a leaf's --
+        // `row.bold` already covers those) reads bold at narrow
+        // widths: with no `what` text at all to carry "this is
+        // what's happening right now", the name is the only thing
+        // left to say so.
         Style::default()
             .fg(ctx.theme.text)
             .add_modifier(Modifier::BOLD)
@@ -1071,7 +1083,7 @@ fn tape_row_line(
         Span::styled(
             format!(
                 "{:<what_width$}",
-                truncate_text(&row.what, what_width.saturating_sub(1))
+                tape_what_text(&tape_loop_what(row, wide_detail), what_width)
             ),
             bg(what_style),
         ),
@@ -1113,7 +1125,12 @@ fn tape_row_line(
             }
         }
         None => {
-            spans.push(Span::styled(" ".repeat(token_width), bg(what_style)));
+            // Narrow (60-79 columns) has no `what` text of its own at
+            // all (`what_width` is 0 there) -- this blank reads as
+            // the name's own colour instead, the only one a bare
+            // row like this still has.
+            let fill_style = if narrow { name_style } else { what_style };
+            spans.push(Span::styled(" ".repeat(token_width), bg(fill_style)));
         }
     }
     Line::from(spans)
@@ -1126,6 +1143,45 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
         String::new()
     } else {
         let truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{truncated}⋯")
+    }
+}
+
+/// A row's own `what` text, cut to its own column's width -- one
+/// char narrower than [`truncate_text`]'s own plain budget
+/// (`what_width - 1`, not `what_width`): text that happens to fill
+/// the column exactly, with nothing left over for even one trailing
+/// space before the next column starts, still needs to read as cut
+/// short, the same `⋯` any longer text already gets, not as if it
+/// had simply ended right there by coincidence.
+/// A running loop's own `done` count (§3.4's `3 passes · 2 wide ·
+/// 0 done`) drops below the 120-column floor's own full height
+/// (`wide_detail`) -- the row's own sparkline just past it already
+/// carries that figure visually, and 80-119 columns needs the room
+/// more than the redundant count.
+fn tape_loop_what(
+    row: &oscilloscope_core::screens::TapeRow,
+    wide_detail: bool,
+) -> std::borrow::Cow<'_, str> {
+    if wide_detail || row.kind != oscilloscope_core::render::RowKind::Loop {
+        return std::borrow::Cow::Borrowed(&row.what);
+    }
+    match row.what.rfind(" · ") {
+        Some(idx) if row.what[idx + 3..].ends_with(" done") => {
+            std::borrow::Cow::Owned(row.what[..idx].to_string())
+        }
+        _ => std::borrow::Cow::Borrowed(&row.what),
+    }
+}
+
+fn tape_what_text(what: &str, what_width: usize) -> String {
+    let budget = what_width.saturating_sub(1);
+    if what.chars().count() < budget {
+        what.to_string()
+    } else if budget == 0 {
+        String::new()
+    } else {
+        let truncated: String = what.chars().take(budget.saturating_sub(1)).collect();
         format!("{truncated}⋯")
     }
 }
@@ -1205,29 +1261,25 @@ fn draw_tape_list(
     // widget below draws over it undisturbed.
     fill_border_rows(frame, inner, border_color);
 
-    // §5: 60-79 columns drops the clock and the what column
-    // entirely and gives the name whatever's left after a fixed 16-
-    // cell token field (the bar's own natural width: 8 cells, a 3-
-    // cell gap, up to 5 digits) -- 80 and up keeps the clock and
-    // computes the token field's own width from what's actually
-    // left after the name and what columns instead.
+    // The token field's own width never flexes (the bar's own
+    // natural width: 8 cells, a 3-cell gap, up to 5 digits) -- it's
+    // the name/what text that gives way to however much room the
+    // terminal actually has. §5: 60-79 columns drops the clock and
+    // the what column entirely and gives the name whatever's left;
+    // 80 and up keeps the clock and gives the what column whatever
+    // the name and the token field don't already need.
+    let token_width = 16;
     let name_width = if narrow {
-        (inner.width as usize).saturating_sub(2 + 16)
+        (inner.width as usize).saturating_sub(2 + token_width)
     } else {
         19
     };
     let what_width = if narrow {
         0
     } else {
-        (inner.width as usize).saturating_sub(40).min(28)
-    };
-    let token_width = if narrow {
-        16
-    } else {
         // 9 for the clock, 2 for the glyph and its own trailing
-        // space -- whatever's left of the pane's own inner width is
-        // the token column's, right-aligned flush to its far edge.
-        (inner.width as usize).saturating_sub(9 + 2 + name_width + what_width)
+        // space.
+        (inner.width as usize).saturating_sub(9 + 2 + name_width + token_width)
     };
 
     let mut lines: Vec<(Option<String>, Line<'static>)> = Vec::new();
@@ -1248,11 +1300,18 @@ fn draw_tape_list(
                         .unwrap_or_else(|| " ".repeat(9));
                     spans.push(Span::styled(ts_text, Style::default().fg(ctx.theme.dim)));
                 }
-                spans.push(Span::styled(
-                    "■ Run Started        ",
-                    Style::default().fg(ctx.theme.fg_muted),
-                ));
-                if !narrow {
+                if narrow {
+                    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                    let width = (inner.width as usize).saturating_sub(used);
+                    spans.push(Span::styled(
+                        format!("{:<width$}", "■ Run Started"),
+                        Style::default().fg(ctx.theme.fg_muted),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        "■ Run Started        ",
+                        Style::default().fg(ctx.theme.fg_muted),
+                    ));
                     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
                     let text = format!("{document} · {engine}");
                     let width = (inner.width as usize).saturating_sub(used);
@@ -1273,6 +1332,7 @@ fn draw_tape_list(
                         screen.unit,
                         app.tape_tokens_view,
                         narrow,
+                        wide_detail,
                         name_width,
                         what_width,
                         token_width,
@@ -1434,22 +1494,37 @@ fn draw_tape_list(
                             oscilloscope_core::format::format_tokens_thousands(*usual)
                         ));
                     }
-                    if let Some(d) = usual_wall_s {
-                        text.push_str(&format!(
-                            " · {}",
-                            oscilloscope_core::format::format_duration(*d)
-                        ));
+                    // 80-119 columns drops just the duration (the
+                    // row still carries its own usual total and
+                    // ETA) -- the Totals row below already has
+                    // less room there too, and this row's own gap
+                    // before the ETA is tuned for 120's own layout.
+                    if wide_detail {
+                        if let Some(d) = usual_wall_s {
+                            text.push_str(&format!(
+                                " · {}",
+                                oscilloscope_core::format::format_duration(*d)
+                            ));
+                        }
                     }
                     if let Some(eta) = eta_ts
                         .as_deref()
                         .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
                     {
-                        text.push_str(&format!("      ETA {eta}"));
+                        // The wide gap only makes sense lined up
+                        // against the duration it shares a row
+                        // with; without one (80-119 columns), ETA
+                        // reads right after the usual total instead.
+                        if wide_detail {
+                            text.push_str(&format!("      ETA {eta}"));
+                        } else {
+                            text.push_str(&format!(" · ETA {eta}"));
+                        }
                     }
-                    let width = (inner.width as usize).saturating_sub(gap.chars().count() + 2);
-                    if text.chars().count() < width {
-                        text = format!("{text:<width$}");
-                    }
+                }
+                let width = (inner.width as usize).saturating_sub(gap.chars().count() + 2);
+                if text.chars().count() < width {
+                    text = format!("{text:<width$}");
                 }
                 lines.push((
                     None,
@@ -1463,7 +1538,22 @@ fn draw_tape_list(
         }
     }
 
-    let viewport = inner.height.saturating_sub(2) as usize; // -1 rule, -1 totals row
+    // -1 rule, -1 totals row.
+    let viewport = inner.height.saturating_sub(2) as usize;
+    // The 80-119 column floor (neither narrow's own tightly packed
+    // layout nor 120's own full-height one) keeps one more row of
+    // slack at the bottom of its own scrollable area than either
+    // (issue #678's own 80x24 vs 60x24: both fit `Run Started`
+    // through `Run End` in exactly the same height, but only the
+    // narrow one actually shows every row of it) -- the rule and
+    // Totals row below still sit right where `viewport` alone
+    // would put them; only how many rows this area's own content
+    // fills before that blank slack changes.
+    let content_rows = if narrow || wide_detail {
+        viewport
+    } else {
+        viewport.saturating_sub(1)
+    };
     let total = lines.len();
     let selected_idx = app.selected_path.as_deref().and_then(|p| {
         lines
@@ -1475,15 +1565,22 @@ fn draw_tape_list(
     } else {
         selected_idx.unwrap_or(0)
     };
-    let start = if total <= viewport {
+    // Biased toward the tail, not centred on the anchor: by default
+    // this reads like `tail -f`, the run's own most recent and
+    // upcoming rows always in view when everything can't fit at
+    // once, scrolling up only as far as it has to so the anchor
+    // itself (the selection, or the Now band while following)
+    // never scrolls out of view above the top.
+    let start = if total <= content_rows {
         0
     } else {
-        anchor.saturating_sub(viewport / 2).min(total - viewport)
+        let tail = total - content_rows;
+        anchor.min(tail)
     };
     let visible: Vec<Line> = lines
         .into_iter()
         .skip(start)
-        .take(viewport)
+        .take(content_rows)
         .map(|(_, l)| l)
         .collect();
     let list_area = Rect {
@@ -14573,13 +14670,10 @@ mod tape_frame_goldens {
         );
     }
 
-    #[test]
-    fn tape_normal_120x30_matches_the_frame() {
-        let plan = demo_plan();
-        let (_history_dir, history) = demo_history();
+    fn run2_frozen_at_3_62s() -> (serde_json::Value, Vec<serde_json::Value>) {
         let run_dir = fixtures_dir().join("run2");
         let mut state = load_json(&run_dir.join("state.live.json"));
-        let now = "2026-11-08T20:50:50.923Z";
+        let now = RUN2_FROZEN_NOW;
         truncate_document(state.get_mut("prime").unwrap(), now);
         // `runtime.last_run.totals`/`completed_at` are themselves
         // only ever written as the run goes/ends; `build_header`'s
@@ -14610,6 +14704,17 @@ mod tape_frame_goldens {
                     .is_some_and(|ts| at_or_before(ts, now))
             })
             .collect();
+        (state, events)
+    }
+
+    const RUN2_FROZEN_NOW: &str = "2026-11-08T20:50:50.923Z";
+
+    #[test]
+    fn tape_normal_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
         let (rendered, tape_screen) = build_tape_screen(
             &plan,
             &history,
@@ -14627,6 +14732,12 @@ mod tape_frame_goldens {
         // ~5.0565s, which rounds to `5.1s` under this renderer's own
         // round-half-up `format_duration`; the frame itself reads
         // `5.0s` in the Run End row's own usual figure.
+        // A row explicitly selected (issue #678's own scenario)
+        // always means a user moved there by hand, not `follow`
+        // auto-advancing -- real key handling already turns it off
+        // the moment a selection moves (`move_or_scroll`); matters
+        // once the list is too short for every row and the Now
+        // band both to stay on screen at the same time.
         assert_tape_frame(
             "tape--normal--120x30",
             120,
@@ -14634,7 +14745,7 @@ mod tape_frame_goldens {
             &rendered,
             &tape_screen,
             Some("prime.gate.reply"),
-            |_| {},
+            |app| app.follow = false,
             now,
             &[(51, 24)],
         );
@@ -14644,31 +14755,8 @@ mod tape_frame_goldens {
     fn tape_usual_120x30_matches_the_frame() {
         let plan = demo_plan();
         let (_history_dir, history) = demo_history();
-        let run_dir = fixtures_dir().join("run2");
-        let mut state = load_json(&run_dir.join("state.live.json"));
-        let now = "2026-11-08T20:50:50.923Z";
-        truncate_document(state.get_mut("prime").unwrap(), now);
-        let last_run = state
-            .pointer_mut("/runtime/last_run")
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
-        last_run.remove("completed_at");
-        last_run["totals"] = serde_json::json!({
-            "wall_time_s": 3.62,
-            "effects_run": 6,
-            "tokens_sent": 796,
-            "tokens_received": 69,
-            "cost_usd": null,
-        });
-        let events: Vec<serde_json::Value> = load_events(&run_dir.join("events.jsonl"))
-            .into_iter()
-            .filter(|e| {
-                e.get("ts")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|ts| at_or_before(ts, now))
-            })
-            .collect();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
         let (rendered, tape_screen) = build_tape_screen(
             &plan,
             &history,
@@ -14688,9 +14776,72 @@ mod tape_frame_goldens {
             &rendered,
             &tape_screen,
             Some("prime.gate.reply"),
-            |app| app.tape_tokens_view = true,
+            |app| {
+                app.follow = false;
+                app.tape_tokens_view = true;
+            },
             now,
             &[(51, 24)],
+        );
+    }
+
+    #[test]
+    fn tape_normal_80x24_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        assert_tape_frame(
+            "tape--normal--80x24",
+            80,
+            24,
+            &rendered,
+            &tape_screen,
+            Some("prime.gate.reply"),
+            |app| app.follow = false,
+            now,
+            &[],
+        );
+    }
+
+    #[test]
+    fn tape_normal_60x24_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        assert_tape_frame(
+            "tape--normal--60x24",
+            60,
+            24,
+            &rendered,
+            &tape_screen,
+            Some("prime.gate.reply"),
+            |app| app.follow = false,
+            now,
+            &[],
         );
     }
 }
