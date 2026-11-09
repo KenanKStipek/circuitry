@@ -518,17 +518,21 @@ def _ollama_streaming_outcome_cases() -> list[dict[str, Any]]:
         # success: two NDJSON deltas, then the final `done: true` line.
         (
             0,
-            '{"message": {"content": "hi "}}\n'
-            '{"message": {"content": "there"}, "done": true, '
-            '"prompt_eval_count": 3, "eval_count": 5, "done_reason": "stop"}\n',
+            (
+                '{"message": {"content": "hi "}}\n'
+                '{"message": {"content": "there"}, "done": true, '
+                '"prompt_eval_count": 3, "eval_count": 5, "done_reason": "stop"}\n'
+            ),
             "",
         ),
         # length: Ollama's own `done_reason` for a budget cutoff.
         (
             0,
-            '{"message": {"content": "hi"}}\n'
-            '{"message": {"content": ""}, "done": true, '
-            '"prompt_eval_count": 3, "eval_count": 2, "done_reason": "length"}\n',
+            (
+                '{"message": {"content": "hi"}}\n'
+                '{"message": {"content": ""}, "done": true, '
+                '"prompt_eval_count": 3, "eval_count": 2, "done_reason": "length"}\n'
+            ),
             "",
         ),
         # an HTTP error body -- curl's own generic HTTP-failure exit.
@@ -678,18 +682,22 @@ def _openai_compat_streaming_outcome_cases() -> list[dict[str, Any]]:
     scripted = [
         (
             0,
-            'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
-            'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}], '
-            '"usage": {"prompt_tokens": 3, "completion_tokens": 5}}\n'
-            "data: [DONE]\n",
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 5}}\n'
+                "data: [DONE]\n"
+            ),
             "",
         ),
         (
             0,
-            'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
-            'data: {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], '
-            '"usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n'
-            "data: [DONE]\n",
+            (
+                'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
+                'data: {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n'
+                "data: [DONE]\n"
+            ),
             "",
         ),
         (
@@ -699,8 +707,10 @@ def _openai_compat_streaming_outcome_cases() -> list[dict[str, Any]]:
         ),
         (
             18,
-            'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
-            'data: {"choices": [{"delta": {"content": "there"}}]}\n',
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}}]}\n'
+            ),
             "curl: (18) transfer closed with outstanding read data remaining",
         ),
         (0, 'data: {"choices": [{"delta": {"content": "hi"}}]}\n', ""),
@@ -829,25 +839,31 @@ def _openai_streaming_outcome_cases() -> list[dict[str, Any]]:
     scripted = [
         (
             0,
-            'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
-            'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}], '
-            '"usage": {"prompt_tokens": 3, "completion_tokens": 5}}\n'
-            "data: [DONE]\n",
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 5}}\n'
+                "data: [DONE]\n"
+            ),
             "",
         ),
         (
             0,
-            'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
-            'data: {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], '
-            '"usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n'
-            "data: [DONE]\n",
+            (
+                'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
+                'data: {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n'
+                "data: [DONE]\n"
+            ),
             "",
         ),
         (22, '{"error": {"message": "bad key"}}', "curl: (22) The requested URL returned error: 401"),
         (
             18,
-            'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
-            'data: {"choices": [{"delta": {"content": "there"}}]}\n',
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}}]}\n'
+            ),
             "curl: (18) transfer closed with outstanding read data remaining",
         ),
         (0, 'data: {"choices": [{"delta": {"content": "hi"}}]}\n', ""),
@@ -965,21 +981,25 @@ def _anthropic_streaming_outcome_cases() -> list[dict[str, Any]]:
     scripted = [
         (
             0,
-            'data: {"type": "message_start", "message": {"usage": {"input_tokens": 3}}}\n'
-            'data: {"type": "content_block_delta", "delta": {"text": "hi "}}\n'
-            'data: {"type": "content_block_delta", "delta": {"text": "there"}}\n'
-            'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
-            '"usage": {"output_tokens": 5}}\n'
-            'data: {"type": "message_stop"}\n',
+            (
+                'data: {"type": "message_start", "message": {"usage": {"input_tokens": 3}}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "hi "}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "there"}}\n'
+                'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
+                '"usage": {"output_tokens": 5}}\n'
+                'data: {"type": "message_stop"}\n'
+            ),
             "",
         ),
         (
             0,
-            'data: {"type": "message_start", "message": {"usage": {"input_tokens": 3}}}\n'
-            'data: {"type": "content_block_delta", "delta": {"text": "hi"}}\n'
-            'data: {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, '
-            '"usage": {"output_tokens": 2}}\n'
-            'data: {"type": "message_stop"}\n',
+            (
+                'data: {"type": "message_start", "message": {"usage": {"input_tokens": 3}}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "hi"}}\n'
+                'data: {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, '
+                '"usage": {"output_tokens": 2}}\n'
+                'data: {"type": "message_stop"}\n'
+            ),
             "",
         ),
         (
@@ -989,8 +1009,10 @@ def _anthropic_streaming_outcome_cases() -> list[dict[str, Any]]:
         ),
         (
             18,
-            'data: {"type": "content_block_delta", "delta": {"text": "hi "}}\n'
-            'data: {"type": "content_block_delta", "delta": {"text": "there"}}\n',
+            (
+                'data: {"type": "content_block_delta", "delta": {"text": "hi "}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "there"}}\n'
+            ),
             "curl: (18) transfer closed with outstanding read data remaining",
         ),
         (0, 'data: {"type": "content_block_delta", "delta": {"text": "hi"}}\n', ""),
