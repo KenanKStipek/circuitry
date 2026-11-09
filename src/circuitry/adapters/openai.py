@@ -17,7 +17,9 @@ from ._openai_compat import (
     StreamAssembly,
     chat_messages,
     parse_chat_response,
+    parse_sse_stream,
     sampling_fields,
+    stream_error_retry_info,
     usage_tokens,
 )
 from ._retry import AdapterCallError, classify_curl_exit
@@ -101,36 +103,67 @@ class OpenAIAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
+            # On the streaming path, a non-22 failure leaves whatever
+            # OpenAI had already answered in `proc.stdout` -- only a
+            # complete HTTP response (22) has a body worth reporting.
+            stdout_for_message = proc.stdout if (proc.returncode == 22 or not self.streams) else ""
             raise AdapterCallError(
                 curl_failure_message(
                     source="openai",
                     model=model,
                     url=url,
                     returncode=proc.returncode,
-                    stdout=proc.stdout,
+                    stdout=stdout_for_message,
                     stderr=proc.stderr,
                     secrets=[api_key],
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
-                error_code=curl_error_code(proc.stdout, [api_key]),
+                error_code=curl_error_code(stdout_for_message, [api_key]),
             )
 
         if assembly is not None and assembly.saw_data_line:
-            tokens_sent, tokens_received = usage_tokens(assembly.usage)
+            text, finish_reason, usage, saw_done, stream_error = parse_sse_stream(proc.stdout)
+
+            if stream_error is not None:
+                error_body = json.dumps({"error": stream_error})
+                raise AdapterCallError(
+                    curl_failure_message(
+                        source="openai",
+                        model=model,
+                        url=url,
+                        returncode=22,
+                        stdout=error_body,
+                        stderr="",
+                        secrets=[api_key],
+                    ),
+                    retry_info=stream_error_retry_info(stream_error),
+                    error_code=curl_error_code(error_body, [api_key]),
+                )
+
+            if not saw_done:
+                raise AdapterCallError(
+                    curl_failure_message(
+                        source="openai",
+                        model=model,
+                        url=url,
+                        returncode=18,
+                        stdout="",
+                        stderr="curl: (18) transfer closed with outstanding read data remaining",
+                        secrets=[api_key],
+                    ),
+                    retry_info=classify_curl_exit(18, ""),
+                )
+
+            tokens_sent, tokens_received = usage_tokens(usage)
             return GenerateResult(
-                text=assembly.text.strip(),
+                text=text.strip(),
                 raw={
-                    "choices": [
-                        {
-                            "message": {"content": assembly.text},
-                            "finish_reason": assembly.finish_reason,
-                        }
-                    ],
-                    "usage": assembly.usage,
+                    "choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
+                    "usage": usage,
                 },
                 tokens_sent=tokens_sent,
                 tokens_received=tokens_received,
-                finish_reason=assembly.finish_reason,
+                finish_reason=finish_reason,
             )
 
         try:

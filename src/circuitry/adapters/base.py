@@ -124,7 +124,13 @@ class GenerateOptions:
     messages: tuple[ChatMessage, ...] = ()
     images: tuple[ImageInput, ...] = ()
     json_schema: Mapping[str, Any] | None = None
-    on_progress: Callable[[GenerateProgress], None] | None = None
+    #: Excluded from equality/repr (like a callback would be anywhere else
+    #: in this codebase): two otherwise-identical ``GenerateOptions`` built
+    #: with different closures over the same attempt must still compare
+    #: equal, and a repr naming a closure's own address is never useful.
+    on_progress: Callable[[GenerateProgress], None] | None = field(
+        default=None, compare=False, repr=False
+    )
 
     def set_fields(self) -> list[str]:
         """The fields carrying a value, named the way a warning shows them.

@@ -29,7 +29,7 @@ from ..curl_support import (
     run_curl_streaming,
 )
 from ..preflight import CheckResult
-from ._retry import AdapterCallError, classify_curl_exit
+from ._retry import AdapterCallError, RetryInfo, classify_curl_exit, status_is_retryable
 from .base import GenerateOptions, GenerateProgress, GenerateResult, last_user_index
 
 
@@ -115,6 +115,19 @@ def parse_chat_response(raw: dict[str, Any]) -> tuple[str, str | None]:
     return (text.strip() if isinstance(text, str) else "", finish_reason)
 
 
+def stream_error_retry_info(error: Any) -> RetryInfo:
+    """Classify an ``{"error": ...}`` payload seen mid-SSE-stream, the same
+    way an HTTP error status would be: a numeric ``code`` is read as the
+    status it stands in for; anything else is not retryable, the same
+    conservative default :func:`classify_curl_exit` falls back to when it
+    can't read curl's own status line.
+    """
+    code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(code, int) and not isinstance(code, bool):
+        return RetryInfo(retryable=status_is_retryable(code), status=code)
+    return RetryInfo(retryable=False)
+
+
 def usage_tokens(usage: Any) -> tuple[int | None, int | None]:
     if not isinstance(usage, dict):
         return None, None
@@ -127,19 +140,18 @@ def usage_tokens(usage: Any) -> tuple[int | None, int | None]:
 
 
 class StreamAssembly:
-    """Accumulates one SSE Chat Completions stream: the assembled text, the
-    last reported ``finish_reason`` and ``usage``, and whether any ``data:``
-    line was actually seen — a server that answers a streaming request
-    with one plain JSON body (no SSE at all) leaves this ``False``, which
-    tells :func:`chat_completion` to fall back to :func:`parse_chat_response`
-    on the whole body instead.
+    """Drives *on_progress* from each SSE delta as it arrives — never the
+    source of the final result, which is parsed from the complete body
+    once the call finishes (:func:`parse_sse_stream`), exactly the way
+    the non-streamed path parses its one JSON object. ``saw_data_line`` is
+    whether any ``data:`` line was seen at all — a server that answers a
+    streaming request with one plain JSON body (no SSE at all) leaves
+    this ``False``, which tells :func:`chat_completion` to fall back to
+    :func:`parse_chat_response` on the whole body instead.
     """
 
     def __init__(self, on_progress: Any) -> None:
         self._on_progress = on_progress
-        self.text_parts: list[str] = []
-        self.finish_reason: str | None = None
-        self.usage: Any = None
         self.saw_data_line = False
 
     def on_line(self, line: str) -> None:
@@ -150,40 +162,73 @@ class StreamAssembly:
         if not payload or payload == "[DONE]":
             return
         self.saw_data_line = True
+        if self._on_progress is None:
+            return
         try:
             event = json.loads(payload)
         except json.JSONDecodeError:
             return
-        if not isinstance(event, dict):
+        if not isinstance(event, dict) or event.get("error") is not None:
             return
-        usage = event.get("usage")
-        if usage is not None:
-            self.usage = usage
         choices = event.get("choices") or []
         if not (choices and isinstance(choices, list) and isinstance(choices[0], dict)):
             return
+        delta = choices[0].get("delta") or {}
+        content = delta.get("content") if isinstance(delta, dict) else None
+        if isinstance(content, str) and content:
+            self._on_progress(GenerateProgress(delta_chars=len(content), delta_count=1))
+
+
+def parse_sse_stream(stdout: str) -> tuple[str, str | None, Any, bool, Any]:
+    """``(text, finish_reason, usage, saw_done, error)`` from a completed
+    SSE Chat Completions stream, parsed in full — the authoritative
+    result for a streamed call, built the same way the non-streamed path
+    builds its one JSON object's. ``saw_done`` is whether a ``data:
+    [DONE]`` sentinel was seen; ``error`` is the first ``{"error": ...}``
+    event's own value, if any (OpenRouter, vLLM and others can send one
+    mid-stream, over an HTTP 200 response, once generation has already
+    started).
+    """
+    text_parts: list[str] = []
+    finish_reason: str | None = None
+    usage: Any = None
+    saw_done = False
+    error: Any = None
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if not payload:
+            continue
+        if payload == "[DONE]":
+            saw_done = True
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        line_error = event.get("error")
+        if line_error is not None and error is None:
+            error = line_error
+            continue
+        line_usage = event.get("usage")
+        if line_usage is not None:
+            usage = line_usage
+        choices = event.get("choices") or []
+        if not (choices and isinstance(choices, list) and isinstance(choices[0], dict)):
+            continue
         choice = choices[0]
         delta = choice.get("delta") or {}
         reason = choice.get("finish_reason")
         if isinstance(reason, str):
-            self.finish_reason = reason
+            finish_reason = reason
         content = delta.get("content") if isinstance(delta, dict) else None
         if isinstance(content, str) and content:
-            self.text_parts.append(content)
-            if self._on_progress is not None:
-                sent, received = usage_tokens(self.usage)
-                self._on_progress(
-                    GenerateProgress(
-                        delta_chars=len(content),
-                        delta_count=1,
-                        tokens_sent=sent,
-                        tokens_received=received,
-                    )
-                )
-
-    @property
-    def text(self) -> str:
-        return "".join(self.text_parts)
+            text_parts.append(content)
+    return "".join(text_parts), finish_reason, usage, saw_done, error
 
 
 def chat_completion(
@@ -267,30 +312,67 @@ def chat_completion(
             raise RuntimeError("curl is not installed or not on PATH") from e
 
     if proc.returncode != 0:
+        # On the streaming path, a non-22 failure leaves whatever the
+        # provider had already answered in `proc.stdout` (curl's
+        # `--no-buffer` flushes it there as it arrives) -- only a complete
+        # HTTP response (22) has a body worth reporting.
+        stdout_for_message = proc.stdout if (proc.returncode == 22 or not cfg.streams) else ""
         raise AdapterCallError(
             curl_failure_message(
                 source="OpenAI-compatible",
                 model=model,
                 url=url,
                 returncode=proc.returncode,
-                stdout=proc.stdout,
+                stdout=stdout_for_message,
                 stderr=proc.stderr,
                 secrets=secrets,
             ),
             retry_info=classify_curl_exit(proc.returncode, proc.stderr),
-            error_code=curl_error_code(proc.stdout, secrets),
+            error_code=curl_error_code(stdout_for_message, secrets),
         )
 
     if assembly is not None and assembly.saw_data_line:
-        text = assembly.text.strip()
-        finish_reason = assembly.finish_reason
-        tokens_sent, tokens_received = usage_tokens(assembly.usage)
+        text, finish_reason, usage, saw_done, stream_error = parse_sse_stream(proc.stdout)
+
+        if stream_error is not None:
+            error_body = json.dumps({"error": stream_error})
+            raise AdapterCallError(
+                curl_failure_message(
+                    source="OpenAI-compatible",
+                    model=model,
+                    url=url,
+                    returncode=22,
+                    stdout=error_body,
+                    stderr="",
+                    secrets=secrets,
+                ),
+                retry_info=stream_error_retry_info(stream_error),
+                error_code=curl_error_code(error_body, secrets),
+            )
+
+        if not saw_done:
+            # The stream ended (curl exited 0) without a `[DONE]` sentinel
+            # -- classified the same way an actual mid-stream disconnect is.
+            raise AdapterCallError(
+                curl_failure_message(
+                    source="OpenAI-compatible",
+                    model=model,
+                    url=url,
+                    returncode=18,
+                    stdout="",
+                    stderr="curl: (18) transfer closed with outstanding read data remaining",
+                    secrets=secrets,
+                ),
+                retry_info=classify_curl_exit(18, ""),
+            )
+
+        tokens_sent, tokens_received = usage_tokens(usage)
         raw: dict[str, Any] = {
-            "choices": [{"message": {"content": assembly.text}, "finish_reason": finish_reason}],
-            "usage": assembly.usage,
+            "choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
+            "usage": usage,
         }
         return GenerateResult(
-            text=text,
+            text=text.strip(),
             raw=raw,
             tokens_sent=tokens_sent,
             tokens_received=tokens_received,

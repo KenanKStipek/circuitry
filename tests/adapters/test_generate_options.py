@@ -24,10 +24,12 @@ from circuitry.adapters.base import (
     DETERMINISTIC_SEED,
     ChatMessage,
     GenerateOptions,
+    GenerateProgress,
     GenerateResult,
     ImageInput,
     adapter_accepts_images,
     call_generate,
+    ignored_options_warning,
 )
 from circuitry.adapters.conformance import validate_generate_result
 from circuitry.adapters.factory import ADAPTER_REGISTRY, build_adapter
@@ -121,6 +123,41 @@ def _record(monkeypatch: pytest.MonkeyPatch, response: dict[str, Any]) -> CurlRe
     recorder = CurlRecorder(response)
     monkeypatch.setattr("subprocess.Popen", recorder)
     return recorder
+
+
+# ---------- GenerateOptions.on_progress ----------
+
+
+def test_on_progress_is_not_a_set_field_but_makes_options_non_empty() -> None:
+    options = GenerateOptions(on_progress=lambda progress: None)
+    assert options.set_fields() == []
+    assert options.is_empty() is False
+    assert ignored_options_warning("adapter", options) == ()
+
+
+def test_options_with_no_on_progress_and_nothing_else_is_empty() -> None:
+    assert GenerateOptions().is_empty() is True
+
+
+def test_on_progress_is_excluded_from_equality_and_repr() -> None:
+    a = GenerateOptions(temperature=0.5, on_progress=lambda progress: None)
+    b = GenerateOptions(temperature=0.5, on_progress=lambda progress: progress)
+    assert a == b
+    assert "on_progress" not in repr(a)
+
+
+def test_call_generate_passes_a_non_empty_options_with_only_on_progress_set() -> None:
+    options = GenerateOptions(on_progress=lambda progress: None)
+    result = call_generate(
+        OptionsAdapter(), model="m", prompt="p", timeout_seconds=5, options=options
+    )
+    assert result.raw["options"] is options
+
+
+def test_generate_progress_defaults() -> None:
+    progress = GenerateProgress(delta_chars=5, delta_count=1)
+    assert progress.tokens_sent is None
+    assert progress.tokens_received is None
 
 
 # ---------- the call_generate shim ----------

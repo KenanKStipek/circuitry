@@ -37,7 +37,7 @@ class QwenDashScopeAdapter:
             base_url=self.base_url,
             api_key_env="DASHSCOPE_API_KEY",
             default_model=self.default_model,
-    streams=self.streams,
+            streams=self.streams,
         )
 
     def generate(

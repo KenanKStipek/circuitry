@@ -39,12 +39,10 @@ _STREAM_ERROR_STATUS: dict[str, int] = {
 
 
 class _AnthropicStream:
-    """Accumulates one Anthropic Messages API SSE stream.
-
-    ``message_start`` reports the exact input token count before any text
-    arrives; ``content_block_delta`` carries the text; ``message_delta``
-    carries the stop reason and the exact output token count; ``error``
-    carries the same explanation an HTTP error body would. ``saw_event`` is
+    """Drives *on_progress* from each SSE delta as it arrives — never the
+    source of the final result, which is parsed from the complete body
+    once the call finishes (:func:`parse_anthropic_stream`), exactly the
+    way the non-streamed path parses its one JSON object. ``saw_event`` is
     ``False`` when the server answered with no recognisable SSE event at
     all (a plain JSON body instead), the same fallback signal
     :class:`~circuitry.adapters._openai_compat.StreamAssembly` has.
@@ -52,12 +50,10 @@ class _AnthropicStream:
 
     def __init__(self, on_progress: Any) -> None:
         self._on_progress = on_progress
-        self.text_parts: list[str] = []
-        self.tokens_sent: int | None = None
-        self.tokens_received: int | None = None
-        self.stop_reason: str | None = None
-        self.error_message: str | None = None
-        self.error_type: str | None = None
+        #: The most recently reported exact input-token count
+        #: (``message_start``), carried onto every later progress call so
+        #: ``meta.live.tokens_sent`` stays populated once known.
+        self._tokens_sent: int | None = None
         self.saw_event = False
 
     def on_line(self, line: str) -> None:
@@ -75,50 +71,105 @@ class _AnthropicStream:
             return
         self.saw_event = True
         etype = event.get("type")
-        if etype == "error":
-            error = event.get("error") or {}
-            message = error.get("message") if isinstance(error, dict) else None
-            self.error_message = message if isinstance(message, str) else json.dumps(error)
-            self.error_type = error.get("type") if isinstance(error, dict) else None
-            return
         if etype == "message_start":
             message = event.get("message") or {}
             usage = message.get("usage") if isinstance(message, dict) else None
             input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
             if isinstance(input_tokens, int):
-                self.tokens_sent = input_tokens
+                self._tokens_sent = input_tokens
+                # Not "a delta" (R6/#674): this carries only the input
+                # token count, no reply text, so it never gates the
+                # per-second throttle or counts as the first token.
                 if self._on_progress is not None:
                     self._on_progress(
                         GenerateProgress(
-                            delta_chars=0, delta_count=1, tokens_sent=self.tokens_sent
+                            delta_chars=0, delta_count=1, tokens_sent=input_tokens
                         )
                     )
         elif etype == "content_block_delta":
             delta = event.get("delta") or {}
             text = delta.get("text") if isinstance(delta, dict) else None
-            if isinstance(text, str) and text:
-                self.text_parts.append(text)
-                if self._on_progress is not None:
-                    self._on_progress(
-                        GenerateProgress(
-                            delta_chars=len(text),
-                            delta_count=1,
-                            tokens_sent=self.tokens_sent,
-                        )
+            if isinstance(text, str) and text and self._on_progress is not None:
+                self._on_progress(
+                    GenerateProgress(
+                        delta_chars=len(text), delta_count=1, tokens_sent=self._tokens_sent
                     )
+                )
+
+
+def parse_anthropic_stream(
+    stdout: str,
+) -> tuple[str, int | None, int | None, str | None, bool, str | None, str | None]:
+    """``(text, tokens_sent, tokens_received, stop_reason,
+    saw_message_stop, error_message, error_type)`` from a completed
+    Anthropic Messages API SSE stream, parsed in full — the authoritative
+    result for a streamed call, built the same way the non-streamed path
+    builds its one JSON object's. ``message_start`` reports the exact
+    input token count; ``content_block_delta`` carries the text;
+    ``message_delta`` carries the stop reason and the exact output token
+    count; ``error`` carries the same explanation an HTTP error body
+    would; ``saw_message_stop`` is whether the stream's own terminal event
+    was seen.
+    """
+    text_parts: list[str] = []
+    tokens_sent: int | None = None
+    tokens_received: int | None = None
+    stop_reason: str | None = None
+    saw_message_stop = False
+    error_message: str | None = None
+    error_type: str | None = None
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if not payload:
+            continue
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        etype = event.get("type")
+        if etype == "error":
+            if error_message is None:
+                error = event.get("error") or {}
+                message = error.get("message") if isinstance(error, dict) else None
+                error_message = message if isinstance(message, str) else json.dumps(error)
+                error_type = error.get("type") if isinstance(error, dict) else None
+            continue
+        if etype == "message_start":
+            message = event.get("message") or {}
+            usage = message.get("usage") if isinstance(message, dict) else None
+            input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+            if isinstance(input_tokens, int):
+                tokens_sent = input_tokens
+        elif etype == "content_block_delta":
+            delta = event.get("delta") or {}
+            text = delta.get("text") if isinstance(delta, dict) else None
+            if isinstance(text, str) and text:
+                text_parts.append(text)
         elif etype == "message_delta":
             delta = event.get("delta") or {}
-            stop_reason = delta.get("stop_reason") if isinstance(delta, dict) else None
-            if isinstance(stop_reason, str):
-                self.stop_reason = stop_reason
+            reason = delta.get("stop_reason") if isinstance(delta, dict) else None
+            if isinstance(reason, str):
+                stop_reason = reason
             usage = event.get("usage")
             output_tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
             if isinstance(output_tokens, int):
-                self.tokens_received = output_tokens
-
-    @property
-    def text(self) -> str:
-        return "".join(self.text_parts)
+                tokens_received = output_tokens
+        elif etype == "message_stop":
+            saw_message_stop = True
+    return (
+        "".join(text_parts),
+        tokens_sent,
+        tokens_received,
+        stop_reason,
+        saw_message_stop,
+        error_message,
+        error_type,
+    )
 
 
 def _image_block(image: ImageInput) -> dict[str, Any]:
@@ -277,45 +328,89 @@ class AnthropicAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
+            # On the streaming path, a non-22 failure leaves whatever
+            # Anthropic had already answered in `proc.stdout` -- only a
+            # complete HTTP response (22) has a body worth reporting.
+            stdout_for_message = proc.stdout if (proc.returncode == 22 or not self.streams) else ""
             raise AdapterCallError(
                 curl_failure_message(
                     source="anthropic",
                     model=model,
                     url=url,
                     returncode=proc.returncode,
-                    stdout=proc.stdout,
+                    stdout=stdout_for_message,
                     stderr=proc.stderr,
                     secrets=[api_key],
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
-                error_code=curl_error_code(proc.stdout, [api_key]),
-            )
-
-        if assembly is not None and assembly.error_message is not None:
-            status = _STREAM_ERROR_STATUS.get(assembly.error_type or "")
-            raise AdapterCallError(
-                f"anthropic request failed: {assembly.error_message}",
-                retry_info=RetryInfo(
-                    retryable=status_is_retryable(status) if status is not None else False,
-                    status=status,
-                ),
-                error_code=assembly.error_type,
+                error_code=curl_error_code(stdout_for_message, [api_key]),
             )
 
         if assembly is not None and assembly.saw_event:
+            (
+                text,
+                tokens_sent,
+                tokens_received,
+                stop_reason,
+                saw_message_stop,
+                error_message,
+                error_type,
+            ) = parse_anthropic_stream(proc.stdout)
+
+            if error_message is not None:
+                status = _STREAM_ERROR_STATUS.get(error_type or "")
+                # Rendered through the same `curl_failure_message` the
+                # HTTP error path uses, from a synthesized body carrying
+                # the same `error.message`/`error.type` shape Anthropic's
+                # own HTTP error response has -- so the two paths give
+                # byte-identical text for the same error, masking included.
+                error_body = json.dumps(
+                    {"error": {"type": error_type, "message": error_message}}
+                )
+                raise AdapterCallError(
+                    curl_failure_message(
+                        source="anthropic",
+                        model=model,
+                        url=url,
+                        returncode=22,
+                        stdout=error_body,
+                        stderr="",
+                        secrets=[api_key],
+                    ),
+                    retry_info=RetryInfo(
+                        retryable=status_is_retryable(status) if status is not None else False,
+                        status=status,
+                    ),
+                    error_code=error_type,
+                )
+
+            if not saw_message_stop:
+                # The stream ended (curl exited 0) without a `message_stop`
+                # event -- classified the same way an actual mid-stream
+                # disconnect is.
+                raise AdapterCallError(
+                    curl_failure_message(
+                        source="anthropic",
+                        model=model,
+                        url=url,
+                        returncode=18,
+                        stdout="",
+                        stderr="curl: (18) transfer closed with outstanding read data remaining",
+                        secrets=[api_key],
+                    ),
+                    retry_info=classify_curl_exit(18, ""),
+                )
+
             return GenerateResult(
-                text=assembly.text.strip(),
+                text=text.strip(),
                 raw={
-                    "content": [{"type": "text", "text": assembly.text}],
-                    "usage": {
-                        "input_tokens": assembly.tokens_sent,
-                        "output_tokens": assembly.tokens_received,
-                    },
-                    "stop_reason": assembly.stop_reason,
+                    "content": [{"type": "text", "text": text}],
+                    "usage": {"input_tokens": tokens_sent, "output_tokens": tokens_received},
+                    "stop_reason": stop_reason,
                 },
-                tokens_sent=assembly.tokens_sent,
-                tokens_received=assembly.tokens_received,
-                finish_reason=assembly.stop_reason,
+                tokens_sent=tokens_sent,
+                tokens_received=tokens_received,
+                finish_reason=stop_reason,
             )
 
         try:
