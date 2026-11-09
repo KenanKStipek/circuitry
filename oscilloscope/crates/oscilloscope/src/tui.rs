@@ -874,6 +874,45 @@ fn tape_deviation_style(pct: f64, theme: &Theme) -> Style {
     }
 }
 
+/// §4's deviation bar (the `t` view): a 4-cell tick either side of
+/// a `┼` pivot, growing from the pivot outward as `|pct|/12.5`
+/// cells (clamped at 4, so a 47% deviation reads a full tick, not a
+/// cell for every percent), filled toward whichever side the sign
+/// points -- the far side's own 4 cells stay the plain, unfilled
+/// `────`. The same 16 columns the fixed-scale bar fills, so
+/// toggling `t` never reflows the column next to it; the deviation
+/// colour (§3.6's own band) without [`tape_deviation_style`]'s own
+/// bold, which is for the Totals row's own figure, not a line this
+/// dense with colour already.
+fn tape_usual_deviation_bar(pct: f64, theme: &Theme) -> Vec<Span<'static>> {
+    let blocks = ((pct.abs() / 12.5).round() as usize).min(4);
+    let color = tape_deviation_style(pct, theme).fg.unwrap_or(theme.text);
+    let pct_text = format!("{pct:+.0}%");
+    let gap = 6usize.saturating_sub(pct_text.chars().count());
+    if pct >= 0.0 {
+        let filled = format!("{}{}", "▓".repeat(blocks), "─".repeat(4 - blocks));
+        vec![
+            Span::styled("────", Style::default().fg(theme.dim)),
+            Span::styled("┼", Style::default().fg(theme.fg_muted)),
+            Span::styled(
+                format!("{filled}{}{pct_text} ", " ".repeat(gap)),
+                Style::default().fg(color),
+            ),
+        ]
+    } else {
+        let filled = format!("{}{}", "─".repeat(4 - blocks), "▓".repeat(blocks));
+        vec![
+            Span::styled(filled, Style::default().fg(color)),
+            Span::styled("┼", Style::default().fg(theme.fg_muted)),
+            Span::styled(
+                format!("────{}", " ".repeat(gap)),
+                Style::default().fg(theme.dim),
+            ),
+            Span::styled(format!("{pct_text} "), Style::default().fg(color)),
+        ]
+    }
+}
+
 /// A row's own token column, in whichever view is active (§3.5's bar,
 /// or §4's `t` deviation view) -- `None` when the row has nothing to
 /// show there at all.
@@ -924,10 +963,7 @@ fn tape_token_column(
                 match tokens.usual {
                     Some(usual) if usual > 0 => {
                         let pct = ((total as f64 - usual as f64) / usual as f64) * 100.0;
-                        Some(Line::from(Span::styled(
-                            format!("vs usual {pct:+.0}%"),
-                            tape_deviation_style(pct, ctx.theme),
-                        )))
+                        Some(Line::from(tape_usual_deviation_bar(pct, ctx.theme)))
                     }
                     _ => Some(Line::from(Span::styled(
                         "—",
@@ -14599,6 +14635,60 @@ mod tape_frame_goldens {
             &tape_screen,
             Some("prime.gate.reply"),
             |_| {},
+            now,
+            &[(51, 24)],
+        );
+    }
+
+    #[test]
+    fn tape_usual_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let run_dir = fixtures_dir().join("run2");
+        let mut state = load_json(&run_dir.join("state.live.json"));
+        let now = "2026-11-08T20:50:50.923Z";
+        truncate_document(state.get_mut("prime").unwrap(), now);
+        let last_run = state
+            .pointer_mut("/runtime/last_run")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        last_run.remove("completed_at");
+        last_run["totals"] = serde_json::json!({
+            "wall_time_s": 3.62,
+            "effects_run": 6,
+            "tokens_sent": 796,
+            "tokens_received": 69,
+            "cost_usd": null,
+        });
+        let events: Vec<serde_json::Value> = load_events(&run_dir.join("events.jsonl"))
+            .into_iter()
+            .filter(|e| {
+                e.get("ts")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|ts| at_or_before(ts, now))
+            })
+            .collect();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        // Same one cell allow-listed as the Normal golden's own.
+        assert_tape_frame(
+            "tape--usual--120x30",
+            120,
+            30,
+            &rendered,
+            &tape_screen,
+            Some("prime.gate.reply"),
+            |app| app.tape_tokens_view = true,
             now,
             &[(51, 24)],
         );
