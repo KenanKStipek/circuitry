@@ -361,6 +361,7 @@ mod tests {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
         }
     }
 
@@ -471,6 +472,7 @@ mod tests {
             },
             routing,
             decomposition: electricity_config::DecompositionSettings::default(),
+            splitting: electricity_config::SplittingSettings::default(),
         }
     }
 

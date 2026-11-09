@@ -46,6 +46,7 @@ fn template_prompt(template: &str) -> PromptOp {
         retries: None,
         description: None,
         group: None,
+        split_budget_tokens: None,
     }
 }
 

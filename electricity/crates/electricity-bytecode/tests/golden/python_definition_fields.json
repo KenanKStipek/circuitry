@@ -19,7 +19,8 @@
     "on_error",
     "description",
     "enabled",
-    "group"
+    "group",
+    "split"
   ],
   "MessageDef": [
     "role",

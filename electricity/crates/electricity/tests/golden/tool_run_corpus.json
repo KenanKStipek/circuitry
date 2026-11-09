@@ -59,10 +59,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -261,10 +267,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -398,10 +410,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -558,10 +576,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -668,10 +692,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -866,10 +896,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -998,10 +1034,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -1165,10 +1207,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -1284,10 +1332,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -1449,10 +1503,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -1567,10 +1627,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -1734,10 +1800,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -1883,10 +1955,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -2046,10 +2124,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -2162,10 +2246,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -2325,10 +2415,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -2441,10 +2537,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {
@@ -2604,10 +2706,16 @@
               "complexity.scoring": "default",
               "complexity.routing": "default",
               "complexity.decomposition": "default",
+              "complexity.splitting": "default",
               "complexity.routing.bands": "default",
               "complexity.decomposition.threshold": "default",
               "complexity.decomposition.max_depth": "default",
-              "complexity.decomposition.on_failure": "default"
+              "complexity.decomposition.on_failure": "default",
+              "complexity.splitting.max_input_tokens": "default",
+              "complexity.splitting.models": "default",
+              "complexity.splitting.max_parts": "default",
+              "complexity.splitting.max_depth": "default",
+              "complexity.splitting.on_failure": "default"
             }
           },
           "plugins": {

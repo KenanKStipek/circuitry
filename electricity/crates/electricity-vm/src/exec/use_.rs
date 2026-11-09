@@ -955,6 +955,7 @@ async fn attempt_once<R: ParamsCtx>(
     if let Some(refusal) = electricity_bytecode::first_unsupported(
         &child_program,
         run_ctx.complexity.decomposition.enabled,
+        run_ctx.complexity.splitting.enabled,
         &run_ctx.supported,
     ) {
         return Err(AttemptProblem::Fatal(VmError::Refused {

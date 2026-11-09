@@ -1677,6 +1677,7 @@ mod tests {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
         }
     }
 

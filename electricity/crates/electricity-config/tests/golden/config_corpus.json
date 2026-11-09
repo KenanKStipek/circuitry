@@ -421,6 +421,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -434,6 +438,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -517,6 +541,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -530,6 +558,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -597,6 +645,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -610,6 +662,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -672,6 +744,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -685,6 +761,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -749,6 +845,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -762,6 +862,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -828,6 +948,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -841,6 +965,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -919,6 +1063,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -932,6 +1080,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -1060,6 +1228,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "orchestration"
         ],
@@ -1073,6 +1245,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -1151,6 +1343,10 @@
           "default"
         ],
         [
+          "complexity.splitting",
+          "default"
+        ],
+        [
           "complexity.routing.bands",
           "default"
         ],
@@ -1164,6 +1360,26 @@
         ],
         [
           "complexity.decomposition.on_failure",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_input_tokens",
+          "default"
+        ],
+        [
+          "complexity.splitting.models",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_parts",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.on_failure",
           "default"
         ]
       ],
@@ -1276,7 +1492,7 @@
     },
     "expect": {
       "ok": false,
-      "error": "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, scoring."
+      "error": "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, scoring, splitting."
     }
   },
   {
@@ -1551,6 +1767,127 @@
     "expect": {
       "ok": false,
       "error": "runtime.complexity keys must be strings; found 1."
+    }
+  },
+  {
+    "name": "complexity_splitting_needs_no_scoring_prerequisite",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "enabled": true,
+            "max_input_tokens": 1000
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "complexity_splitting_enabled_without_a_budget_is_an_error",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.splitting.enabled is true but neither runtime.complexity.splitting.max_input_tokens nor a non-empty runtime.complexity.splitting.models is set. Splitting needs a budget to compare the prompt's estimated size against."
+    }
+  },
+  {
+    "name": "complexity_splitting_enabled_with_only_models_is_valid",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "enabled": true,
+            "models": {
+              "llama3.1:8b": 24000
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "complexity_splitting_max_input_tokens_must_be_positive",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "max_input_tokens": 0
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.splitting.max_input_tokens must be 1 or greater; found 0."
+    }
+  },
+  {
+    "name": "complexity_splitting_max_parts_must_be_at_least_two",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "max_parts": 1
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.splitting.max_parts must be 2 or greater; found 1."
+    }
+  },
+  {
+    "name": "complexity_splitting_on_failure_must_be_a_valid_choice",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "on_failure": "bogus"
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.splitting.on_failure must be one of run_as_is, fail; found 'bogus'."
+    }
+  },
+  {
+    "name": "complexity_splitting_unknown_key_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "splitting": {
+            "budget": 100
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.splitting: unknown key 'budget'. Valid keys: enabled, max_concurrency, max_depth, max_input_tokens, max_parts, models, on_failure."
     }
   },
   {

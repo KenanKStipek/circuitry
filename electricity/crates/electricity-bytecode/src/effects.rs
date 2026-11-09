@@ -168,6 +168,14 @@ pub struct PromptOp {
     pub retries: Option<RetryPolicy>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `split.budget_tokens`, when the effect's own `split:` block sets it
+    /// (issue #672) -- read only by the preview refusal walk
+    /// (`RefusalReason::SplitBudget`): a prompt with `split.budget_tokens`
+    /// splits even when the run's effective config has splitting disabled,
+    /// so this is the one `split:` field electricity needs at compile time
+    /// to refuse up front, without otherwise compiling or running the
+    /// feature at all.
+    pub split_budget_tokens: Option<i64>,
 }
 
 /// `ToolDefinition`, minus `name`/`on_error`/`enabled`.

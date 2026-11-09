@@ -305,7 +305,7 @@ fn record_complexity_sources(
     };
     sources.insert("complexity".to_string(), complexity_source.to_string());
 
-    for key in ["scoring", "routing", "decomposition"] {
+    for key in ["scoring", "routing", "decomposition", "splitting"] {
         let present = get(winner, key).is_some();
         sources.insert(
             format!("complexity.{key}"),
@@ -345,6 +345,26 @@ fn record_complexity_sources(
     sources.insert(
         "complexity.decomposition.on_failure".to_string(),
         field_source("decomposition", "on_failure"),
+    );
+    sources.insert(
+        "complexity.splitting.max_input_tokens".to_string(),
+        field_source("splitting", "max_input_tokens"),
+    );
+    sources.insert(
+        "complexity.splitting.models".to_string(),
+        field_source("splitting", "models"),
+    );
+    sources.insert(
+        "complexity.splitting.max_parts".to_string(),
+        field_source("splitting", "max_parts"),
+    );
+    sources.insert(
+        "complexity.splitting.max_depth".to_string(),
+        field_source("splitting", "max_depth"),
+    );
+    sources.insert(
+        "complexity.splitting.on_failure".to_string(),
+        field_source("splitting", "on_failure"),
     );
 }
 

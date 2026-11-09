@@ -393,9 +393,16 @@ pub fn validate_plan(
 }
 
 /// `core/decompose.py::maybe_decompose`'s own `base` dict (`:171-180`).
+/// `trigger` (issue #672) always reads `"score"` here — this is the score
+/// trigger's own record construction; the size trigger is a Python-only
+/// preview feature electricity refuses up front rather than running.
 pub fn base_meta(score: f64, settings: &DecompositionSettings, depth: u32) -> Dict {
     let mut dict = Dict::new();
     dict.insert(Value::Str("decomposed".to_string()), Value::Bool(false));
+    dict.insert(
+        Value::Str("trigger".to_string()),
+        Value::Str("score".to_string()),
+    );
     dict.insert(Value::Str("score".to_string()), Value::Float(score));
     dict.insert(
         Value::Str("threshold".to_string()),
@@ -915,7 +922,7 @@ pub(crate) async fn maybe_decompose(
     // absorbed by `on_error`/`on_failure`, nothing written to
     // `meta.decomposition` at all. Checked before anything below ever
     // touches *base* again.
-    if let Some(refusal) = first_unsupported(&plan_program, false, &run_ctx.supported) {
+    if let Some(refusal) = first_unsupported(&plan_program, false, false, &run_ctx.supported) {
         return Err(VmError::Refused {
             refusal,
             child_label: Some(format!("decomposition plan of '{name}'")),
@@ -1009,7 +1016,7 @@ mod tests {
         );
         let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
             .expect("the copy compiles");
-        assert!(first_unsupported(&program, false, &Supported::current(&[])).is_none());
+        assert!(first_unsupported(&program, false, false, &Supported::current(&[])).is_none());
     }
 
     #[test]
@@ -1403,7 +1410,14 @@ mod tests {
         let keys: Vec<&str> = base.keys().filter_map(Value::as_str).collect();
         assert_eq!(
             keys,
-            vec!["decomposed", "score", "threshold", "depth", "max_depth"]
+            vec![
+                "decomposed",
+                "trigger",
+                "score",
+                "threshold",
+                "depth",
+                "max_depth"
+            ]
         );
     }
 
@@ -1649,6 +1663,7 @@ mod tests {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
         }
     }
 
