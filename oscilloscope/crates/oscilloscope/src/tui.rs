@@ -6387,6 +6387,36 @@ fn flow_fork_width(fork: &Fork, app: &App, area_width: u16) -> usize {
     }
 }
 
+/// A lane's own painted height: three rows, unless one of its own
+/// items is itself an unfolded fork taller than that (a nested `if`
+/// or loop inside a loop's own pass, say) -- the outer fork's own
+/// next lane must start after that full height, never a flat three
+/// rows, or it paints over the inner fork's own lower lanes.
+fn flow_lane_height(items: &[RailItem], app: &App, area_width: u16) -> u16 {
+    items
+        .iter()
+        .map(|it| flow_item_height(it, app, area_width))
+        .max()
+        .unwrap_or(3)
+}
+
+fn flow_item_height(item: &RailItem, app: &App, area_width: u16) -> u16 {
+    match item {
+        RailItem::Station(_) => 3,
+        RailItem::Fork(fork) => flow_fork_height(fork, app, area_width),
+    }
+}
+
+fn flow_fork_height(fork: &Fork, app: &App, area_width: u16) -> u16 {
+    if flow_fork_folded(fork, app, area_width) {
+        return 3;
+    }
+    flow_lane_window(fork, app)
+        .iter()
+        .map(|l| flow_lane_height(&l.items, app, area_width))
+        .sum()
+}
+
 /// `items`' own `(start, end)` full-coordinate span, in order --
 /// no gap at all around a fork (its own lead-in/lead-out already is
 /// one), DESIGN.md §2.3's own connector rule for every other pair.
@@ -7052,8 +7082,11 @@ fn flow_paint_fork(
     let mut final_headline_style = faint;
     let mut final_detail_style = faint;
     let visible_lanes = flow_lane_window(fork, app);
+    let mut cursor_y = y0;
     for (k, lane) in visible_lanes.iter().enumerate() {
-        let row_y = y0 + 3 * k as u16;
+        let lane_height = flow_lane_height(&lane.items, app, area_width);
+        let row_y = cursor_y;
+        cursor_y += lane_height;
         let is_last = k == visible_lanes.len() - 1;
         let (lane_end, h_last, d_last) = match &lane.ghost {
             Some(name) => {
@@ -7085,7 +7118,7 @@ fn flow_paint_fork(
         };
         if lane_end < content_x + max_lane {
             let pad = " ".repeat(content_x + max_lane - lane_end);
-            for dy in 0..3 {
+            for dy in 0..lane_height {
                 flow_put(
                     buf,
                     area,
@@ -7110,46 +7143,33 @@ fn flow_paint_fork(
             } else {
                 faint
             };
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                x,
-                row_y + 1,
-                " ",
-                prior_styles.0,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                x,
-                row_y + 2,
-                " ",
-                prior_styles.1,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                wall_x,
-                row_y + 1,
-                "│  ",
-                left_wall_style,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                wall_x,
-                row_y + 2,
-                "│  ",
-                left_wall_style,
-            );
+            for dy in 1..lane_height {
+                let prior_style = if dy == 1 {
+                    prior_styles.0
+                } else {
+                    prior_styles.1
+                };
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    x,
+                    row_y + dy,
+                    " ",
+                    prior_style,
+                );
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    wall_x,
+                    row_y + dy,
+                    "│  ",
+                    left_wall_style,
+                );
+            }
             let tail_style = if next_is_ahead { faint } else { tee_style };
             flow_put(
                 buf,
@@ -7161,46 +7181,29 @@ fn flow_paint_fork(
                 "─┴── ",
                 tail_style,
             );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                tail_x,
-                row_y + 1,
-                " ",
-                h_last,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                tail_x,
-                row_y + 2,
-                " ",
-                d_last,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                right_wall_x,
-                row_y + 1,
-                "│   ",
-                faint,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                right_wall_x,
-                row_y + 2,
-                "│   ",
-                faint,
-            );
+            for dy in 1..lane_height {
+                let trailing_style = if dy == 1 { h_last } else { d_last };
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    tail_x,
+                    row_y + dy,
+                    " ",
+                    trailing_style,
+                );
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    right_wall_x,
+                    row_y + dy,
+                    "│   ",
+                    faint,
+                );
+            }
             continue;
         }
         let left_corner = if is_last { '└' } else { '├' };
@@ -7232,66 +7235,39 @@ fn flow_paint_fork(
             faint,
         );
         if !is_last {
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                wall_x,
-                row_y + 1,
-                "│  ",
-                faint,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                wall_x,
-                row_y + 2,
-                "│  ",
-                faint,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                tail_x,
-                row_y + 1,
-                " ",
-                h_last,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                tail_x,
-                row_y + 2,
-                " ",
-                d_last,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                right_wall_x,
-                row_y + 1,
-                "│   ",
-                faint,
-            );
-            flow_put(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                right_wall_x,
-                row_y + 2,
-                "│   ",
-                faint,
-            );
+            for dy in 1..lane_height {
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    wall_x,
+                    row_y + dy,
+                    "│  ",
+                    faint,
+                );
+                let trailing_style = if dy == 1 { h_last } else { d_last };
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    tail_x,
+                    row_y + dy,
+                    " ",
+                    trailing_style,
+                );
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    right_wall_x,
+                    row_y + dy,
+                    "│   ",
+                    faint,
+                );
+            }
         }
         if is_last {
             final_headline_style = faint;
@@ -7570,6 +7546,122 @@ mod flow_layout_tests {
         // right after it (flow_layout's own rule); the band itself
         // starts 3 cells into the fork (its own '══ ' lead-in).
         assert_eq!(x, rail::STATION_WIDTH + 3);
+    }
+
+    /// A decision's own two lanes never fold -- its own painted
+    /// height is the sum of both three-row lanes, never a flat three
+    /// the way an un-nested lane would be.
+    #[test]
+    fn flow_fork_height_sums_a_decisions_own_two_lanes() {
+        let fork = Fork {
+            path: "prime.pick".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Done,
+            lanes: vec![
+                Lane {
+                    items: vec![station("prime.pick.few", StatusKind::Done)],
+                    ghost: None,
+                    running: false,
+                    waiting: false,
+                },
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("many".to_string()),
+                    running: false,
+                    waiting: false,
+                },
+            ],
+        };
+        let app = App::new(false);
+        assert_eq!(flow_fork_height(&fork, &app, 200), 6);
+    }
+
+    /// A lane holding a nested fork (an unnamed `if` inside a loop's
+    /// own pass, both ghost lanes visible) reports that nested
+    /// fork's own full height, never a flat three -- or the outer
+    /// fork's next lane would start too soon and paint over it.
+    #[test]
+    fn flow_lane_height_reports_a_nested_forks_own_full_height() {
+        let inner = Fork {
+            path: "prime.fan.iter_0.__if".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Pending,
+            lanes: vec![
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("then_step".to_string()),
+                    running: false,
+                    waiting: false,
+                },
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("else_step".to_string()),
+                    running: false,
+                    waiting: false,
+                },
+            ],
+        };
+        let lane_items = vec![RailItem::Fork(inner)];
+        let app = App::new(false);
+        assert_eq!(flow_lane_height(&lane_items, &app, 200), 6);
+    }
+
+    /// A 2-pass loop whose own body holds an unnamed `if` (both
+    /// ghost lanes visible, issue's own repro shape): each pass's
+    /// own lane is six rows tall, not three, so the loop fork's own
+    /// total height is twelve -- the outer fork must step its next
+    /// lane by that, never a flat three per lane.
+    #[test]
+    fn a_loop_whose_body_holds_a_nested_if_is_taller_than_a_flat_three_rows_per_pass() {
+        let inner = Fork {
+            path: "prime.fan.iter_0.__if".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Pending,
+            lanes: vec![
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("then_step".to_string()),
+                    running: false,
+                    waiting: false,
+                },
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("else_step".to_string()),
+                    running: false,
+                    waiting: false,
+                },
+            ],
+        };
+        let pass_lane = Lane {
+            items: vec![RailItem::Fork(inner)],
+            ghost: None,
+            running: false,
+            waiting: false,
+        };
+        let outer = Fork {
+            path: "prime.fan".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Pending,
+            lanes: vec![pass_lane.clone(), pass_lane],
+        };
+        let app = App::new(false);
+        assert_eq!(flow_fork_height(&outer, &app, 200), 12);
+    }
+
+    /// A nested loop inside another fork's lane is bounded the same
+    /// way: an unfolded 2-pass inner loop reports six rows of its
+    /// own (two plain three-row lanes), not three.
+    #[test]
+    fn a_nested_loop_also_reports_the_sum_of_its_own_lanes() {
+        let inner_loop = Fork {
+            path: "prime.outer.iter_0.fan".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Pending,
+            lanes: vec![empty_lane(false, true), empty_lane(false, true)],
+        };
+        let lane_items = vec![RailItem::Fork(inner_loop)];
+        let app = App::new(false);
+        assert_eq!(flow_lane_height(&lane_items, &app, 200), 6);
     }
 
     #[test]
