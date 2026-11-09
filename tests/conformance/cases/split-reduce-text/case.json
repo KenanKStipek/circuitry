@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 4: split.merge.template runs a reduce prompt over the part replies",
+  "description": "A text input split into parts, merged by a reduce prompt (split.merge.template) over `parts` instead of the native join -- meta.decomposition records merge: reduce, and the effect's value is the reduce prompt's own reply.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}
