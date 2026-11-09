@@ -47,13 +47,15 @@ from ..curl_support import extract_retry_after
 #: (prompt, tool, use), not just adapter dispatch.
 RETRY_BACKOFF_CAP_MS = 60_000
 
-#: curl exit codes that mean the request never got a reply at all — DNS
-#: failure (6), couldn't connect (7), operation timeout (28), SSL connect
-#: error (35), the server stopped responding mid-transfer (52), the network
-#: failed partway through (56). Every one of these is a transient,
-#: infrastructure-level failure worth retrying regardless of what the
-#: request was.
-RETRYABLE_CURL_EXIT_CODES = frozenset({6, 7, 28, 35, 52, 56})
+#: curl exit codes that mean the request never got a (complete) reply at
+#: all — DNS failure (6), couldn't connect (7), operation timeout (28), SSL
+#: connect error (35), the server stopped responding mid-transfer (52), the
+#: network failed partway through (56), a premature EOF partway through the
+#: body with fewer bytes delivered than promised (18 — the shape a streamed
+#: reply's own mid-stream disconnect takes, #674). Every one of these is a
+#: transient, infrastructure-level failure worth retrying regardless of
+#: what the request was.
+RETRYABLE_CURL_EXIT_CODES = frozenset({6, 7, 18, 28, 35, 52, 56})
 
 #: ``--fail-with-body`` always exits 22 on an HTTP error; curl still writes
 #: the status to stderr in this form.

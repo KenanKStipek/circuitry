@@ -1,0 +1,17 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: text/event-stream
+    body: |
+      data: {"choices": [{"delta": {"content": "hello "}}]}
+
+      data: {"choices": [{"delta": {"content": "from the mock"}, "finish_reason": "stop"}]}
+
+      data: {"choices": [{"delta": {}}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}
+
+      data: [DONE]
+

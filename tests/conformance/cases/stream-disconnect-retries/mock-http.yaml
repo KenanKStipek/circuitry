@@ -1,0 +1,25 @@
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: |
+      {"response": "hello ", "done": false}
+      {"response": "there", "done": false}
+      {"response": "", "done": true, "prompt_eval_count": 7, "eval_count": 5, "done_reason": "stop"}
+    truncate_after_bytes: 75
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: |
+      {"response": "hello ", "done": false}
+      {"response": "there", "done": false}
+      {"response": "", "done": true, "prompt_eval_count": 7, "eval_count": 5, "done_reason": "stop"}

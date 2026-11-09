@@ -1,0 +1,24 @@
+- request:
+    method: POST
+    path: /v1/messages
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: text/event-stream
+    body: |
+      event: message_start
+      data: {"type": "message_start", "message": {"usage": {"input_tokens": 9}}}
+
+      event: content_block_delta
+      data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hello "}}
+
+      event: content_block_delta
+      data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "from anthropic"}}
+
+      event: message_delta
+      data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 6}}
+
+      event: message_stop
+      data: {"type": "message_stop"}
+

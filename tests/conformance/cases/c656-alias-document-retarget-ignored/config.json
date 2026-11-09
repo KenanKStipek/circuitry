@@ -1,9 +1,15 @@
 {
-  "enabled_adapters": ["local_a"],
+  "enabled_adapters": [
+    "local_a"
+  ],
   "default_adapter": "local_a",
   "runtime": {
     "adapters": {
-      "local_a": {"adapter": "lmstudio", "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/a/v1"}
+      "local_a": {
+        "adapter": "lmstudio",
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/a/v1",
+        "stream": false
+      }
     }
   }
 }

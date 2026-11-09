@@ -177,6 +177,21 @@ Prefer shared state for anything another effect might want; use `inputs` for gen
 
 A prompt can fail: the adapter times out, the model returns something that will not parse as the declared type, the provider is down. `retries`, `provider_fallbacks`, `timeout_ms`, and `on_error` govern what happens next, and they are the subject of [Errors](05-errors.md). A prompt's `timeout_ms` bounds each attempt and can only shorten the timeout of whichever adapter that attempt actually dispatches to — the one named by `provider:`/`provider_fallbacks` for that attempt, not necessarily the run default — never lengthen it; it rounds up to whole seconds. The one-line preview: by default a failed prompt fails the run (`on_error: fail`), every attempt is recorded in `meta`, and nothing ever fails silently.
 
+## Watching it while it runs
+
+Ollama, the OpenAI-compatible family, `openai` and `anthropic` stream their
+reply by default: the text arrives in pieces, assembled into the exact same
+value a non-streamed call would have given — same text, same token counts,
+same `finish_reason`, same errors. While one of those attempts is running,
+its node carries `meta.live` (tokens so far, an estimate of what's still
+arriving, a tokens/sec figure), the same way the `agent` tool's own session
+does; `--events` gets a matching `progress` line. Neither persists: both
+disappear the moment the attempt ends, so a finished run looks exactly like
+one that never streamed. `runtime.adapters.<name>.stream: false` turns
+streaming off for one adapter, for a server that misbehaves on a streaming
+request. [The reference](../orchestration-reference.md#streaming-adapters-and-a-prompts-live-progress)
+has the full table and the `meta.live` key list.
+
 ## What lands in the shadow state
 
 ```

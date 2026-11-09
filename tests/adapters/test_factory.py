@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from circuitry.adapters.anthropic import AnthropicAdapter
@@ -62,6 +64,26 @@ def test_ollama_config_passthrough() -> None:
     adapter = build_adapter(adapter_name="ollama", runtime=runtime)
     assert isinstance(adapter, OllamaAdapter)
     assert adapter.base_url == "http://gpu-box:11434"
+
+
+@pytest.mark.parametrize("adapter_name", ["ollama", "openai", "anthropic", "groq"])
+def test_stream_defaults_true(adapter_name: str) -> None:
+    adapter = build_adapter(adapter_name=adapter_name, runtime={})
+    assert cast(Any, adapter).streams is True
+
+
+@pytest.mark.parametrize("adapter_name", ["ollama", "openai", "anthropic", "groq"])
+def test_stream_false_opts_out(adapter_name: str) -> None:
+    runtime = {"adapters": {adapter_name: {"stream": False}}}
+    adapter = build_adapter(adapter_name=adapter_name, runtime=runtime)
+    assert cast(Any, adapter).streams is False
+
+
+@pytest.mark.parametrize("adapter_name", ["ollama", "openai", "anthropic", "groq"])
+def test_stream_non_boolean_is_rejected(adapter_name: str) -> None:
+    runtime = {"adapters": {adapter_name: {"stream": "yes"}}}
+    with pytest.raises(ValueError, match=f"adapters.{adapter_name}.stream must be a boolean"):
+        build_adapter(adapter_name=adapter_name, runtime=runtime)
 
 
 def test_openai_config_passthrough() -> None:
