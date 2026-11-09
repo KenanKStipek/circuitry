@@ -252,6 +252,20 @@ pub struct Header {
     pub effects_planned_full: Option<u64>,
     pub tokens_sent: u64,
     pub tokens_received: u64,
+    /// Every currently running prompt's own live estimate (issue
+    /// #675) -- `tokens_sent`/`tokens_received` once the provider has
+    /// reported one, else its own estimate, summed separately from
+    /// the exact pair above so a front end can draw it in the faint
+    /// "live" style and add it on top. A node's own exact tokens and
+    /// this estimate are never both counted: `tokens_sent`/`_received`
+    /// above only ever reads a *finished* node's `meta.tokens_sent`/
+    /// `_received` (always `null` while running), and this only ever
+    /// sums a node still running right now -- the instant a poll
+    /// catches one finished, it drops out of this sum and its own
+    /// exact figure joins the pair above instead, once each, never
+    /// both in the same frame.
+    pub tokens_sent_live_estimate: u64,
+    pub tokens_received_live_estimate: u64,
     pub innermost_loop_eta_s: Option<f64>,
     /// `innermost_loop_eta_s`, as an absolute clock time (`now` plus
     /// the ETA) rather than a remaining duration (issue #613: "the
@@ -1576,6 +1590,27 @@ fn build_header(
             })
         });
 
+    // Issue #675: every currently running prompt's own live
+    // estimate, summed separately -- `is_running_prompt` is the same
+    // gate `build_token_bar` already uses to count a prompt in
+    // flight, so this never double-counts a node that is running a
+    // tool, nor one whose own `meta.live` has already been removed
+    // because its attempt just ended (it fails `is_running_prompt`
+    // the moment `completed_at` is set).
+    let (tokens_sent_live_estimate, tokens_received_live_estimate) = flat
+        .iter()
+        .filter(|(_, node)| crate::model::is_running_prompt(node))
+        .filter_map(|(path, node)| crate::model::prompt_live_figures(Some(node), path, model, now))
+        .fold((0u64, 0u64), |(sent, recv), live| {
+            (
+                sent + live.tokens_sent.or(live.tokens_sent_estimate).unwrap_or(0),
+                recv + live
+                    .tokens_received
+                    .or(live.tokens_received_estimate)
+                    .unwrap_or(0),
+            )
+        });
+
     // The innermost running loop's own ETA (§6.3: "There is no
     // run-level ETA") — the running loop with the deepest path, since
     // a nested loop's own progress is more specific than its
@@ -1624,6 +1659,8 @@ fn build_header(
         effects_planned_full,
         tokens_sent,
         tokens_received,
+        tokens_sent_live_estimate,
+        tokens_received_live_estimate,
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
         // Issue #649: `build`/`build_header` have no history of
@@ -5063,6 +5100,71 @@ mod tests {
         );
         assert_eq!(rendered.token_bar.agents_running, 0);
         assert_eq!(rendered.token_bar.prompts_running, 1);
+        // Issue #675: the header's own live estimate reads the
+        // running prompt's `tokens_sent_estimate`/`tokens_received_
+        // estimate` (neither is exact yet), on top of the exact
+        // pair above, which stays zero while it runs.
+        assert_eq!(rendered.header.tokens_sent, 0);
+        assert_eq!(rendered.header.tokens_received, 0);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 3);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 2);
+    }
+
+    /// Issue #675's "no double counting": the same prompt, observed
+    /// once still running (its tokens only in the live estimate) and
+    /// once finished (its tokens only in the exact pair) -- never
+    /// both at once for the same instant.
+    #[test]
+    fn a_prompt_that_finishes_between_two_polls_is_counted_exactly_once() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "p": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                    "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                    "streaming": true, "first_token_at": "2026-10-08T11:46:43.6Z",
+                    "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                    "tokens_received_estimate": 8, "chars_received": 30,
+                    "tokens_per_second": null}}}
+        }});
+        let running = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&running_state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:44Z",
+            &[],
+        );
+        assert_eq!(running.header.tokens_sent, 0);
+        assert_eq!(running.header.tokens_received, 0);
+        assert_eq!(running.header.tokens_sent_live_estimate, 10);
+        assert_eq!(running.header.tokens_received_live_estimate, 8);
+
+        let finished_state = json!({"prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:45Z"},
+            "p": {"value": "ok", "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": "2026-10-08T11:46:45Z",
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "tokens_sent": 10, "tokens_received": 12}}
+        }});
+        let finished = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&finished_state),
+            ProcessState::Running,
+            2.0,
+            "2026-10-08T11:46:46Z",
+            &[],
+        );
+        assert_eq!(finished.header.tokens_sent, 10);
+        assert_eq!(finished.header.tokens_received, 12);
+        assert_eq!(finished.header.tokens_sent_live_estimate, 0);
+        assert_eq!(finished.header.tokens_received_live_estimate, 0);
     }
 
     /// An interrupted run's own leftover `meta.live` (DESIGN.md) must
