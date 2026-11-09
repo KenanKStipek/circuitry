@@ -169,13 +169,27 @@ pub struct PromptOp {
     pub description: Option<String>,
     pub group: Option<String>,
     /// `split.budget_tokens`, when the effect's own `split:` block sets it
-    /// (issue #672) -- read only by the preview refusal walk
-    /// (`RefusalReason::SplitBudget`): a prompt with `split.budget_tokens`
-    /// splits even when the run's effective config has splitting disabled,
-    /// so this is the one `split:` field electricity needs at compile time
-    /// to refuse up front, without otherwise compiling or running the
-    /// feature at all.
+    /// (issue #672/#682): outranks `runtime.complexity.splitting.models`/
+    /// `max_input_tokens`, and splits even when the runtime switch is off.
     pub split_budget_tokens: Option<i64>,
+    /// `split.enabled` (issue #682): `Some(false)` always opts this effect
+    /// out, even with the runtime switch on; `Some(true)`/`None` follow
+    /// the runtime switch (`split_budget_tokens` above still splits
+    /// regardless, Python's own precedence).
+    pub split_enabled: Option<bool>,
+    /// `split.max_parts` (issue #682): overrides `runtime.complexity.
+    /// splitting.max_parts` for this effect's own widest fan-out.
+    pub split_max_parts: Option<i64>,
+    /// `split.separator` (issue #682): the native `join` merge's own
+    /// joiner for a `text` prompt, overriding the default blank line.
+    pub split_separator: Option<String>,
+    /// `split.merge.template` (issue #682): a reduce prompt's own Mustache
+    /// template, `parts` bound to the collected part values -- required
+    /// for any `prompt_type` the native `join`/`concat` rule doesn't
+    /// cover. Forwarded onto both generated prompts unrewritten (every
+    /// level rewrites its own copy against its own loop's collected
+    /// value).
+    pub split_merge_template: Option<String>,
 }
 
 /// `ToolDefinition`, minus `name`/`on_error`/`enabled`.

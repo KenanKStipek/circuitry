@@ -60,12 +60,6 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
             "a tool effect whose params name a secret ({secret: ...})".to_string()
         }
         RefusalReason::HttpSaveTo => "an http effect with save_to".to_string(),
-        RefusalReason::SplittingEnabled => {
-            "a run whose effective config enables the size trigger for decomposition \
-             (runtime.complexity.splitting)"
-                .to_string()
-        }
-        RefusalReason::SplitBudget => "a prompt effect with split.budget_tokens set".to_string(),
     }
 }
 

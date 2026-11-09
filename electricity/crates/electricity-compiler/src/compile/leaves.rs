@@ -388,19 +388,53 @@ pub(crate) fn compile_prompt(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    // Only `budget_tokens` is read (issue #672): the rest of `split:` is
-    // never compiled, since the preview refusal fires before anything
-    // else about it would matter.
-    let split_budget_tokens = match effect.get(&Value::Str("split".to_string())) {
-        Some(Value::Dict(split_dict)) => {
-            match split_dict.get(&Value::Str("budget_tokens".to_string())) {
-                Some(Value::Int(i)) => Some(i.to_f64() as i64),
-                Some(Value::Float(f)) if f.fract() == 0.0 => Some(*f as i64),
-                _ => None,
-            }
-        }
+    // The size trigger's own `split:` block (issue #672/#682): the
+    // orchestration schema already constrains every field's shape
+    // (`enabled` boolean, `budget_tokens`/`max_parts` integers,
+    // `separator` a string, `merge.template` a required string) before
+    // compilation ever reaches here.
+    let split_dict = match effect.get(&Value::Str("split".to_string())) {
+        Some(Value::Dict(split_dict)) => Some(split_dict),
         _ => None,
     };
+    let split_budget_tokens = split_dict.and_then(|split_dict| {
+        match split_dict.get(&Value::Str("budget_tokens".to_string())) {
+            Some(Value::Int(i)) => Some(i.to_f64() as i64),
+            Some(Value::Float(f)) if f.fract() == 0.0 => Some(*f as i64),
+            _ => None,
+        }
+    });
+    let split_enabled = split_dict.and_then(|split_dict| {
+        match split_dict.get(&Value::Str("enabled".to_string())) {
+            Some(Value::Bool(b)) => Some(*b),
+            _ => None,
+        }
+    });
+    let split_max_parts = split_dict.and_then(|split_dict| {
+        match split_dict.get(&Value::Str("max_parts".to_string())) {
+            Some(Value::Int(i)) => Some(i.to_f64() as i64),
+            Some(Value::Float(f)) if f.fract() == 0.0 => Some(*f as i64),
+            _ => None,
+        }
+    });
+    let split_separator = split_dict.and_then(|split_dict| {
+        match split_dict.get(&Value::Str("separator".to_string())) {
+            Some(Value::Str(s)) => Some(s.clone()),
+            _ => None,
+        }
+    });
+    let split_merge_template =
+        split_dict.and_then(
+            |split_dict| match split_dict.get(&Value::Str("merge".to_string())) {
+                Some(Value::Dict(merge_dict)) => {
+                    match merge_dict.get(&Value::Str("template".to_string())) {
+                        Some(Value::Str(s)) => Some(s.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+        );
 
     let op = PromptOp {
         content,
@@ -419,6 +453,10 @@ pub(crate) fn compile_prompt(
         description,
         group,
         split_budget_tokens,
+        split_enabled,
+        split_max_parts,
+        split_separator,
+        split_merge_template,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Prompt(op), on_error))
 }
