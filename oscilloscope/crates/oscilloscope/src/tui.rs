@@ -7470,6 +7470,280 @@ fn flow_track_line(
     Line::from(spans)
 }
 
+#[cfg(test)]
+mod flow_layout_tests {
+    use super::*;
+    use oscilloscope_core::model::StatusKind;
+    use oscilloscope_core::rail::{Detail, Fork, ForkKind, Headline, Lane, RailItem, Station};
+    use oscilloscope_core::render::RowKind;
+
+    fn station(path: &str, status: StatusKind) -> RailItem {
+        RailItem::Station(Station {
+            path: path.to_string(),
+            selectable: true,
+            is_edge: false,
+            row_kind: RowKind::Tool,
+            status,
+            name: path.to_string(),
+            headline: Headline::Blank,
+            detail: Detail::Blank,
+        })
+    }
+
+    fn empty_lane(running: bool, waiting: bool) -> Lane {
+        Lane {
+            items: Vec::new(),
+            ghost: None,
+            running,
+            waiting,
+        }
+    }
+
+    #[test]
+    fn flow_layout_places_plain_stations_left_to_right_with_the_normal_connector_between() {
+        let items = vec![
+            station("a", StatusKind::Done),
+            station("b", StatusKind::Done),
+        ];
+        let app = App::new(false);
+        let layout = flow_layout(&items, &app, 200);
+        assert_eq!(layout[0], (0, rail::STATION_WIDTH));
+        assert_eq!(
+            layout[1],
+            (
+                rail::STATION_WIDTH + rail::NORMAL_CONNECTOR,
+                rail::STATION_WIDTH * 2 + rail::NORMAL_CONNECTOR
+            )
+        );
+    }
+
+    #[test]
+    fn flow_now_arrow_x_is_none_with_nothing_running() {
+        let items = vec![
+            station("a", StatusKind::Done),
+            station("b", StatusKind::Pending),
+        ];
+        let app = App::new(false);
+        assert_eq!(flow_now_arrow_x(&items, &app, 200), None);
+    }
+
+    #[test]
+    fn flow_now_arrow_x_points_at_the_first_running_leaf() {
+        let items = vec![
+            station("a", StatusKind::Done),
+            station("b", StatusKind::Running),
+        ];
+        let app = App::new(false);
+        let x = flow_now_arrow_x(&items, &app, 200).expect("a live leaf");
+        assert_eq!(x, rail::STATION_WIDTH + rail::NORMAL_CONNECTOR);
+    }
+
+    /// A folded fork (four or more lanes) with a live lane inside
+    /// reads Now at its own band's content start -- the band is
+    /// drawn as one unit, never descending into lanes it isn't
+    /// showing.
+    #[test]
+    fn flow_now_arrow_x_reads_a_folded_forks_own_band_start_when_a_lane_inside_is_live() {
+        let fork = Fork {
+            path: "prime.fan".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Running,
+            lanes: (0..4)
+                .map(|i| {
+                    let mut lane = empty_lane(i == 0, i != 0);
+                    lane.items = vec![station(
+                        &format!("p{i}"),
+                        if i == 0 {
+                            StatusKind::Running
+                        } else {
+                            StatusKind::Pending
+                        },
+                    )];
+                    lane
+                })
+                .collect(),
+        };
+        let items = vec![station("start", StatusKind::Done), RailItem::Fork(fork)];
+        let app = App::new(false);
+        let x = flow_now_arrow_x(&items, &app, 200).expect("a live lane inside the fold");
+        // No connector sits between a plain station and the fork
+        // right after it (flow_layout's own rule); the band itself
+        // starts 3 cells into the fork (its own '══ ' lead-in).
+        assert_eq!(x, rail::STATION_WIDTH + 3);
+    }
+
+    #[test]
+    fn flow_resolve_scroll_never_scrolls_while_now_is_in_view() {
+        let items = vec![station("a", StatusKind::Running)];
+        let mut app = App::new(false);
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        assert_eq!(scroll, 0);
+        assert!(app.follow);
+    }
+
+    /// A 40-station synthetic plan, the last one running: once Now
+    /// would leave the visible window, the rail scrolls to the
+    /// station boundary closest to putting it 60% of the way across
+    /// the visible width -- never a different boundary, and never
+    /// leaving Now out of view.
+    #[test]
+    fn flow_resolve_scroll_scrolls_to_the_boundary_closest_to_60_percent_on_a_40_station_plan() {
+        let items: Vec<RailItem> = (0..40)
+            .map(|i| {
+                station(
+                    &format!("s{i}"),
+                    if i == 39 {
+                        StatusKind::Running
+                    } else {
+                        StatusKind::Done
+                    },
+                )
+            })
+            .collect();
+        let mut app = App::new(false);
+        let visible_width = 100usize;
+        let area_width = 200u16;
+        let scroll = flow_resolve_scroll(&items, &mut app, area_width, visible_width);
+        let arrow =
+            flow_now_arrow_x(&items, &app, area_width).expect("the running station's own x");
+        assert!(
+            scroll <= arrow && arrow < scroll + visible_width,
+            "Now must be in view: scroll={scroll} arrow={arrow}"
+        );
+        let target = (arrow as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
+        let layout = flow_layout(&items, &app, area_width);
+        let max_scroll = flow_total_width(&items, &app, area_width).saturating_sub(visible_width);
+        let best = std::iter::once(0usize)
+            .chain(layout.iter().map(|&(s, _)| s))
+            .min_by_key(|&s| s.abs_diff(target))
+            .unwrap()
+            .min(max_scroll);
+        assert_eq!(
+            scroll, best,
+            "must land on the station boundary closest to 60%, clamped to the rail's own end"
+        );
+        assert!(
+            app.follow,
+            "follow stays on once it had to scroll to keep Now in view"
+        );
+    }
+
+    #[test]
+    fn flow_resolve_scroll_turns_follow_back_on_once_a_manual_scroll_lands_now_back_in_view() {
+        let items = vec![station("a", StatusKind::Running)];
+        let mut app = App::new(false);
+        app.follow = false;
+        app.flow_scroll = 0;
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        assert_eq!(scroll, 0);
+        assert!(app.follow, "Now was already in view: follow resumes");
+    }
+
+    #[test]
+    fn flow_indicator_line_names_start_and_end_with_nothing_off_either_edge() {
+        let items = vec![
+            station("Start", StatusKind::Done),
+            station("End", StatusKind::Done),
+        ];
+        let app = App::new(false);
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let line = flow_indicator_line(&items, &app, 200, 0, 200, &ctx);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("Start"));
+        assert!(text.contains("End"));
+    }
+
+    #[test]
+    fn flow_indicator_line_names_whatever_is_off_the_right_edge() {
+        let items: Vec<RailItem> = (0..10)
+            .map(|i| station(&format!("s{i}"), StatusKind::Done))
+            .collect();
+        let app = App::new(false);
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        // Visible only wide enough for the first couple of stations.
+        let line = flow_indicator_line(&items, &app, 200, 0, 25, &ctx);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("s9"), "{text}");
+    }
+
+    #[test]
+    fn flow_track_line_fills_the_whole_track_when_the_whole_rail_is_visible() {
+        let items: Vec<RailItem> = (0..10)
+            .map(|i| station(&format!("s{i}"), StatusKind::Done))
+            .collect();
+        let app = App::new(false);
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let total = flow_total_width(&items, &app, 200);
+        let line = flow_track_line(&items, &app, 200, 0, total, 50, &ctx);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.chars().filter(|&c| c == '━').count(), 50);
+        assert_eq!(text.chars().filter(|&c| c == '─').count(), 0);
+    }
+
+    #[test]
+    fn flow_fork_folded_by_width_below_100_columns() {
+        let fork = Fork {
+            path: "p".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Running,
+            lanes: vec![empty_lane(false, false); 2],
+        };
+        let app = App::new(false);
+        assert!(flow_fork_folded(&fork, &app, 99));
+        assert!(!flow_fork_folded(&fork, &app, 100));
+    }
+
+    #[test]
+    fn flow_fork_folded_by_lane_count_at_four_or_more() {
+        let fork3 = Fork {
+            path: "p".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Running,
+            lanes: vec![empty_lane(false, false); 3],
+        };
+        let fork4 = Fork {
+            lanes: vec![empty_lane(false, false); 4],
+            ..fork3.clone()
+        };
+        let app = App::new(false);
+        assert!(!flow_fork_folded(&fork3, &app, 200));
+        assert!(flow_fork_folded(&fork4, &app, 200));
+    }
+
+    #[test]
+    fn flow_fork_folded_never_folds_a_decision() {
+        let fork = Fork {
+            path: "p".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Done,
+            lanes: vec![empty_lane(false, false); 5],
+        };
+        let app = App::new(false);
+        assert!(!flow_fork_folded(&fork, &app, 50));
+    }
+}
+
 /// A continuation row under a fork whose own lanes are narrower
 /// than a sibling's (DESIGN.md §2.3's own frame: the gap under a
 /// plain station like `drafts`, on another fork's own lane rows)

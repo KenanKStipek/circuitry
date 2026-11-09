@@ -1360,6 +1360,81 @@ mod tests {
         assert_eq!(edge_style(StatusKind::Skipped), EdgeStyle::Ahead);
     }
 
+    fn plain_station(path: &str) -> Station {
+        Station {
+            path: path.to_string(),
+            selectable: true,
+            is_edge: false,
+            row_kind: RowKind::Tool,
+            status: StatusKind::Done,
+            name: path.to_string(),
+            headline: Headline::Blank,
+            detail: Detail::Blank,
+        }
+    }
+
+    #[test]
+    fn lane_width_sums_its_own_items_plus_the_normal_connector_between_them() {
+        let items = vec![
+            RailItem::Station(plain_station("a")),
+            RailItem::Station(plain_station("b")),
+        ];
+        assert_eq!(lane_width(&items), STATION_WIDTH * 2 + NORMAL_CONNECTOR);
+        assert_eq!(lane_width(&[]), STATION_WIDTH);
+    }
+
+    #[test]
+    fn fork_width_is_its_own_lead_and_tail_plus_the_widest_lane() {
+        let fork = Fork {
+            path: "p".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Done,
+            lanes: vec![
+                Lane {
+                    items: vec![RailItem::Station(plain_station("taken"))],
+                    ghost: None,
+                    running: false,
+                    waiting: false,
+                },
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("untaken".to_string()),
+                    running: false,
+                    waiting: false,
+                },
+            ],
+        };
+        assert_eq!(fork_width(&fork), FORK_LEAD + STATION_WIDTH + FORK_TAIL);
+    }
+
+    #[test]
+    fn fork_width_reads_the_widest_lane_when_lanes_differ() {
+        let fork = Fork {
+            path: "p".to_string(),
+            kind: ForkKind::Loop,
+            source_status: StatusKind::Running,
+            lanes: vec![
+                Lane {
+                    items: vec![RailItem::Station(plain_station("a"))],
+                    ghost: None,
+                    running: false,
+                    waiting: false,
+                },
+                Lane {
+                    items: vec![
+                        RailItem::Station(plain_station("b")),
+                        RailItem::Station(plain_station("c")),
+                    ],
+                    ghost: None,
+                    running: false,
+                    waiting: false,
+                },
+            ],
+        };
+        let widest_lane = STATION_WIDTH * 2 + NORMAL_CONNECTOR;
+        assert_eq!(fork_width(&fork), FORK_LEAD + widest_lane + FORK_TAIL);
+    }
+
     #[test]
     fn condense_condition_drops_the_state_prefix_and_every_space() {
         assert_eq!(
