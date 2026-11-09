@@ -783,7 +783,25 @@ fn tape_token_bar(
     } else {
         ctx.theme.accent_primary
     };
-    // The 3-cell gap before the count reads as the empty bar's own
+    // The bar's own count never gets the `≈` marker the row's `what`
+    // text and the detail pane's own Received line both carry (issue
+    // #675): the faint style already says "this is a running
+    // estimate", and a live total in the thousands -- a common
+    // prompt's own estimate -- needs every one of the column's 16
+    // cells just for the digits, with none to spare for a marker on
+    // top of them.
+    let count_text = oscilloscope_core::format::format_tokens_t(total);
+    // The gap before the count shrinks as the count itself widens (the
+    // same column-sizing `tape_token_column` already does for a loop's
+    // own sparkline+`t/p` suffix) -- the live estimate's own leading
+    // `≈` would otherwise push a count of 1,000 tokens or more past the
+    // 16-cell column and get cut by the pane's own clipping, silently
+    // turning it into a smaller, wrong number.
+    let gap = 16usize
+        .saturating_sub(8)
+        .saturating_sub(count_text.chars().count())
+        .max(1);
+    // The gap before the count reads as the empty bar's own
     // colour (`design/frames/`'s own span grouping) -- or, once the
     // bar is full and has no empty cells of its own to lend it one,
     // the filled bar's own colour instead.
@@ -791,20 +809,15 @@ fn tape_token_bar(
         vec![
             Span::styled("▰".repeat(filled), Style::default().fg(filled_color)),
             Span::styled(
-                format!("{}   ", "▱".repeat(empty)),
+                format!("{}{}", "▱".repeat(empty), " ".repeat(gap)),
                 Style::default().fg(ctx.theme.dim),
             ),
         ]
     } else {
         vec![Span::styled(
-            "▰".repeat(filled) + "   ",
+            "▰".repeat(filled) + &" ".repeat(gap),
             Style::default().fg(filled_color),
         )]
-    };
-    let count_text = if live {
-        format!("≈{}", oscilloscope_core::format::format_tokens_t(total))
-    } else {
-        oscilloscope_core::format::format_tokens_t(total)
     };
     let count_style = if live {
         Style::default().fg(ctx.theme.dim)
@@ -817,6 +830,48 @@ fn tape_token_bar(
     };
     spans.push(Span::styled(count_text, count_style));
     spans
+}
+
+#[cfg(test)]
+mod tape_token_bar_tests {
+    use super::*;
+
+    fn printed_width(spans: &[Span<'static>]) -> usize {
+        spans.iter().map(|s| s.content.chars().count()).sum()
+    }
+
+    /// A live count of 1,000 tokens or more -- a common prompt's own
+    /// estimate -- still prints within the column's own 16-cell
+    /// budget: the leading marker the faint style's own count carries
+    /// must shrink the gap before it, not push the whole thing past
+    /// the column and get cut by the pane (issue #675).
+    #[test]
+    fn a_live_estimate_in_the_thousands_still_fits_the_column() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        for total in [41u64, 391, 1902, 9999] {
+            let spans = tape_token_bar(total, 50, false, true, &ctx);
+            let width = printed_width(&spans);
+            assert!(
+                width <= 16,
+                "a live total of {total} printed {width} cells, over the 16-cell column"
+            );
+            let full: String = spans.iter().map(|s| s.content.as_ref()).collect();
+            let expected_count = oscilloscope_core::format::format_tokens_t(total);
+            assert!(
+                full.ends_with(&expected_count),
+                "the count itself must never be cut: {full:?}"
+            );
+        }
+    }
 }
 
 /// §2.1's head rule: `━━ <label> ━━━━...`, filled to `width` -- the Now
@@ -2186,21 +2241,22 @@ fn tape_normal_detail_lines(
 
     if let Some(prompt_sent) = &detail.prompt_sent {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("Prompt Sent ", title_bold),
-                Span::styled(
-                    format!(
-                        "· {} t",
-                        oscilloscope_core::format::format_tokens_thousands(
-                            detail.prompt_sent_tokens.unwrap_or(0)
-                        )
-                    ),
-                    muted,
+        // A running prompt's own `tokens_sent` reads `None`
+        // (`build_tape_selected_detail`'s own doc comment) -- the
+        // Live block below already carries the sent figure for one
+        // of those, so this heading drops its own count rather than
+        // print a bogus `0 t`.
+        let mut heading = vec![Span::styled("Prompt Sent ", title_bold)];
+        if let Some(tokens) = detail.prompt_sent_tokens {
+            heading.push(Span::styled(
+                format!(
+                    "· {} t",
+                    oscilloscope_core::format::format_tokens_thousands(tokens)
                 ),
-            ],
-            width,
-        ));
+                muted,
+            ));
+        }
+        lines.push(tape_detail_line(heading, width));
         for line in tape_word_wrap(prompt_sent, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }

@@ -2149,13 +2149,15 @@ rate from `ms`/`first_token_ms` by the same two-delta, 500ms gate
 A running prompt's own Tape row (`screens::tape_running_prompt_what`/
 `tape_running_prompt_tokens`) reads this attempt's own elapsed
 (`live.elapsed_s`, since its own `started_at`, winning over the row's
-own `duration_s`, which counts an earlier attempt's backoff too):
-`waiting for the first token · 1.2s` before the first delta, else the
-elapsed, the received count (exact once the provider has reported
-one, `≈` while it is still the running estimate) and the rate once
-there has been enough of a second delta to measure one; `attempt N+1`
-appended once `attempt` is above zero; a non-streaming adapter keeps
-only the elapsed time, nothing it has no live figures for. The token
+own `duration_s`, which counts an earlier attempt's backoff too) and,
+on a retry, `attempt N+1`, first: the row's own `what` column is cut
+from the right the moment the pane is too narrow for all of it, so
+whatever reads first is the only part guaranteed to survive. After
+that: `waiting for the first token` before the first delta, else the
+received count (exact once the provider has reported one, `≈` while
+it is still the running estimate) and the rate once there has been
+enough of a second delta to measure one; a non-streaming adapter has
+none of that to show, only the elapsed time and attempt. The token
 column's own bar and figure (`TapeTokens::live`) draw in the faint
 style for exactly as long as they are this running estimate, settling
 to the normal style the instant the same row's own tokens next read

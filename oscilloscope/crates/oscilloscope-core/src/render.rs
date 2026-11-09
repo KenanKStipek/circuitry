@@ -1591,16 +1591,30 @@ fn build_header(
         });
 
     // Issue #675: every currently running prompt's own live
-    // estimate, summed separately -- `is_running_prompt` is the same
-    // gate `build_token_bar` already uses to count a prompt in
-    // flight, so this never double-counts a node that is running a
-    // tool, nor one whose own `meta.live` has already been removed
-    // because its attempt just ended (it fails `is_running_prompt`
-    // the moment `completed_at` is set).
-    let (tokens_sent_live_estimate, tokens_received_live_estimate) = flat
+    // estimate, summed separately -- gated on `statuses` reading
+    // `Running` for the path, not merely on `flat` still carrying a
+    // `meta.live` object, so a run that was killed mid-attempt (whose
+    // leftover `meta.live` stops updating but is never removed) drops
+    // out of this sum the same frame `statuses` stops calling it
+    // `Running`, rather than staying counted for as long as that
+    // state is open. A path `--events` alone has confirmed `Running`
+    // but that has no node in `flat` at all (`osi watch` with no
+    // live state) still counts, from the latest `progress` line, so
+    // the Totals row gets an events-only estimate too; `is_running_
+    // prompt` still gates a real node, so this never double-counts
+    // one running a tool.
+    let (tokens_sent_live_estimate, tokens_received_live_estimate) = statuses
         .iter()
-        .filter(|(_, node)| crate::model::is_running_prompt(node))
-        .filter_map(|(path, node)| crate::model::prompt_live_figures(Some(node), path, model, now))
+        .filter(|(_, status)| status.kind == StatusKind::Running)
+        .filter_map(|(path, _)| {
+            let node = flat.get(path.as_str());
+            let is_prompt = match node {
+                Some(node) => crate::model::is_running_prompt(node),
+                None => model.progress_at(path).is_some(),
+            };
+            is_prompt.then(|| crate::model::prompt_live_figures(node, path, model, now))
+        })
+        .flatten()
         .fold((0u64, 0u64), |(sent, recv), live| {
             (
                 sent + live.tokens_sent.or(live.tokens_sent_estimate).unwrap_or(0),
@@ -2267,6 +2281,18 @@ fn walk_rows(
 ) {
     let node = flat.get(path);
     let kind = row_kind_for(path, plan, flat);
+    // Issue #675's events-only attach: a path `--events` has
+    // confirmed with no state node at all (`osi watch` on `--events`
+    // alone) has nothing of its own in `flat` or `plan` for
+    // `row_kind_for` to classify by, so it reads `Unknown` even when
+    // it is in fact the running prompt the latest `progress` line
+    // names -- read as a prompt here instead, the one case `Unknown`
+    // plus a progress sample for this exact path can mean.
+    let kind = if kind == RowKind::Unknown && node.is_none() && model.progress_at(path).is_some() {
+        RowKind::Prompt
+    } else {
+        kind
+    };
     let last_segment = path.rsplit('.').next().unwrap_or(path);
     let label = if pass_index(last_segment).is_some() {
         pass_row_label(path, flat)

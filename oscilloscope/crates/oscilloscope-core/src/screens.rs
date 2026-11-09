@@ -1092,13 +1092,17 @@ fn tape_prompt_what(sent: u64, received: u64, reply_first_words: Option<&str>) -
 }
 
 /// A running prompt's own "what" text (issue #675): the elapsed
-/// time, then -- for a streaming adapter -- `waiting for the first
-/// token` before its own first delta, else how much has come back so
-/// far (exact once the provider has reported it, `≈` while it's
-/// still an estimate) and the rate, once there's been enough of a
-/// second delta to measure one. A non-streaming adapter has none of
-/// that to show, only the elapsed time (today's own tool-row shape).
-/// A retried attempt appends its own number, on every branch alike.
+/// time and, on a retry, its own attempt number, first -- the
+/// row's own `what` column is cut from the right the moment the
+/// pane is too narrow for the rest of it (`tape_what_text`), so
+/// whatever comes after this point is the first thing to go. After
+/// that: for a streaming adapter, `waiting for the first token`
+/// before its own first delta, else how much has come back so far
+/// (exact once the provider has reported it, `≈` while it's still
+/// an estimate) and the rate, once there's been enough of a second
+/// delta to measure one. A non-streaming adapter has none of that to
+/// show, only the elapsed time and attempt (today's own tool-row
+/// shape).
 fn tape_running_prompt_what(
     duration_s: Option<f64>,
     live: &crate::model::PromptLiveFigures,
@@ -1115,28 +1119,25 @@ fn tape_running_prompt_what(
         .or(duration_s)
         .map(crate::format::format_duration)
         .unwrap_or_default();
-    let mut what = if !live.streaming {
-        elapsed
-    } else if live.waiting_for_first_token {
-        format!("waiting for the first token · {elapsed}")
-    } else {
-        match live.tokens_received_or_estimate() {
-            Some((n, is_estimate)) => {
-                let marker = if is_estimate { "≈" } else { "" };
-                let rate = live
-                    .tokens_per_second
-                    .map(|r| format!(" · {} t/s", r.round() as i64))
-                    .unwrap_or_default();
-                format!(
-                    "{elapsed} · ↓{marker}{} t{rate}",
-                    crate::format::format_tokens_thousands(n)
-                )
-            }
-            None => elapsed,
-        }
-    };
-    if live.attempt.is_some_and(|a| a > 0) {
-        what.push_str(&format!(" · attempt {}", live.attempt.unwrap() + 1));
+    let mut what = elapsed;
+    if let Some(attempt) = live.attempt.filter(|&a| a > 0) {
+        what.push_str(&format!(" · attempt {}", attempt + 1));
+    }
+    if !live.streaming {
+        return what;
+    }
+    if live.waiting_for_first_token {
+        what.push_str(" · waiting for the first token");
+    } else if let Some((n, is_estimate)) = live.tokens_received_or_estimate() {
+        let marker = if is_estimate { "≈" } else { "" };
+        let rate = live
+            .tokens_per_second
+            .map(|r| format!(" · {} t/s", r.round() as i64))
+            .unwrap_or_default();
+        what.push_str(&format!(
+            " · ↓{marker}{} t{rate}",
+            crate::format::format_tokens_thousands(n)
+        ));
     }
     what
 }
@@ -3364,7 +3365,7 @@ mod tests {
             false,
             "2026-10-08T11:46:44.2Z",
         );
-        assert_eq!(what, "waiting for the first token · 1.2s");
+        assert_eq!(what, "1.2s · waiting for the first token");
         assert!(tokens.live);
     }
 
@@ -3495,7 +3496,7 @@ mod tests {
             false,
             "2026-10-08T11:46:51Z",
         );
-        assert_eq!(what, "waiting for the first token · 1.0s · attempt 2");
+        assert_eq!(what, "1.0s · attempt 2 · waiting for the first token");
     }
 
     /// A node whose `meta.live` is malformed (or missing entirely)

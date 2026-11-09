@@ -2311,9 +2311,11 @@ mod tests {
     }
 
     /// A node whose `meta.live` is malformed (an object with neither
-    /// shape's own telling key, or missing fields entirely) parses as
-    /// neither `AgentLive` nor `PromptLive` -- read as today, never a
-    /// crash (issue #675's own acceptance).
+    /// shape's own telling key, missing fields entirely) parses as
+    /// `PromptLive::from_value(..) == None` -- `AgentLive::from_value`
+    /// has no telling key of its own to require, so the same value
+    /// still parses as an (empty) `AgentLive`; either way, this never
+    /// crashes (issue #675's own acceptance).
     #[test]
     fn a_malformed_meta_live_crashes_neither_parse() {
         let value = json!({"something": "else"});

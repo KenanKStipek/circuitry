@@ -6,7 +6,7 @@ expression: "tape_snapshot_at(80, 24, &retry_attempt_state(), \"2026-10-08T11:46
 "╭─ Tape · 0 Done · 1 Running · 0 Ahead · ▰ = 50 t ─────────────────────────────╮"
 "│11:46:43 ■ Run Started        do-thing.yml · cof                              │"
 "│━━ Now 11:46:51 · 8.0s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│"
-"│11:46:43 ● ask                waiting for the first token · ⋯ ▰▰▰▰▰▰▰▱   ≈350 │"
+"│11:46:43 ● ask                1.0s · attempt 2 · waiting for⋯ ▰▰▰▰▰▰▰▱   350 t│"
 "│         ■ Run End            ETA — · no history yet                          │"
 "│                                                                              │"
 "│                                                                              │"
