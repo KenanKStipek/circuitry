@@ -1,12 +1,12 @@
 {
-  "_run_id": "b7084742-e19e-4f88-ad21-0fe0da3f5aa1",
-  "_timestamp": "20261007_213233",
+  "_run_id": "73fb6b29-b06b-4bfa-87fd-11d6bd9a7c64",
+  "_timestamp": "20261109_004615",
   "input": {},
   "prime": {
     "meta": {
       "adapter": "_noop",
-      "completed_at": "2026-10-07T21:32:33.168518+00:00",
-      "created_at": "2026-10-07T21:32:33.168387+00:00",
+      "completed_at": "2026-11-09T00:46:15.150469+00:00",
+      "created_at": "2026-11-09T00:46:15.150301+00:00",
       "dry_run": false,
       "error": null,
       "flow": "chain",
@@ -17,8 +17,8 @@
     },
     "step1": {
       "meta": {
-        "completed_at": "2026-10-07T21:32:33.168511+00:00",
-        "created_at": "2026-10-07T21:32:33.168436+00:00",
+        "completed_at": "2026-11-09T00:46:15.150462+00:00",
+        "created_at": "2026-11-09T00:46:15.150353+00:00",
         "error": null,
         "exit_code": null,
         "params_rendered": {
@@ -77,6 +77,12 @@
         "complexity.routing": "default",
         "complexity.routing.bands": "default",
         "complexity.scoring": "default",
+        "complexity.splitting": "default",
+        "complexity.splitting.max_depth": "default",
+        "complexity.splitting.max_input_tokens": "default",
+        "complexity.splitting.max_parts": "default",
+        "complexity.splitting.models": "default",
+        "complexity.splitting.on_failure": "default",
         "model": "config",
         "out": "cli",
         "plugins": "default",
@@ -84,18 +90,18 @@
       }
     },
     "last_run": {
-      "completed_at": "2026-10-07T21:32:33.168524+00:00",
+      "completed_at": "2026-11-09T00:46:15.150477+00:00",
       "document_hash": "43a6174053f8288c80db0097ae8690ff6e4da839bbde13661e8176614c8883e5",
       "dry_run": false,
       "orchestration_path": "orchestration.yml",
-      "run_id": "b7084742-e19e-4f88-ad21-0fe0da3f5aa1",
-      "started_at": "2026-10-07T21:32:33.166033+00:00",
+      "run_id": "73fb6b29-b06b-4bfa-87fd-11d6bd9a7c64",
+      "started_at": "2026-11-09T00:46:15.148445+00:00",
       "totals": {
         "cost_usd": null,
         "effects_run": 2,
         "tokens_received": 0,
         "tokens_sent": 0,
-        "wall_time_s": 0.00446566694881767
+        "wall_time_s": 0.003965666051954031
       },
       "validate_only": false,
       "verbose": false
