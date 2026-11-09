@@ -1504,11 +1504,10 @@ fn draw_tape_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
             width: area.width,
             height: 1,
         };
-        let pad = (area.width as usize).saturating_sub(7);
+        let pad = (area.width as usize).saturating_sub(2 + 5);
         let spans = vec![
-            Span::styled(" ".repeat(pad), Style::default().bg(bg)),
             Span::styled(
-                " q ",
+                format!("{}q ", " ".repeat(pad)),
                 Style::default()
                     .fg(ctx.theme.keyhint_key)
                     .bg(bg)
@@ -12714,5 +12713,334 @@ mod highlight_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, Color::Reset);
+    }
+}
+
+/// The `.mock` frames under `../../design/frames/` (issue #678's
+/// "the frames are the contract"): a plain-text grid of `{role
+/// [bold|dim] [on:bg-role]}text{/}` spans, one line per screen row,
+/// resolved through a real [`Theme`] and compared cell for cell
+/// (symbol, fg, bg, bold, dim) against a real `ratatui::buffer::
+/// Buffer` [`draw`] actually produced. A frame that cannot match
+/// exactly is a design question, not something this parser papers
+/// over: it panics on anything it does not recognise rather than
+/// guessing.
+#[cfg(test)]
+mod tape_frame_goldens {
+    use super::*;
+    use oscilloscope_core::render::{Header, RenderState};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::theme::{ColorMode, Theme, ThemeName};
+
+    fn frames_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../design/frames")
+    }
+
+    /// The frames' own zone (issue #613's "one clock"): drawn in
+    /// UTC-8 -- `run2/events.jsonl`'s `run_start` is `20:50:47Z`,
+    /// the frames' header reads `12:50:47`.
+    fn frame_zone() -> chrono::FixedOffset {
+        chrono::FixedOffset::west_opt(8 * 3600).unwrap()
+    }
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    struct MockCellStyle {
+        fg: Color,
+        bg: Color,
+        bold: bool,
+        dim: bool,
+    }
+
+    struct MockFrame {
+        width: u16,
+        height: u16,
+        cells: Vec<Vec<(char, MockCellStyle)>>,
+    }
+
+    fn role_color(role: &str, theme: &Theme) -> Color {
+        match role {
+            "bg.base" => theme.background.expect("bg.base needs a themed background"),
+            "bg.inset" => theme.bg_inset,
+            "bg.surface" | "bg.overlay" => theme.bg_surface,
+            "fg.default" | "fg.title" => theme.text,
+            "fg.muted" => theme.fg_muted,
+            "fg.faint" => theme.dim,
+            "fg.on-accent" => theme.on_accent,
+            "border.default" => theme.border,
+            "border.focus" => theme.border_focused,
+            "accent.primary" => theme.accent_primary,
+            "accent.secondary" => theme.accent_secondary,
+            "selection.bg" => theme.selection_bg,
+            "selection.fg" => theme.selection_fg,
+            "status.success" => theme.status_done,
+            "status.warning" => theme.warning,
+            "status.error" => theme.status_failed,
+            "status.info" => theme.status_info,
+            "statusbar.bg" => theme.statusbar_bg,
+            "statusbar.fg" => theme.statusbar_fg,
+            "keyhint.key" => theme.keyhint_key,
+            "keyhint.desc" => theme.keyhint_desc,
+            other => panic!("tape_frame_goldens: unknown role {other:?}"),
+        }
+    }
+
+    /// Parses one `{role [bold|dim] [on:bg-role]}` tag into a style,
+    /// against `base` (the pane's own already-painted background --
+    /// every span not carrying its own `on:` paints over it, never
+    /// a bare `Color::Reset`).
+    fn parse_tag(tag: &str, base_bg: Color, theme: &Theme) -> MockCellStyle {
+        let mut parts = tag.split(' ');
+        let role = parts.next().expect("a span's tag names a role first");
+        let mut bold = false;
+        let mut dim = false;
+        let mut bg = base_bg;
+        for part in parts {
+            if part == "bold" {
+                bold = true;
+            } else if part == "dim" {
+                dim = true;
+            } else if let Some(bg_role) = part.strip_prefix("on:") {
+                bg = role_color(bg_role, theme);
+            } else if !part.is_empty() {
+                panic!("tape_frame_goldens: unknown span attribute {part:?} in {tag:?}");
+            }
+        }
+        MockCellStyle {
+            fg: role_color(role, theme),
+            bg,
+            bold,
+            dim,
+        }
+    }
+
+    /// Parses one already-stripped-of-trailing-newline body line into
+    /// its own row of styled cells.
+    fn parse_row(line: &str, base_bg: Color, theme: &Theme) -> Vec<(char, MockCellStyle)> {
+        let chars: Vec<char> = line.chars().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < chars.len() {
+            assert_eq!(
+                chars[i], '{',
+                "tape_frame_goldens: expected a span tag at {line:?}[{i}]"
+            );
+            i += 1;
+            let tag_start = i;
+            while chars[i] != '}' {
+                i += 1;
+            }
+            let tag: String = chars[tag_start..i].iter().collect();
+            i += 1;
+            let text_start = i;
+            while !(chars[i] == '{'
+                && chars.get(i + 1) == Some(&'/')
+                && chars.get(i + 2) == Some(&'}'))
+            {
+                i += 1;
+            }
+            let text: &[char] = &chars[text_start..i];
+            i += 3;
+            let style = parse_tag(&tag, base_bg, theme);
+            out.extend(text.iter().map(|&c| (c, style)));
+        }
+        out
+    }
+
+    /// Parses one `.mock` file (issue #678's own golden format): the
+    /// `#!` metadata lines (only `size` is read; the rest -- region
+    /// boxes, captions, notes -- document the frame for a human, not
+    /// this comparison), then one line of spans per row.
+    fn parse_mock(name: &str, theme: &Theme) -> MockFrame {
+        let path = frames_dir().join(format!("{name}.mock"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("tape_frame_goldens: couldn't read {path:?}: {e}"));
+        let mut width = 0u16;
+        let mut height = 0u16;
+        let mut body_lines: Vec<&str> = Vec::new();
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("#! size: ") {
+                let (w, h) = rest.split_once('x').expect("size: WxH");
+                width = w.parse().unwrap();
+                height = h.parse().unwrap();
+            } else if line.starts_with("#!") {
+                continue;
+            } else {
+                body_lines.push(line);
+            }
+        }
+        assert_eq!(
+            body_lines.len(),
+            height as usize,
+            "{name}: expected {height} body lines, got {}",
+            body_lines.len()
+        );
+        let base_bg = theme.background.unwrap_or(Color::Reset);
+        let blank = (
+            ' ',
+            MockCellStyle {
+                fg: theme.text,
+                bg: base_bg,
+                bold: false,
+                dim: false,
+            },
+        );
+        let cells = body_lines
+            .iter()
+            .map(|line| {
+                let mut row = if line.is_empty() {
+                    Vec::new()
+                } else {
+                    parse_row(line, base_bg, theme)
+                };
+                assert!(
+                    row.len() <= width as usize,
+                    "{name}: row {line:?} is wider than {width} cells"
+                );
+                // A line shorter than `width` (every blank one, and
+                // any with trailing space trimmed by the builder) is
+                // the rest of the pane's own base fill, never a
+                // separate span of its own.
+                row.resize(width as usize, blank);
+                row
+            })
+            .collect();
+        MockFrame {
+            width,
+            height,
+            cells,
+        }
+    }
+
+    /// Compares `buffer` against `mock` cell for cell, panicking with
+    /// every mismatch found (not just the first) so a real divergence
+    /// is reported all at once.
+    fn assert_matches_mock(buffer: &ratatui::buffer::Buffer, mock: &MockFrame, name: &str) {
+        assert_eq!(buffer.area.width, mock.width, "{name}: width");
+        assert_eq!(buffer.area.height, mock.height, "{name}: height");
+        let mut mismatches = Vec::new();
+        for y in 0..mock.height {
+            for x in 0..mock.width {
+                let cell = &buffer[(x, y)];
+                let (expected_ch, expected_style) = mock.cells[y as usize][x as usize];
+                let actual_bold = cell.modifier.contains(Modifier::BOLD);
+                let actual_dim = cell.modifier.contains(Modifier::DIM);
+                let actual_ch = cell.symbol().chars().next().unwrap_or(' ');
+                if actual_ch != expected_ch
+                    || cell.fg != expected_style.fg
+                    || cell.bg != expected_style.bg
+                    || actual_bold != expected_style.bold
+                    || actual_dim != expected_style.dim
+                {
+                    mismatches.push(format!(
+                        "({x},{y}): got {actual_ch:?} fg={:?} bg={:?} bold={actual_bold} dim={actual_dim} -- want {expected_ch:?} fg={:?} bg={:?} bold={} dim={}",
+                        cell.fg, cell.bg, expected_style.fg, expected_style.bg, expected_style.bold, expected_style.dim
+                    ));
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{name}: {} cell mismatch(es):\n{}",
+            mismatches.len(),
+            mismatches.join("\n")
+        );
+    }
+
+    #[test]
+    fn tape_toosmall_60x16_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("tape--toosmall--60x16", &theme);
+        let tracker = crate::highlight::Tracker::new();
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let rendered = RenderState {
+            header: Header {
+                document: "demo.yml".to_string(),
+                engine: "cof".to_string(),
+                run_id: None,
+                status: oscilloscope_core::model::RunStatus::Running,
+                elapsed_s: 0.0,
+                run_start_ts: None,
+                run_end_ts: None,
+                effects_done: 0,
+                effects_planned: None,
+                effects_planned_is_lower_bound: false,
+                tokens_sent: 0,
+                tokens_received: 0,
+                innermost_loop_eta_s: None,
+                innermost_loop_eta_ts: None,
+                history_eta_ts: None,
+                history_eta_past_usual: false,
+                history_eta_remaining_s: None,
+                history_eta_low_ts: None,
+                history_eta_high_ts: None,
+                history_vs_usual_s: None,
+                history_usual_total_s: None,
+                history_usual_total_tokens: None,
+                history_same_hash_count: None,
+                history_step_usual: Default::default(),
+                latest_report: None,
+                engine_alive: true,
+            },
+            unfolded_rows: Vec::new(),
+            rows: Vec::new(),
+            state_rows: Vec::new(),
+            token_bar: Default::default(),
+            log: Vec::new(),
+        };
+        let mut app = crate::keys::App::new(false);
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let model = oscilloscope_core::model::RunModel::new();
+        let flat = std::collections::BTreeMap::new();
+        // The too-small check runs inside `draw_tape` itself, after
+        // a real `TapeScreen` already exists -- `main.rs`'s own
+        // `build_tape_if_active` builds one whenever the Tape is the
+        // screen on display, with no terminal-size check of its own.
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            false,
+            "2026-11-08T12:50:47-08:00",
+        );
+        let backend = TestBackend::new(60, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    "2026-11-08T12:50:47-08:00",
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        assert_matches_mock(terminal.backend().buffer(), &mock, "tape--toosmall--60x16");
     }
 }
