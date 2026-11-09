@@ -25,7 +25,7 @@ Every case is synthetic, written directly against runtime-semantics.md
 §3.1/§3.4/§3.6/§5.9 and the rulings on issue #487 -- nothing here is
 copied from any real orchestration.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (a local Python 3.11 venv; `actions/setup-python`
 3.11 in CI, `electricity/scripts/generator-constraints.txt` pinned).
 Usage: python3 generate_compose_corpus.py [--check]
 """
