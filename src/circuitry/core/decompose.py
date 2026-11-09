@@ -76,9 +76,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .effect_identity import nested_container
-from .split import NoSplitPoint
+from .split import NoSplitPoint, split_list, split_mapping, split_text
 from .split import estimate_tokens as _estimate_tokens
-from .split import split_list, split_mapping, split_text
 from .store import Store
 from .use import (
     _clean_yaml_fences,
@@ -92,8 +91,12 @@ from .use import (
 
 if TYPE_CHECKING:
     from ..adapters import Adapter
-    from ..cli.complexity_config import ComplexitySettings, DecompositionSettings, SplittingSettings
-    from .prompt import PromptDefinition, SplitDef, SplitMergeDef
+    from ..cli.complexity_config import (
+        ComplexitySettings,
+        DecompositionSettings,
+        SplittingSettings,
+    )
+    from .prompt import PromptDefinition, SplitDef
 
 logger = logging.getLogger(__name__)
 
@@ -1382,12 +1385,15 @@ def _prepare_split(
         )
         if budget < 1:
             raise _NoSplitPointError("the budget leaves no room for any part")
+        file_parts: list[Any]
         try:
-            parts = split_text(read.text, room=budget)
+            file_parts = split_text(read.text, room=budget)
         except NoSplitPoint as exc:
             raise _NoSplitPointError(str(exc)) from exc
-        sizes = [_estimate_tokens(part) for part in parts]
-        return _SplitPrep(ref_path="template", kind="string", parts=parts, sizes=sizes)
+        file_sizes = [_estimate_tokens(part) for part in file_parts]
+        return _SplitPrep(
+            ref_path="template", kind="string", parts=file_parts, sizes=file_sizes
+        )
 
     sources = _template_sources(defn)
     if not sources:
@@ -1462,6 +1468,7 @@ def _prepare_split(
             "does not leave room for a part within the budget"
         )
 
+    parts: list[Any]
     try:
         if kind == "list":
             parts = split_list(value, room=room)

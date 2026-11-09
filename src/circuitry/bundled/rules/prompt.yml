@@ -63,6 +63,15 @@ fields:
   group:
     type: string
     note: "Named concurrency-group slot (runtime.concurrency_groups.<name>) this call waits for a free slot in before dispatching, on top of runtime.max_concurrency's run-wide cap. Must name a group runtime.concurrency_groups defines, or cof check rejects it. Usually omitted."
+  split:
+    type: object
+    properties:
+      enabled: "boolean, default follows runtime.complexity.splitting"
+      budget_tokens: "integer, min 1"
+      max_parts: "integer, min 2"
+      separator: "string, default a blank line"
+      merge: "{template: string} -- a reduce prompt over the parts"
+    note: "Size trigger for decomposition: splits this call's rendered input into parts and runs them in parallel when it exceeds a token budget (runtime.complexity.splitting). Usually omitted -- runner/config policy, not author-facing, except merge.template, which only the author can write: required for any prompt_type other than text or an array (json with an array schema), whose parts are joined/concatenated natively."
 state_paths:
   output: "prime.<name>.value"
   in_dynamic: "prime.<dynamic_name>.<name>.value"
