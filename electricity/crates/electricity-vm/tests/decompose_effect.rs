@@ -403,9 +403,16 @@ async fn record_children_grafts_the_decomposition_childs_own_effects() {
     );
     let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
     let observer = RecordingObserver::new();
-    electricity_vm::execute_root(&program(root), &store, &Value::None, &ctx, &observer, &token)
-        .await
-        .unwrap();
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
 
     let snapshot = store.snapshot(&store.root);
     let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
