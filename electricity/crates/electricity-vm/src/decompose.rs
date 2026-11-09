@@ -15,18 +15,23 @@
 
 use std::rc::Rc;
 
-use crate::exec::prompt::prompt_type_str;
+use crate::exec::key;
+use crate::exec::prompt::{prompt_type_str, role_str};
 use crate::exec::use_::{
     allowlist_names, record_children_enabled, resolve_dot_path, run_isolated, sha256_hex,
     validate_inline_yaml,
 };
 use crate::exec::{CtxChain, live_ctx};
+use crate::params::ParamsCtx;
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
-use electricity_bytecode::effects::{PromptContent, PromptOp};
+use electricity_bytecode::effects::{
+    AssetRef, DispatchFile, PromptContent, PromptOp, PromptType, TimeoutMs,
+};
+use electricity_bytecode::param::ParamNode;
 use electricity_bytecode::{EffectPath, Op, first_unsupported};
 use electricity_compiler::DocumentOrigin;
-use electricity_config::{ComplexitySettings, DecompositionSettings};
+use electricity_config::{ComplexitySettings, DecompositionSettings, SplittingSettings};
 use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use electricity_yaml::{DumpError, DumpOptions};
@@ -322,6 +327,33 @@ fn check_allowlists(plan: &Plan, runtime_config: &Value) -> Vec<String> {
         // `false`).
         true,
     )
+}
+
+/// `core/decompose.py::_validate_generated_yaml` (issue #682): the four
+/// checks every generated plan -- planned (score trigger) or
+/// deterministically generated (size trigger) -- must pass before it
+/// runs, minus the schema/chunk-count checks [`validate_plan`] alone
+/// needs for a *planned* document. Shared so the size trigger's own,
+/// never-planned plan runs through the same gate [`validate_plan`]
+/// gives the score trigger's planner output.
+fn validate_generated_yaml(yaml: &str, result_path: &str, runtime_config: &Value) -> Vec<String> {
+    let throwaway = Plan {
+        say: Value::None,
+        chunks: Value::None,
+        yaml: Some(yaml.to_string()),
+        done: Value::None,
+        result_path: result_path.to_string(),
+    };
+    let parsed = match electricity_yaml::load_yaml(yaml) {
+        Err(err) => return vec![format!("YAML parse error: {err}")],
+        Ok(value) => value,
+    };
+    if let Err(errors) = validate_inline_yaml(&parsed) {
+        return errors;
+    }
+    let mut problems = check_merge_contract(&throwaway);
+    problems.extend(check_allowlists(&throwaway, runtime_config));
+    problems
 }
 
 /// `core/decompose.py::_validate_plan`. `_check_capability_ceiling`
@@ -779,6 +811,7 @@ pub(crate) async fn maybe_decompose(
     prompt: &PromptOp,
     complexity_meta: Option<&Value>,
     prompt_sent: &str,
+    resolved_model: &str,
     render_chain: &CtxChain,
     store: &Store,
     frame: &Frame,
@@ -788,6 +821,28 @@ pub(crate) async fn maybe_decompose(
 ) -> Result<Option<DecompositionResult>, VmError> {
     let name = op.name.as_deref().unwrap_or("");
     let settings = run_ctx.complexity;
+
+    // Size runs first (issue #682, `core/decompose.py::maybe_decompose`'s
+    // own doc comment): a part is within budget by construction, a
+    // planned chunk is not, so checking size first means every leaf
+    // finally sent fits whatever the score trigger's planner does.
+    if let Some(result) = maybe_split(
+        op,
+        prompt,
+        prompt_sent,
+        resolved_model,
+        render_chain,
+        store,
+        frame,
+        run_ctx,
+        observer,
+        token,
+    )
+    .await?
+    {
+        return Ok(Some(result));
+    }
+
     let dset = &settings.decomposition;
 
     if !dset.enabled {
@@ -981,7 +1036,7 @@ pub(crate) async fn maybe_decompose(
     // absorbed by `on_error`/`on_failure`, nothing written to
     // `meta.decomposition` at all. Checked before anything below ever
     // touches *base* again.
-    if let Some(refusal) = first_unsupported(&plan_program, false, false, &run_ctx.supported) {
+    if let Some(refusal) = first_unsupported(&plan_program, false, &run_ctx.supported) {
         return Err(VmError::Refused {
             refusal,
             child_label: Some(format!("decomposition plan of '{name}'")),
@@ -1064,6 +1119,1209 @@ pub(crate) async fn maybe_decompose(
     Ok(Some(result))
 }
 
+// --------------------------------------------------------------------------
+// size trigger (issue #672/#682)
+// --------------------------------------------------------------------------
+
+/// `core/decompose.py::_resolve_split_budget`.
+fn resolve_split_budget(
+    prompt: &PromptOp,
+    sset: &SplittingSettings,
+    resolved_model: &str,
+) -> Option<i64> {
+    if let Some(budget) = prompt.split_budget_tokens {
+        return Some(budget);
+    }
+    if !sset.enabled {
+        return None;
+    }
+    if let Some(budget) = sset.models.get(resolved_model) {
+        return Some(*budget);
+    }
+    sset.max_input_tokens
+}
+
+/// `core/decompose.py::_native_merge_mode`.
+fn native_merge_mode(prompt: &PromptOp) -> Option<&'static str> {
+    match prompt.prompt_type {
+        PromptType::Text => Some("join"),
+        PromptType::Array => Some("concat"),
+        PromptType::Json => {
+            let is_array_schema = matches!(
+                &prompt.schema,
+                Some(Value::Dict(schema))
+                    if matches!(
+                        schema.get(&key("type")),
+                        Some(Value::Str(t)) if t == "array"
+                    )
+            );
+            if is_array_schema {
+                Some("concat")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `core/decompose.py::_maybe_split`'s own `base` dict (size trigger's
+/// own key order -- `trigger: "size"`, distinct from the score
+/// trigger's own [`base_meta`]).
+fn split_base_meta(estimated: i64, budget: i64, depth: u32, sset: &SplittingSettings) -> Dict {
+    let mut dict = Dict::new();
+    dict.insert(key("decomposed"), Value::Bool(false));
+    dict.insert(key("trigger"), Value::Str("size".to_string()));
+    dict.insert(key("estimated_tokens"), Value::from(estimated));
+    dict.insert(key("budget"), Value::from(budget));
+    dict.insert(key("depth"), Value::from(i64::from(depth)));
+    dict.insert(key("max_depth"), Value::from(sset.max_depth));
+    dict
+}
+
+/// `core/decompose.py::_split_failure`: never a route-up (no bigger
+/// context window), so `fallback_model` is never even a key in *base*
+/// (unlike the score trigger's own [`failure_result`]).
+fn split_failure_result(
+    mut base: Dict,
+    sset: &SplittingSettings,
+    reason: &'static str,
+    error: String,
+) -> DecompositionResult {
+    let fail = sset.on_failure == "fail";
+    let outcome = if fail { "failed" } else { "run_as_is" };
+    base.insert(key("outcome"), Value::Str(outcome.to_string()));
+    base.insert(key("reason"), Value::Str(reason.to_string()));
+    base.insert(key("error"), Value::Str(error.clone()));
+    let posture = if fail {
+        Posture::Fail { reason, error }
+    } else {
+        Posture::Dispatch {
+            fallback_model: None,
+        }
+    };
+    DecompositionResult {
+        meta: Value::Dict(base),
+        posture,
+        child_record: Vec::new(),
+    }
+}
+
+/// `core/split.py::NoSplitPoint`'s own text (`"{unit} does not fit the
+/// room"`) -- this module never constructs the splitter's own error
+/// type directly, only its message.
+fn no_split_point_text(unit: &crate::split::NoSplitPoint) -> String {
+    unit.to_string()
+}
+
+/// `core/decompose.py::_template_sources`: one `(label, raw text, role)`
+/// per analyzable source -- the one template, or every `messages[]`
+/// entry that isn't itself a dispatch-time file.
+struct SplitSource {
+    label: String,
+    text: String,
+    role: Option<electricity_bytecode::effects::Role>,
+}
+
+fn template_sources(prompt: &PromptOp) -> Vec<SplitSource> {
+    match &prompt.content {
+        PromptContent::Template(text) => vec![SplitSource {
+            label: "template".to_string(),
+            text: text.source.clone(),
+            role: None,
+        }],
+        PromptContent::TemplateFile(_) => Vec::new(),
+        PromptContent::Messages(messages) => messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.file.is_none())
+            .map(|(index, message)| SplitSource {
+                label: format!("messages[{index}].content"),
+                text: message.content.source.clone(),
+                role: Some(message.role),
+            })
+            .collect(),
+    }
+}
+
+/// `core/decompose.py::_candidate_references`: every distinct state
+/// reference across *expanded_sources*, in first-seen order --
+/// `electricity_complexity::reference_names_sorted`'s own per-source
+/// return is already sorted (`core/complexity.py::_extract_references`'s
+/// own `sorted(references)`); this accumulates first-seen across
+/// sources on top of that.
+fn candidate_references(expanded_sources: &[String]) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut ordered = Vec::new();
+    for text in expanded_sources {
+        let names =
+            electricity_complexity::reference_names_sorted(text).map_err(|err| err.to_string())?;
+        for name in names {
+            if seen.insert(name.clone()) {
+                ordered.push(name);
+            }
+        }
+    }
+    Ok(ordered)
+}
+
+/// `core/decompose.py::_render_reference_alone`.
+fn render_reference_alone(reference: &str, ctx: &Value) -> Result<String, String> {
+    let mut template = String::with_capacity(reference.len() + 6);
+    template.push_str("{{{");
+    template.push_str(reference);
+    template.push_str("}}}");
+    electricity_template::render_template_with_root_and_escape(
+        &template,
+        ctx,
+        &electricity_template::PlainCtx,
+        "split reference",
+        false,
+    )
+    .map_err(|err| err.to_string())
+}
+
+/// `core/decompose.py::_tag_occurrences_and_extensions`.
+fn tag_occurrences_and_extensions(
+    expanded_sources: &[String],
+    reference: &str,
+) -> Result<(usize, Vec<String>), String> {
+    let mut count = 0usize;
+    let mut extending = Vec::new();
+    let prefix = format!("{reference}.");
+    for text in expanded_sources {
+        let tags = electricity_complexity::find_tags(text).map_err(|err| err.to_string())?;
+        for (_sigil, name) in tags {
+            if name == reference {
+                count += 1;
+            } else if name.starts_with(&prefix) {
+                extending.push(name);
+            }
+        }
+    }
+    Ok((count, extending))
+}
+
+/// `core/decompose.py::_file_message_fixed_tokens`.
+fn file_message_fixed_tokens(prompt: &PromptOp, ctx: &Value, name: &str) -> Result<i64, String> {
+    let PromptContent::Messages(messages) = &prompt.content else {
+        return Ok(0);
+    };
+    let mut total = 0i64;
+    for (index, message) in messages.iter().enumerate() {
+        let Some(source) = &message.file else {
+            continue;
+        };
+        let field = format!("messages[{index}].content");
+        let raw_path = ctx.resolve_from(&source.path_from);
+        let within_value = source
+            .within_from
+            .as_deref()
+            .and_then(|path| ctx.resolve_from(path));
+        let read = electricity_compiler::prompt_files::read_dispatch_file(
+            source,
+            raw_path.as_ref(),
+            within_value.as_ref(),
+            &field,
+            &format!("Prompt effect '{name}'"),
+        )?;
+        total +=
+            crate::split::estimate_tokens(&format!("{}: {}", role_str(message.role), read.text));
+    }
+    Ok(total)
+}
+
+/// `core/decompose.py::_serialize_message_file`.
+fn serialize_message_file(source: &DispatchFile) -> Value {
+    let mut file = Dict::new();
+    file.insert(key("from"), Value::Str(source.path_from.clone()));
+    let mut out = Dict::new();
+    out.insert(key("file"), Value::Dict(file));
+    let within = match &source.within {
+        Some(literal) => Value::Str(literal.clone()),
+        None => {
+            let mut within_dict = Dict::new();
+            within_dict.insert(
+                key("from"),
+                Value::Str(source.within_from.clone().unwrap_or_default()),
+            );
+            Value::Dict(within_dict)
+        }
+    };
+    out.insert(key("within"), within);
+    Value::Dict(out)
+}
+
+/// `core/decompose.py::_set_dotted_copy`: a shallow-structural copy of
+/// *ctx* with *value* set at the dotted *path* -- only the branch
+/// actually being modified is rebuilt.
+fn set_dotted_copy(ctx: &Value, path: &[&str], value: Value) -> Value {
+    let Some((head, rest)) = path.split_first() else {
+        return ctx.clone();
+    };
+    let mut new_dict = ctx.as_dict().cloned().unwrap_or_default();
+    if rest.is_empty() {
+        new_dict.insert(Value::Str((*head).to_string()), value);
+    } else {
+        let current = new_dict
+            .get(&Value::Str((*head).to_string()))
+            .cloned()
+            .unwrap_or(Value::Dict(Dict::new()));
+        let current = if current.as_dict().is_some() {
+            current
+        } else {
+            Value::Dict(Dict::new())
+        };
+        new_dict.insert(
+            Value::Str((*head).to_string()),
+            set_dotted_copy(&current, rest, value),
+        );
+    }
+    Value::Dict(new_dict)
+}
+
+/// Everything [`prepare_split`] worked out about *how* to split --
+/// `core/decompose.py::_SplitPrep`.
+struct SplitPrep {
+    ref_path: String,
+    kind: &'static str,
+    parts: Vec<Value>,
+    sizes: Vec<i64>,
+    template_text: Option<String>,
+    message_texts: Option<Vec<Option<String>>>,
+    extra_state: indexmap::IndexMap<String, String>,
+}
+
+/// `core/decompose.py::_prepare_split`: pick the split reference,
+/// measure the room each part has, and cut its value into whole-unit
+/// parts.
+fn prepare_split(
+    prompt: &PromptOp,
+    name: &str,
+    ctx: &Value,
+    declared_prompts: &indexmap::IndexMap<String, String>,
+    effect_names: &std::collections::BTreeSet<String>,
+    budget: i64,
+) -> Result<SplitPrep, String> {
+    if let PromptContent::TemplateFile(source) = &prompt.content {
+        let raw_path = ctx.resolve_from(&source.path_from);
+        let within_value = source
+            .within_from
+            .as_deref()
+            .and_then(|path| ctx.resolve_from(path));
+        let read = electricity_compiler::prompt_files::read_dispatch_file(
+            source,
+            raw_path.as_ref(),
+            within_value.as_ref(),
+            "template",
+            &format!("Prompt effect '{name}'"),
+        )?;
+        if budget < 1 {
+            return Err("the budget leaves no room for any part".to_string());
+        }
+        let parts = crate::split::split_text(&read.text, budget)
+            .map_err(|err| no_split_point_text(&err))?;
+        let sizes = parts
+            .iter()
+            .map(|part| crate::split::estimate_tokens(part))
+            .collect();
+        return Ok(SplitPrep {
+            ref_path: "template".to_string(),
+            kind: "string",
+            parts: parts.into_iter().map(Value::Str).collect(),
+            sizes,
+            template_text: None,
+            message_texts: None,
+            extra_state: indexmap::IndexMap::new(),
+        });
+    }
+
+    let sources = template_sources(prompt);
+    if sources.is_empty() {
+        return Err("the prompt has no template text to split".to_string());
+    }
+
+    let source_pairs: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|source| (source.label.as_str(), source.text.as_str()))
+        .collect();
+    let (expanded_texts, extra_state) = crate::compose::expand_sources(
+        &source_pairs,
+        ctx,
+        declared_prompts,
+        effect_names,
+        &electricity_template::PlainCtx,
+    )?;
+
+    let references = candidate_references(&expanded_texts)?;
+    if references.is_empty() {
+        return Err(
+            "the template has no state references to split \u{2014} its fixed text alone is \
+             over budget"
+                .to_string(),
+        );
+    }
+
+    let mut best_reference: Option<String> = None;
+    let mut best_tokens: i64 = -1;
+    for reference in &references {
+        let rendered = render_reference_alone(reference, ctx)?;
+        let tokens = crate::split::estimate_tokens(&rendered);
+        if tokens > best_tokens {
+            best_tokens = tokens;
+            best_reference = Some(reference.clone());
+        }
+    }
+    let reference = best_reference.expect("references is non-empty");
+
+    let (occurrences, extending) = tag_occurrences_and_extensions(&expanded_texts, &reference)?;
+    if let Some(first) = extending.first() {
+        return Err(format!(
+            "the template reaches into the split reference {} with a further path: {}",
+            Value::Str(reference.clone()).py_repr(),
+            Value::Str(first.clone()).py_repr()
+        ));
+    }
+    if occurrences < 1 {
+        return Err(format!(
+            "the split reference {} does not occur in the template",
+            Value::Str(reference.clone()).py_repr()
+        ));
+    }
+
+    let value = resolve_dot_path(ctx, &reference);
+    let (kind, empty): (&'static str, Value) = match &value {
+        Value::Str(_) => ("string", Value::Str(String::new())),
+        Value::Dict(_) => ("mapping", Value::Dict(Dict::new())),
+        Value::List(_) => ("list", Value::List(Vec::new())),
+        _ => {
+            return Err(format!(
+                "the split reference {} is not a list, mapping, or string",
+                Value::Str(reference.clone()).py_repr()
+            ));
+        }
+    };
+
+    let path_segments: Vec<&str> = reference.split('.').collect();
+    let fixed_ctx = set_dotted_copy(ctx, &path_segments, empty);
+    let mut merged_dict = fixed_ctx.as_dict().cloned().unwrap_or_default();
+    for (extra_key, extra_value) in &extra_state {
+        merged_dict.insert(
+            Value::Str(extra_key.clone()),
+            Value::Str(extra_value.clone()),
+        );
+    }
+    let merged_ctx = Value::Dict(merged_dict);
+
+    let mut rendered_fixed = Vec::with_capacity(sources.len());
+    for (index, text) in expanded_texts.iter().enumerate() {
+        let rendered = electricity_template::render_template_with_root_and_escape(
+            text,
+            &merged_ctx,
+            &electricity_template::PlainCtx,
+            &sources[index].label,
+            false,
+        )
+        .map_err(|err| err.to_string())?;
+        rendered_fixed.push(rendered);
+    }
+
+    let (fixed_text, template_text, message_texts) =
+        if matches!(prompt.content, PromptContent::Template(_)) {
+            (
+                rendered_fixed[0].clone(),
+                Some(expanded_texts[0].clone()),
+                None,
+            )
+        } else {
+            let fixed_text = sources
+                .iter()
+                .zip(rendered_fixed.iter())
+                .map(|(source, text)| {
+                    format!(
+                        "{}: {text}",
+                        role_str(source.role.expect("messages source has a role"))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let PromptContent::Messages(messages) = &prompt.content else {
+                unreachable!(
+                    "template_sources only returns messages-shaped sources for a messages prompt"
+                )
+            };
+            let mut expanded_iter = expanded_texts.into_iter();
+            let message_texts: Vec<Option<String>> = messages
+                .iter()
+                .map(|message| {
+                    if message.file.is_some() {
+                        None
+                    } else {
+                        Some(
+                            expanded_iter
+                                .next()
+                                .expect("one expanded text per non-file message"),
+                        )
+                    }
+                })
+                .collect();
+            (fixed_text, None, Some(message_texts))
+        };
+
+    let fixed_tokens =
+        crate::split::estimate_tokens(&fixed_text) + file_message_fixed_tokens(prompt, ctx, name)?;
+    let room = (budget - fixed_tokens).div_euclid(occurrences as i64);
+    if room < 1 {
+        return Err(
+            "the template's fixed text (everything except the split reference) does not leave \
+             room for a part within the budget"
+                .to_string(),
+        );
+    }
+
+    let parts: Vec<Value> = match kind {
+        "list" => crate::split::split_list(value.as_list().expect("kind matched list above"), room)
+            .map_err(|err| no_split_point_text(&err))?
+            .into_iter()
+            .map(Value::List)
+            .collect(),
+        "mapping" => {
+            crate::split::split_mapping(value.as_dict().expect("kind matched mapping above"), room)
+                .map_err(|err| no_split_point_text(&err))?
+                .into_iter()
+                .map(Value::Dict)
+                .collect()
+        }
+        _ => crate::split::split_text(value.as_str().expect("kind matched string above"), room)
+            .map_err(|err| no_split_point_text(&err))?
+            .into_iter()
+            .map(Value::Str)
+            .collect(),
+    };
+    let sizes: Vec<i64> = parts
+        .iter()
+        .map(|part| match part {
+            Value::Str(text) => crate::split::estimate_tokens(text),
+            other => crate::split::estimate_tokens(&other.py_repr()),
+        })
+        .collect();
+
+    Ok(SplitPrep {
+        ref_path: reference,
+        kind,
+        parts,
+        sizes,
+        template_text,
+        message_texts,
+        extra_state,
+    })
+}
+
+/// `core/decompose.py::_SIGIL_TAG_FORMATS`/`_rewrite_exact`: every tag
+/// reading exactly *old_path*, every sigil, rewritten to *new_name*.
+fn rewrite_exact(text: &str, old_path: &str, new_name: &str) -> String {
+    fn regex_escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            if "\\.+*?()|[]{}^$".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    }
+    fn replace_all(text: &str, re: &fancy_regex::Regex, replacement: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0usize;
+        for found in re.find_iter(text) {
+            let Ok(found) = found else { continue };
+            out.push_str(&text[last..found.start()]);
+            out.push_str(replacement);
+            last = found.end();
+        }
+        out.push_str(&text[last..]);
+        out
+    }
+
+    let escaped = regex_escape(old_path);
+    let specs: [(&str, &str, &str, &str); 6] = [
+        (r"\{\{\{", r"\}\}\}", "{{{", "}}}"),
+        (r"\{\{&", r"\}\}", "{{&", "}}"),
+        (r"\{\{#", r"\}\}", "{{#", "}}"),
+        (r"\{\{\^", r"\}\}", "{{^", "}}"),
+        (r"\{\{/", r"\}\}", "{{/", "}}"),
+        (r"\{\{", r"\}\}", "{{", "}}"),
+    ];
+    let mut result = text.to_string();
+    for (open_pattern, close_pattern, open_literal, close_literal) in specs {
+        let pattern = format!(r"{open_pattern}\s*{escaped}\s*{close_pattern}");
+        let re = fancy_regex::Regex::new(&pattern)
+            .expect("a fixed tag shape around an escaped state-reference path always compiles");
+        let mut replacement = String::new();
+        replacement.push_str(open_literal);
+        replacement.push_str(new_name);
+        replacement.push_str(close_literal);
+        result = replace_all(&result, &re, &replacement);
+    }
+    result
+}
+
+/// `core/decompose.py::_pick_parts_key`.
+fn pick_parts_key(ctx: &Value) -> String {
+    let existing: std::collections::HashSet<&str> = ctx
+        .as_dict()
+        .and_then(|dict| dict.get(&key("input")))
+        .and_then(Value::as_dict)
+        .map(|dict| dict.keys().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let mut candidate = "split_parts".to_string();
+    while existing.contains(candidate.as_str()) {
+        candidate.push('_');
+    }
+    candidate
+}
+
+/// `core/decompose.py::_pick_effect_name`.
+fn pick_effect_name(base: &str, ctx: &Value) -> String {
+    let existing: std::collections::HashSet<&str> = ctx
+        .as_dict()
+        .and_then(|dict| dict.get(&key("prime")))
+        .and_then(Value::as_dict)
+        .map(|dict| dict.keys().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let mut candidate = base.to_string();
+    while existing.contains(candidate.as_str()) {
+        candidate.push('_');
+    }
+    candidate
+}
+
+/// `core/decompose.py::_serialize_timeout_ms`.
+fn serialize_timeout_ms(timeout_ms: &TimeoutMs) -> Value {
+    match timeout_ms {
+        TimeoutMs::Literal(n) => Value::from(*n),
+        TimeoutMs::From(from) => {
+            let mut dict = Dict::new();
+            dict.insert(key("from"), Value::Str(from.path.clone()));
+            if let Some(default) = from.default {
+                dict.insert(key("default"), Value::from(default));
+            }
+            Value::Dict(dict)
+        }
+    }
+}
+
+/// A compiled [`ParamNode`] back into the plain YAML-shaped [`Value`]
+/// it was compiled from -- the same round trip `_copy_source_fields`
+/// needs for `defn.params`/`defn.inputs`, since those are read from
+/// the already-compiled [`PromptOp`], never the raw document dict.
+fn param_node_to_value(node: &ParamNode) -> Value {
+    match node {
+        ParamNode::Literal(value) => value.clone(),
+        ParamNode::Template(text) => Value::Str(text.source.clone()),
+        ParamNode::From {
+            path,
+            default,
+            as_json,
+        } => {
+            let mut dict = Dict::new();
+            dict.insert(key("from"), Value::Str(path.clone()));
+            if let Some(default) = default {
+                dict.insert(key("default"), default.clone());
+            }
+            if *as_json {
+                dict.insert(key("as"), Value::Str("json".to_string()));
+            }
+            Value::Dict(dict)
+        }
+        ParamNode::Map(map) => Value::Dict(
+            map.iter()
+                .map(|(k, v)| (k.clone(), param_node_to_value(v)))
+                .collect(),
+        ),
+        ParamNode::List(list) => Value::List(list.iter().map(param_node_to_value).collect()),
+    }
+}
+
+/// `core/decompose.py::_copy_source_fields`.
+fn copy_source_fields(prompt: &PromptOp) -> Dict {
+    let mut out = Dict::new();
+    out.insert(
+        key("prompt_type"),
+        Value::Str(prompt_type_str(prompt.prompt_type).to_string()),
+    );
+    if let Some(schema) = &prompt.schema {
+        out.insert(key("schema"), schema.clone());
+    }
+    if let Some(model) = &prompt.model {
+        out.insert(key("model"), Value::Str(model.clone()));
+    }
+    if let Some(provider) = &prompt.provider {
+        out.insert(key("provider"), Value::Str(provider.clone()));
+    }
+    if !prompt.provider_fallbacks.is_empty() {
+        out.insert(
+            key("provider_fallbacks"),
+            Value::List(
+                prompt
+                    .provider_fallbacks
+                    .iter()
+                    .cloned()
+                    .map(Value::Str)
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(params) = &prompt.model_params {
+        out.insert(key("params"), param_node_to_value(params));
+    }
+    if let Some(timeout_ms) = &prompt.timeout_ms {
+        out.insert(key("timeout_ms"), serialize_timeout_ms(timeout_ms));
+    }
+    out.insert(key("deterministic"), Value::Bool(prompt.deterministic));
+    if let Some(retries) = &prompt.retries {
+        let mut dict = Dict::new();
+        dict.insert(
+            key("max_attempts"),
+            Value::from(i64::from(retries.max_attempts)),
+        );
+        dict.insert(
+            key("backoff_ms"),
+            Value::from(i64::from(retries.backoff_ms)),
+        );
+        out.insert(key("retries"), Value::Dict(dict));
+    }
+    if let Some(inputs) = &prompt.inputs {
+        out.insert(key("inputs"), param_node_to_value(inputs));
+    }
+    if !prompt.assets.is_empty() {
+        out.insert(
+            key("assets"),
+            Value::List(
+                prompt
+                    .assets
+                    .iter()
+                    .map(|asset: &AssetRef| {
+                        let mut dict = Dict::new();
+                        dict.insert(key("kind"), Value::Str(asset.kind.clone()));
+                        dict.insert(key("ref"), Value::Str(asset.reference.clone()));
+                        Value::Dict(dict)
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(group) = &prompt.group {
+        out.insert(key("group"), Value::Str(group.clone()));
+    }
+    if let Some(description) = &prompt.description {
+        out.insert(key("description"), Value::Str(description.clone()));
+    }
+    out
+}
+
+/// `core/decompose.py::_forwarded_split_config`: the source's own
+/// `split:` block, forwarded onto both generated prompts unrewritten.
+fn forwarded_split_config(prompt: &PromptOp) -> Option<Dict> {
+    let mut out = Dict::new();
+    if let Some(template) = &prompt.split_merge_template {
+        let mut merge = Dict::new();
+        merge.insert(key("template"), Value::Str(template.clone()));
+        out.insert(key("merge"), Value::Dict(merge));
+    }
+    if let Some(separator) = &prompt.split_separator {
+        out.insert(key("separator"), Value::Str(separator.clone()));
+    }
+    if let Some(max_parts) = prompt.split_max_parts {
+        out.insert(key("max_parts"), Value::from(max_parts));
+    }
+    if let Some(budget_tokens) = prompt.split_budget_tokens {
+        out.insert(key("budget_tokens"), Value::from(budget_tokens));
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// `core/decompose.py::_generate_split_plan`: `(parts_key, plan dict,
+/// result_path)`.
+fn generate_split_plan(
+    prompt: &PromptOp,
+    prep: &SplitPrep,
+    merge_mode: &str,
+    n_parts: usize,
+    max_concurrency: Option<i64>,
+    ctx: &Value,
+) -> Result<(String, Value, String), String> {
+    let ref_path = &prep.ref_path;
+    let parts_key = pick_parts_key(ctx);
+    let loop_name = pick_effect_name("parts", ctx);
+
+    let mut map_prompt = Dict::new();
+    map_prompt.insert(key("type"), Value::Str("prompt".to_string()));
+    map_prompt.insert(key("name"), Value::Str("map".to_string()));
+    for (k, v) in copy_source_fields(prompt) {
+        map_prompt.insert(k, v);
+    }
+    match &prompt.content {
+        PromptContent::Template(_) => {
+            let template_text = prep
+                .template_text
+                .as_ref()
+                .expect("a template source always has template_text");
+            map_prompt.insert(
+                key("template"),
+                Value::Str(rewrite_exact(template_text, ref_path, "part")),
+            );
+        }
+        PromptContent::TemplateFile(_) => {
+            map_prompt.insert(key("template"), Value::Str("{{{part}}}".to_string()));
+        }
+        PromptContent::Messages(messages) => {
+            let message_texts = prep
+                .message_texts
+                .as_ref()
+                .expect("a messages source always has message_texts");
+            let mut list = Vec::with_capacity(messages.len());
+            for (message, text) in messages.iter().zip(message_texts.iter()) {
+                let mut entry = Dict::new();
+                entry.insert(key("role"), Value::Str(role_str(message.role).to_string()));
+                let content = match (&message.file, text) {
+                    (Some(source), _) => serialize_message_file(source),
+                    (None, Some(text)) => Value::Str(rewrite_exact(text, ref_path, "part")),
+                    (None, None) => {
+                        return Err("a non-file message is missing its expanded text".to_string());
+                    }
+                };
+                entry.insert(key("content"), content);
+                list.push(Value::Dict(entry));
+            }
+            map_prompt.insert(key("messages"), Value::List(list));
+        }
+    }
+    map_prompt.insert(key("on_error"), Value::Str("fail".to_string()));
+    if let Some(forwarded) = forwarded_split_config(prompt) {
+        map_prompt.insert(key("split"), Value::Dict(forwarded));
+    }
+
+    let mut loop_effect = Dict::new();
+    loop_effect.insert(key("type"), Value::Str("loop".to_string()));
+    loop_effect.insert(key("name"), Value::Str(loop_name.clone()));
+    loop_effect.insert(key("flow"), Value::Str("tree".to_string()));
+    let mut each = Dict::new();
+    each.insert(key("in"), Value::Str(format!("input.{parts_key}")));
+    each.insert(key("as"), Value::Str("part".to_string()));
+    loop_effect.insert(key("each"), Value::Dict(each));
+    loop_effect.insert(key("max_iterations"), Value::from(n_parts as i64));
+    if let Some(max_concurrency) = max_concurrency {
+        loop_effect.insert(key("max_concurrency"), Value::from(max_concurrency));
+    }
+    loop_effect.insert(key("collect"), Value::Str("map".to_string()));
+    loop_effect.insert(key("on_error"), Value::Str("fail".to_string()));
+    loop_effect.insert(key("body"), Value::List(vec![Value::Dict(map_prompt)]));
+
+    let mut effects = vec![Value::Dict(loop_effect)];
+    let result_path = if merge_mode == "reduce" {
+        let merge_name = pick_effect_name("merge", ctx);
+        let mut merge_prompt = Dict::new();
+        merge_prompt.insert(key("type"), Value::Str("prompt".to_string()));
+        merge_prompt.insert(key("name"), Value::Str(merge_name.clone()));
+        for (k, v) in copy_source_fields(prompt) {
+            merge_prompt.insert(k, v);
+        }
+        let merge_template_src = prompt
+            .split_merge_template
+            .as_deref()
+            .expect("merge_mode == reduce implies split.merge.template");
+        let new_prefix = format!("prime.{loop_name}.collected.value");
+        let rewritten =
+            electricity_complexity::rewrite_tag_prefix(merge_template_src, "parts", &new_prefix)
+                .map_err(|err| err.to_string())?;
+        merge_prompt.insert(key("template"), Value::Str(rewritten));
+        merge_prompt.insert(key("on_error"), Value::Str("fail".to_string()));
+        if let Some(forwarded) = forwarded_split_config(prompt) {
+            merge_prompt.insert(key("split"), Value::Dict(forwarded));
+        }
+        effects.push(Value::Dict(merge_prompt));
+        format!("prime.{merge_name}.value")
+    } else {
+        format!("prime.{loop_name}.collected.value")
+    };
+
+    let mut parts_input = Dict::new();
+    parts_input.insert(key("type"), Value::Str("array".to_string()));
+    parts_input.insert(key("required"), Value::Bool(true));
+    let mut inputs = Dict::new();
+    inputs.insert(Value::Str(parts_key.clone()), Value::Dict(parts_input));
+    let mut interface = Dict::new();
+    interface.insert(key("inputs"), Value::Dict(inputs));
+
+    let mut plan = Dict::new();
+    plan.insert(key("interface"), Value::Dict(interface));
+    plan.insert(key("effects"), Value::List(effects));
+
+    Ok((parts_key, Value::Dict(plan), result_path))
+}
+
+/// `core/decompose.py::_apply_native_merge`/`_MergeInvalidError`.
+fn apply_native_merge(
+    merge_mode: &str,
+    parts_value: &Value,
+    schema: Option<&Value>,
+    separator: Option<&str>,
+) -> Result<Value, String> {
+    let Value::List(items) = parts_value else {
+        return Err("the collected parts are not a list".to_string());
+    };
+
+    if merge_mode == "join" {
+        let mut texts = Vec::with_capacity(items.len());
+        for item in items {
+            let Value::Str(text) = item else {
+                return Err(format!(
+                    "a part's value is {}, not a string, and the output type is text",
+                    item.type_name()
+                ));
+            };
+            texts.push(text.clone());
+        }
+        return Ok(Value::Str(texts.join(separator.unwrap_or("\n\n"))));
+    }
+
+    if merge_mode == "concat" {
+        let mut merged = Vec::new();
+        for item in items {
+            let Value::List(part_items) = item else {
+                return Err(format!(
+                    "a part's value is {}, not an array, and the output type is an array",
+                    item.type_name()
+                ));
+            };
+            merged.extend(part_items.iter().cloned());
+        }
+        let merged_value = Value::List(merged);
+        if let Some(schema) = schema {
+            match electricity_schema::validate_prompt_schema(schema, &merged_value) {
+                electricity_schema::PromptSchemaCheck::Valid => {}
+                electricity_schema::PromptSchemaCheck::Invalid(message) => {
+                    return Err(format!("the merged value failed its schema: {message}"));
+                }
+                electricity_schema::PromptSchemaCheck::SchemaError(message) => {
+                    return Err(format!("the merged value's schema is invalid: {message}"));
+                }
+            }
+        }
+        return Ok(merged_value);
+    }
+
+    Err(format!("unknown merge mode {merge_mode:?}"))
+}
+
+/// `core/decompose.py::_maybe_split` -- the size trigger. See
+/// [`maybe_decompose`], which runs this first. `Ok(None)` means size
+/// does not apply at all; everything else is a real attempt.
+#[allow(clippy::too_many_arguments)]
+async fn maybe_split(
+    op: &Op,
+    prompt: &PromptOp,
+    prompt_sent: &str,
+    resolved_model: &str,
+    render_chain: &CtxChain,
+    store: &Store,
+    frame: &Frame,
+    run_ctx: &RunContext<'_>,
+    observer: &dyn RunObserver,
+    token: &CancellationToken,
+) -> Result<Option<DecompositionResult>, VmError> {
+    let name = op.name.as_deref().unwrap_or("");
+    let sset = &run_ctx.complexity.splitting;
+
+    if prompt.split_enabled == Some(false) {
+        return Ok(None);
+    }
+
+    let Some(budget) = resolve_split_budget(prompt, sset, resolved_model) else {
+        return Ok(None);
+    };
+
+    let estimated = crate::split::estimate_tokens(prompt_sent);
+    if estimated <= budget {
+        return Ok(None);
+    }
+
+    let depth = run_ctx.decomposition_depth;
+    let max_parts = prompt.split_max_parts.unwrap_or(sset.max_parts);
+
+    let mut base = split_base_meta(estimated, budget, depth, sset);
+
+    if i64::from(depth) >= sset.max_depth {
+        return Ok(Some(split_failure_result(
+            base,
+            sset,
+            "max_depth",
+            "max depth reached before splitting".to_string(),
+        )));
+    }
+
+    let has_merge_template = prompt
+        .split_merge_template
+        .as_deref()
+        .is_some_and(|text| !py_strip(text).is_empty());
+    let merge_mode: &'static str = if has_merge_template {
+        "reduce"
+    } else {
+        match native_merge_mode(prompt) {
+            Some(mode) => mode,
+            None => {
+                return Ok(Some(split_failure_result(
+                    base,
+                    sset,
+                    "no_merge",
+                    format!(
+                        "prompt_type {} needs split.merge.template to merge parts",
+                        Value::Str(prompt_type_str(prompt.prompt_type).to_string()).py_repr()
+                    ),
+                )));
+            }
+        }
+    };
+    base.insert(key("merge"), Value::Str(merge_mode.to_string()));
+
+    let ctx = live_ctx(render_chain, store);
+    let prep = match prepare_split(
+        prompt,
+        name,
+        &ctx,
+        run_ctx.declared_prompts,
+        run_ctx.effect_names,
+        budget,
+    ) {
+        Ok(prep) => prep,
+        Err(message) => {
+            return Ok(Some(split_failure_result(
+                base,
+                sset,
+                "no_split_point",
+                message,
+            )));
+        }
+    };
+
+    let n_parts = prep.parts.len();
+    if n_parts as i64 > max_parts {
+        return Ok(Some(split_failure_result(
+            base,
+            sset,
+            "too_many_parts",
+            format!("splitting produced {n_parts} parts; the budget is {max_parts}"),
+        )));
+    }
+
+    let mut split_record = Dict::new();
+    split_record.insert(key("path"), Value::Str(prep.ref_path.clone()));
+    split_record.insert(key("kind"), Value::Str(prep.kind.to_string()));
+    split_record.insert(key("parts"), Value::from(n_parts as i64));
+    split_record.insert(
+        key("sizes"),
+        Value::List(prep.sizes.iter().map(|size| Value::from(*size)).collect()),
+    );
+    base.insert(key("split"), Value::Dict(split_record));
+    base.insert(key("chunk_count"), Value::from(n_parts as i64));
+
+    let (parts_key, plan_dict, result_path) = match generate_split_plan(
+        prompt,
+        &prep,
+        merge_mode,
+        n_parts,
+        sset.max_concurrency,
+        &ctx,
+    ) {
+        Ok(generated) => generated,
+        Err(message) => {
+            return Ok(Some(split_failure_result(
+                base,
+                sset,
+                "execution_failed",
+                message,
+            )));
+        }
+    };
+
+    let plan_yaml = match electricity_yaml::dump(&plan_dict, &DumpOptions { sort_keys: false }) {
+        Ok(text) => text,
+        Err(err) => {
+            return Ok(Some(split_failure_result(
+                base,
+                sset,
+                "execution_failed",
+                err.to_string(),
+            )));
+        }
+    };
+    base.insert(key("yaml"), Value::Str(plan_yaml.clone()));
+    base.insert(key("result_path"), Value::Str(result_path.clone()));
+
+    let problems = validate_generated_yaml(&plan_yaml, &result_path, run_ctx.runtime_config);
+    if !problems.is_empty() {
+        log::warn!(
+            "Generated split plan for prompt {} failed validation: {}",
+            Value::Str(name.to_string()).py_repr(),
+            problems.join("; ")
+        );
+        return Ok(Some(split_failure_result(
+            base,
+            sset,
+            "execution_failed",
+            problems.join("; "),
+        )));
+    }
+
+    let identity = plan_identity(&plan_yaml);
+    if let Some(message) = cycle_error(name, frame.use_call_stack(), &identity) {
+        log::warn!(
+            "Decomposition (size trigger) child failed for prompt {}",
+            Value::Str(name.to_string()).py_repr()
+        );
+        return Ok(Some(split_failure_result(
+            base,
+            sset,
+            "execution_failed",
+            message,
+        )));
+    }
+
+    let plan_program =
+        match electricity_compiler::compile_document(&plan_dict, &DocumentOrigin::Generated) {
+            Ok(program) => program,
+            Err(err) => {
+                return Ok(Some(split_failure_result(
+                    base,
+                    sset,
+                    "execution_failed",
+                    err.0,
+                )));
+            }
+        };
+    if let Some(refusal) = first_unsupported(&plan_program, false, &run_ctx.supported) {
+        return Err(VmError::Refused {
+            refusal,
+            child_label: Some(format!("split plan of '{name}'")),
+        });
+    }
+
+    let declared = declared_effect_names(&plan_dict);
+    let mut seed_state = child_seed_state(&ctx, &result_path);
+    if let Value::Dict(seed_dict) = &mut seed_state {
+        let input_entry = seed_dict
+            .entry(key("input"))
+            .or_insert_with(|| Value::Dict(Dict::new()));
+        if let Value::Dict(input_dict) = input_entry {
+            input_dict.insert(
+                Value::Str(parts_key.clone()),
+                Value::List(prep.parts.clone()),
+            );
+        }
+        for (extra_key, extra_value) in &prep.extra_state {
+            seed_dict.insert(
+                Value::Str(extra_key.clone()),
+                Value::Str(extra_value.clone()),
+            );
+        }
+        if let Some(Value::Dict(prime)) = seed_dict.get_mut(&key("prime")) {
+            for declared_name in &declared {
+                prime.shift_remove(&Value::Str(declared_name.clone()));
+            }
+        }
+    }
+
+    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    let plan_run_ctx = child_run_ctx(
+        run_ctx,
+        run_ctx.complexity,
+        depth + 1,
+        &plan_program.prompts,
+        &plan_program.effect_names,
+    );
+
+    let child_store = match run_isolated(
+        &plan_program,
+        seed_state,
+        &plan_frame,
+        &plan_run_ctx,
+        observer,
+        token,
+    )
+    .await
+    {
+        Err(VmError::Refused {
+            refusal,
+            child_label,
+        }) => {
+            return Err(VmError::Refused {
+                refusal,
+                child_label: child_label.or_else(|| Some(format!("split plan of '{name}'"))),
+            });
+        }
+        Err(err) if err.is_fatal() => return Err(err),
+        Err(err) => {
+            log::warn!(
+                "Decomposition (size trigger) child failed for prompt {}",
+                Value::Str(name.to_string()).py_repr()
+            );
+            return Ok(Some(split_failure_result(
+                base,
+                sset,
+                "execution_failed",
+                err.to_string(),
+            )));
+        }
+        Ok(store) => store,
+    };
+
+    let collected = resolve_dot_path(&child_store.snapshot(&child_store.root), &result_path);
+    if matches!(collected, Value::None) {
+        log::warn!(
+            "Decomposition (size trigger) child failed for prompt {}",
+            Value::Str(name.to_string()).py_repr()
+        );
+        return Ok(Some(split_failure_result(
+            base,
+            sset,
+            "execution_failed",
+            missing_result_error(&result_path),
+        )));
+    }
+
+    let value = if merge_mode == "reduce" {
+        collected
+    } else {
+        match apply_native_merge(
+            merge_mode,
+            &collected,
+            prompt.schema.as_ref(),
+            prompt.split_separator.as_deref(),
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                return Ok(Some(split_failure_result(
+                    base,
+                    sset,
+                    "merge_invalid",
+                    message,
+                )));
+            }
+        }
+    };
+
+    let mut result = success_result(base, value);
+    if record_children_enabled(run_ctx.runtime_config) {
+        if let Ok(Some(child_prime)) =
+            child_store.child(&child_store.root, &Value::Str("prime".to_string()))
+        {
+            result.child_record = declared_children_entries(&child_prime, &declared);
+        }
+    }
+    Ok(Some(result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1088,7 +2346,7 @@ mod tests {
         );
         let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
             .expect("the copy compiles");
-        assert!(first_unsupported(&program, false, false, &Supported::current(&[])).is_none());
+        assert!(first_unsupported(&program, false, &Supported::current(&[])).is_none());
     }
 
     #[test]
@@ -1736,6 +2994,10 @@ mod tests {
             description: None,
             group: None,
             split_budget_tokens: None,
+            split_enabled: None,
+            split_max_parts: None,
+            split_separator: None,
+            split_merge_template: None,
         }
     }
 

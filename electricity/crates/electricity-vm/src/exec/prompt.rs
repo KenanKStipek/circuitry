@@ -1170,6 +1170,7 @@ pub(crate) async fn execute_prompt(
         prompt,
         complexity_meta.as_ref(),
         &prompt_sent,
+        &resolved_model,
         &render_chain,
         store,
         frame,
@@ -1839,6 +1840,10 @@ mod tests {
             description: None,
             group: None,
             split_budget_tokens: None,
+            split_enabled: None,
+            split_max_parts: None,
+            split_separator: None,
+            split_merge_template: None,
         }
     }
 
