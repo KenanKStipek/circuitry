@@ -1457,6 +1457,37 @@ max_depth, plan?, chunk_count?, yaml?, result_path?, fallback_model?,
 error?}` — present **only** when the attempt was actually triggered (score
 over threshold); absent otherwise, same all-or-nothing-key rule as scoring.
 
+**Splitting (size trigger)** (`core/split.py`/`core/decompose.py`'s own
+`_maybe_split`): runs before the score trigger, on its own schedule — no
+score, no planner, no model call to produce the plan. When the effect's
+rendered input (`meta.prompt_sent`, the scorer's own estimator) strictly
+exceeds a token budget, the budget resolved per effect
+(`split.budget_tokens` on the prompt itself, outranking
+`runtime.complexity.splitting.models.<resolved model>`, outranking
+`runtime.complexity.splitting.max_input_tokens` — the first two still split
+even with `runtime.complexity.splitting.enabled: false`; `split.enabled:
+false` on the prompt always opts it out), the template/messages' own single
+largest state reference is sliced into whole units (list items, mapping
+entries, or text at its own structure — blank lines, then lines, then
+sentence ends, then whitespace, then a hard character cut) and a plan is
+*generated*, never asked for: one `flow: tree` loop over the parts with a
+copy of the source prompt as the loop body, and (for an output type the
+native `join`/`concat` merge doesn't cover) an author-supplied
+`split.merge.template` reduce prompt, forwarded the source's own `split:`
+block so a part — or the merge prompt's own input — that is itself still
+over budget splits again. The plan runs through the same validate/execute
+path a score-trigger plan does (schema, allowlists, the merge contract, the
+isolated-child run with namespaced observability) and shares the one
+`max_depth` ceiling (`_decomposition_depth`) with the score trigger — size
+is checked first, so a part is scored and size-checked again like any other
+prompt at `depth + 1`. There is no route-up for size (a bigger model is not
+a bigger context window), so `on_failure` is only `run_as_is`/`fail`.
+Recorded in `meta.decomposition.{decomposed, trigger: "size", estimated_tokens,
+budget, depth, max_depth, merge, split: {path, kind, parts, sizes},
+chunk_count, yaml, result_path, outcome, reason, error?}`, the same
+all-or-nothing-key rule — present only when the budget was actually
+exceeded.
+
 ---
 
 ## 6. The error model

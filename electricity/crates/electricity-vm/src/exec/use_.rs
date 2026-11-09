@@ -1810,8 +1810,16 @@ pub async fn run_isolated(
     // (`ChildObserver::forward_dispatch`'s own doc comment), matching
     // `core/decompose.py::_build_child_store`'s own omission of
     // `concurrent_dispatch` (issue #682).
-    let (store, result) =
-        run_isolated_inner(program, initial_state, frame, run_ctx, observer, token, false).await;
+    let (store, result) = run_isolated_inner(
+        program,
+        initial_state,
+        frame,
+        run_ctx,
+        observer,
+        token,
+        false,
+    )
+    .await;
     result.map(|()| store)
 }
 

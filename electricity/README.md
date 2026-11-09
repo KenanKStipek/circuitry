@@ -28,10 +28,12 @@ nor reimplements), as does a `reflector`'s own generated plan naming it.
 Model-mode `if`/`while` conditions and `expect:` run too. `--profile
 <path>` loads a profile (adapter/model/inputs/persistence overrides,
 routing pins and provider denials) from an explicit path -- no name
-discovery. `runtime.complexity` scoring, model routing and decomposition
-(splitting an over-threshold prompt into chunks, planned and executed as
-its own isolated child run) all run too, writing
-`meta.complexity`/`meta.decomposition` the same way `cof run` does. [What
+discovery. `runtime.complexity` scoring, model routing and decomposition (splitting
+an over-threshold prompt into chunks, planned and executed as its own
+isolated child run) all run too, writing `meta.complexity`/
+`meta.decomposition` the same way `cof run` does -- including the size
+trigger (a prompt's rendered input over its own token budget, sliced
+deterministically into whole-unit parts and run the same way). [What
 electricity can't run yet](#what-electricity-cant-run-yet), below, still
 refuses with a preview message pointing at `cof run`. A document and its
 literal `use` children are checked before the run starts; an inline or

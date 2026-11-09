@@ -864,6 +864,7 @@ dependencies = [
  "electricity-tools",
  "electricity-value",
  "electricity-yaml",
+ "fancy-regex 0.14.0",
  "futures",
  "indexmap",
  "log",

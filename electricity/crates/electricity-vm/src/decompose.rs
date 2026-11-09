@@ -1961,6 +1961,75 @@ fn generate_split_plan(
     Ok((parts_key, Value::Dict(plan), result_path))
 }
 
+/// PyYAML aliases a repeated *container* by Python object identity,
+/// never a scalar: `core/decompose.py::_generate_split_plan` builds
+/// *one* `forwarded_split` dict and assigns `dict(forwarded_split)` (a
+/// shallow copy) to both the map prompt's and the merge prompt's own
+/// `split:` key, so the nested `merge: {template: ...}` sub-dict --
+/// the one container value the source's own `split.merge` carries,
+/// present whenever `merge_mode == "reduce"` at all -- keeps the same
+/// identity across both copies. `yaml.safe_dump` renders its first
+/// occurrence as `merge: &id001` (with the sub-block indented under
+/// it, unchanged) and every later occurrence as a bare `merge:
+/// *id001`. electricity's own dumper has no identity-aware aliasing
+/// (every `Value` it dumps is a fresh, independently owned tree, and
+/// this module calls [`forwarded_split_config`] twice, once per
+/// generated prompt, rather than sharing one allocation) -- since this
+/// is the one place the whole dumper would ever need it, this patches
+/// the already-dumped text in place instead of teaching the dumper
+/// general identity tracking for a single call site. A no-op if the
+/// text has fewer than two `merge:`-as-its-own-line occurrences (any
+/// shape other than exactly the one this function exists for).
+fn alias_shared_merge_block(yaml_text: &str) -> String {
+    let lines: Vec<&str> = yaml_text.lines().collect();
+    let merge_line_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_start() == "merge:")
+        .map(|(index, _)| index)
+        .collect();
+    let [first, second] = merge_line_indices.as_slice() else {
+        return yaml_text.to_string();
+    };
+    let first_indent = lines[*first].len() - lines[*first].trim_start().len();
+    let second_indent = lines[*second].len() - lines[*second].trim_start().len();
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut index = 0usize;
+    while index < lines.len() {
+        if index == *first {
+            out.push(format!("{}merge: &id001", " ".repeat(first_indent)));
+            index += 1;
+            continue;
+        }
+        if index == *second {
+            out.push(format!("{}merge: *id001", " ".repeat(second_indent)));
+            index += 1;
+            // Skip every following line indented deeper than *second*'s own
+            // `merge:` line -- its sub-block, now replaced by the alias.
+            while index < lines.len() {
+                let line = lines[index];
+                if line.trim().is_empty() {
+                    break;
+                }
+                let indent = line.len() - line.trim_start().len();
+                if indent <= second_indent {
+                    break;
+                }
+                index += 1;
+            }
+            continue;
+        }
+        out.push(lines[index].to_string());
+        index += 1;
+    }
+    let mut result = out.join("\n");
+    if yaml_text.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 /// `core/decompose.py::_apply_native_merge`/`_MergeInvalidError`.
 fn apply_native_merge(
     merge_mode: &str,
@@ -2155,6 +2224,11 @@ async fn maybe_split(
                 err.to_string(),
             )));
         }
+    };
+    let plan_yaml = if merge_mode == "reduce" {
+        alias_shared_merge_block(&plan_yaml)
+    } else {
+        plan_yaml
     };
     base.insert(key("yaml"), Value::Str(plan_yaml.clone()));
     base.insert(key("result_path"), Value::Str(result_path.clone()));
