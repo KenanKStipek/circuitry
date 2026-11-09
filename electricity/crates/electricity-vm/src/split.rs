@@ -8,10 +8,12 @@
 //! value itself for a string -- estimates to no more than *room* tokens.
 //!
 //! [`estimate_tokens`] duplicates `core/complexity.py::_estimate_tokens`'s
-//! own ceiling-division-by-4, exactly like the Python module it mirrors
-//! duplicates it independently of `core.complexity`, so the two must be
-//! kept in sync (pinned by a test alongside `electricity-complexity`'s own
-//! estimator -- see `decompose.rs`'s own doc comment).
+//! own ceiling-division-by-4, exactly like `core/split.py::estimate_tokens`
+//! duplicates it independently of `core.complexity` -- and like
+//! `exec::prompt::live`'s own tiny copy for `meta.live.
+//! tokens_sent_estimate`, which the two must also be kept in sync with
+//! (pinned by a test there, `estimate_tokens_agrees_with_splits_own_
+//! independent_copy`).
 //!
 //! A single unit -- one list item, one mapping entry, or (after every
 //! level of text-structure splitting has been tried) one character --
@@ -180,7 +182,23 @@ fn sentence_re() -> &'static fancy_regex::Regex {
 
 fn whitespace_re() -> &'static fancy_regex::Regex {
     static RE: OnceLock<fancy_regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| fancy_regex::Regex::new(r"\s+").expect("fixed pattern"))
+    // `core/split.py::_WHITESPACE_RE` is `re.compile(r"\s+")` -- a plain
+    // `fancy_regex`/`regex`-crate `\s` is Unicode `White_Space` only,
+    // which leaves out four control characters (U+001C-U+001F) Python's
+    // own `\s` (and `str.isspace()`) still matches, so this translates
+    // the real pattern through this workspace's own Python-semantics
+    // regex translator (`electricity-pyre`, built from the same
+    // generated tables `core/plugins/regex.py` itself reaches through)
+    // instead of spelling the difference out by hand.
+    RE.get_or_init(|| {
+        let translated = electricity_pyre::translate::translate(
+            r"\s+",
+            electricity_pyre::translate::ResolvedFlags::default(),
+        )
+        .expect("\\s+ is a fixed pattern, verified to translate by this module's tests");
+        fancy_regex::Regex::new(&translated.pattern)
+            .expect("the translated pattern is always valid")
+    })
 }
 
 /// `core/split.py::_split_keep_leading`: *text* cut right after each
@@ -323,6 +341,21 @@ mod tests {
         let parts = split_text(text, 4).unwrap();
         assert_eq!(parts.join(""), text);
         assert!(parts.len() >= 2);
+    }
+
+    #[test]
+    fn split_text_whitespace_level_splits_on_pythons_own_extra_control_whitespace() {
+        // Python's `str.isspace()` (and so `re`'s own `\s`) treats
+        // U+001C-U+001F as whitespace even though Unicode's `White_Space`
+        // property doesn't -- `core/split.py`'s own whitespace cascade
+        // splits here too.
+        let text = "aaaa\u{1c}bbbb\u{1c}cccc\u{1c}dddd";
+        let parts = split_text(text, 2).unwrap();
+        assert_eq!(
+            parts,
+            vec!["aaaa\u{1c}", "bbbb\u{1c}", "cccc\u{1c}", "dddd"]
+        );
+        assert_eq!(parts.join(""), text);
     }
 
     #[test]

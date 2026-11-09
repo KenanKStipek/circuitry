@@ -1295,6 +1295,68 @@
   {
     "error": null,
     "kind": "text",
+    "name": "text_whitespace_level_extra_control_whitespace",
+    "parts": [
+      {
+        "t": "str",
+        "v": "aaaa\u001c"
+      },
+      {
+        "t": "str",
+        "v": "bbbb\u001c"
+      },
+      {
+        "t": "str",
+        "v": "cccc\u001c"
+      },
+      {
+        "t": "str",
+        "v": "dddd\u001d"
+      },
+      {
+        "t": "str",
+        "v": "eeee\u001e"
+      },
+      {
+        "t": "str",
+        "v": "ffff\u001f"
+      },
+      {
+        "t": "str",
+        "v": "gggg"
+      }
+    ],
+    "room": 2,
+    "text": "aaaa\u001cbbbb\u001ccccc\u001cdddd\u001deeee\u001effff\u001fgggg"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_whitespace_level_unicode_whitespace",
+    "parts": [
+      {
+        "t": "str",
+        "v": "aaaa "
+      },
+      {
+        "t": "str",
+        "v": "bbbb "
+      },
+      {
+        "t": "str",
+        "v": "cccc "
+      },
+      {
+        "t": "str",
+        "v": "dddd"
+      }
+    ],
+    "room": 2,
+    "text": "aaaa bbbb cccc dddd"
+  },
+  {
+    "error": null,
+    "kind": "text",
     "name": "text_hard_cut_level",
     "parts": [
       {

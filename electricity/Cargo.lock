@@ -623,6 +623,7 @@ dependencies = [
  "electricity-complexity",
  "electricity-config",
  "electricity-json",
+ "electricity-pyre",
  "electricity-redaction",
  "electricity-schema",
  "electricity-template",

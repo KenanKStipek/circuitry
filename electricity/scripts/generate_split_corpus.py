@@ -181,6 +181,30 @@ def build_cases() -> list[dict[str, Any]]:
     )
     cases.append(
         text_case(
+            # Python's own `str.isspace()` (and so `re`'s `\s`, which
+            # `core/split.py::_WHITESPACE_RE` uses) treats U+001C-U+001F as
+            # whitespace even though Unicode's `White_Space` property
+            # doesn't -- a text with no higher-level structure (no blank
+            # lines, newlines, or sentence ends) falls to this level and
+            # still has to split at one.
+            "text_whitespace_level_extra_control_whitespace",
+            "aaaa\x1cbbbb\x1ccccc\x1cdddd\x1deeee\x1effff\x1fgggg",
+            2,
+        )
+    )
+    cases.append(
+        text_case(
+            # Unicode `White_Space` (not one of Python's own extra four
+            # control characters) -- already matched correctly by a
+            # plain Unicode `\s`, pinned here for symmetry with the
+            # control-whitespace case above.
+            "text_whitespace_level_unicode_whitespace",
+            chr(0x2003).join(["aaaa", "bbbb", "cccc", "dddd"]),
+            2,
+        )
+    )
+    cases.append(
+        text_case(
             "text_hard_cut_level",
             "x" * 60,
             3,

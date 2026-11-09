@@ -18,6 +18,12 @@ electricity-config = { path = "../electricity-config" }
 # Lane K2 (issue #516): `complexity::score_and_route` calls straight
 # into K1's pure scorer/router library.
 electricity-complexity = { path = "../electricity-complexity" }
+# `split::whitespace_re` translates `core/split.py::_WHITESPACE_RE`'s
+# own `\s+` through this crate's own Python-semantics regex translator
+# rather than the `regex`/`fancy_regex` crates' own Unicode `\s` (issue
+# #682): Python's `\s` also matches four control characters Unicode's
+# `White_Space` property doesn't.
+electricity-pyre = { path = "../electricity-pyre" }
 electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }
