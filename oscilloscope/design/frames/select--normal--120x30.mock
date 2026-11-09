@@ -1,0 +1,44 @@
+#! tui-mockup 1
+#! size: 120x30
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — select
+#! state: normal
+#! theme: catppuccin-mocha
+#! note: data: six real orchestrations launched together by demo/multi/launch6.sh, four on cof and two on electricity, snapshotted 2.8 s in
+#! note: invented: nothing; names, configs, pids, timings and tokens are the engines' own (snap6/manifest.json is what osi knew at launch)
+#! note: craft-ok CR6 the chooser is a short centered list by design; nothing else belongs on this screen
+#! region r1 header 0,0,120,1
+#! region r2 list 30,10,60,9 Running Orchestrations · 6
+#! region r3 keybar 0,29,120,1
+#! focus r2
+#! selected r2 1
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}Select {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● {/}{fg.default on:statusbar.bg}6 Running                                                                         {/}{fg.on-accent on:accent.secondary}  SELECT  {/}{statusbar.fg on:statusbar.bg}  15:51:58 {/}
+
+
+
+
+
+
+
+
+
+{border.focus}                              ╭─ {/}{fg.title bold}Running Orchestrations · 6 {/}{border.focus}─────────────────────────────╮{/}
+{border.focus}                              │   {/}{accent.primary bold}● {/}{fg.default bold}All            {/}{fg.muted}6 runs · tiled                        {/}{border.focus}│{/}
+{border.focus}                              │{/}{accent.primary bold on:selection.bg} ❯ ● {/}{selection.fg on:selection.bg}triage.yml     config-triage.json                cof {/}{border.focus}│{/}
+{border.focus}                              │   {/}{accent.primary bold}● {/}{fg.default}triage.yml     {/}{fg.muted}config-triage-b.json              cof {/}{border.focus}│{/}
+{border.focus}                              │   {/}{accent.primary bold}● {/}{fg.default}digest.yml     {/}{fg.muted}config-digest.json                cof {/}{border.focus}│{/}
+{border.focus}                              │   {/}{accent.primary bold}● {/}{fg.default}review.yml     {/}{fg.muted}config-review.json                cof {/}{border.focus}│{/}
+{border.focus}                              │   {/}{accent.primary bold}● {/}{fg.default}summarize.yml  {/}{fg.muted}config-summarize.json     electricity {/}{border.focus}│{/}
+{border.focus}                              │   {/}{accent.primary bold}● {/}{fg.default}classify.yml   {/}{fg.muted}config-classify.json      electricity {/}{border.focus}│{/}
+{border.focus}                              ╰──────────────────────────────────────────────────────────╯{/}
+
+
+
+
+
+
+
+
+
+{fg.default} 4 on cof · 2 on electricity · refreshing every 2s{/}
+{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open                                                                                   {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}
