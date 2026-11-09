@@ -2371,9 +2371,9 @@ pub fn build_tape(
 /// `received` are this column's whole sum, over every prompt whose
 /// end landed here, not one prompt's own figure. `sent_live`/
 /// `received_live` mark a running prompt's own estimate, counted
-/// only in the Now column (R3: "grows its column at Now"), the same
-/// mutually-exclusive rule the Tape's own live estimate follows --
-/// never both a finished node's exact figure and its own running
+/// only in the Now column, growing it as the estimate grows, the
+/// same mutually-exclusive rule the Tape's own live estimate follows
+/// -- never both a finished node's exact figure and its own running
 /// estimate in the same redraw.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SignalBucket {
@@ -2393,9 +2393,9 @@ pub struct SignalBucket {
 }
 
 /// What a trace column's own axis mark means (§3.7): a decision wins
-/// over a finished prompt when both land in the same column (R3: the
+/// over a finished prompt when both land in the same column -- the
 /// design's own `run2` fixture has three prompts and one decision
-/// share a column, and the frame marks it `◆`, never `✓`).
+/// share a column, and the frame marks it `◆`, never `✓`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalMark {
     Done,
@@ -2423,15 +2423,14 @@ pub enum SignalStepKind {
     /// words each absent when there is nothing to show).
     Prompt { rest: String },
     /// `sleep 3 · 3.0s`, drawn as a bar from this row's own `col` to
-    /// `end_col` (R3's own tool bar), the label overlaid at its own
-    /// start and the rest of the span filled with the row's own bar
-    /// rule.
+    /// `end_col`, the label overlaid at its own start and the rest
+    /// of the span filled with the row's own bar rule.
     Tool { end_col: usize, text: String },
     /// The branch's own released steps (the row's own `label`,
     /// already `gate → then`, names the branch itself), and a
-    /// trailing muted `suffix` (R1's own "from the frames": the very
-    /// next top-level row's own progress, read off the frame rather
-    /// than the design text, which says nothing about it).
+    /// trailing muted `suffix`: the very next top-level row's own
+    /// progress, when it is an already-active loop -- the design
+    /// text says nothing about it, only the `run2` frame does.
     Decision {
         released: Vec<SignalReleasedStep>,
         suffix: String,
@@ -2497,10 +2496,10 @@ pub struct SignalReadings {
 /// Screen 1's own model (issue #688, design v1 part 2, replacing
 /// Time): the trace's own columns and axis marks, the step rows
 /// under it, the Now pane and Readings -- built from exactly the
-/// same inputs [`build_tape`] already has, plus `column_ms` (R5's
-/// own zoom, 50-1,000 ms per column, 100 the default) -- no engine
-/// change, same as the Tape's own model.
-#[derive(Debug, Clone, PartialEq)]
+/// same inputs [`build_tape`] already has, plus `column_ms` (§3.5/
+/// §4's own zoom, 50-1,000 ms per column, 100 the default) -- no
+/// engine change, same as the Tape's own model.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SignalScreen {
     /// The run's own model name, for the title's `Tokens to
     /// scripted-model` -- `None` when nothing has run yet.
@@ -2522,14 +2521,19 @@ pub struct SignalScreen {
     /// label's own `3.6s`, kept alongside the raw clock so a front
     /// end never has to re-derive it from the two timestamps.
     pub now_elapsed_s: Option<f64>,
+    /// `←→`'s own scrub cursor, a column index -- equal to
+    /// `now_col` while following, a smaller column once scrubbed.
+    /// `tui::draw_signal_chart` draws this distinctly from the Now
+    /// sweep whenever the two differ.
+    pub cursor_col: Option<usize>,
     /// The whole run's own usual end, raw (`header.history_eta_ts`),
     /// for the `Ahead` label's own `usually ends <clock>`.
     pub ahead_eta_ts: Option<String>,
     pub step_rows: Vec<SignalStepRow>,
-    /// The faint plan-ahead list trailing the *last* step row (R3:
-    /// the current loop's own next pass, then every top-level row
-    /// still ahead, then `■ End`) -- `None` once nothing is ahead any
-    /// more (a loop with no queued pass and no sibling left, on a
+    /// The faint plan-ahead list trailing the *last* step row: the
+    /// current loop's own next pass, then every top-level row still
+    /// ahead, then `■ End` -- `None` once nothing is ahead any more
+    /// (a loop with no queued pass and no sibling left, on a
     /// finished run).
     pub ahead_suffix: Option<String>,
     pub now_pane: SignalNowPane,
@@ -2578,16 +2582,17 @@ fn signal_axis_series_min(start: u64, need: u64) -> u64 {
 /// §3.5's axis rule: with history, the smallest of the doubling
 /// series that holds 1.5x the usual largest step's own sent (or
 /// received) figure; without history, 600 (or 80), doubled exactly
-/// once if the run's own total-so-far has already passed it, and
-/// never again (R3: "never sliding").
-fn signal_axis_top(largest_usual: Option<u64>, so_far: u64, start: u64) -> u64 {
+/// once if the run's own largest single column has already passed
+/// it, and never again -- the axis never slides back down, and
+/// never doubles a second time.
+fn signal_axis_top(largest_usual: Option<u64>, largest_col: u64, start: u64) -> u64 {
     match largest_usual.filter(|&v| v > 0) {
         Some(largest) => {
             let need = (largest as f64 * 1.5).ceil() as u64;
             signal_axis_series_min(start, need)
         }
         None => {
-            if so_far > start {
+            if largest_col > start {
                 start * 2
             } else {
                 start
@@ -2619,8 +2624,8 @@ fn signal_pass_path(path: &str) -> Option<&str> {
 
 /// The sum of tokens over every pass of `loop_path` that has one so
 /// far, and how many such passes there are -- the loop row's own
-/// `130 t per pass` (R4) and a decision's own trailing `· drafts ×2
-/// · 261 t` (R1's "from the frames") both read this.
+/// `130 t per pass` and a decision's own trailing `· drafts ×2 ·
+/// 261 t` both read this.
 fn signal_loop_pass_tokens(loop_path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, u64) {
     let prefix = format!("{loop_path}.iter_");
     let mut per_pass: BTreeMap<u64, u64> = BTreeMap::new();
@@ -2650,12 +2655,26 @@ pub fn build_signal(
     cursor_col: Option<usize>,
     now: &str,
 ) -> SignalScreen {
+    // Once a run has ended, its own Now sweep stays at the run's
+    // own end rather than drifting on with the wall clock a caller
+    // still passes in (`osi watch` of an old run, say) -- the run
+    // has no later activity for a sweep past its end to mean.
+    let now = header.run_end_ts.as_deref().unwrap_or(now);
     let run_start = header.run_start_ts.as_deref();
     let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
     let column_s = (column_ms.max(1) as f64) / 1000.0;
     let col_of = |offset_s: f64| (offset_s / column_s).floor().max(0.0) as usize;
+    // The axis's own no-history fallback (§3.5) measures the
+    // largest single column against 600/80, never the run's own
+    // running total -- at a fixed 100 ms base so zooming the
+    // display columns can't change what the axis reads.
+    let col_of_100 = |offset_s: f64| (offset_s / 0.1).floor().max(0.0) as usize;
     let now_offset = elapsed_offset(now);
     let now_col = now_offset.map(col_of);
+    // ←→'s own scrub cursor (§4): a column at or before Now --
+    // Readings' own Peak, Largest and Quiet all read up to here, not
+    // past it, once scrubbed away from Now.
+    let cursor = cursor_col.or(now_col);
 
     let model_label = rows
         .iter()
@@ -2669,6 +2688,7 @@ pub fn build_signal(
 
     let mut buckets: Vec<SignalBucket> = Vec::new();
     let mut marks: BTreeMap<usize, SignalMark> = BTreeMap::new();
+    let mut fixed_cols: BTreeMap<usize, (u64, u64)> = BTreeMap::new();
     fn ensure_len(buckets: &mut Vec<SignalBucket>, len: usize) {
         if buckets.len() < len {
             buckets.resize(len, SignalBucket::default());
@@ -2700,6 +2720,14 @@ pub fn build_signal(
                     }
                     b.prompt_count += 1;
                     b.last_ts = Some(now.to_string());
+                    if let Some(now_offset) = now_offset {
+                        let fixed = fixed_cols.entry(col_of_100(now_offset)).or_default();
+                        fixed.0 += live.tokens_sent_or_estimate().map(|(v, _)| v).unwrap_or(0);
+                        fixed.1 += live
+                            .tokens_received_or_estimate()
+                            .map(|(v, _)| v)
+                            .unwrap_or(0);
+                    }
                 } else if row.status.kind == StatusKind::Done
                     || row.status.kind == StatusKind::FailedHandled
                 {
@@ -2719,6 +2747,9 @@ pub fn build_signal(
                     b.prompt_count += 1;
                     b.last_ts = Some(end_ts.to_string());
                     marks.entry(col).or_insert(SignalMark::Done);
+                    let fixed = fixed_cols.entry(col_of_100(offset)).or_default();
+                    fixed.0 += sent;
+                    fixed.1 += received;
                 }
             }
             RowKind::If => {
@@ -2738,13 +2769,15 @@ pub fn build_signal(
         }
     }
 
+    let largest_col_sent = fixed_cols.values().map(|(s, _)| *s).max().unwrap_or(0);
+    let largest_col_received = fixed_cols.values().map(|(_, r)| *r).max().unwrap_or(0);
     let sent_axis_top_val = signal_axis_top(
         header
             .history_step_usual
             .values()
             .filter_map(|s| s.tokens_sent_p50)
             .max(),
-        header.tokens_sent,
+        largest_col_sent,
         600,
     );
     let received_axis_top_val = signal_axis_top(
@@ -2753,7 +2786,7 @@ pub fn build_signal(
             .values()
             .filter_map(|s| s.tokens_received_p50)
             .max(),
-        header.tokens_received,
+        largest_col_received,
         80,
     );
 
@@ -2832,15 +2865,17 @@ pub fn build_signal(
                         }
                     })
                     .collect();
-                // R1's own "from the frames": the very next
-                // top-level row's own progress, when it is an
-                // already-active loop -- the design's text never
-                // names this, only `run2`'s own frame does.
+                // The very next top-level row's own progress, when
+                // it is an already-active loop -- the design's text
+                // never names this, only `run2`'s own frame does.
                 let suffix = top_level
                     .iter()
                     .position(|r| r.path == row.path)
                     .and_then(|idx| top_level.get(idx + 1))
-                    .filter(|r| r.kind == RowKind::Loop)
+                    .filter(|r| {
+                        r.kind == RowKind::Loop
+                            && !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped)
+                    })
                     .map(|r| {
                         let (tokens, count) = signal_loop_pass_tokens(&r.path, flat);
                         format!(
@@ -2903,7 +2938,7 @@ pub fn build_signal(
         });
     }
 
-    // The faint plan-ahead list trailing the last step row (R3): the
+    // The faint plan-ahead list trailing the last step row: the
     // last started top-level row's own loop, if any, names its own
     // next undispatched pass first; then every top-level row still
     // ahead, in plan order; then `■ End` while the run is live.
@@ -3022,9 +3057,8 @@ pub fn build_signal(
         let prefix = format!("{}.", loop_row.path);
         // The pass itself never gets a row of its own (only its own
         // leaves do) -- the first pending leaf under a queued pass
-        // names it, its own breadcrumb cut back to the pass (R1's
-        // own "from the frames": `drafts › iter_2`, never drilling
-        // into the leaf).
+        // names it, its own breadcrumb cut back to the pass
+        // (`drafts › iter_2`, never drilling into the leaf).
         if let Some(next) = augmented.iter().find(|r| {
             r.path.starts_with(&prefix)
                 && tape_row_is_under_a_queued_pass(&r.path)
@@ -3109,10 +3143,13 @@ pub fn build_signal(
         )
     });
 
-    // Readings.
+    // Readings: Peak, Largest and Quiet all read only up to the
+    // cursor's own column (Now's, when not scrubbed), the same
+    // moment the trace itself stops drawing at.
+    let cursor_buckets = &buckets[..cursor.map(|c| (c + 1).min(buckets.len())).unwrap_or(0)];
     let ratio = (header.tokens_received > 0)
         .then(|| (header.tokens_sent as f64 / header.tokens_received as f64 * 10.0).round() / 10.0);
-    let peak = buckets
+    let peak = cursor_buckets
         .iter()
         .filter(|b| b.sent > 0)
         .max_by_key(|b| b.sent)
@@ -3125,6 +3162,15 @@ pub fn build_signal(
         let Some(node) = flat.get(&row.path) else {
             continue;
         };
+        let in_view = node
+            .completed_at
+            .as_deref()
+            .and_then(elapsed_offset)
+            .map(col_of)
+            .is_some_and(|c| cursor.is_none_or(|cur| c <= cur));
+        if !in_view {
+            continue;
+        }
         let (sent, received) = crate::model::node_tokens(&node.meta);
         let total = sent + received;
         if total == 0 {
@@ -3134,8 +3180,14 @@ pub fn build_signal(
             largest = Some((tape_row_label(row, flat, plan), total));
         }
     }
-    let quiet_s = last_burst_idx
-        .and_then(|i| buckets[i].last_ts.as_deref())
+    let cursor_burst_idx = cursor_buckets
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, b)| b.sent + b.received > 0)
+        .map(|(i, _)| i);
+    let quiet_s = cursor_burst_idx
+        .and_then(|i| cursor_buckets[i].last_ts.as_deref())
         .and_then(|ts| duration_seconds(ts, now));
 
     let largest_usual_step = header
@@ -3149,7 +3201,6 @@ pub fn build_signal(
     // the greatest start column at or before the cursor (Now's own
     // column when not scrubbed) is whichever step the cursor is
     // currently sitting over.
-    let cursor = cursor_col.or(now_col);
     let selected = cursor
         .and_then(|c| {
             step_rows
@@ -3180,6 +3231,7 @@ pub fn build_signal(
         now_col,
         now_ts,
         now_elapsed_s: now_offset,
+        cursor_col: cursor,
         ahead_eta_ts,
         step_rows,
         ahead_suffix,
@@ -5025,7 +5077,7 @@ mod tests {
     #[test]
     fn signal_axis_top_with_history_holds_1_5x_the_usual_largest_step() {
         // 1.5 * 390 = 585, the smallest of 300/600/1200/... at or
-        // above it is 600 -- the design's own `run2` fixture (R3).
+        // above it is 600 -- the design's own `run2` fixture.
         assert_eq!(signal_axis_top(Some(390), 0, 600), 600);
         // 1.5 * 30 = 45, the smallest of 40/80/160/... at or above
         // it is 80.
@@ -5042,8 +5094,49 @@ mod tests {
         assert_eq!(signal_axis_top(None, 100_000, 600), 1200);
     }
 
-    /// Two top-level prompts ending in the same 100 ms column (R3:
-    /// "a prompt's tokens land in the bucket of its end time") sum
+    /// Three prompts summing well past 600 tokens over the whole
+    /// run, no single one past it, never double the axis -- the
+    /// no-history rule measures the largest single column, not the
+    /// run's own running total.
+    #[test]
+    fn build_signal_axis_without_history_measures_the_largest_column_not_the_run_total() {
+        let rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.b", 1, "b", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.c", 1, "c", RowKind::Prompt, StatusKind::Done),
+        ];
+        let mut flat = BTreeMap::new();
+        for (name, end) in [
+            ("a", "2026-01-01T00:00:01.000Z"),
+            ("b", "2026-01-01T00:00:02.000Z"),
+            ("c", "2026-01-01T00:00:03.000Z"),
+        ] {
+            flat.insert(
+                format!("prime.{name}"),
+                signal_node("2026-01-01T00:00:00.000Z", Some(end), 300, 20),
+            );
+        }
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.tokens_sent = 900;
+        header.tokens_received = 60;
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            "2026-01-01T00:00:03.100Z",
+        );
+        assert_eq!(signal.sent_axis_top, 600, "no single column passed 600");
+    }
+
+    /// Two top-level prompts ending in the same 100 ms column sum
     /// into that one column rather than each getting their own.
     #[test]
     fn build_signal_sums_two_prompts_ending_in_the_same_column() {
@@ -5100,9 +5193,8 @@ mod tests {
     }
 
     /// A decision's own mark wins over a finished prompt's `✓` when
-    /// both land in the same column (R3, matching `run2`'s own
-    /// frame: `◆` at the column three prompts and a decision
-    /// share).
+    /// both land in the same column, matching `run2`'s own frame:
+    /// `◆` at the column three prompts and a decision share.
     #[test]
     fn build_signal_a_decision_mark_wins_over_a_prompt_mark_in_the_same_column() {
         let mut gate = tape_row("prime.gate", 1, "gate", RowKind::If, StatusKind::Done);
@@ -5157,9 +5249,9 @@ mod tests {
         assert_eq!(mark, Some(SignalMark::Decision));
     }
 
-    /// A running prompt's own live estimate grows the Now column
-    /// (R3: "grows its column at Now, marked ≈"), never the column
-    /// its own start time would otherwise place it at.
+    /// A running prompt's own live estimate grows the Now column,
+    /// never the column its own start time would otherwise place it
+    /// at.
     #[test]
     fn build_signal_a_running_prompts_live_estimate_lands_in_the_now_column() {
         let rows = vec![tape_row(
@@ -5243,5 +5335,201 @@ mod tests {
         let (peak_tokens, peak_ts) = signal.readings.peak.expect("a peak column");
         assert_eq!(peak_tokens, 584);
         assert_eq!(peak_ts, "2026-01-01T00:00:03.000Z");
+    }
+
+    /// The Now pane's own lines: a running leaf with its slot, the
+    /// active loop's own summary, Last Burst and Next Signal, all
+    /// read off the same `rows`/`flat`/buckets the trace itself is.
+    #[test]
+    fn build_signal_now_panes_lines() {
+        let mut drafts = tape_row(
+            "prime.drafts",
+            1,
+            "drafts",
+            RowKind::Loop,
+            StatusKind::Running,
+        );
+        drafts.loop_progress = Some(crate::render::LoopProgress {
+            done: 1,
+            total: Some(3),
+            eta_s: None,
+        });
+        let rows = vec![
+            drafts,
+            tape_row(
+                "prime.drafts.iter_0.draft",
+                3,
+                "iter_0 › draft",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.draft",
+                3,
+                "iter_1 › draft",
+                RowKind::Prompt,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.next",
+                1,
+                "next",
+                RowKind::Prompt,
+                StatusKind::Pending,
+            ),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.drafts.iter_0.draft".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:01.000Z"),
+                80,
+                50,
+            ),
+        );
+        let mut running_node = tape_node("2026-01-01T00:00:01.500Z", None);
+        running_node.meta = json!({
+            "adapter": "scripted", "model": "scripted-model",
+            "live": {
+                "adapter": "scripted", "attempt": 0, "streaming": true,
+                "started_at": "2026-01-01T00:00:01.500Z",
+                "tokens_sent": 40, "tokens_received_estimate": 7,
+            }
+        });
+        running_node.prompt_live = crate::model::PromptLive::from_value(&running_node.meta["live"]);
+        flat.insert("prime.drafts.iter_1.draft".to_string(), running_node);
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:02.100Z";
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+
+        assert_eq!(signal.now_pane.running.len(), 1);
+        assert_eq!(signal.now_pane.running[0].path, "prime.drafts.iter_1.draft");
+        let (loop_label, loop_status) = signal
+            .now_pane
+            .loop_summary
+            .as_ref()
+            .expect("an active loop");
+        assert_eq!(loop_label, "drafts");
+        assert_eq!(loop_status, "1 of 3 passes · 130 t per pass");
+        let last_burst = signal.now_pane.last_burst.as_deref().expect("a last burst");
+        // The most recent column with any activity at all -- the
+        // running pass's own live estimate at Now, not the earlier
+        // finished pass, since it is in fact the newer of the two.
+        assert!(
+            last_burst.contains("↑40") && last_burst.contains("↓7"),
+            "{last_burst:?}"
+        );
+        let next_signal = signal
+            .now_pane
+            .next_signal
+            .as_deref()
+            .expect("a next signal");
+        assert!(next_signal.starts_with("next"), "{next_signal:?}");
+        assert!(next_signal.contains("queued"), "{next_signal:?}");
+    }
+
+    /// A running prompt's own live estimate marks its column
+    /// `received_live`; once the node finishes, the same column
+    /// carries the exact figure and `received_live` clears -- the
+    /// two are mutually exclusive, never both counted at once.
+    #[test]
+    fn build_signal_the_live_estimate_settles_to_the_exact_count_once() {
+        let rows_running = vec![tape_row(
+            "prime.a",
+            1,
+            "a",
+            RowKind::Prompt,
+            StatusKind::Running,
+        )];
+        let mut flat_running = BTreeMap::new();
+        let mut node = tape_node("2026-01-01T00:00:00.000Z", None);
+        node.meta = json!({
+            "adapter": "scripted", "model": "scripted-model",
+            "live": {
+                "adapter": "scripted", "attempt": 0, "streaming": true,
+                "started_at": "2026-01-01T00:00:00.000Z",
+                "tokens_sent": 40, "tokens_received_estimate": 7,
+            }
+        });
+        node.prompt_live = crate::model::PromptLive::from_value(&node.meta["live"]);
+        flat_running.insert("prime.a".to_string(), node);
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:00.650Z";
+        let running = build_signal(
+            &rows_running,
+            &header,
+            &flat_running,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            now,
+        );
+        assert!(running.buckets[6].received_live);
+        assert_eq!(running.buckets[6].received, 7);
+
+        let rows_done = vec![tape_row(
+            "prime.a",
+            1,
+            "a",
+            RowKind::Prompt,
+            StatusKind::Done,
+        )];
+        let mut flat_done = BTreeMap::new();
+        flat_done.insert(
+            "prime.a".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:00.650Z"),
+                40,
+                9,
+            ),
+        );
+        let done = build_signal(
+            &rows_done, &header, &flat_done, &plan, &model, None, 100, None, now,
+        );
+        assert!(!done.buckets[6].received_live);
+        assert_eq!(done.buckets[6].received, 9);
+    }
+
+    /// Zooming changes which 100 ms span a bucket's own column
+    /// covers -- the same event lands in a different column at 200
+    /// ms per column than it does at the 100 ms default.
+    #[test]
+    fn build_signal_zoom_changes_which_column_an_event_lands_in() {
+        let rows = vec![tape_row(
+            "prime.a",
+            1,
+            "a",
+            RowKind::Prompt,
+            StatusKind::Done,
+        )];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:00.350Z"),
+                10,
+                2,
+            ),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:00.400Z";
+        let at_100ms = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, now);
+        assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
+        assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");
     }
 }
