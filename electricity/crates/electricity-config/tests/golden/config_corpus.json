@@ -457,6 +457,10 @@
           "default"
         ],
         [
+          "complexity.splitting.max_concurrency",
+          "default"
+        ],
+        [
           "complexity.splitting.on_failure",
           "default"
         ]
@@ -577,6 +581,10 @@
           "default"
         ],
         [
+          "complexity.splitting.max_concurrency",
+          "default"
+        ],
+        [
           "complexity.splitting.on_failure",
           "default"
         ]
@@ -681,6 +689,10 @@
           "default"
         ],
         [
+          "complexity.splitting.max_concurrency",
+          "default"
+        ],
+        [
           "complexity.splitting.on_failure",
           "default"
         ]
@@ -777,6 +789,10 @@
         ],
         [
           "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_concurrency",
           "default"
         ],
         [
@@ -881,6 +897,10 @@
           "default"
         ],
         [
+          "complexity.splitting.max_concurrency",
+          "default"
+        ],
+        [
           "complexity.splitting.on_failure",
           "default"
         ]
@@ -981,6 +1001,10 @@
         ],
         [
           "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_concurrency",
           "default"
         ],
         [
@@ -1096,6 +1120,10 @@
         ],
         [
           "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_concurrency",
           "default"
         ],
         [
@@ -1264,6 +1292,10 @@
           "default"
         ],
         [
+          "complexity.splitting.max_concurrency",
+          "default"
+        ],
+        [
           "complexity.splitting.on_failure",
           "default"
         ]
@@ -1376,6 +1408,10 @@
         ],
         [
           "complexity.splitting.max_depth",
+          "default"
+        ],
+        [
+          "complexity.splitting.max_concurrency",
           "default"
         ],
         [

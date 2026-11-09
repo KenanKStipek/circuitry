@@ -69,6 +69,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -316,6 +317,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -485,6 +487,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -696,6 +699,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -841,6 +845,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -1091,6 +1096,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -1250,6 +1256,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },
@@ -1416,6 +1423,7 @@
               "complexity.splitting.models": "default",
               "complexity.splitting.max_parts": "default",
               "complexity.splitting.max_depth": "default",
+              "complexity.splitting.max_concurrency": "default",
               "complexity.splitting.on_failure": "default"
             }
           },

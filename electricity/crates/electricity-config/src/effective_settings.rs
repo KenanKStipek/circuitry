@@ -363,6 +363,10 @@ fn record_complexity_sources(
         field_source("splitting", "max_depth"),
     );
     sources.insert(
+        "complexity.splitting.max_concurrency".to_string(),
+        field_source("splitting", "max_concurrency"),
+    );
+    sources.insert(
         "complexity.splitting.on_failure".to_string(),
         field_source("splitting", "on_failure"),
     );
