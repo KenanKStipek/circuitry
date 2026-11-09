@@ -493,11 +493,20 @@ fn screen_keys_switch_screens_during_a_live_run() {
     send_bytes(&mut master, b"2");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_2..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        // A key press only redraws the cells that changed (the `· 0/2 · ▰ = 50 t` part of the title
+        // keeps its columns from the Tape's own title), and a styled run is split by escapes in the raw
+        // stream, so neither the bytes after the key nor the raw bytes can be searched for the title:
+        // replay everything drawn so far onto a screen and read that. `Flow ·` is the rail pane's
+        // own title, drawn only on the Flow screen.
         assert!(
-            rendered.contains("Flow \u{b7}"),
-            "expected the Flow screen's own rail pane after pressing 2; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_2,
+            "pressing 2 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Flow \u{b7}"),
+            "expected the Flow screen's own rail pane after pressing 2; screen:\n{screen}"
         );
     }
 
@@ -505,11 +514,16 @@ fn screen_keys_switch_screens_during_a_live_run() {
     send_bytes(&mut master, b"0");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_0..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        // Same replay; `Tape ·` is the Tape's own pane title (the Totals row is on every screen now).
         assert!(
-            rendered.contains("Totals"),
-            "expected the Tape's own list back after pressing 0; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_0,
+            "pressing 0 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Tape \u{b7}"),
+            "expected the Tape's own list back after pressing 0; screen:\n{screen}"
         );
     }
 
