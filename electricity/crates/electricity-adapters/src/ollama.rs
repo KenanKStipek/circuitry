@@ -352,7 +352,10 @@ pub fn interpret_outcome(
     }
     let raw =
         electricity_json::loads(&outcome.stdout).map_err(|_| non_json_error(&outcome.stdout))?;
-    let dict = raw.as_dict().ok_or_else(|| attribute_error(&raw, "get"))?.clone();
+    let dict = raw
+        .as_dict()
+        .ok_or_else(|| attribute_error(&raw, "get"))?
+        .clone();
     let text = delta_text(&dict);
     result_from_final(raw, text)
 }
@@ -484,7 +487,10 @@ pub fn interpret_streaming_outcome(
         // non-streamed way, so the two paths can't drift apart.
         let raw = electricity_json::loads(&outcome.stdout)
             .map_err(|_| non_json_error(&outcome.stdout))?;
-        let dict = raw.as_dict().ok_or_else(|| attribute_error(&raw, "get"))?.clone();
+        let dict = raw
+            .as_dict()
+            .ok_or_else(|| attribute_error(&raw, "get"))?
+            .clone();
         let text = delta_text(&dict);
         return result_from_final(raw, text);
     }
@@ -492,8 +498,8 @@ pub fn interpret_streaming_outcome(
     if let Some(error) = parsed.error {
         let mut error_dict = Dict::new();
         dict_insert(&mut error_dict, "error", error);
-        let error_body =
-            electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT).unwrap_or_default();
+        let error_body = electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT)
+            .unwrap_or_default();
         let message = curl_failure_message(
             "ollama",
             (!model.is_empty()).then_some(model),
@@ -606,10 +612,15 @@ impl Adapter for OllamaAdapter {
         if self.streams {
             let on_progress = call.on_progress;
             let mut on_line = |line: &str| stream_on_line(line, on_progress);
-            let outcome =
-                run_curl_streaming(&url, &headers, Some(&body), call.timeout_seconds, &mut on_line)
-                    .await
-                    .map_err(transport_failure_error)?;
+            let outcome = run_curl_streaming(
+                &url,
+                &headers,
+                Some(&body),
+                call.timeout_seconds,
+                &mut on_line,
+            )
+            .await
+            .map_err(transport_failure_error)?;
             interpret_streaming_outcome(
                 &self.name,
                 &outcome,
@@ -712,7 +723,8 @@ mod tests {
 
     #[test]
     fn build_request_uses_generate_for_a_template_prompt() {
-        let (endpoint, payload) = build_request("m", "hello", &GenerateOptions::default(), false).unwrap();
+        let (endpoint, payload) =
+            build_request("m", "hello", &GenerateOptions::default(), false).unwrap();
         assert_eq!(endpoint, "/api/generate");
         assert_eq!(
             payload.get(&Value::Str("prompt".to_string())),
@@ -1161,7 +1173,12 @@ mod tests {
         let token = CancellationToken::new();
         let path = EffectPath::root();
         let err = adapter
-            .generate("m", "hi", &GenerateOptions::default(), &call_ctx(&path, &token))
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
             .await
             .unwrap_err();
         assert!(err.retry.retryable);
@@ -1183,7 +1200,12 @@ mod tests {
         let token = CancellationToken::new();
         let path = EffectPath::root();
         let err = adapter
-            .generate("m", "hi", &GenerateOptions::default(), &call_ctx(&path, &token))
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
             .await
             .unwrap_err();
         assert!(!err.retry.retryable);
@@ -1205,7 +1227,12 @@ mod tests {
         let token = CancellationToken::new();
         let path = EffectPath::root();
         let result = adapter
-            .generate("m", "hi", &GenerateOptions::default(), &call_ctx(&path, &token))
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
             .await
             .unwrap();
         assert_eq!(result.text, "hi");

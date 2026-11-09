@@ -687,8 +687,14 @@ pub async fn run_curl_streaming(
         buffer.extend_from_slice(chunk);
         drain_lines(&mut buffer, on_line);
     };
-    match http_client::send_streaming(&client, &connect_target, &raw_request, timeout, &mut on_chunk)
-        .await
+    match http_client::send_streaming(
+        &client,
+        &connect_target,
+        &raw_request,
+        timeout,
+        &mut on_chunk,
+    )
+    .await
     {
         Err(err) => Ok(send_error_outcome(err)),
         Ok(response) => response_outcome(response),

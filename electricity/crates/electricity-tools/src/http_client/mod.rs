@@ -631,14 +631,12 @@ pub async fn send_streaming(
     on_chunk: OnChunk<'_>,
 ) -> Result<RawResponse, SendError> {
     match timeout {
-        TimeoutModel::Total(d) => {
-            tokio::time::timeout(
-                d,
-                send_inner(client, target, request, timeout, Some(on_chunk)),
-            )
-            .await
-            .unwrap_or(Err(SendError::Timeout))
-        }
+        TimeoutModel::Total(d) => tokio::time::timeout(
+            d,
+            send_inner(client, target, request, timeout, Some(on_chunk)),
+        )
+        .await
+        .unwrap_or(Err(SendError::Timeout)),
         TimeoutModel::PerOperation(_) => {
             send_inner(client, target, request, timeout, Some(on_chunk)).await
         }

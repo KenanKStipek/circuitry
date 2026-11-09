@@ -597,7 +597,10 @@ async fn generate_with_fallbacks(
                 self.observer.write();
             }
         }
-        let _clear_live = ClearLiveOnDrop { meta_node, observer };
+        let _clear_live = ClearLiveOnDrop {
+            meta_node,
+            observer,
+        };
 
         let on_progress = |progress: GenerateProgress| {
             live_state.borrow_mut().apply(&progress);

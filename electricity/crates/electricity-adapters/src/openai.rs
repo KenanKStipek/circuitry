@@ -5,10 +5,12 @@
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
 use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url, stream_flag};
-use crate::curl_text::{classify_curl_outcome_with_error_code, curl_error_code, curl_failure_message};
+use crate::curl_text::{
+    classify_curl_outcome_with_error_code, curl_error_code, curl_failure_message,
+};
 use crate::openai_compat::{
-    chat_messages, parse_chat_response, parse_sse_stream, sampling_fields,
-    stream_error_retry_info, stream_on_line_progress, usage_tokens,
+    chat_messages, parse_chat_response, parse_sse_stream, sampling_fields, stream_error_retry_info,
+    stream_on_line_progress, usage_tokens,
 };
 use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
@@ -255,8 +257,8 @@ pub fn interpret_streaming_outcome(
     if let Some(error) = parsed.error {
         let mut error_dict = Dict::new();
         error_dict.insert(Value::Str("error".to_string()), error.clone());
-        let error_body =
-            electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT).unwrap_or_default();
+        let error_body = electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT)
+            .unwrap_or_default();
         let message = curl_failure_message(
             "openai",
             Some(model),
@@ -302,7 +304,11 @@ pub fn interpret_streaming_outcome(
     choice.insert(Value::Str("message".to_string()), Value::Dict(message_dict));
     choice.insert(
         Value::Str("finish_reason".to_string()),
-        parsed.finish_reason.clone().map(Value::Str).unwrap_or(Value::None),
+        parsed
+            .finish_reason
+            .clone()
+            .map(Value::Str)
+            .unwrap_or(Value::None),
     );
     let mut raw = Dict::new();
     raw.insert(
@@ -383,10 +389,15 @@ impl Adapter for OpenAiAdapter {
         if self.streams {
             let on_progress = call.on_progress;
             let mut on_line = |line: &str| stream_on_line_progress(line, on_progress);
-            let outcome =
-                run_curl_streaming(&url, &headers, Some(&body), call.timeout_seconds, &mut on_line)
-                    .await
-                    .map_err(transport_failure_error)?;
+            let outcome = run_curl_streaming(
+                &url,
+                &headers,
+                Some(&body),
+                call.timeout_seconds,
+                &mut on_line,
+            )
+            .await
+            .map_err(transport_failure_error)?;
             interpret_streaming_outcome(&outcome, model, &url, &api_key)
         } else {
             let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)

@@ -499,12 +499,16 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
             "error" if error_message.is_none() => {
                 let error = dict.get(&Value::Str("error".to_string()));
                 let error_dict = error.and_then(Value::as_dict);
-                error_message = Some(match error_dict.and_then(|d| d.get(&Value::Str("message".to_string()))) {
-                    Some(Value::Str(s)) => s.clone(),
-                    _ => error
-                        .map(|e| electricity_json::dumps(e, WriteMode::COMPACT).unwrap_or_default())
-                        .unwrap_or_default(),
-                });
+                error_message = Some(
+                    match error_dict.and_then(|d| d.get(&Value::Str("message".to_string()))) {
+                        Some(Value::Str(s)) => s.clone(),
+                        _ => error
+                            .map(|e| {
+                                electricity_json::dumps(e, WriteMode::COMPACT).unwrap_or_default()
+                            })
+                            .unwrap_or_default(),
+                    },
+                );
                 error_type = match error_dict.and_then(|d| d.get(&Value::Str("type".to_string()))) {
                     Some(Value::Str(s)) => Some(s.clone()),
                     _ => None,
@@ -611,7 +615,11 @@ pub fn interpret_streaming_outcome(
         dict_insert(
             &mut error_dict,
             "type",
-            parsed.error_type.clone().map(Value::Str).unwrap_or(Value::None),
+            parsed
+                .error_type
+                .clone()
+                .map(Value::Str)
+                .unwrap_or(Value::None),
         );
         dict_insert(&mut error_dict, "message", Value::Str(error_message));
         let mut body = Dict::new();
@@ -670,15 +678,26 @@ pub fn interpret_streaming_outcome(
     dict_insert(
         &mut usage,
         "output_tokens",
-        parsed.tokens_received.map(Value::from).unwrap_or(Value::None),
+        parsed
+            .tokens_received
+            .map(Value::from)
+            .unwrap_or(Value::None),
     );
     let mut raw = Dict::new();
-    dict_insert(&mut raw, "content", Value::List(vec![Value::Dict(content_block)]));
+    dict_insert(
+        &mut raw,
+        "content",
+        Value::List(vec![Value::Dict(content_block)]),
+    );
     dict_insert(&mut raw, "usage", Value::Dict(usage));
     dict_insert(
         &mut raw,
         "stop_reason",
-        parsed.stop_reason.clone().map(Value::Str).unwrap_or(Value::None),
+        parsed
+            .stop_reason
+            .clone()
+            .map(Value::Str)
+            .unwrap_or(Value::None),
     );
     Ok(GenerateResult {
         text: py_strip(&parsed.text).to_string(),
@@ -753,10 +772,15 @@ impl Adapter for AnthropicAdapter {
             let tokens_sent = Cell::new(None);
             let on_progress = call.on_progress;
             let mut on_line = |line: &str| stream_on_line_progress(line, on_progress, &tokens_sent);
-            let outcome =
-                run_curl_streaming(&url, &headers, Some(&body), call.timeout_seconds, &mut on_line)
-                    .await
-                    .map_err(transport_failure_error)?;
+            let outcome = run_curl_streaming(
+                &url,
+                &headers,
+                Some(&body),
+                call.timeout_seconds,
+                &mut on_line,
+            )
+            .await
+            .map_err(transport_failure_error)?;
             interpret_streaming_outcome(&outcome, model, &url, &api_key)
         } else {
             let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
@@ -1100,7 +1124,8 @@ mod tests {
     fn stream_on_line_progress_carries_tokens_sent_onto_later_deltas() {
         let tokens_sent = Cell::new(None);
         let seen = std::cell::RefCell::new(Vec::new());
-        let on_progress = |p: GenerateProgress| seen.borrow_mut().push((p.delta_chars, p.tokens_sent));
+        let on_progress =
+            |p: GenerateProgress| seen.borrow_mut().push((p.delta_chars, p.tokens_sent));
         stream_on_line_progress(
             "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}",
             Some(&on_progress),

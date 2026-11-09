@@ -569,7 +569,9 @@ pub fn usage_tokens(usage: Option<&Value>) -> (Option<i64>, Option<i64>) {
 /// `code` is read as the status it stands in for; anything else is
 /// not retryable.
 pub fn stream_error_retry_info(error: &Value) -> RetryInfo {
-    if let Some(Value::Int(_)) = error.as_dict().and_then(|d| d.get(&Value::Str("code".to_string())))
+    if let Some(Value::Int(_)) = error
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("code".to_string())))
     {
         let code = error
             .as_dict()
@@ -599,7 +601,9 @@ pub fn interpret_streaming_outcome(
     secrets: &[&str],
 ) -> Result<GenerateResult, AdapterError> {
     if outcome.returncode != 0 {
-        return Err(curl_failure_error(source, outcome, model, url, secrets, true));
+        return Err(curl_failure_error(
+            source, outcome, model, url, secrets, true,
+        ));
     }
 
     let parsed = parse_sse_stream(&outcome.stdout);
@@ -620,8 +624,8 @@ pub fn interpret_streaming_outcome(
             Some(other) => return Err(attribute_error(other, "get")),
             None => None,
         };
-        let tokens_sent = usage_dict
-            .and_then(|d| int_if_pyint(d.get(&Value::Str("prompt_tokens".to_string()))));
+        let tokens_sent =
+            usage_dict.and_then(|d| int_if_pyint(d.get(&Value::Str("prompt_tokens".to_string()))));
         let tokens_received = usage_dict
             .and_then(|d| int_if_pyint(d.get(&Value::Str("completion_tokens".to_string()))));
         return Ok(GenerateResult {
@@ -638,18 +642,10 @@ pub fn interpret_streaming_outcome(
     if let Some(error) = parsed.error {
         let mut error_dict = Dict::new();
         dict_insert(&mut error_dict, "error", error.clone());
-        let error_body =
-            electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT).unwrap_or_default();
-        let message = curl_failure_message(
-            source,
-            Some(model),
-            url,
-            22,
-            &error_body,
-            "",
-            "",
-            secrets,
-        );
+        let error_body = electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT)
+            .unwrap_or_default();
+        let message =
+            curl_failure_message(source, Some(model), url, 22, &error_body, "", "", secrets);
         return Err(AdapterError {
             message,
             retry: stream_error_retry_info(&error),
@@ -680,16 +676,28 @@ pub fn interpret_streaming_outcome(
     let (tokens_sent, tokens_received) = usage_tokens(parsed.usage.as_ref());
     let mut raw = Dict::new();
     let mut message_dict = Dict::new();
-    dict_insert(&mut message_dict, "content", Value::Str(parsed.text.clone()));
+    dict_insert(
+        &mut message_dict,
+        "content",
+        Value::Str(parsed.text.clone()),
+    );
     let mut choice = Dict::new();
     dict_insert(&mut choice, "message", Value::Dict(message_dict));
     dict_insert(
         &mut choice,
         "finish_reason",
-        parsed.finish_reason.clone().map(Value::Str).unwrap_or(Value::None),
+        parsed
+            .finish_reason
+            .clone()
+            .map(Value::Str)
+            .unwrap_or(Value::None),
     );
     dict_insert(&mut raw, "choices", Value::List(vec![Value::Dict(choice)]));
-    dict_insert(&mut raw, "usage", parsed.usage.clone().unwrap_or(Value::None));
+    dict_insert(
+        &mut raw,
+        "usage",
+        parsed.usage.clone().unwrap_or(Value::None),
+    );
     Ok(GenerateResult {
         text: electricity_value::pycompat::py_strip(&parsed.text).to_string(),
         raw: Value::Dict(raw),
@@ -750,7 +758,9 @@ pub fn interpret_outcome(
     secrets: &[&str],
 ) -> Result<GenerateResult, AdapterError> {
     if outcome.returncode != 0 {
-        return Err(curl_failure_error(source, outcome, model, url, secrets, false));
+        return Err(curl_failure_error(
+            source, outcome, model, url, secrets, false,
+        ));
     }
 
     let raw = electricity_json::loads(&outcome.stdout)

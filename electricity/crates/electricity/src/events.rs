@@ -243,7 +243,9 @@ impl EventLog {
             .entry(path.to_string())
             .or_default()
             .push((instance_id, started_at));
-        self.instant_by_id.borrow_mut().insert(instance_id, started_at);
+        self.instant_by_id
+            .borrow_mut()
+            .insert(instance_id, started_at);
         let mut payload = Dict::new();
         payload.insert(Value::Str("v".to_string()), Value::from(1i64));
         payload.insert(
@@ -291,7 +293,9 @@ impl EventLog {
                 let ms = started_at.elapsed().as_millis().min(i64::MAX as u128) as i64;
                 self.instant_by_id.borrow_mut().remove(&instance_id);
                 self.first_token_ms.borrow_mut().remove(&instance_id);
-                self.first_token_ms_attempt.borrow_mut().remove(&instance_id);
+                self.first_token_ms_attempt
+                    .borrow_mut()
+                    .remove(&instance_id);
                 (Value::from(instance_id as i64), Some(ms))
             }
             None => (Value::None, None),

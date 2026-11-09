@@ -1482,9 +1482,8 @@ mod tests {
         let token = CancellationToken::new();
         let path = EffectPath::root().push_name("x");
         let seen = std::cell::RefCell::new(Vec::new());
-        let on_progress = |p: electricity_vm::adapter::GenerateProgress| {
-            seen.borrow_mut().push(p.delta_chars)
-        };
+        let on_progress =
+            |p: electricity_vm::adapter::GenerateProgress| seen.borrow_mut().push(p.delta_chars);
         let mut call = call_ctx(&path, &token);
         call.on_progress = Some(&on_progress);
         let result = adapter

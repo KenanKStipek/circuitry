@@ -26,11 +26,7 @@ fn now_iso_string() -> String {
 /// else in this module touches complexity scoring at all.
 pub(crate) fn estimate_tokens(text: &str) -> i64 {
     let len = text.chars().count() as i64;
-    if len == 0 {
-        0
-    } else {
-        (len + 3) / 4
-    }
+    if len == 0 { 0 } else { (len + 3) / 4 }
 }
 
 /// `core/prompt.py::_LiveAttemptState`.
@@ -117,13 +113,19 @@ impl LiveAttemptState {
         dict.insert(key("streaming"), Value::Bool(streaming));
         dict.insert(
             key("first_token_at"),
-            self.first_token_at.clone().map(Value::Str).unwrap_or(Value::None),
+            self.first_token_at
+                .clone()
+                .map(Value::Str)
+                .unwrap_or(Value::None),
         );
         dict.insert(
             key("tokens_sent"),
             self.tokens_sent.map(Value::from).unwrap_or(Value::None),
         );
-        dict.insert(key("tokens_sent_estimate"), Value::from(tokens_sent_estimate));
+        dict.insert(
+            key("tokens_sent_estimate"),
+            Value::from(tokens_sent_estimate),
+        );
         dict.insert(
             key("tokens_received"),
             self.tokens_received.map(Value::from).unwrap_or(Value::None),
@@ -135,7 +137,9 @@ impl LiveAttemptState {
         dict.insert(key("chars_received"), Value::from(self.chars_received));
         dict.insert(
             key("tokens_per_second"),
-            self.tokens_per_second().map(Value::Float).unwrap_or(Value::None),
+            self.tokens_per_second()
+                .map(Value::Float)
+                .unwrap_or(Value::None),
         );
         Value::Dict(dict)
     }
