@@ -879,6 +879,16 @@ pub struct StepStats {
     /// this step actually recorded a token figure (a tool step
     /// never does), and is `None` below [`P50_MIN_RUNS`] of those.
     pub tokens_p50: Option<u64>,
+    /// `tokens_p50`'s own two halves (issue #688's Signal axis,
+    /// §3.5: the sent axis holds 1.5x "the usual largest step"'s
+    /// own *sent* figure, the received axis likewise its own
+    /// *received* figure, each separately -- `tokens_p50` alone
+    /// (sent plus received together) answers a different question
+    /// (the Tape's bar unit). Pooled and divided by passes the
+    /// same way `tokens_p50` is, and `None` below the same
+    /// threshold.
+    pub tokens_sent_p50: Option<u64>,
+    pub tokens_received_p50: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1002,6 +1012,28 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
                 }
             })
             .collect();
+        // Same pool and the same per-pass division as `tokens`
+        // above, split into its own sent/received half -- a run
+        // where this step recorded one side but not the other (a
+        // tool never records either) still contributes a `0.0` for
+        // the side it has nothing for, same as `tokens` itself
+        // folding a missing side to `0` before summing.
+        let tokens_sent: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key))
+            .filter_map(|s| match (s.tokens_sent, s.tokens_received) {
+                (None, None) => None,
+                (sent, _) => Some(sent.unwrap_or(0) as f64 / s.passes.max(1) as f64),
+            })
+            .collect();
+        let tokens_received: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key))
+            .filter_map(|s| match (s.tokens_sent, s.tokens_received) {
+                (None, None) => None,
+                (_, received) => Some(received.unwrap_or(0) as f64 / s.passes.max(1) as f64),
+            })
+            .collect();
         per_step.insert(
             key.clone(),
             StepStats {
@@ -1014,6 +1046,14 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
                 remaining_after_p50_s: percentile_with_threshold(&remaining, 50.0, P50_MIN_RUNS),
                 tokens_p50: percentile_with_threshold(&tokens, 50.0, P50_MIN_RUNS)
                     .map(|v| v.round() as u64),
+                tokens_sent_p50: percentile_with_threshold(&tokens_sent, 50.0, P50_MIN_RUNS)
+                    .map(|v| v.round() as u64),
+                tokens_received_p50: percentile_with_threshold(
+                    &tokens_received,
+                    50.0,
+                    P50_MIN_RUNS,
+                )
+                .map(|v| v.round() as u64),
             },
         );
     }

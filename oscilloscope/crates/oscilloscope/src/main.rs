@@ -1772,59 +1772,52 @@ fn build_flow_screen_if_active(
     ))
 }
 
-/// Screen 1's own model (issue #650), built only while it's actually
-/// on display -- the same performance rule the other three screens'
-/// own `_if_active` builders follow.
-#[allow(clippy::too_many_arguments)]
-fn build_time_screen_if_active(
+/// Screen 1's own model (issue #688, design v1 part 2), built only
+/// while it's actually on display -- the same performance rule the
+/// other three screens' own `_if_active` builders follow.
+fn build_signal_screen_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
     plan: &oscilloscope_core::plan::PlanTree,
     model: &oscilloscope_core::model::RunModel,
     state: Option<&serde_json::Value>,
-    story: &[oscilloscope_core::diff::LogLine],
     now: &str,
-) -> Option<oscilloscope_core::screens::TimeScreen> {
-    if app.screen != oscilloscope_core::screens::Screen::Time {
+) -> Option<oscilloscope_core::screens::SignalScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Signal {
         return None;
     }
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-    let selected_path = details_selection_path(app);
-    Some(oscilloscope_core::screens::build_time_screen(
+    Some(oscilloscope_core::screens::build_signal(
         &render_state.rows,
+        &render_state.header,
         &flat,
         plan,
         model,
-        &render_state.header,
         state,
-        story,
-        selected_path.as_deref(),
-        &app.time_expanded_loops,
+        app.signal_column_ms,
+        app.signal_cursor_col,
         now,
     ))
 }
 
-/// Issue #637 (extended by #650 to screen 1, #678 to screen 0): the
+/// Issue #637 (extended by #688 to screen 1, #678 to screen 0): the
 /// transcript path for whichever step is actually on screen right now
-/// -- the Tape's own selected step on screen 0, Flow's and Time's own
-/// selected step on screens 2 and 1 -- `None` on every other screen.
-/// Tails a finished
-/// agent's own `meta.raw.transcript` too, not just a running one's
-/// `meta.live.transcript` -- the Time screen's zoom pane (issue #650)
-/// is the first thing that ever shows a finished agent's own bands,
-/// which need the transcript the same way a running one's do.
+/// -- the Tape's own selected step on screen 0, Flow's and Signal's
+/// own selected step on screens 2 and 1 -- `None` on every other
+/// screen. Tails a finished agent's own `meta.raw.transcript` too,
+/// not just a running one's `meta.live.transcript`.
 fn focused_agent_transcript_path(
     app: &App,
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
-    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
+    signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
 ) -> Option<String> {
     use oscilloscope_core::screens::{FocusDetail, Screen};
     let step = match app.screen {
         Screen::Tape => tape_screen.and_then(|t| t.selected.as_ref()),
         Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),
-        Screen::Time => time_screen.and_then(|t| t.selected.as_ref()),
+        Screen::Signal => signal_screen.and_then(|t| t.selected.as_ref()),
         _ => None,
     }?;
     match &step.detail {
@@ -1871,10 +1864,10 @@ fn tail_focused_transcript(
     app: &App,
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
-    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
+    signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
     cache: &mut TranscriptTailCache,
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
-    let path = focused_agent_transcript_path(app, tape_screen, flow_screen, time_screen)?;
+    let path = focused_agent_transcript_path(app, tape_screen, flow_screen, signal_screen)?;
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
     if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
         return cache.view.clone();
@@ -2130,13 +2123,12 @@ fn run_tui(
         &story,
         &now_str,
     );
-    let mut time_screen = build_time_screen_if_active(
+    let mut signal_screen = build_signal_screen_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         current_state.as_ref(),
-        &story,
         &now_str,
     );
     let mut transcript_cache = TranscriptTailCache::default();
@@ -2144,7 +2136,7 @@ fn run_tui(
         &app,
         tape_screen.as_ref(),
         flow_screen.as_ref(),
-        time_screen.as_ref(),
+        signal_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
@@ -2353,20 +2345,19 @@ fn run_tui(
                 &story,
                 &now_str,
             );
-            time_screen = build_time_screen_if_active(
+            signal_screen = build_signal_screen_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 current_state.as_ref(),
-                &story,
                 &now_str,
             );
             transcript_view = tail_focused_transcript(
                 &app,
                 tape_screen.as_ref(),
                 flow_screen.as_ref(),
-                time_screen.as_ref(),
+                signal_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
@@ -2404,12 +2395,9 @@ fn run_tui(
             } else {
                 Vec::new()
             };
-        let visible = match (&flow_screen, &time_screen) {
-            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+        let visible = match &flow_screen {
+            Some(_) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 flow_owned.iter().collect()
-            }
-            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
-                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
             }
             _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
                 tape_owned.iter().collect()
@@ -2566,20 +2554,19 @@ fn run_tui(
                             &story,
                             &now_str,
                         );
-                        time_screen = build_time_screen_if_active(
+                        signal_screen = build_signal_screen_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             current_state.as_ref(),
-                            &story,
                             &now_str,
                         );
                         transcript_view = tail_focused_transcript(
                             &app,
                             tape_screen.as_ref(),
                             flow_screen.as_ref(),
-                            time_screen.as_ref(),
+                            signal_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -2653,7 +2640,7 @@ fn run_tui(
                     tape_screen.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
-                    time_screen.as_ref(),
+                    signal_screen.as_ref(),
                     transcript_view.as_ref(),
                     &mut cost_layout,
                 );
@@ -3407,13 +3394,12 @@ fn run_tui_watch(
         &story,
         &now_str,
     );
-    let mut time_screen = build_time_screen_if_active(
+    let mut signal_screen = build_signal_screen_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         last_state.as_ref(),
-        &story,
         &now_str,
     );
     let mut transcript_cache = TranscriptTailCache::default();
@@ -3421,7 +3407,7 @@ fn run_tui_watch(
         &app,
         tape_screen.as_ref(),
         flow_screen.as_ref(),
-        time_screen.as_ref(),
+        signal_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
@@ -3660,20 +3646,19 @@ fn run_tui_watch(
                 &story,
                 &now_str,
             );
-            time_screen = build_time_screen_if_active(
+            signal_screen = build_signal_screen_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 last_state.as_ref(),
-                &story,
                 &now_str,
             );
             transcript_view = tail_focused_transcript(
                 &app,
                 tape_screen.as_ref(),
                 flow_screen.as_ref(),
-                time_screen.as_ref(),
+                signal_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
@@ -3698,12 +3683,9 @@ fn run_tui_watch(
             } else {
                 Vec::new()
             };
-        let visible = match (&flow_screen, &time_screen) {
-            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
+        let visible = match &flow_screen {
+            Some(_) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 flow_owned.iter().collect()
-            }
-            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
-                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
             }
             _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
                 tape_owned.iter().collect()
@@ -3827,20 +3809,19 @@ fn run_tui_watch(
                             &story,
                             &now_str,
                         );
-                        time_screen = build_time_screen_if_active(
+                        signal_screen = build_signal_screen_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             last_state.as_ref(),
-                            &story,
                             &now_str,
                         );
                         transcript_view = tail_focused_transcript(
                             &app,
                             tape_screen.as_ref(),
                             flow_screen.as_ref(),
-                            time_screen.as_ref(),
+                            signal_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -3903,7 +3884,7 @@ fn run_tui_watch(
                     tape_screen.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
-                    time_screen.as_ref(),
+                    signal_screen.as_ref(),
                     transcript_view.as_ref(),
                     &mut cost_layout,
                 );
@@ -4146,14 +4127,14 @@ mod tests {
         }})
     }
 
-    /// Issue #637 (extended by #650 to screen 1): transcript tailing
+    /// Issue #637 (extended by #688 to screen 1): transcript tailing
     /// only ever happens for the one step actually on screen -- the
     /// overview's own focused step on screen 0, Flow's selected step
-    /// on screen 2, Time's selected step on screen 1, and nothing at
-    /// all on screen 3, even though the very same agent step exists
-    /// in state either way.
+    /// on screen 2, Signal's selected step on screen 1, and nothing
+    /// at all on screen 3, even though the very same agent step
+    /// exists in state either way.
     #[test]
-    fn focused_agent_transcript_path_is_none_off_the_overview_flow_and_time_screens() {
+    fn focused_agent_transcript_path_is_none_off_the_overview_flow_and_signal_screens() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = agent_running_state_for_transcript_path_test();
@@ -4195,16 +4176,15 @@ mod tests {
             rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:01Z",
         );
-        let time_screen = oscilloscope_core::screens::build_time_screen(
+        let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.header,
             &flat,
             &plan,
             &model,
-            &rendered.header,
             Some(&state),
-            &[],
-            Some("prime.fix"),
-            &Default::default(),
+            100,
+            None,
             "2026-01-01T00:00:01Z",
         );
 
@@ -4215,7 +4195,7 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen)
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
@@ -4226,18 +4206,18 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen)
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
 
-        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.screen = oscilloscope_core::screens::Screen::Signal;
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen)
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
@@ -4248,10 +4228,10 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen)
             ),
             None,
-            "no screen but tape/flow/time ever names a transcript to tail"
+            "no screen but tape/flow/signal ever names a transcript to tail"
         );
     }
 

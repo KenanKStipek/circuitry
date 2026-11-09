@@ -28,7 +28,7 @@ pub enum Screen {
     /// column.
     #[default]
     Tape,
-    Time,
+    Signal,
     Flow,
     Cost,
 }
@@ -37,7 +37,7 @@ impl Screen {
     pub fn number(self) -> u8 {
         match self {
             Screen::Tape => 0,
-            Screen::Time => 1,
+            Screen::Signal => 1,
             Screen::Flow => 2,
             Screen::Cost => 3,
         }
@@ -46,7 +46,7 @@ impl Screen {
     pub fn label(self) -> &'static str {
         match self {
             Screen::Tape => "tape",
-            Screen::Time => "time",
+            Screen::Signal => "signal",
             Screen::Flow => "flow",
             Screen::Cost => "cost",
         }
@@ -55,7 +55,7 @@ impl Screen {
     pub fn is_available(self) -> bool {
         matches!(
             self,
-            Screen::Tape | Screen::Time | Screen::Flow | Screen::Cost
+            Screen::Tape | Screen::Signal | Screen::Flow | Screen::Cost
         )
     }
 
@@ -65,7 +65,7 @@ impl Screen {
     pub fn from_key(c: char) -> Option<Screen> {
         let screen = match c {
             '0' => Screen::Tape,
-            '1' => Screen::Time,
+            '1' => Screen::Signal,
             '2' => Screen::Flow,
             '3' => Screen::Cost,
             _ => return None,
@@ -75,7 +75,7 @@ impl Screen {
 
     /// Every screen with a tab, in tab order (issue #626's header).
     pub fn available() -> &'static [Screen] {
-        &[Screen::Tape, Screen::Time, Screen::Flow, Screen::Cost]
+        &[Screen::Tape, Screen::Signal, Screen::Flow, Screen::Cost]
     }
 }
 
@@ -460,7 +460,7 @@ pub enum FocusDetail {
         raw_files_changed: Option<u64>,
         /// `meta.raw.turns`.
         raw_turns: Option<u64>,
-        /// `meta.raw.tool_calls` -- the Time screen's zoom pane footer
+        /// `meta.raw.tool_calls` -- the Flow screen's selected pane
         /// (issue #650) needs this once the session has finished,
         /// the same way it reads `meta.live.tool_calls` while running.
         raw_tool_calls: Option<u64>,
@@ -853,7 +853,7 @@ pub enum TapeItem {
 /// Screen 0's own model (issue #678, replacing the old Overview): the
 /// Tape's list, top to bottom, plus the counts and head rule its own
 /// title and top border need, and the selected row's own detail (the
-/// same [`FocusedStep`] the Flow and Time screens already build
+/// same [`FocusedStep`] the Flow screen already builds
 /// theirs from).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapeScreen {
@@ -901,7 +901,7 @@ pub struct TapeScreen {
 }
 
 /// The selected row's own prompt content (issue #678's §2.1 detail
-/// pane), beyond what [`FocusedStep`] already carries for Flow/Time.
+/// pane), beyond what [`FocusedStep`] already carries for Flow.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TapeSelectedDetail {
     /// The row's own finish instant, for the Status line's clock
@@ -2360,6 +2360,883 @@ pub fn build_tape(
     }
 }
 
+// ---------------------------------------------------------------------
+// Screen 1: Signal (issue #688)
+// ---------------------------------------------------------------------
+
+/// One column's own totals (§2.2's trace, §3.5's bucketing rule): a
+/// column spans [`col * column_s`, `(col+1) * column_s`) seconds
+/// since `run_start`, and every finished prompt's own sent/received
+/// pair lands in the column that holds its own end time -- `sent`/
+/// `received` are this column's whole sum, over every prompt whose
+/// end landed here, not one prompt's own figure. `sent_live`/
+/// `received_live` mark a running prompt's own estimate, counted
+/// only in the Now column (R3: "grows its column at Now"), the same
+/// mutually-exclusive rule the Tape's own live estimate follows --
+/// never both a finished node's exact figure and its own running
+/// estimate in the same redraw.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SignalBucket {
+    pub sent: u64,
+    pub received: u64,
+    pub sent_live: bool,
+    pub received_live: bool,
+    /// How many distinct prompts contributed to this column (the Now
+    /// pane's own "3 prompts in one step").
+    pub prompt_count: u64,
+    /// The latest timestamp among this column's own contributors --
+    /// Peak's own clock and "time since the last burst" both read
+    /// this directly, rather than re-deriving a clock from the
+    /// column's own index (which the run's own zone and rounding
+    /// could disagree with).
+    pub last_ts: Option<String>,
+}
+
+/// What a trace column's own axis mark means (§3.7): a decision wins
+/// over a finished prompt when both land in the same column (R3: the
+/// design's own `run2` fixture has three prompts and one decision
+/// share a column, and the frame marks it `◆`, never `✓`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalMark {
+    Done,
+    Decision,
+}
+
+/// A step the decision's own branch already released (§2.2: "a
+/// decision with its branch and the steps it released"), styled as
+/// its own run of spans by a front end -- `label`/`tokens`/`dev_pct`
+/// read the same way a Tape row's own would.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalReleasedStep {
+    pub label: String,
+    pub tokens: Option<u64>,
+    pub dev_pct: Option<f64>,
+}
+
+/// A step row's own kind-specific content (§2.2's "step rows under
+/// the axis"), already composed text wherever a single style covers
+/// the whole fragment -- a front end never re-derives a kind's own
+/// shape from a path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignalStepKind {
+    /// `215 t · +6% · Bug.` (the deviation and the reply's own first
+    /// words each absent when there is nothing to show).
+    Prompt { rest: String },
+    /// `sleep 3 · 3.0s`, drawn as a bar from this row's own `col` to
+    /// `end_col` (R3's own tool bar), the label overlaid at its own
+    /// start and the rest of the span filled with the row's own bar
+    /// rule.
+    Tool { end_col: usize, text: String },
+    /// The branch's own released steps (the row's own `label`,
+    /// already `gate → then`, names the branch itself), and a
+    /// trailing muted `suffix` (R1's own "from the frames": the very
+    /// next top-level row's own progress, read off the frame rather
+    /// than the design text, which says nothing about it).
+    Decision {
+        released: Vec<SignalReleasedStep>,
+        suffix: String,
+    },
+    /// `2 Running · 1 Queued` (the same slots rule the Tape's own
+    /// `SlotsRule` already computes).
+    Loop { status_text: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalStepRow {
+    pub path: String,
+    pub label: String,
+    pub col: usize,
+    pub row_kind: RowKind,
+    pub status: StatusKind,
+    pub kind: SignalStepKind,
+}
+
+/// A Now pane row for a running leaf (§2.2: `● drafts › iter_0 ›
+/// pause   0.6s · sleep 1 · slot 1`) -- `label` is the full
+/// breadcrumb from the run's own root, since the Now pane (unlike
+/// the Tape's own list) has no loop heading above it to carry the
+/// loop's own name instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalRunningRow {
+    pub path: String,
+    pub label: String,
+    pub what: String,
+    pub slot: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SignalNowPane {
+    /// `2 of 2 Slots Busy` -- `None` with no loop currently busy
+    /// (the pane's own title falls back to a bare `Now`).
+    pub slots_text: Option<String>,
+    pub running: Vec<SignalRunningRow>,
+    /// A pass waiting for a free slot (§2.2: `· drafts › iter_2
+    /// waits for a slot`).
+    pub waiting: Vec<(String, String)>,
+    /// The active loop's own row (§2.2: `⟳ drafts  0 of 3 passes ·
+    /// 130 t per pass`) -- label and the status text after it.
+    pub loop_summary: Option<(String, String)>,
+    pub last_burst: Option<String>,
+    pub next_signal: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SignalReadings {
+    pub sent: u64,
+    pub received: u64,
+    /// Sent to received, to one decimal (§2.2: `11.5 : 1`) -- `None`
+    /// with nothing received yet.
+    pub ratio: Option<f64>,
+    /// The largest column's own sent figure and its clock.
+    pub peak: Option<(u64, String)>,
+    /// The single largest finished prompt's own breadcrumb and total.
+    pub largest: Option<(String, u64)>,
+    pub quiet_s: Option<f64>,
+}
+
+/// Screen 1's own model (issue #688, design v1 part 2, replacing
+/// Time): the trace's own columns and axis marks, the step rows
+/// under it, the Now pane and Readings -- built from exactly the
+/// same inputs [`build_tape`] already has, plus `column_ms` (R5's
+/// own zoom, 50-1,000 ms per column, 100 the default) -- no engine
+/// change, same as the Tape's own model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalScreen {
+    /// The run's own model name, for the title's `Tokens to
+    /// scripted-model` -- `None` when nothing has run yet.
+    pub model_label: Option<String>,
+    pub column_ms: u64,
+    pub sent_axis_top: u64,
+    pub received_axis_top: u64,
+    pub buckets: Vec<SignalBucket>,
+    pub marks: Vec<(usize, SignalMark)>,
+    /// The Now sweep's own column, `None` before the run has a start
+    /// time at all.
+    pub now_col: Option<usize>,
+    /// `now`'s own raw timestamp, for a front end's own clock
+    /// formatting (never pre-formatted here, same reason a
+    /// `TapeRow`'s own `ts` isn't) -- `None` exactly when `now_col`
+    /// is.
+    pub now_ts: Option<String>,
+    /// `now`'s own elapsed seconds since `run_start` -- the Now
+    /// label's own `3.6s`, kept alongside the raw clock so a front
+    /// end never has to re-derive it from the two timestamps.
+    pub now_elapsed_s: Option<f64>,
+    /// The whole run's own usual end, raw (`header.history_eta_ts`),
+    /// for the `Ahead` label's own `usually ends <clock>`.
+    pub ahead_eta_ts: Option<String>,
+    pub step_rows: Vec<SignalStepRow>,
+    /// The faint plan-ahead list trailing the *last* step row (R3:
+    /// the current loop's own next pass, then every top-level row
+    /// still ahead, then `■ End`) -- `None` once nothing is ahead any
+    /// more (a loop with no queued pass and no sibling left, on a
+    /// finished run).
+    pub ahead_suffix: Option<String>,
+    pub now_pane: SignalNowPane,
+    pub readings: SignalReadings,
+    /// The Help overlay's own token legend reads this the same way
+    /// the Tape's does -- Signal draws no bars of its own at this
+    /// unit, but keeps the same field name so `tui::draw`'s shared
+    /// dialog plumbing needs no Signal-specific case of its own.
+    pub unit: u64,
+    /// The step under the scrub cursor (Now when not scrubbed), for
+    /// `enter`'s own full-screen step view (§4: "opens the step
+    /// under the cursor") -- the same [`FocusedStep`] the Tape's own
+    /// detail pane builds theirs from.
+    pub selected: Option<FocusedStep>,
+    /// The Totals row's own "usual" deviation (§3.3), the same sum
+    /// over every already-run-or-running row's own usual tokens the
+    /// Tape's own `usual_so_far_tokens` is.
+    pub usual_so_far_tokens: Option<u64>,
+    /// §3.2's status line: the most recently finished row, any
+    /// depth -- a front end reads its own glyph/colour straight off
+    /// `kind`/`status`, the same way the Tape's own status line
+    /// already does for its own last row.
+    pub last_finished: Option<SignalLastFinished>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalLastFinished {
+    pub label: String,
+    pub kind: RowKind,
+    pub status: StatusKind,
+    pub tokens: Option<(u64, u64)>,
+    pub ts: Option<String>,
+}
+
+/// §3.5's own doubling series (`300, 600, 1,200, 2,400, ...` for
+/// sent, `40, 80, 160, 320, ...` for received): the smallest value
+/// in the series starting at `start` that is at least `need`.
+fn signal_axis_series_min(start: u64, need: u64) -> u64 {
+    let mut v = start;
+    while v < need {
+        v *= 2;
+    }
+    v
+}
+
+/// §3.5's axis rule: with history, the smallest of the doubling
+/// series that holds 1.5x the usual largest step's own sent (or
+/// received) figure; without history, 600 (or 80), doubled exactly
+/// once if the run's own total-so-far has already passed it, and
+/// never again (R3: "never sliding").
+fn signal_axis_top(largest_usual: Option<u64>, so_far: u64, start: u64) -> u64 {
+    match largest_usual.filter(|&v| v > 0) {
+        Some(largest) => {
+            let need = (largest as f64 * 1.5).ceil() as u64;
+            signal_axis_series_min(start, need)
+        }
+        None => {
+            if so_far > start {
+                start * 2
+            } else {
+                start
+            }
+        }
+    }
+}
+
+/// A leaf's own breadcrumb relative to the run's root (§2.2's Now
+/// pane: `drafts › iter_0 › pause`, never stripped of its own loop
+/// name the way the Tape's list rows are).
+fn signal_breadcrumb(path: &str) -> String {
+    crate::cost::path_breadcrumb_relative_to(path, "prime")
+}
+
+/// `path` cut back to its own first `iter_N` segment (`prime.drafts.
+/// iter_2.draft` to `prime.drafts.iter_2`) -- `None` for a path with
+/// no loop pass segment at all.
+fn signal_pass_path(path: &str) -> Option<&str> {
+    let mut end = 0;
+    for (i, seg) in path.split('.').enumerate() {
+        end += seg.len() + if i == 0 { 0 } else { 1 };
+        if seg.starts_with("iter_") {
+            return Some(&path[..end]);
+        }
+    }
+    None
+}
+
+/// The sum of tokens over every pass of `loop_path` that has one so
+/// far, and how many such passes there are -- the loop row's own
+/// `130 t per pass` (R4) and a decision's own trailing `· drafts ×2
+/// · 261 t` (R1's "from the frames") both read this.
+fn signal_loop_pass_tokens(loop_path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, u64) {
+    let prefix = format!("{loop_path}.iter_");
+    let mut per_pass: BTreeMap<u64, u64> = BTreeMap::new();
+    for (path, node) in flat {
+        let Some(rest) = path.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some(Ok(idx)) = rest.split('.').next().map(str::parse) else {
+            continue;
+        };
+        let (sent, received) = crate::model::node_tokens(&node.meta);
+        *per_pass.entry(idx).or_insert(0) += sent + received;
+    }
+    let with_tokens: Vec<u64> = per_pass.values().copied().filter(|&t| t > 0).collect();
+    (with_tokens.iter().sum(), with_tokens.len() as u64)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_signal(
+    rows: &[Row],
+    header: &crate::render::Header,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    state: Option<&Value>,
+    column_ms: u64,
+    cursor_col: Option<usize>,
+    now: &str,
+) -> SignalScreen {
+    let run_start = header.run_start_ts.as_deref();
+    let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
+    let column_s = (column_ms.max(1) as f64) / 1000.0;
+    let col_of = |offset_s: f64| (offset_s / column_s).floor().max(0.0) as usize;
+    let now_offset = elapsed_offset(now);
+    let now_col = now_offset.map(col_of);
+
+    let model_label = rows
+        .iter()
+        .filter(|r| r.kind == RowKind::Prompt)
+        .find_map(|r| {
+            flat.get(&r.path)
+                .and_then(|n| n.meta.get("model"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string);
+
+    let mut buckets: Vec<SignalBucket> = Vec::new();
+    let mut marks: BTreeMap<usize, SignalMark> = BTreeMap::new();
+    fn ensure_len(buckets: &mut Vec<SignalBucket>, len: usize) {
+        if buckets.len() < len {
+            buckets.resize(len, SignalBucket::default());
+        }
+    }
+    for row in rows {
+        let node = flat.get(&row.path);
+        match row.kind {
+            RowKind::Prompt | RowKind::Reflector => {
+                let is_running = matches!(
+                    row.status.kind,
+                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                );
+                if is_running {
+                    let Some(now_col) = now_col else { continue };
+                    let Some(live) = crate::model::prompt_live_figures(node, &row.path, model, now)
+                    else {
+                        continue;
+                    };
+                    ensure_len(&mut buckets, now_col + 1);
+                    let b = &mut buckets[now_col];
+                    if let Some((sent, live_sent)) = live.tokens_sent_or_estimate() {
+                        b.sent += sent;
+                        b.sent_live = b.sent_live || live_sent;
+                    }
+                    if let Some((received, live_recv)) = live.tokens_received_or_estimate() {
+                        b.received += received;
+                        b.received_live = b.received_live || live_recv;
+                    }
+                    b.prompt_count += 1;
+                    b.last_ts = Some(now.to_string());
+                } else if row.status.kind == StatusKind::Done
+                    || row.status.kind == StatusKind::FailedHandled
+                {
+                    let Some(node) = node else { continue };
+                    let Some(end_ts) = node.completed_at.as_deref() else {
+                        continue;
+                    };
+                    let Some(offset) = elapsed_offset(end_ts) else {
+                        continue;
+                    };
+                    let col = col_of(offset);
+                    ensure_len(&mut buckets, col + 1);
+                    let (sent, received) = crate::model::node_tokens(&node.meta);
+                    let b = &mut buckets[col];
+                    b.sent += sent;
+                    b.received += received;
+                    b.prompt_count += 1;
+                    b.last_ts = Some(end_ts.to_string());
+                    marks.entry(col).or_insert(SignalMark::Done);
+                }
+            }
+            RowKind::If => {
+                let Some(node) = node else { continue };
+                if node.branch.is_none() {
+                    continue;
+                }
+                let Some(start_ts) = node.created_at.as_deref() else {
+                    continue;
+                };
+                let Some(offset) = elapsed_offset(start_ts) else {
+                    continue;
+                };
+                marks.insert(col_of(offset), SignalMark::Decision);
+            }
+            _ => {}
+        }
+    }
+
+    let sent_axis_top_val = signal_axis_top(
+        header
+            .history_step_usual
+            .values()
+            .filter_map(|s| s.tokens_sent_p50)
+            .max(),
+        header.tokens_sent,
+        600,
+    );
+    let received_axis_top_val = signal_axis_top(
+        header
+            .history_step_usual
+            .values()
+            .filter_map(|s| s.tokens_received_p50)
+            .max(),
+        header.tokens_received,
+        80,
+    );
+
+    let now_ts = now_col.map(|_| now.to_string());
+    let ahead_eta_ts = header.history_eta_ts.clone();
+
+    // §2.2's own step rows: one per top-level entry that has started
+    // (`rows`'s own depth-1 slice, in plan order -- never real finish
+    // order, which this screen has no Now band to anchor against the
+    // way the Tape's own list does), each at its own start column.
+    let top_level: Vec<&Row> = rows.iter().filter(|r| r.depth == 1).collect();
+    let started: Vec<&&Row> = top_level
+        .iter()
+        .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+        .collect();
+    let mut step_rows = Vec::new();
+    for row in &started {
+        let Some(node) = flat.get(&row.path) else {
+            continue;
+        };
+        let Some(start_ts) = node.created_at.as_deref() else {
+            continue;
+        };
+        let Some(offset) = elapsed_offset(start_ts) else {
+            continue;
+        };
+        let col = col_of(offset);
+        let label = tape_row_label(row, flat, plan);
+        let kind = match row.kind {
+            RowKind::Prompt | RowKind::Reflector => {
+                let (sent, received) = crate::model::node_tokens(&node.meta);
+                let total = sent + received;
+                let usual = tape_row_usual_tokens(&row.path, plan, header);
+                let dev = usual
+                    .filter(|&u| u > 0)
+                    .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
+                let reply_words = crate::render::display_value(&node.value);
+                let reply_words = (!reply_words.is_empty()).then(|| first_words(&reply_words, 24));
+                let mut parts = vec![format!(
+                    "{} t",
+                    crate::format::format_tokens_thousands(total)
+                )];
+                if let Some(dev) = dev {
+                    parts.push(format!("{dev:+.0}%"));
+                }
+                if let Some(words) = reply_words {
+                    parts.push(words);
+                }
+                SignalStepKind::Prompt {
+                    rest: parts.join(" \u{b7} "),
+                }
+            }
+            RowKind::If => {
+                let prefix = format!("{}.", row.path);
+                let released = rows
+                    .iter()
+                    .filter(|r| {
+                        r.depth == row.depth + 1
+                            && r.path.starts_with(&prefix)
+                            && !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped)
+                    })
+                    .map(|r| {
+                        let rn = flat.get(&r.path);
+                        let (sent, received) = rn
+                            .map(|n| crate::model::node_tokens(&n.meta))
+                            .unwrap_or((0, 0));
+                        let total = sent + received;
+                        let usual = tape_row_usual_tokens(&r.path, plan, header);
+                        let dev = usual
+                            .filter(|&u| u > 0)
+                            .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
+                        SignalReleasedStep {
+                            label: r.label.clone(),
+                            tokens: (total > 0).then_some(total),
+                            dev_pct: dev,
+                        }
+                    })
+                    .collect();
+                // R1's own "from the frames": the very next
+                // top-level row's own progress, when it is an
+                // already-active loop -- the design's text never
+                // names this, only `run2`'s own frame does.
+                let suffix = top_level
+                    .iter()
+                    .position(|r| r.path == row.path)
+                    .and_then(|idx| top_level.get(idx + 1))
+                    .filter(|r| r.kind == RowKind::Loop)
+                    .map(|r| {
+                        let (tokens, count) = signal_loop_pass_tokens(&r.path, flat);
+                        format!(
+                            "\u{b7} {} \u{d7}{count} \u{b7} {} t",
+                            tape_row_label(r, flat, plan),
+                            crate::format::format_tokens_thousands(tokens)
+                        )
+                    })
+                    .unwrap_or_default();
+                SignalStepKind::Decision { released, suffix }
+            }
+            RowKind::Loop => {
+                let busy = rows
+                    .iter()
+                    .filter(|r| {
+                        r.path.starts_with(&format!("{}.", row.path))
+                            && r.kind.is_leaf()
+                            && matches!(
+                                r.status.kind,
+                                StatusKind::Running
+                                    | StatusKind::LikelyRunning
+                                    | StatusKind::RunningOrQueued
+                            )
+                    })
+                    .count() as u64;
+                let total = row.loop_progress.and_then(|p| p.total);
+                let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
+                let queued = total.map(|t| t.saturating_sub(done).saturating_sub(busy));
+                let status_text = match queued {
+                    Some(queued) => format!("{busy} Running \u{b7} {queued} Queued"),
+                    None => format!("{busy} Running"),
+                };
+                SignalStepKind::Loop { status_text }
+            }
+            _ => {
+                let what = tape_tool_what(row, Some(node));
+                let (cmd, duration) = match what.split_once(" \u{b7} ") {
+                    Some((d, c)) => (c.to_string(), d.to_string()),
+                    None => (String::new(), what),
+                };
+                let text = if cmd.is_empty() {
+                    format!("{label} \u{b7} {duration}")
+                } else {
+                    format!("{label} \u{b7} {cmd} \u{b7} {duration}")
+                };
+                let end_col = row
+                    .duration_s
+                    .map(|d| col + ((d / column_s).round() as usize).max(1) - 1)
+                    .unwrap_or(col);
+                SignalStepKind::Tool { end_col, text }
+            }
+        };
+        step_rows.push(SignalStepRow {
+            path: row.path.clone(),
+            label,
+            col,
+            row_kind: row.kind,
+            status: row.status.kind,
+            kind,
+        });
+    }
+
+    // The faint plan-ahead list trailing the last step row (R3): the
+    // last started top-level row's own loop, if any, names its own
+    // next undispatched pass first; then every top-level row still
+    // ahead, in plan order; then `■ End` while the run is live.
+    let last_started = started.last().copied();
+    let mut ahead_items: Vec<String> = Vec::new();
+    if let Some(row) = last_started {
+        if row.kind == RowKind::Loop {
+            let busy = rows
+                .iter()
+                .filter(|r| {
+                    r.path.starts_with(&format!("{}.", row.path))
+                        && r.kind.is_leaf()
+                        && matches!(
+                            r.status.kind,
+                            StatusKind::Running
+                                | StatusKind::LikelyRunning
+                                | StatusKind::RunningOrQueued
+                        )
+                })
+                .count() as u64;
+            let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
+            let total = row.loop_progress.and_then(|p| p.total);
+            if total.is_none_or(|t| done + busy < t) {
+                ahead_items.push(format!("iter_{}", done + busy));
+            }
+        }
+    }
+    for row in top_level
+        .iter()
+        .filter(|r| matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+    {
+        ahead_items.push(tape_row_label(row, flat, plan));
+    }
+    let ahead_suffix = if ahead_items.is_empty() {
+        header
+            .run_end_ts
+            .is_none()
+            .then(|| "\u{25a0} End".to_string())
+    } else {
+        let mut text = ahead_items
+            .iter()
+            .map(|i| format!("\u{b7} {i}"))
+            .collect::<Vec<_>>()
+            .join("   ");
+        if header.run_end_ts.is_none() {
+            text.push_str("   \u{25a0} End");
+        }
+        Some(text)
+    };
+
+    // The Now pane.
+    let running_loops: Vec<&Row> = top_level
+        .iter()
+        .filter(|r| r.kind == RowKind::Loop && r.status.kind != StatusKind::Done)
+        .copied()
+        .collect();
+    let slots_text = running_loops.first().map(|loop_row| {
+        let prefix = format!("{}.", loop_row.path);
+        let busy = rows
+            .iter()
+            .filter(|r| {
+                r.path.starts_with(&prefix)
+                    && r.kind.is_leaf()
+                    && matches!(
+                        r.status.kind,
+                        StatusKind::Running
+                            | StatusKind::LikelyRunning
+                            | StatusKind::RunningOrQueued
+                    )
+            })
+            .count() as u64;
+        let slots = model
+            .running_or_queued_bound(&loop_row.path)
+            .unwrap_or(busy);
+        format!("{busy} of {slots} Slots Busy")
+    });
+    let mut running = Vec::new();
+    let mut per_loop_slot: BTreeMap<String, u64> = BTreeMap::new();
+    for row in rows.iter().filter(|r| {
+        r.kind.is_leaf()
+            && matches!(
+                r.status.kind,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            )
+    }) {
+        let (what, _, _) = tape_row_content(row, flat, plan, model, state, false, false, now);
+        let loop_path = running_loops
+            .iter()
+            .find(|l| row.path.starts_with(&format!("{}.", l.path)))
+            .map(|l| l.path.clone());
+        let slot = loop_path.map(|lp| {
+            let n = per_loop_slot.entry(lp).or_insert(0);
+            *n += 1;
+            *n
+        });
+        running.push(SignalRunningRow {
+            path: row.path.clone(),
+            label: signal_breadcrumb(&row.path),
+            what,
+            slot,
+        });
+    }
+    // A pass not yet dispatched (`iter_2`, say) has no row of its
+    // own in `rows` at all, only once it starts -- the same gap
+    // `build_tape`'s own `missing_loop_pass_rows` fills in for the
+    // Tape's list, needed here for "waits for a slot" and "Next
+    // Signal" to see an undispatched pass's own leaves too.
+    let extra_rows = crate::render::missing_loop_pass_rows(rows, flat, plan, state);
+    let augmented: Vec<&Row> = rows
+        .iter()
+        .chain(extra_rows.iter().map(|(_, r)| r))
+        .collect();
+
+    let mut waiting = Vec::new();
+    for loop_row in &running_loops {
+        let prefix = format!("{}.", loop_row.path);
+        // The pass itself never gets a row of its own (only its own
+        // leaves do) -- the first pending leaf under a queued pass
+        // names it, its own breadcrumb cut back to the pass (R1's
+        // own "from the frames": `drafts › iter_2`, never drilling
+        // into the leaf).
+        if let Some(next) = augmented.iter().find(|r| {
+            r.path.starts_with(&prefix)
+                && tape_row_is_under_a_queued_pass(&r.path)
+                && r.status.kind == StatusKind::Pending
+        }) {
+            if let Some(pass_path) = signal_pass_path(&next.path) {
+                waiting.push((signal_breadcrumb(pass_path), "waits for a slot".to_string()));
+            }
+        }
+    }
+    let loop_summary = running_loops.first().map(|loop_row| {
+        let done = loop_row.loop_progress.map(|p| p.done).unwrap_or(0);
+        let total = loop_row
+            .loop_progress
+            .and_then(|p| p.total)
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        let (tokens, count) = signal_loop_pass_tokens(&loop_row.path, flat);
+        let per_pass = match tokens.checked_div(count) {
+            Some(avg) => format!(" \u{b7} {avg} t per pass"),
+            None => String::new(),
+        };
+        (
+            tape_row_label(loop_row, flat, plan),
+            format!("{done} of {total} passes{per_pass}"),
+        )
+    });
+
+    let last_burst_idx = buckets
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, b)| b.sent + b.received > 0)
+        .map(|(i, _)| i);
+    let last_burst = last_burst_idx.and_then(|i| {
+        let b = &buckets[i];
+        let ts = b.last_ts.as_deref()?;
+        let age = duration_seconds(ts, now)?;
+        Some(format!(
+            "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {} prompt{} in one step",
+            crate::format::format_duration(age),
+            crate::format::format_tokens_thousands(b.sent),
+            crate::format::format_tokens_thousands(b.received),
+            b.prompt_count,
+            if b.prompt_count == 1 { "" } else { "s" },
+        ))
+    });
+    // An undispatched pass's own leaf (an `extra_rows` entry)
+    // always precedes a later top-level sibling in real plan order
+    // (its own loop is already running), so it's checked first --
+    // `rows` alone would read a top-level row like `summary` as
+    // "next" instead, skipping over the loop's own queued pass
+    // entirely (`augmented`'s own chained order is append-only, not
+    // plan order).
+    let is_pending_prompt = |r: &&Row| {
+        matches!(r.kind, RowKind::Prompt | RowKind::Reflector)
+            && r.status.kind == StatusKind::Pending
+    };
+    let next_signal_row = extra_rows
+        .iter()
+        .map(|(_, r)| r)
+        .find(|r| is_pending_prompt(r))
+        .or_else(|| rows.iter().find(is_pending_prompt));
+    let next_signal = next_signal_row.map(|r| {
+        let queued = tape_row_is_under_a_queued_pass(&r.path)
+            && running_loops
+                .iter()
+                .any(|l| r.path.starts_with(&format!("{}.", l.path)));
+        let qualifier = if queued { "next slot" } else { "queued" };
+        let usual = tape_row_usual_tokens(&r.path, plan, header);
+        let usual_text = usual
+            .map(|u| {
+                format!(
+                    " \u{b7} usually {} t",
+                    crate::format::format_tokens_thousands(u)
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            "{} \u{b7} {qualifier}{usual_text}",
+            tape_row_label(r, flat, plan)
+        )
+    });
+
+    // Readings.
+    let ratio = (header.tokens_received > 0)
+        .then(|| (header.tokens_sent as f64 / header.tokens_received as f64 * 10.0).round() / 10.0);
+    let peak = buckets
+        .iter()
+        .filter(|b| b.sent > 0)
+        .max_by_key(|b| b.sent)
+        .and_then(|b| Some((b.sent, b.last_ts.clone()?)));
+    let mut largest: Option<(String, u64)> = None;
+    for row in rows
+        .iter()
+        .filter(|r| matches!(r.kind, RowKind::Prompt | RowKind::Reflector))
+    {
+        let Some(node) = flat.get(&row.path) else {
+            continue;
+        };
+        let (sent, received) = crate::model::node_tokens(&node.meta);
+        let total = sent + received;
+        if total == 0 {
+            continue;
+        }
+        if largest.as_ref().is_none_or(|(_, t)| total > *t) {
+            largest = Some((tape_row_label(row, flat, plan), total));
+        }
+    }
+    let quiet_s = last_burst_idx
+        .and_then(|i| buckets[i].last_ts.as_deref())
+        .and_then(|ts| duration_seconds(ts, now));
+
+    let largest_usual_step = header
+        .history_step_usual
+        .values()
+        .filter_map(|s| s.tokens_p50)
+        .max();
+    let unit = tape_unit(largest_usual_step);
+
+    // §4's own "opens the step under the cursor": the step row with
+    // the greatest start column at or before the cursor (Now's own
+    // column when not scrubbed) is whichever step the cursor is
+    // currently sitting over.
+    let cursor = cursor_col.or(now_col);
+    let selected = cursor
+        .and_then(|c| {
+            step_rows
+                .iter()
+                .filter(|r| r.col <= c)
+                .max_by_key(|r| r.col)
+        })
+        .and_then(|r| rows.iter().find(|row| row.path == r.path))
+        .map(|row| {
+            build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+            )
+        });
+
+    SignalScreen {
+        model_label,
+        column_ms,
+        sent_axis_top: sent_axis_top_val,
+        received_axis_top: received_axis_top_val,
+        buckets,
+        marks: marks.into_iter().collect(),
+        now_col,
+        now_ts,
+        now_elapsed_s: now_offset,
+        ahead_eta_ts,
+        step_rows,
+        ahead_suffix,
+        now_pane: SignalNowPane {
+            slots_text,
+            running,
+            waiting,
+            loop_summary,
+            last_burst,
+            next_signal,
+        },
+        readings: SignalReadings {
+            sent: header.tokens_sent,
+            received: header.tokens_received,
+            ratio,
+            peak,
+            largest,
+            quiet_s,
+        },
+        unit,
+        selected,
+        usual_so_far_tokens: {
+            let sum: u64 = rows
+                .iter()
+                .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+                .filter_map(|r| tape_row_usual_tokens(&r.path, plan, header))
+                .sum();
+            (sum > 0).then_some(sum)
+        },
+        last_finished: {
+            let finish_ts = |r: &&Row| -> Option<&str> {
+                let node = flat.get(&r.path)?;
+                if r.kind == RowKind::If {
+                    node.created_at.as_deref()
+                } else {
+                    node.completed_at.as_deref()
+                }
+            };
+            rows.iter()
+                .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
+                .filter_map(|r| Some((r, elapsed_offset(finish_ts(&r)?)?)))
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(row, _)| {
+                    let node = flat.get(&row.path);
+                    let tokens = node.map(|n| crate::model::node_tokens(&n.meta));
+                    SignalLastFinished {
+                        label: tape_row_label(row, flat, plan),
+                        kind: row.kind,
+                        status: row.status.kind,
+                        tokens: tokens.filter(|(s, r)| s + r > 0),
+                        ts: finish_ts(&row).map(str::to_string),
+                    }
+                })
+        },
+    }
+}
+
 /// Screen 3's own model (issue #632): the by-store treemap for
 /// whichever [`crate::treemap::Measure`] is currently selected, the
 /// "largest stores" table and its footer, and the "tokens over time"
@@ -2545,506 +3422,6 @@ pub fn build_flow_screen(
     }
 }
 
-/// A loop row's own pass rows, spliced into [`TimeScreen::rows`]
-/// right after it when its path is in `expanded_loops` (DESIGN.md:
-/// "`⏎` on a loop row expands it into one row per pass") -- `label`
-/// already carries [`crate::time::LoopPassRow::label`]'s own prefix
-/// (`pass 1`/`#1`), since a pass row has no real tree path of its
-/// own to show a breadcrumb for.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimeLoopPassRow {
-    pub label: String,
-    pub status: RowStatus,
-    pub start_s: Option<f64>,
-    pub duration_s: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TimeDisplayRow {
-    Row(crate::time::TimeRow),
-    Pass(TimeLoopPassRow),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimeStrips {
-    /// Unbucketed (DESIGN.md's events/min strip): `oscilloscope`'s
-    /// `tui.rs` buckets these at whatever width and visible window
-    /// the bars themselves are drawn at right now, so the two always
-    /// line up (issue #650) -- a separate, fixed resolution here
-    /// couldn't keep up with `+`/`-`'s own axis zoom.
-    pub events_points: Vec<(f64, u64)>,
-    pub events_from_state: bool,
-    pub decisions: Vec<f64>,
-    /// Every currently-in-view leaf row's own `[start_s, end_s]`
-    /// (DESIGN.md's in-flight strip), a running leaf's own end
-    /// extended to now -- a container row never counts here, or one
-    /// running leaf inside a chain of containers would read as two
-    /// or three "in flight" instead of one.
-    pub in_flight_intervals: Vec<(f64, f64)>,
-    pub queued: u64,
-    pub quiet_agent: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimeVsUsualRow {
-    /// The timeline's own row path -- a front end filters against
-    /// its own currently *visible* rows with this (DESIGN.md: vs
-    /// usual "lists only the timeline's own rows", a collapsed or
-    /// filtered-out row included), since `build_vs_usual_pane` itself
-    /// has no view of a collapse or filter state of its own.
-    pub path: String,
-    pub label: String,
-    pub now_s: f64,
-    pub running: bool,
-    pub p50_s: f64,
-    pub mark: crate::time::VsUsualMark,
-    /// This row's own step's pooled "earlier versions" run count
-    /// (`history::StepStats::count`, issue #654) -- `TimeVsUsualPane
-    /// ::from_runs` pools across every row here regardless of
-    /// collapse or filter, so a front end that means to show only
-    /// the largest pooled count among the rows it actually draws
-    /// needs each row's own count to recompute that from, not the
-    /// pane's own pre-pooled figure.
-    pub pooled_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct TimeVsUsualPane {
-    pub rows: Vec<TimeVsUsualRow>,
-    pub earlier_versions: bool,
-    /// `Some((count, threshold))` below the run-count threshold
-    /// (DESIGN.md: "`history: 1 of 3 runs of this version`") --
-    /// `rows` is always empty in this case.
-    pub too_few_runs: Option<(usize, usize)>,
-    pub finish_ts: Option<String>,
-    pub usual_low_ts: Option<String>,
-    pub usual_high_ts: Option<String>,
-    /// The current hash's own ok-run count normally; under "earlier
-    /// versions" (`earlier_versions`), the largest pooled count among
-    /// the rows actually shown instead -- never the current hash's
-    /// count there, which is always below the threshold by
-    /// definition and would read `from 0 runs` for figures pooled
-    /// from other versions entirely. `None` when there is nothing
-    /// meaningful to show.
-    pub from_runs: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimeScreen {
-    pub rows: Vec<TimeDisplayRow>,
-    pub axis: crate::time::AxisSpan,
-    /// `now`'s own run-relative offset, for the now line -- `None`
-    /// exactly when `axis.show_now` is `false` or the run has no
-    /// start yet.
-    pub now_s: Option<f64>,
-    pub planned: Option<crate::time::GhostBar>,
-    pub strips: TimeStrips,
-    pub selected: Option<FocusedStep>,
-    /// The zoom pane's own extra data (DESIGN.md's zoom pane) for a
-    /// container, a prompt or a tool -- `None` for an agent (whose
-    /// own zoom draws straight from [`Self::selected`]'s
-    /// `FocusDetail::Agent`) or for nothing selected at all.
-    pub zoom_extra: Option<TimeZoomExtra>,
-    pub vs_usual: TimeVsUsualPane,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TimeZoomExtra {
-    /// DESIGN.md's zoom pane: "A container: its own children as rows
-    /// with bars" -- direct children only, on the container's own
-    /// axis (`axis_end_s`, from its own start, DESIGN.md: "on its own
-    /// axis from its start to its end (or now)").
-    Container {
-        children: Vec<crate::time::TimeRow>,
-        start_s: f64,
-        axis_end_s: f64,
-    },
-    /// DESIGN.md's zoom pane: "A prompt or tool: its own bar, with
-    /// its p50 and p90 marked on the axis when history has them, and
-    /// `waiting for the reply` or `running`".
-    StepBar {
-        start_s: f64,
-        p50_s: Option<f64>,
-        p90_s: Option<f64>,
-        axis_end_s: f64,
-        /// `Some("waiting for the reply")` for a running prompt,
-        /// `Some("running")` for a running tool, `None` once it has
-        /// finished.
-        waiting_label: Option<&'static str>,
-    },
-}
-
-/// [`TimeZoomExtra`], for `selected_path`'s own row -- `None` for an
-/// agent (`FocusDetail::Agent` already has everything its own zoom
-/// needs) or any row with neither children nor a leaf kind.
-fn build_time_zoom_extra(
-    selected_path: &str,
-    display_rows: &[TimeDisplayRow],
-    plan: &PlanTree,
-    header: &crate::render::Header,
-    now_s: Option<f64>,
-) -> Option<TimeZoomExtra> {
-    let selected = display_rows.iter().find_map(|r| match r {
-        TimeDisplayRow::Row(tr) if tr.path == selected_path => Some(tr),
-        _ => None,
-    })?;
-    let start_s = selected.start_s?;
-    let axis_end_s = start_s
-        + selected
-            .duration_s
-            .unwrap_or_else(|| now_s.map_or(0.0, |n| (n - start_s).max(0.0)));
-    if selected.has_children {
-        let children: Vec<crate::time::TimeRow> = display_rows
-            .iter()
-            .filter_map(|r| match r {
-                TimeDisplayRow::Row(tr)
-                    if tr.depth == selected.depth + 1
-                        && tr.path.starts_with(&format!("{selected_path}.")) =>
-                {
-                    Some(tr.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        return Some(TimeZoomExtra::Container {
-            children,
-            start_s,
-            axis_end_s,
-        });
-    }
-    if matches!(selected.kind, RowKind::Tool | RowKind::Prompt) {
-        let key = crate::history::display_key(selected_path, plan);
-        let stats = key
-            .as_deref()
-            .and_then(|k| header.history_step_usual.get(k));
-        let waiting_label = (selected.status.kind == StatusKind::Running).then(|| {
-            if selected.kind == RowKind::Prompt {
-                "waiting for the reply"
-            } else {
-                "running"
-            }
-        });
-        return Some(TimeZoomExtra::StepBar {
-            start_s,
-            p50_s: stats.and_then(|s| s.busy_p50_s),
-            p90_s: stats.and_then(|s| s.busy_p90_s),
-            axis_end_s,
-            waiting_label,
-        });
-    }
-    None
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn build_time_screen(
-    rows: &[Row],
-    flat: &BTreeMap<String, NodeMeta>,
-    plan: &PlanTree,
-    model: &RunModel,
-    header: &crate::render::Header,
-    state: Option<&Value>,
-    story_lines: &[crate::diff::LogLine],
-    selected_path: Option<&str>,
-    expanded_loops: &std::collections::BTreeSet<String>,
-    now: &str,
-) -> TimeScreen {
-    let time_rows =
-        crate::time::build_time_rows(rows, flat, model, plan, header, &header.history_step_usual);
-    let axis = crate::time::axis_span(header, now);
-    let run_start_ts = header.run_start_ts.clone();
-    let now_s = if axis.show_now {
-        run_start_ts
-            .as_deref()
-            .and_then(|start| duration_seconds(start, now))
-    } else {
-        None
-    };
-    let planned = now_s
-        .and_then(|offset| crate::time::planned_ghost_bar(offset, header.history_eta_remaining_s));
-
-    let mut display_rows = Vec::with_capacity(time_rows.len());
-    for row in time_rows {
-        // An unnamed loop's body shares its row with the leaf
-        // underneath it (`RowKind::Tool`/`Prompt`, never
-        // `RowKind::Loop` of its own), so `row.loop_expandable` alone
-        // -- already true only for a real loop container or an
-        // actually-expandable unnamed loop body -- decides this.
-        let expand = row.loop_expandable && expanded_loops.contains(&row.path);
-        let path = row.path.clone();
-        display_rows.push(TimeDisplayRow::Row(row));
-        if expand {
-            if let Some(run_start_ts) = run_start_ts.as_deref() {
-                for pass in crate::time::expand_loop(
-                    &path,
-                    flat,
-                    model,
-                    run_start_ts,
-                    now,
-                    header.run_end_ts.as_deref(),
-                ) {
-                    display_rows.push(TimeDisplayRow::Pass(TimeLoopPassRow {
-                        label: pass.label,
-                        status: pass.status,
-                        start_s: pass.start_s,
-                        duration_s: pass.duration_s,
-                    }));
-                }
-            }
-        }
-    }
-
-    let strips = run_start_ts.as_deref().map_or_else(
-        || TimeStrips {
-            events_points: Vec::new(),
-            events_from_state: !model.has_events(),
-            decisions: Vec::new(),
-            in_flight_intervals: Vec::new(),
-            queued: crate::time::queued_now(flat),
-            quiet_agent: false,
-        },
-        |run_start_ts| {
-            // Leaf rows only, and only ones without child rows of
-            // their own (`RowKind::is_leaf` alone still includes a
-            // `use`, which can have children) -- a container counting
-            // alongside the one leaf actually running inside it would
-            // read "in flight" as 2 or 3 for a single running step.
-            let leaf_intervals: Vec<(f64, f64, bool, StatusKind)> = rows
-                .iter()
-                .filter(|r| r.kind.is_leaf() && !r.has_children)
-                .flat_map(|r| {
-                    // An unnamed loop's body leaf: named and unnamed
-                    // loops run their passes the same way in `chain`
-                    // and `tree` flow, so a `flow: tree` unnamed loop
-                    // can have several passes in flight at once --
-                    // one interval per logged (finished) pass at this
-                    // path, plus one per pass still open right now,
-                    // rather than a single interval for the whole
-                    // loop (which undercounts a tree loop's own max
-                    // at 1).
-                    if model.has_events() && plan.is_unnamed_loop_body_path(&r.path) {
-                        let is_agent = is_agent_row(r, flat, plan);
-                        let offsets = model.step_interval_offsets(run_start_ts);
-                        let mut out: Vec<(f64, f64, bool, StatusKind)> = model
-                            .step_intervals()
-                            .iter()
-                            .zip(offsets.iter())
-                            .filter(|&(i, &(s, e))| i.path == r.path && !s.is_nan() && !e.is_nan())
-                            .map(|(i, &(s, e))| {
-                                (
-                                    s,
-                                    e,
-                                    is_agent,
-                                    if i.ok {
-                                        StatusKind::Done
-                                    } else {
-                                        StatusKind::Failed
-                                    },
-                                )
-                            })
-                            .collect();
-                        drop(offsets);
-                        let end_now = duration_seconds(run_start_ts, now);
-                        for start_ts in model.open_starts_at(&r.path) {
-                            if let Some(s) = duration_seconds(run_start_ts, start_ts) {
-                                out.push((s, end_now.unwrap_or(s), is_agent, StatusKind::Running));
-                            }
-                        }
-                        return out;
-                    }
-                    let Some(start) = row_run_relative_start(r, flat, model, run_start_ts) else {
-                        return Vec::new();
-                    };
-                    let end = if r.status.kind == StatusKind::Running {
-                        duration_seconds(run_start_ts, now).unwrap_or(start)
-                    } else {
-                        start + r.duration_s.unwrap_or(0.0)
-                    };
-                    vec![(start, end, is_agent_row(r, flat, plan), r.status.kind)]
-                })
-                .collect();
-            let in_flight_intervals: Vec<(f64, f64)> =
-                leaf_intervals.iter().map(|&(s, e, _, _)| (s, e)).collect();
-            let running_starts: Vec<f64> = leaf_intervals
-                .iter()
-                .filter(|&&(_, _, _, status)| status == StatusKind::Running)
-                .map(|&(s, _, _, _)| s)
-                .collect();
-            let events_points = crate::time::event_points(model, run_start_ts, &running_starts);
-            let decisions = crate::time::decision_points(story_lines, run_start_ts);
-            let running_leaf_is_agent: Vec<bool> = leaf_intervals
-                .iter()
-                .filter(|&&(_, _, _, status)| status == StatusKind::Running)
-                .map(|&(_, _, is_agent, _)| is_agent)
-                .collect();
-            // The strip's own rate over the last minute, read from
-            // the same points it draws from -- "quiet = agent" is
-            // about the rate having actually dropped, not merely
-            // about an agent happening to be the only thing running.
-            // The running leaf's own start event is excluded: without
-            // that, an agent that had just started would read
-            // "quiet" as false from its own start alone.
-            let recent_rate = now_s.map_or(0u64, |now_offset| {
-                events_points
-                    .iter()
-                    .filter(|&&(t, _)| t >= now_offset - 60.0 && !running_starts.contains(&t))
-                    .map(|&(_, w)| w)
-                    .sum()
-            });
-            TimeStrips {
-                events_points,
-                events_from_state: !model.has_events(),
-                decisions,
-                in_flight_intervals,
-                queued: crate::time::queued_now(flat),
-                quiet_agent: crate::time::quiet_agent(&running_leaf_is_agent, recent_rate),
-            }
-        },
-    );
-
-    let selected = selected_path
-        .and_then(|path| rows.iter().find(|r| r.path == path))
-        .map(|row| build_focused_step(row, flat, plan, model, state, now, None));
-    let zoom_extra = selected_path
-        .and_then(|path| build_time_zoom_extra(path, &display_rows, plan, header, now_s));
-
-    let vs_usual = build_vs_usual_pane(rows, flat, plan, model, header, now);
-
-    TimeScreen {
-        rows: display_rows,
-        axis,
-        now_s,
-        planned,
-        strips,
-        selected,
-        zoom_extra,
-        vs_usual,
-    }
-}
-
-fn row_run_relative_start(
-    row: &Row,
-    flat: &BTreeMap<String, NodeMeta>,
-    model: &RunModel,
-    run_start_ts: &str,
-) -> Option<f64> {
-    let start_ts = flat
-        .get(&row.path)
-        .and_then(|n| n.created_at.as_deref())
-        .or_else(|| model.event_started_at(&row.path))?;
-    duration_seconds(run_start_ts, start_ts)
-}
-
-fn build_vs_usual_pane(
-    rows: &[Row],
-    flat: &BTreeMap<String, NodeMeta>,
-    plan: &PlanTree,
-    model: &RunModel,
-    header: &crate::render::Header,
-    now: &str,
-) -> TimeVsUsualPane {
-    if let Some(too_few) = crate::time::vs_usual_too_few_runs(header) {
-        return TimeVsUsualPane {
-            too_few_runs: Some(too_few),
-            earlier_versions: crate::time::vs_usual_is_earlier_versions(header),
-            ..Default::default()
-        };
-    }
-    let earlier_versions = crate::time::vs_usual_is_earlier_versions(header);
-    if header.run_start_ts.is_none() {
-        return TimeVsUsualPane {
-            earlier_versions,
-            ..Default::default()
-        };
-    }
-    // The same "a loop's own passes never appear as the base tree's
-    // own rows" rule `draw_time_timeline` applies when drawing the
-    // timeline itself -- history keeps one figure per loop step
-    // across every pass (summed for a chain, overlap-merged for a
-    // tree), so comparing one of its own passes against that figure
-    // compares a part against the whole. A collapsed loop's pass
-    // rows (breadcrumbed or not) stay out of vs usual entirely, same
-    // as an expanded loop's `TimeDisplayRow::Pass` rows, which never
-    // reach this `rows` list at all.
-    let loop_prefixes: Vec<String> = rows
-        .iter()
-        .filter(|r| r.kind == RowKind::Loop)
-        .map(|r| format!("{}.", r.path))
-        .collect();
-    let mut vs_rows = Vec::new();
-    // "earlier versions" pools a different count per step (issue
-    // #650) -- the largest pooled count among the rows actually shown
-    // stands in for the footer's own `from N runs`, since `header.
-    // history_same_hash_count` is the *current* hash's own count,
-    // always below the threshold whenever `earlier_versions` is true
-    // by definition, and would otherwise read "from 0 runs" for
-    // figures that are not from 0 runs at all.
-    let mut pooled_run_count: Option<usize> = None;
-    for row in rows {
-        if loop_prefixes
-            .iter()
-            .any(|p| row.path.starts_with(p.as_str()))
-        {
-            continue;
-        }
-        let Some(key) = crate::history::display_key(&row.path, plan) else {
-            continue;
-        };
-        let Some(stats) = header.history_step_usual.get(&key) else {
-            continue;
-        };
-        let Some(p50) = stats.busy_p50_s else {
-            continue;
-        };
-        let running = row.status.kind == StatusKind::Running;
-        let now_s = if running {
-            let start_ts = flat
-                .get(&row.path)
-                .and_then(|n| n.created_at.as_deref())
-                .or_else(|| model.event_started_at(&row.path));
-            match start_ts.and_then(|s| duration_seconds(s, now)) {
-                Some(s) => s,
-                None => continue,
-            }
-        } else {
-            match row.duration_s {
-                Some(s) => s,
-                None => continue,
-            }
-        };
-        let Some(mark) = crate::time::vs_usual_mark(now_s, stats, running) else {
-            continue;
-        };
-        pooled_run_count = Some(pooled_run_count.unwrap_or(0).max(stats.count));
-        vs_rows.push(TimeVsUsualRow {
-            path: row.path.clone(),
-            label: row.label.clone(),
-            now_s,
-            running,
-            p50_s: p50,
-            mark,
-            pooled_count: stats.count,
-        });
-    }
-    let finish_ts = if earlier_versions {
-        None
-    } else {
-        header.history_eta_ts.clone()
-    };
-    TimeVsUsualPane {
-        rows: vs_rows,
-        earlier_versions,
-        too_few_runs: None,
-        finish_ts,
-        usual_low_ts: header.history_eta_low_ts.clone(),
-        usual_high_ts: header.history_eta_high_ts.clone(),
-        from_runs: if earlier_versions {
-            pooled_run_count
-        } else {
-            header.history_same_hash_count
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3094,7 +3471,7 @@ mod tests {
     #[test]
     fn screen_from_key_only_accepts_available_screens() {
         assert_eq!(Screen::from_key('0'), Some(Screen::Tape));
-        assert_eq!(Screen::from_key('1'), Some(Screen::Time));
+        assert_eq!(Screen::from_key('1'), Some(Screen::Signal));
         assert_eq!(Screen::from_key('2'), Some(Screen::Flow));
         assert_eq!(Screen::from_key('3'), Some(Screen::Cost));
         assert_eq!(Screen::from_key('x'), None);
@@ -3712,7 +4089,7 @@ mod tests {
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 tape]  1 time  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 tape]  1 signal  2 flow  3 cost",
             ),
         ];
         for (width, want) in expected {
@@ -4623,1623 +5000,6 @@ mod tests {
                 );
             }
             other => panic!("expected a populated Agent detail, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn build_time_screen_shows_a_running_rows_bar_and_the_now_line() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"}},
-            "b": {"value": null, "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": null}}
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            30.0,
-            "2026-01-01T00:00:30Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat_from(state.clone()),
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:30Z",
-        );
-        assert!(screen.axis.show_now);
-        assert_eq!(screen.now_s, Some(30.0));
-        let running = screen
-            .rows
-            .iter()
-            .find_map(|r| match r {
-                TimeDisplayRow::Row(row) if row.path == "prime.b" => Some(row),
-                _ => None,
-            })
-            .expect("row b is in the timeline");
-        assert_eq!(running.start_s, Some(10.0));
-        assert_eq!(running.status.kind, StatusKind::Running);
-    }
-
-    /// A finished step's zoom-pane duration is its own `completed_at`
-    /// minus `created_at`, never `now - created_at` -- `now` here is
-    /// long after the whole run ended, which a stale computation
-    /// would otherwise fold into the step's own duration.
-    #[test]
-    fn build_time_screen_a_finished_steps_duration_ignores_how_long_ago_now_is() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": "ok", "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:20Z"
-            },
-            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"}},
-            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": "2026-01-01T00:00:20Z"}}
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            20.0,
-            "2026-01-01T00:00:20Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat_from(state.clone()),
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            Some("prime.a"),
-            &Default::default(),
-            "2026-02-15T12:00:00Z",
-        );
-        let selected = screen.selected.expect("prime.a is selected");
-        assert_eq!(
-            selected.elapsed_s,
-            Some(10.0),
-            "a finished step's own duration, not now - its start"
-        );
-    }
-
-    fn each_loop_plan() -> PlanTree {
-        use electricity_bytecode::{
-            EffectPath, LeafKind, NodeKind, OnError, Op, Program, Region, ToolOp,
-        };
-        let root_path = EffectPath::root();
-        let loop_path = root_path.push_name("items");
-        let pass0 = loop_path.push_pass(electricity_bytecode::LoopId(0));
-        let tool = Op {
-            path: pass0.push_name("nap"),
-            name: Some("nap".to_string()),
-            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
-                provider: "shell".to_string(),
-                params: electricity_bytecode::ParamNode::Literal(electricity_value::Value::None),
-                params_json: None,
-                prompt: None,
-                model: None,
-                timeout_ms: None,
-                retries: Default::default(),
-                expect: None,
-                description: None,
-                group: None,
-                prompt_file: None,
-            }))),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![Op {
-                    path: loop_path.clone(),
-                    name: Some("items".to_string()),
-                    kind: NodeKind::Control(Region::Loop {
-                        name: Some("items".to_string()),
-                        spec: electricity_bytecode::LoopSpec::Each {
-                            in_path: "prime.xs".to_string(),
-                            as_name: "x".to_string(),
-                            truncate: false,
-                        },
-                        body: Box::new(Region::Block {
-                            ops: vec![tool],
-                            overlay: true,
-                        }),
-                        flow: electricity_bytecode::LoopFlow::Chain,
-                        max_concurrency: None,
-                        max_iterations: None,
-                        min_iterations: 0,
-                        collect: None,
-                    }),
-                    on_error: OnError::Fail,
-                    labels: None,
-                    enabled: true,
-                }],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        let program = Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        };
-        PlanTree::from_program(&program)
-    }
-
-    /// History keeps one figure per loop step across every pass
-    /// (issue #650's design), so a pass's own child row must never be
-    /// compared against it in vs usual -- only the full timeline's
-    /// own rows are, and a loop's passes never appear there at all.
-    #[test]
-    fn build_vs_usual_pane_never_compares_a_loop_passs_own_child() {
-        let plan = each_loop_plan();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": "ok", "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"
-            },
-            "items": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"
-                },
-                "iter_0": {
-                    "nap": {"value": "ok", "meta": {
-                        "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z",
-                        "provider": "shell"
-                    }}
-                },
-                "iter_1": {
-                    "nap": {"value": "ok", "meta": {
-                        "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:10Z",
-                        "provider": "shell"
-                    }}
-                }
-            }
-        }});
-        let mut rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            10.0,
-            "2026-01-01T00:00:10Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        rendered.header.history_same_hash_count = Some(3);
-        rendered
-            .header
-            .history_step_usual
-            .insert("items.iter_*.nap".to_string(), stats_usual(100.0));
-        let flat = flat_from(state.clone());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:10Z",
-        );
-        assert!(
-            screen.vs_usual.rows.is_empty(),
-            "a pass's own child must never appear in vs usual: {:?}",
-            screen.vs_usual.rows
-        );
-    }
-
-    fn stats_usual(busy_p50: f64) -> crate::history::StepStats {
-        crate::history::StepStats {
-            count: 3,
-            busy_p50_s: Some(busy_p50),
-            ..Default::default()
-        }
-    }
-
-    /// "earlier versions" means below the current hash's own
-    /// run-count threshold, so `header.history_same_hash_count`
-    /// alone would always read `from 0 runs` here -- the footer must
-    /// instead read however many runs the pooled figures it is
-    /// actually showing came from.
-    #[test]
-    fn build_vs_usual_pane_reads_the_pooled_count_under_earlier_versions_not_zero() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"
-            },
-            "nap": {"value": "ok", "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z",
-                "provider": "shell"
-            }}
-        }});
-        let mut rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            10.0,
-            "2026-01-01T00:00:10Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        rendered.header.history_same_hash_count = Some(0);
-        rendered.header.history_step_usual.insert(
-            "nap".to_string(),
-            crate::history::StepStats {
-                count: 7,
-                busy_p50_s: Some(10.0),
-                ..Default::default()
-            },
-        );
-        let flat = flat_from(state.clone());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:10Z",
-        );
-        assert!(screen.vs_usual.earlier_versions);
-        assert!(
-            !screen.vs_usual.rows.is_empty(),
-            "the pooled row must show: {:?}",
-            screen.vs_usual.rows
-        );
-        assert_eq!(
-            screen.vs_usual.from_runs,
-            Some(7),
-            "must read the pooled count the figures actually came from, never the current hash's 0 runs"
-        );
-    }
-
-    #[test]
-    fn build_time_screen_expands_a_loop_row_when_asked() {
-        let plan = each_loop_plan();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "items": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
-                "iter_0": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z"}},
-                "iter_1": {"value": null, "meta": {"created_at": "2026-01-01T00:00:05Z", "completed_at": null}}
-            }
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            10.0,
-            "2026-01-01T00:00:10Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = flat_from(state.clone());
-        let mut expanded = std::collections::BTreeSet::new();
-        expanded.insert("prime.items".to_string());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &expanded,
-            "2026-01-01T00:00:10Z",
-        );
-        let passes: Vec<&TimeLoopPassRow> = screen
-            .rows
-            .iter()
-            .filter_map(|r| match r {
-                TimeDisplayRow::Pass(p) => Some(p),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(passes.len(), 2);
-        assert_eq!(passes[0].label, "pass 1");
-        assert_eq!(passes[1].label, "pass 2");
-    }
-
-    /// An unnamed loop's body leaf shares its row with the loop
-    /// itself (`RowKind::Tool`, never `RowKind::Loop`), so
-    /// `build_time_screen` -- not only `expand_loop` directly -- must
-    /// still add its `TimeDisplayRow::Pass` rows once `--events` gave
-    /// it more than one interval. A sibling at the same parent path
-    /// that is not part of the loop's body must never expand, even if
-    /// asked to.
-    fn unnamed_loop_plan_with_sibling() -> PlanTree {
-        use electricity_bytecode::{
-            EffectPath, LeafKind, LoopFlow, LoopSpec, NodeKind, OnError, Op, ParamNode, Program,
-            Region, ToolOp,
-        };
-        fn tool(path: EffectPath, name: &str) -> Op {
-            Op {
-                path,
-                name: Some(name.to_string()),
-                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
-                    provider: "shell".to_string(),
-                    params: ParamNode::Literal(electricity_value::Value::None),
-                    params_json: None,
-                    prompt: None,
-                    model: None,
-                    timeout_ms: None,
-                    retries: Default::default(),
-                    expect: None,
-                    description: None,
-                    group: None,
-                    prompt_file: None,
-                }))),
-                on_error: OnError::Fail,
-                labels: None,
-                enabled: true,
-            }
-        }
-        let root_path = EffectPath::root();
-        let root = Op {
-            path: root_path.clone(),
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![
-                    Op {
-                        path: root_path.clone(),
-                        name: None,
-                        kind: NodeKind::Control(Region::Loop {
-                            name: None,
-                            spec: LoopSpec::Each {
-                                in_path: "prime.items".to_string(),
-                                as_name: "item".to_string(),
-                                truncate: false,
-                            },
-                            body: Box::new(Region::Block {
-                                ops: vec![tool(root_path.clone().push_name("u_nap"), "u_nap")],
-                                overlay: true,
-                            }),
-                            flow: LoopFlow::Chain,
-                            max_concurrency: None,
-                            max_iterations: None,
-                            min_iterations: 0,
-                            collect: None,
-                        }),
-                        on_error: OnError::Fail,
-                        labels: None,
-                        enabled: true,
-                    },
-                    tool(root_path.push_name("a"), "a"),
-                ],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        PlanTree::from_program(&Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        })
-    }
-
-    #[test]
-    fn build_time_screen_expands_an_unnamed_loops_body_leaf_but_never_its_sibling() {
-        let plan = unnamed_loop_plan_with_sibling();
-        let mut model = RunModel::new();
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            id: Some(1),
-            path: "prime.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(1),
-            path: "prime.u_nap".to_string(),
-            ok: true,
-            ms: Some(5_000),
-            error: None,
-        });
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(2),
-            path: "prime.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:12Z".to_string(),
-            id: Some(2),
-            path: "prime.u_nap".to_string(),
-            ok: true,
-            ms: Some(7_000),
-            error: None,
-        });
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "a": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:12Z", "completed_at": "2026-01-01T00:00:13Z"
-            }}
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            13.0,
-            "2026-01-01T00:00:13Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = flat_from(state.clone());
-        let mut expanded = std::collections::BTreeSet::new();
-        expanded.insert("prime.u_nap".to_string());
-        expanded.insert("prime.a".to_string());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &expanded,
-            "2026-01-01T00:00:13Z",
-        );
-        let pass_labels_after = |path: &str, rows: &[TimeDisplayRow]| -> Vec<String> {
-            let mut out = Vec::new();
-            let mut seen_row = false;
-            for row in rows {
-                match row {
-                    TimeDisplayRow::Row(r) if r.path == path => seen_row = true,
-                    TimeDisplayRow::Row(_) => seen_row = false,
-                    TimeDisplayRow::Pass(p) if seen_row => out.push(p.label.clone()),
-                    TimeDisplayRow::Pass(_) => {}
-                }
-            }
-            out
-        };
-        assert_eq!(
-            pass_labels_after("prime.u_nap", &screen.rows),
-            vec!["#1".to_string(), "#2".to_string()],
-            "the loop's own body leaf must expand into its own pass rows: {:?}",
-            screen.rows
-        );
-        assert!(
-            pass_labels_after("prime.a", &screen.rows).is_empty(),
-            "a sibling outside the loop's body must never expand, even if asked to: {:?}",
-            screen.rows
-        );
-    }
-
-    /// Collapsed, an unnamed loop's own row spans its first pass's
-    /// own start through its last pass's own (state-sourced) end,
-    /// carries the real finished `⟲ 2/2` once the loop itself has
-    /// ended, and the whole span counts once in `in flight`.
-    #[test]
-    fn build_time_screen_collapsed_unnamed_loop_row_spans_first_pass_to_last() {
-        let plan = unnamed_loop_plan_with_sibling();
-        let mut model = RunModel::new();
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            id: Some(1),
-            path: "prime.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(1),
-            path: "prime.u_nap".to_string(),
-            ok: true,
-            ms: Some(5_000),
-            error: None,
-        });
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(2),
-            path: "prime.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:12Z".to_string(),
-            id: Some(2),
-            path: "prime.u_nap".to_string(),
-            ok: true,
-            ms: Some(7_000),
-            error: None,
-        });
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:13Z"
-            },
-            "u_nap": {"value": "ok", "meta": {
-                "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z",
-                "provider": "shell"
-            }},
-            "a": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:12Z", "completed_at": "2026-01-01T00:00:13Z"
-            }}
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            13.0,
-            "2026-01-01T00:00:13Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = flat_from(state.clone());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:13Z",
-        );
-        let row = screen
-            .rows
-            .iter()
-            .find_map(|r| match r {
-                TimeDisplayRow::Row(tr) if tr.path == "prime.u_nap" => Some(tr),
-                _ => None,
-            })
-            .expect("the collapsed row must still be there");
-        assert_eq!(
-            row.start_s,
-            Some(0.0),
-            "the row starts at the first pass's own start, not the last pass's: {row:?}"
-        );
-        assert_eq!(
-            row.duration_s,
-            Some(12.0),
-            "the row's own span runs through the last pass's own (state-sourced) end: {row:?}"
-        );
-        let progress = row
-            .loop_progress
-            .expect("an unnamed loop with logged passes has progress");
-        assert_eq!(progress.done, 2);
-        assert_eq!(
-            progress.total,
-            Some(2),
-            "the loop itself has finished, so the real total is known"
-        );
-        // One interval per logged pass (two, for u_nap), plus one
-        // for the unrelated sibling `a` -- sequential, so none
-        // overlap, and the true max stays 1.
-        assert_eq!(
-            screen.strips.in_flight_intervals.len(),
-            3,
-            "{:?}",
-            screen.strips.in_flight_intervals
-        );
-        let heights =
-            crate::time::in_flight_heights(0.0, 13.0, 13, &screen.strips.in_flight_intervals);
-        assert_eq!(
-            heights.iter().copied().max(),
-            Some(1),
-            "sequential passes never overlap: {heights:?}"
-        );
-    }
-
-    fn unnamed_loop_plan_under_tree_parallel() -> PlanTree {
-        use electricity_bytecode::{
-            EffectPath, LeafKind, LoopFlow, LoopSpec, NodeKind, OnError, Op, ParamNode, Program,
-            Region, ToolOp,
-        };
-        fn tool(path: EffectPath, name: &str) -> Op {
-            Op {
-                path,
-                name: Some(name.to_string()),
-                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
-                    provider: "shell".to_string(),
-                    params: ParamNode::Literal(electricity_value::Value::None),
-                    params_json: None,
-                    prompt: None,
-                    model: None,
-                    timeout_ms: None,
-                    retries: Default::default(),
-                    expect: None,
-                    description: None,
-                    group: None,
-                    prompt_file: None,
-                }))),
-                on_error: OnError::Fail,
-                labels: None,
-                enabled: true,
-            }
-        }
-        let root_path = EffectPath::root();
-        let fan_path = root_path.clone().push_name("fan");
-        let a_path = fan_path.clone().push_name("a");
-        let u_nap_path = fan_path.clone().push_name("u_nap");
-        let root = Op {
-            path: root_path.clone(),
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![Op {
-                    path: fan_path.clone(),
-                    name: Some("fan".to_string()),
-                    kind: NodeKind::Control(Region::Parallel {
-                        branches: vec![
-                            tool(a_path, "a"),
-                            Op {
-                                path: fan_path.clone(),
-                                name: None,
-                                kind: NodeKind::Control(Region::Loop {
-                                    name: None,
-                                    spec: LoopSpec::Each {
-                                        in_path: "prime.items".to_string(),
-                                        as_name: "item".to_string(),
-                                        truncate: false,
-                                    },
-                                    body: Box::new(Region::Block {
-                                        ops: vec![tool(u_nap_path, "u_nap")],
-                                        overlay: true,
-                                    }),
-                                    flow: LoopFlow::Chain,
-                                    max_concurrency: None,
-                                    max_iterations: None,
-                                    min_iterations: 0,
-                                    collect: None,
-                                }),
-                                on_error: OnError::Fail,
-                                labels: None,
-                                enabled: true,
-                            },
-                        ],
-                        max_concurrency: None,
-                        stop_on_error: false,
-                    }),
-                    on_error: OnError::Fail,
-                    labels: None,
-                    enabled: true,
-                }],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        PlanTree::from_program(&Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        })
-    }
-
-    /// An unnamed loop reached directly as a tree `dynamic`'s own
-    /// `Parallel` branch, never through `walk_block`'s transparent-op
-    /// handling, must still be recognised as a loop body -- `record_
-    /// op_entry` is the one place both contexts funnel their loop
-    /// `PlanEntryKind` through.
-    #[test]
-    fn build_time_screen_expands_an_unnamed_loop_directly_under_a_tree_parallel() {
-        let plan = unnamed_loop_plan_under_tree_parallel();
-        let mut model = RunModel::new();
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            id: Some(1),
-            path: "prime.fan.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(1),
-            path: "prime.fan.u_nap".to_string(),
-            ok: true,
-            ms: Some(5_000),
-            error: None,
-        });
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(2),
-            path: "prime.fan.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:12Z".to_string(),
-            id: Some(2),
-            path: "prime.fan.u_nap".to_string(),
-            ok: true,
-            ms: Some(7_000),
-            error: None,
-        });
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "fan": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:00Z", "completed_at": null, "flow": "tree"
-                },
-                "a": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z"
-                }},
-                "u_nap": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z"
-                }}
-            }
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            13.0,
-            "2026-01-01T00:00:13Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = flat_from(state.clone());
-        let mut expanded = std::collections::BTreeSet::new();
-        expanded.insert("prime.fan.u_nap".to_string());
-        expanded.insert("prime.fan.a".to_string());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &expanded,
-            "2026-01-01T00:00:13Z",
-        );
-        let pass_labels_after = |path: &str, rows: &[TimeDisplayRow]| -> Vec<String> {
-            let mut out = Vec::new();
-            let mut seen_row = false;
-            for row in rows {
-                match row {
-                    TimeDisplayRow::Row(r) if r.path == path => seen_row = true,
-                    TimeDisplayRow::Row(_) => seen_row = false,
-                    TimeDisplayRow::Pass(p) if seen_row => out.push(p.label.clone()),
-                    TimeDisplayRow::Pass(_) => {}
-                }
-            }
-            out
-        };
-        assert_eq!(
-            pass_labels_after("prime.fan.u_nap", &screen.rows),
-            vec!["#1".to_string(), "#2".to_string()],
-            "the loop's own body leaf must expand into its own pass rows: {:?}",
-            screen.rows
-        );
-        assert!(
-            pass_labels_after("prime.fan.a", &screen.rows).is_empty(),
-            "a sibling outside the loop's body must never expand, even if asked to: {:?}",
-            screen.rows
-        );
-    }
-
-    fn unnamed_loop_inside_named_loops_pass_plan() -> PlanTree {
-        use electricity_bytecode::{
-            EffectPath, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
-            Program, Region, ToolOp,
-        };
-        fn tool(path: EffectPath, name: &str) -> Op {
-            Op {
-                path,
-                name: Some(name.to_string()),
-                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
-                    provider: "shell".to_string(),
-                    params: ParamNode::Literal(electricity_value::Value::None),
-                    params_json: None,
-                    prompt: None,
-                    model: None,
-                    timeout_ms: None,
-                    retries: Default::default(),
-                    expect: None,
-                    description: None,
-                    group: None,
-                    prompt_file: None,
-                }))),
-                on_error: OnError::Fail,
-                labels: None,
-                enabled: true,
-            }
-        }
-        let root_path = EffectPath::root();
-        let loop_path = root_path.clone().push_name("items");
-        let pass_path = loop_path.clone().push_pass(LoopId(0));
-        let u_nap_path = pass_path.clone().push_name("u_nap");
-        let root = Op {
-            path: root_path.clone(),
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![Op {
-                    path: loop_path.clone(),
-                    name: Some("items".to_string()),
-                    kind: NodeKind::Control(Region::Loop {
-                        name: Some("items".to_string()),
-                        spec: LoopSpec::Each {
-                            in_path: "prime.list".to_string(),
-                            as_name: "item".to_string(),
-                            truncate: false,
-                        },
-                        body: Box::new(Region::Block {
-                            ops: vec![Op {
-                                path: pass_path.clone(),
-                                name: None,
-                                kind: NodeKind::Control(Region::Loop {
-                                    name: None,
-                                    spec: LoopSpec::Each {
-                                        in_path: "prime.sub".to_string(),
-                                        as_name: "s".to_string(),
-                                        truncate: false,
-                                    },
-                                    body: Box::new(Region::Block {
-                                        ops: vec![tool(u_nap_path.clone(), "u_nap")],
-                                        overlay: true,
-                                    }),
-                                    flow: LoopFlow::Chain,
-                                    max_concurrency: None,
-                                    max_iterations: None,
-                                    min_iterations: 0,
-                                    collect: None,
-                                }),
-                                on_error: OnError::Fail,
-                                labels: None,
-                                enabled: true,
-                            }],
-                            overlay: true,
-                        }),
-                        flow: LoopFlow::Chain,
-                        max_concurrency: None,
-                        max_iterations: None,
-                        min_iterations: 0,
-                        collect: None,
-                    }),
-                    on_error: OnError::Fail,
-                    labels: None,
-                    enabled: true,
-                }],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        PlanTree::from_program(&Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        })
-    }
-
-    /// An unnamed loop inside a *named* loop's own pass carries the
-    /// real pass's concrete `iter_N` in its row path, never the
-    /// `iter_*` placeholder `PlanTree::is_unnamed_loop_body_path`'s
-    /// own set is keyed by -- the lookup must normalise first.
-    #[test]
-    fn build_time_screen_expands_an_unnamed_loop_inside_a_named_loops_pass() {
-        let plan = unnamed_loop_inside_named_loops_pass_plan();
-        let mut model = RunModel::new();
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            id: Some(1),
-            path: "prime.items.iter_0.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(1),
-            path: "prime.items.iter_0.u_nap".to_string(),
-            ok: true,
-            ms: Some(5_000),
-            error: None,
-        });
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:05Z".to_string(),
-            id: Some(2),
-            path: "prime.items.iter_0.u_nap".to_string(),
-        });
-        model.observe_event(&crate::observe::Event::End {
-            ts: "2026-01-01T00:00:12Z".to_string(),
-            id: Some(2),
-            path: "prime.items.iter_0.u_nap".to_string(),
-            ok: true,
-            ms: Some(7_000),
-            error: None,
-        });
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "items": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:00Z", "completed_at": null, "mode": "each"
-                },
-                "iter_0": {"value": null, "meta": {
-                        "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-                    },
-                    "u_nap": {"value": null, "meta": {
-                        "created_at": "2026-01-01T00:00:05Z", "completed_at": "2026-01-01T00:00:12Z"
-                    }}
-                }
-            }
-        }});
-        let rendered = crate::render::build_folded(
-            "do.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            13.0,
-            "2026-01-01T00:00:13Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = flat_from(state.clone());
-        let mut expanded = std::collections::BTreeSet::new();
-        expanded.insert("prime.items.iter_0.u_nap".to_string());
-        let screen = build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &expanded,
-            "2026-01-01T00:00:13Z",
-        );
-        let pass_labels_after = |path: &str, rows: &[TimeDisplayRow]| -> Vec<String> {
-            let mut out = Vec::new();
-            let mut seen_row = false;
-            for row in rows {
-                match row {
-                    TimeDisplayRow::Row(r) if r.path == path => seen_row = true,
-                    TimeDisplayRow::Row(_) => seen_row = false,
-                    TimeDisplayRow::Pass(p) if seen_row => out.push(p.label.clone()),
-                    TimeDisplayRow::Pass(_) => {}
-                }
-            }
-            out
-        };
-        assert_eq!(
-            pass_labels_after("prime.items.iter_0.u_nap", &screen.rows),
-            vec!["#1".to_string(), "#2".to_string()],
-            "the inner unnamed loop's own body leaf must expand into its own pass rows: {:?}",
-            screen.rows
-        );
-    }
-
-    /// (`RowKind::is_leaf`), but it can have child rows of its own --
-    /// without excluding those, "in flight" would count the `use`
-    /// alongside the one child actually running inside it.
-    #[test]
-    fn build_time_screen_in_flight_excludes_a_use_with_a_running_child() {
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "review": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-                },
-                "nap": {"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:01Z", "completed_at": null
-                }}
-            }
-        }});
-        let flat = flat_from(state.clone());
-        let rows = vec![
-            Row {
-                path: "prime".to_string(),
-                depth: 0,
-                label: "prime".to_string(),
-                kind: RowKind::Root,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.review".to_string(),
-                depth: 1,
-                label: "review".to_string(),
-                kind: RowKind::Use,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.review.nap".to_string(),
-                depth: 2,
-                label: "nap".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            },
-        ];
-        let header = crate::render::Header {
-            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
-            ..base_header()
-        };
-        let screen = build_time_screen(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            &header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:02Z",
-        );
-        assert_eq!(
-            screen.strips.in_flight_intervals.len(),
-            1,
-            "only the running child counts, not the use step around it: {:?}",
-            screen.strips.in_flight_intervals
-        );
-    }
-
-    /// An unnamed loop runs its passes the same way whether it's
-    /// named or not (`flow: tree` passes can run concurrently) -- a
-    /// single merged interval for the whole loop undercounted "in
-    /// flight" at 1 for three passes genuinely running at once.
-    #[test]
-    fn build_time_screen_in_flight_counts_an_unnamed_tree_loops_concurrent_passes() {
-        let plan = unnamed_loop_plan_with_sibling();
-        let mut model = RunModel::new();
-        for id in 1..=3 {
-            model.observe_event(&crate::observe::Event::Start {
-                ts: "2026-01-01T00:00:00Z".to_string(),
-                id: Some(id),
-                path: "prime.u_nap".to_string(),
-            });
-        }
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "u_nap": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            }}
-        }});
-        let flat = flat_from(state.clone());
-        let rows = vec![
-            Row {
-                path: "prime".to_string(),
-                depth: 0,
-                label: "prime".to_string(),
-                kind: RowKind::Root,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.u_nap".to_string(),
-                depth: 1,
-                label: "u_nap".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            },
-        ];
-        let header = crate::render::Header {
-            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
-            ..base_header()
-        };
-        let screen = build_time_screen(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            &header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:05Z",
-        );
-        assert_eq!(
-            screen.strips.in_flight_intervals.len(),
-            3,
-            "every concurrently open pass must count: {:?}",
-            screen.strips.in_flight_intervals
-        );
-        let heights =
-            crate::time::in_flight_heights(0.0, 5.0, 1, &screen.strips.in_flight_intervals);
-        assert_eq!(heights, vec![3], "max overlap must read 3, not 1");
-    }
-
-    /// An unnamed loop's own body leaf, with several passes open at
-    /// once (`flow: tree`), feeds one events/min start point per
-    /// pass -- not a single point for the whole loop, which would
-    /// undercount a tree loop's own concurrent passes the same way
-    /// `in_flight_intervals` would.
-    #[test]
-    fn build_time_screen_events_per_minute_counts_an_unnamed_loops_concurrent_pass_starts() {
-        let plan = unnamed_loop_plan_with_sibling();
-        let mut model = RunModel::new();
-        for id in 1..=3 {
-            model.observe_event(&crate::observe::Event::Start {
-                ts: format!("2026-01-01T00:00:0{id}Z"),
-                id: Some(id),
-                path: "prime.u_nap".to_string(),
-            });
-        }
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "u_nap": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            }}
-        }});
-        let flat = flat_from(state.clone());
-        let rows = vec![
-            Row {
-                path: "prime".to_string(),
-                depth: 0,
-                label: "prime".to_string(),
-                kind: RowKind::Root,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.u_nap".to_string(),
-                depth: 1,
-                label: "u_nap".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            },
-        ];
-        let header = crate::render::Header {
-            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
-            ..base_header()
-        };
-        let screen = build_time_screen(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            &header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:05Z",
-        );
-        let starts: Vec<f64> = screen
-            .strips
-            .events_points
-            .iter()
-            .filter(|&&(t, _)| t == 1.0 || t == 2.0 || t == 3.0)
-            .map(|&(t, _)| t)
-            .collect();
-        assert_eq!(
-            starts.len(),
-            3,
-            "every concurrently open pass's own start must count, not one for the whole loop: {:?}",
-            screen.strips.events_points
-        );
-    }
-
-    /// An agent is a `RowKind::Tool` with provider `agent`, never a
-    /// `RowKind::Prompt` -- `quiet_agent` must read true for a lone
-    /// running agent tool once its own recent rate has dropped, not
-    /// only for an ordinary prompt.
-    #[test]
-    fn build_time_screen_quiet_agent_is_true_for_a_lone_running_agent_tool() {
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "agent_step": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null,
-                "provider": "agent"
-            }}
-        }});
-        let flat = flat_from(state.clone());
-        let rows = vec![
-            Row {
-                path: "prime".to_string(),
-                depth: 0,
-                label: "prime".to_string(),
-                kind: RowKind::Root,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.agent_step".to_string(),
-                depth: 1,
-                label: "agent_step".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            },
-        ];
-        let header = crate::render::Header {
-            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
-            ..base_header()
-        };
-        // Past the agent's own start by more than the 60s window, so
-        // only its own start event (excluded) would otherwise have
-        // kept the rate above zero.
-        let screen = build_time_screen(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            &header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:02:00Z",
-        );
-        assert!(screen.strips.quiet_agent);
-    }
-
-    /// The agent's own start event must not itself count toward
-    /// "recent" -- an agent that only just started would otherwise
-    /// never read as quiet.
-    #[test]
-    fn build_time_screen_quiet_agent_excludes_the_agents_own_start_event() {
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-            },
-            "agent_step": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": null,
-                "provider": "agent"
-            }}
-        }});
-        let flat = flat_from(state.clone());
-        let rows = vec![
-            Row {
-                path: "prime".to_string(),
-                depth: 0,
-                label: "prime".to_string(),
-                kind: RowKind::Root,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.agent_step".to_string(),
-                depth: 1,
-                label: "agent_step".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            },
-        ];
-        let header = crate::render::Header {
-            run_start_ts: Some("2026-01-01T00:00:00Z".to_string()),
-            ..base_header()
-        };
-        // 30s after the agent's own start -- well inside the 60s
-        // window, so this only reads quiet if that one event is
-        // excluded.
-        let screen = build_time_screen(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            &header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            "2026-01-01T00:00:30Z",
-        );
-        assert!(screen.strips.quiet_agent);
-    }
-
-    fn time_row(
-        path: &str,
-        depth: usize,
-        kind: RowKind,
-        status_kind: StatusKind,
-        start_s: Option<f64>,
-        duration_s: Option<f64>,
-        has_children: bool,
-    ) -> crate::time::TimeRow {
-        crate::time::TimeRow {
-            path: path.to_string(),
-            depth,
-            label: path.rsplit('.').next().unwrap_or(path).to_string(),
-            kind,
-            status: RowStatus {
-                kind: status_kind,
-                skip_reason: None,
-                retrying: false,
-            },
-            start_s,
-            duration_s,
-            loop_progress: None,
-            has_children,
-            loop_expandable: false,
-            ghost: None,
-        }
-    }
-
-    #[test]
-    fn zoom_extra_lists_a_containers_direct_children_only() {
-        let display_rows = vec![
-            TimeDisplayRow::Row(time_row(
-                "prime.review",
-                1,
-                RowKind::If,
-                StatusKind::Running,
-                Some(0.0),
-                None,
-                true,
-            )),
-            TimeDisplayRow::Row(time_row(
-                "prime.review.agent",
-                2,
-                RowKind::Tool,
-                StatusKind::Done,
-                Some(0.0),
-                Some(10.0),
-                false,
-            )),
-            TimeDisplayRow::Row(time_row(
-                "prime.review.agent.deep",
-                3,
-                RowKind::Tool,
-                StatusKind::Done,
-                Some(0.0),
-                Some(5.0),
-                false,
-            )),
-            TimeDisplayRow::Row(time_row(
-                "prime.review.check",
-                2,
-                RowKind::Tool,
-                StatusKind::Pending,
-                None,
-                None,
-                false,
-            )),
-        ];
-        let plan = PlanTree::empty();
-        let header = base_header();
-        let extra =
-            build_time_zoom_extra("prime.review", &display_rows, &plan, &header, Some(20.0));
-        match extra {
-            Some(TimeZoomExtra::Container {
-                children,
-                start_s,
-                axis_end_s,
-            }) => {
-                assert_eq!(
-                    children.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
-                    vec!["prime.review.agent", "prime.review.check"],
-                    "only direct children, not the grandchild"
-                );
-                assert_eq!(start_s, 0.0);
-                assert_eq!(axis_end_s, 20.0, "no duration yet, so the axis runs to now");
-            }
-            other => panic!("expected Container, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn zoom_extra_marks_a_running_tool_as_running_and_a_running_prompt_as_waiting() {
-        let plan = PlanTree::empty();
-        let header = base_header();
-        let tool_rows = vec![TimeDisplayRow::Row(time_row(
-            "prime.a",
-            1,
-            RowKind::Tool,
-            StatusKind::Running,
-            Some(5.0),
-            None,
-            false,
-        ))];
-        match build_time_zoom_extra("prime.a", &tool_rows, &plan, &header, Some(8.0)) {
-            Some(TimeZoomExtra::StepBar {
-                waiting_label,
-                start_s,
-                axis_end_s,
-                ..
-            }) => {
-                assert_eq!(waiting_label, Some("running"));
-                assert_eq!(start_s, 5.0);
-                assert_eq!(axis_end_s, 8.0);
-            }
-            other => panic!("expected StepBar, got {other:?}"),
-        }
-        let prompt_rows = vec![TimeDisplayRow::Row(time_row(
-            "prime.b",
-            1,
-            RowKind::Prompt,
-            StatusKind::Running,
-            Some(5.0),
-            None,
-            false,
-        ))];
-        match build_time_zoom_extra("prime.b", &prompt_rows, &plan, &header, Some(8.0)) {
-            Some(TimeZoomExtra::StepBar { waiting_label, .. }) => {
-                assert_eq!(waiting_label, Some("waiting for the reply"))
-            }
-            other => panic!("expected StepBar, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn zoom_extra_reads_p50_p90_from_pooled_history_for_a_finished_tool() {
-        let plan = PlanTree::empty();
-        let mut header = base_header();
-        header.history_step_usual.insert(
-            "a".to_string(),
-            crate::history::StepStats {
-                count: 5,
-                busy_p50_s: Some(60.0),
-                busy_p90_s: Some(90.0),
-                ..Default::default()
-            },
-        );
-        let rows = vec![TimeDisplayRow::Row(time_row(
-            "prime.a",
-            1,
-            RowKind::Tool,
-            StatusKind::Done,
-            Some(0.0),
-            Some(70.0),
-            false,
-        ))];
-        match build_time_zoom_extra("prime.a", &rows, &plan, &header, None) {
-            Some(TimeZoomExtra::StepBar {
-                p50_s,
-                p90_s,
-                waiting_label,
-                ..
-            }) => {
-                assert_eq!(p50_s, Some(60.0));
-                assert_eq!(p90_s, Some(90.0));
-                assert_eq!(waiting_label, None, "finished, not waiting or running");
-            }
-            other => panic!("expected StepBar, got {other:?}"),
         }
     }
 }
