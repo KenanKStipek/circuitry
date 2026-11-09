@@ -175,11 +175,11 @@ the reply in full; `enter` opens the same content full-screen. A
 Totals row (tokens, the run's own deviation from usual, effects done,
 ETA, cost) is pinned above the list's own bottom border.
 
-At 120 columns and up the detail pane shows beside the list, and
-previous rows are on by default (`p` toggles; off below 24 rows, to
-leave more height for the Now band). At 80–119 columns the detail
-pane drops, previews are always off, and `enter` opens the step's
-details over the list instead. At 60–79 columns the list drops its
+At 100 columns and up the detail pane shows beside the list, and
+preview rows are on by default (`p` toggles; off at 24–29 rows, to
+leave more height for the Now band, on again at 30 and up). At
+80–99 columns the detail pane drops, previews are always off, and
+`enter` opens the step's details over the list instead. At 60–79 columns the list drops its
 clock column too, keeping only the glyph, the name and a fixed-width
 token column, and the title, the status line and the Totals row all
 shorten to their own bare figures. Below 60×24, a plain too-small
@@ -188,12 +188,15 @@ terminal has, and points at `osi --log`.
 
 `↑↓`/`j`/`k`, `PageUp`/`PageDown`, `Home`/`End` and `g`/`G` move over
 the Tape's own rows in the order it draws them (finish order, then
-what's running, then what's ahead), not the plan's own tree order.
-`T` cycles the colour theme; `?` opens Help, listing exactly this
-screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
+what's running, then what's ahead), not the plan's own tree order,
+and turn follow off unless the move lands the selection right back
+on the row follow would have picked itself -- `f` toggles follow by
+hand. `T` cycles the colour theme; `?` opens Help, listing exactly
+this screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
 Tape keys at all -- they still work on the time, flow and cost
 screens below, which keep their own panes until their own part of
-this redesign.
+this redesign. Below 60×24, every screen -- not only the Tape --
+shows the too-small notice instead.
 
 ### `--glance`
 

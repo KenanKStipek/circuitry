@@ -2070,19 +2070,28 @@ is) and for the whole run, over the same runs and the same 3-run
 threshold as every other `_p50` figure here. A loop pass is also
 kept by its own literal, un-stripped path (`history::display_key_
 literal`), alongside the existing pass-stripped one the Time
-screen's ghost bars read: the stripped key still sums every pass of
-a run together, which is what that needs, but the Tape's own
-"usually" for one specific pass (`drafts.iter_2.draft`) needs that
-pass's own three recorded figures, never summed with its siblings'.
-Pinned against the design's own fixture history (`design/fixtures/
-hist`): the non-loop steps, the whole run's own total, and now each
-of a tree loop's own three passes individually, all match the
-design builders' own summary (`hist/history.json`) exactly. The
-whole-run figure reaches the header through a new `Header::
-history_usual_total_tokens`, set in `history_io::apply_history_eta`
-from `DocumentStats::whole_run`'s own `tokens_p50` -- the Tape's
-`+12%` Totals deviation and `usually 1,324 t` Run End both read it
-from there, not a `_total` step key that never existed.
+screen's ghost bars read: the stripped key's own per-run sample is
+now that run's own tokens *divided by that run's own pass count*
+before the median is taken across runs, so it reads as one typical
+pass's size whether a loop pass's own literal key has three runs to
+go on yet or the Tape falls back to the stripped key for it; a
+non-loop step's own pass count is always 1, so this changes nothing
+for it. A literal key is capped at the first 8 passes a loop records
+in any one run -- past that, a pass keeps contributing to the
+stripped key's own sum, it just never earns a literal key of its
+own -- and an evicted literal key's own tokens are never folded into
+`(other)` a second time on top of its already-counted stripped
+sibling's; both guard a loop long enough to otherwise grow one
+record past its own 64 KiB line cap. Pinned against the design's own
+fixture history (`design/fixtures/hist`): the non-loop steps, the
+whole run's own total, and each of a tree loop's own three passes
+individually, all match the design builders' own summary (`hist/
+history.json`) exactly. The whole-run figure reaches the header
+through a new `Header::history_usual_total_tokens`, set in
+`history_io::apply_history_eta` from `DocumentStats::whole_run`'s
+own `tokens_p50` -- the Tape's `+12%` Totals deviation and `usually
+1,324 t` Run End both read it from there, not a `_total` step key
+that never existed.
 
 **The Tape** (`screens::TapeScreen`, `build_tape`) replaces the
 Overview as screen 0. Built from the same inputs `render::build`
@@ -2104,7 +2113,12 @@ own cost per row would turn one redraw of a long run back into the
 O(n²) walk issue #637's own budget test exists to catch. The token
 unit (`screens::tape_unit`) is the smallest of 10/20/50/100/200/500
 that keeps the usual largest step's own history inside eight bar
-cells, `50` without enough of it. The detail pane reuses
+cells by the same rounding the bar itself draws with, `50` without
+enough of it -- the design's own fixture history gives the largest
+step (`summary`) a usual 402 t, which still rounds to a full 8-cell
+bar at 50 t/cell, so every frame's own `▰ = 50 t` title is this
+derivation's real result for that history, not a separate fixed
+default kept alongside it. The detail pane reuses
 `screens::build_focused_step`/`FocusedStep` -- the same model Flow's
 and Time's own selected panes already build theirs from -- plus the
 selected row's own Usual (history's median and the run count behind
@@ -2123,7 +2137,12 @@ movement key (`j`/`k`, the arrows, `PageUp`/`PageDown`, `Home`/`End`,
 list -- the Tape's own draw order (finish order, then running, then
 rows ahead), never the plan's depth-first order `visible_rows`
 returns for everything else, which put a loop's later passes and the
-plan's own root in places the Tape never draws them. `Tab`, `z`
+plan's own root in places the Tape never draws them. On the Tape
+only, a manual move that lands the selection right back on the row
+follow would itself have picked turns follow back on, rather than
+needing `f`; the design names no key for this on the Tape, so it
+reuses the shared `f` toggle every screen already has, and every
+other screen's plain "any move turns follow off" is unchanged. `Tab`, `z`
 (fold) and `v` (full value) go from the Tape entirely -- they
 reached a pane or a fold state the design gives it no key for at
 all -- as do `Left`/`Right` (collapse/expand), since its rows have
@@ -2133,10 +2152,14 @@ shipped panes, until their own part of the redesign; each of those
 three screens' own Help overlay (`tui::screen_help_text`) lists its
 own keys, since the Tape's no longer does.
 
-**Sizes.** 120 columns and up: the list beside its detail pane,
-previous rows on by default (off at 24–29 rows, to leave more height
-for the Now band and what's ahead of it). 80–119: the list alone,
-full width, previews always off. 60–79: the list without its
+**Sizes.** 100 columns and up: the list beside its detail pane,
+preview rows on by default (off at 24–29 rows, to leave more height
+for the Now band and what's ahead of it); §5 also asks for a
+shortened title at 100–119, which this build does not yet give it
+-- the full title still draws there, ratatui's own border truncating
+it if it runs long, a cosmetic gap from the design rather than a
+broken layout. 80–99: the list alone, full width, previews always
+off. 60–79: the list without its
 clock column, with the name column absorbing the freed width and a
 fixed 16-cell token field, a shortened `Tape · done/planned · ▰ =
 unit t` title, and the Run Started/Run End rows, the status line and
@@ -2159,13 +2182,25 @@ status line (the run's own latest report when there is one, in its
 level's colour and collapsing to a bare `▸` when it would not fit,
 else the newest line already in the run's own log, until Flow/Time/
 Cost get a bespoke one of their own); a key bar in `keyhint.key`/
-`keyhint.desc`, each screen's own keys; a Totals row (tokens sent/
-received and the total, its own deviation from the whole run's usual
-tokens once history has one, effects done of planned, the ETA and
---- not yet wired to a real figure on any screen --- the run's own
-cost). Flow/Time/Cost keep their own inner panels and their own keys
-exactly as shipped; `tui::draw`'s own outer `Layout` just gives them
-4 fewer rows of body than before to draw them in.
+`keyhint.desc`, each screen's own keys, right-aligned so `? Help  q
+Quit` always sits flush against the bar's own right edge and a left
+item that would not fit is dropped whole (never cut mid-word) with a
+trailing `⋯`; a Totals row (tokens sent/received and the total, its
+own deviation from the whole run's usual tokens once history has
+one, effects done of planned, the ETA and --- not yet wired to a
+real figure on any screen --- the run's own cost). Flow/Time/Cost
+keep their own inner panels and their own keys exactly as shipped;
+`tui::draw`'s own outer `Layout` just gives them 4 fewer rows of
+body than before to draw them in, and their own small-terminal
+thresholds (`tui::thresholds`) are 4 rows lower than their own named
+size to compensate -- a panel still named "80×20" is still checked
+against an 80×20 terminal, not 80×24. Below 60×24, every screen
+now reads the Tape's own too-small notice (`tui::draw_too_small`,
+renamed from `draw_tape_too_small`), not only the Tape; several of
+Flow/Time/Cost's own narrower-terminal goldens (`_at_70x20`,
+`_at_80x20`) now pin that notice instead of the sub-24-row layout
+they used to, since nothing renders below the shared floor on any
+screen any more.
 
 **Goldens and allow-listed cells.** Every `tape--*` frame in
 `design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
@@ -2183,20 +2218,60 @@ error in full and what was not reached after a failure. A loop whose
 `each.in` is a document literal counts its passes from the plan
 before any of them runs (`plan::resolve_each_len`), so the effects
 count reads `/14` from the first frame. A few cells are skipped by
-coordinate, each documented at the test's call site: the median wall
-time of the three history runs (5.0565 s) rounds to `5.1s` under
-`format_duration`'s round-half-up rule while the frames read `5.0s`,
-one figure in each of the Starting, Ended, Normal and Usual frames;
-the Help overlay's `0 1 2 3` row, where the frames name the Signal
-and Store screens that parts 2 and 4 of the design introduce while
-this build still has Time and Cost; and the last column of the header
-and key bar in the Help frame, where the mockup's trailing blank
-carries another foreground. Everything else matches exactly.
+coordinate, each documented at the test's call site: the three history
+runs' own median wall time reads differently depending on which clock
+measures it -- osi's own history records `last_run.started_at` to
+`completed_at` (5.0565 s median, rounding to `5.1s` under
+`format_duration`'s round-half-up rule), while the design's own
+fixture summary pools the runs' `run_start`/`run_end` *event*
+timestamps instead (5.049 s median, rounding to `5.0s`, what the
+frames read); one figure in each of the Starting, Ended, Normal and
+Usual frames. The status line's own row, in the Normal, Usual,
+80×24 and 60×24 frames (and the Help frame's own copy of it, below
+the modal): §3.2 reads the newest finished step, loop passes
+included, and `drafts.iter_1.draft` finishes 2 ms after `gate.reply`
+in `run2/events.jsonl`, so the renderer now reads that pass as the
+newest -- the frame still reads `gate › reply finished`, the step
+that finished 2 ms earlier. Also skipped: the Help overlay's `0 1 2
+3` row, where the frames name the Signal and Store screens that
+parts 2 and 4 of the design introduce while this build still has
+Time and Cost; and the last column of the header and key bar in the
+Help frame, where the `.mock` parser pads a trimmed line's own rest
+out with a bare `fg.default` span rather than this renderer's dimmed
+base fill. Everything else matches exactly.
+
+**From the frames, not from the design text.** A few behaviours the
+design document's own prose never states, read off the frames
+themselves instead, so a later frame change could change them: the
+80–119 column floor keeps one row of slack at the bottom of its own
+scrollable list that 60–79 and 120 + do not (both fit `Run Started`
+through `Run End` in the same height; only 80–119 draws a trailing
+blank line before it); rows read in plan order, not real finish
+order, once a run has ended (finish order would scramble a loop's
+own passes by whichever of two near-simultaneous steps the engine
+happened to write first); and prompt previews are off for the
+Starting, Ended and Failed states. The Help overlay's own six blank
+rows (`design/frames/tape--help--120x30.mock` rows 15-20) are left
+blank here too, rather than given the movement aliases, `/`, `e`,
+`T`, `c` and `f` §4 also names as Tape keys: populating them changes
+over 300 of the frame's own cells at once, the kind of change this
+repository's own goldens ask to be reported rather than allow-listed
+away.
 
 **Not yet shipped.** The Totals row's cost figure reads `—` on every
 screen until a run reports one (`meta.cost_usd`,
 `runtime.last_run.totals.cost_usd`); the frames' scripted adapter
-never does, so every frame reads `—` too.
+never does, so every frame reads `—` too. The Help overlay's own six
+blank rows stay blank (above, "from the frames, not the design
+text"), and §3.5's own "100–119 columns shorten long titles and
+labels" is not yet given its own title-shortening rule at that
+width specifically -- the detail pane does show there, same as
+120 +, just with whichever title ratatui's own border truncation
+gives a long one. Below three finished runs, the Run End row reads
+`ETA — · no history yet` (§3.5); the Help overlay's own "Tokens"
+legend states the run's own actual unit and, once there have been
+enough runs to pool, the real count pooled, not fixed `50 t`/`3`
+figures.
 
 ### 6.4 Tests
 
