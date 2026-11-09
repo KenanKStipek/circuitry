@@ -1514,6 +1514,9 @@ def validate(
         merged_runtime = _merge_runtime(
             (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
         )
+        from ..core.lint import splitting_merge_warnings
+
+        lint_warnings += splitting_merge_warnings(orch, merged_runtime)
         secret_sources = secret_definition_sources(
             named_secrets,
             config_runtime=config.runtime if config is not None else None,

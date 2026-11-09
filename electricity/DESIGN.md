@@ -2833,6 +2833,8 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 
 ---
 
+| — | **The size trigger for decomposition** (issue #672): `runtime.complexity.splitting` and a prompt's own `split:` block are a Python-only preview feature — cof slices an over-budget prompt's context into parts deterministically and runs them in parallel; electricity has no runner for the generated plan at all. | **Refuse, never execute** — `electricity-config` parses `runtime.complexity.splitting` with the same validation and error texts as `cli/complexity_config.py` (so a document/config setting it still gets a byte-identical error, or resolves cleanly, on either engine), but `Supported::splitting` stays `false`: a run whose effective config enables splitting, or whose prompt sets `split.budget_tokens` (splits even with the switch off), is refused up front with the standard preview marker (`RefusalReason::SplittingEnabled`/`SplitBudget`), the same posture `Supported::decomposition` had before issue #522. `split: {enabled: false}` alone, with no `budget_tokens`, is not refused. Parity (actually running a generated split plan) is a follow-up milestone. | No — explicitly out of scope for this issue; electricity running splits is filed as its own follow-up when this lands. |
+
 ## 14. Security model
 
 electricity's security posture mirrors Circuitry's (Decisions, §1: "same security rules as
