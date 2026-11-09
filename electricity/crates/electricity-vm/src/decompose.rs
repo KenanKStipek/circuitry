@@ -129,17 +129,29 @@ pub fn route_up_model(settings: &ComplexitySettings, prompt_model: Option<&str>)
 }
 
 /// `core/decompose.py::_planner_runtime_config`: the planner's own
-/// complexity settings, decomposition switched off -- scoring and
-/// routing stay as configured. Python replaces the whole `complexity.
-/// decomposition` block with `{"enabled": False}`; since this crate
-/// already holds *resolved* settings rather than raw config, that is
-/// exactly [`DecompositionSettings::default`] with `enabled` forced
-/// false.
+/// complexity settings, both decomposition triggers switched off --
+/// scoring and routing stay as configured. The planner's own planning
+/// prompt scores off the chart by construction, and its rendered input
+/// (the source template plus the planning instructions) is enormous by
+/// construction too, so a size-triggered split needs the same shield a
+/// score-triggered decomposition already gets: left on, it would hand
+/// the planner a plan built from a slice of its own instructions rather
+/// than the planner itself, and under `splitting.on_failure: fail` would
+/// turn every over-threshold decomposition attempt into a planner
+/// failure. Python replaces the whole `complexity.decomposition` and
+/// `complexity.splitting` blocks with `{"enabled": False}`; since this
+/// crate already holds *resolved* settings rather than raw config, that
+/// is exactly [`DecompositionSettings::default`]/[`SplittingSettings::
+/// default`] with `enabled` forced false.
 pub fn planner_settings(settings: &ComplexitySettings) -> ComplexitySettings {
     let mut cloned = settings.clone();
     cloned.decomposition = DecompositionSettings {
         enabled: false,
         ..DecompositionSettings::default()
+    };
+    cloned.splitting = SplittingSettings {
+        enabled: false,
+        ..SplittingSettings::default()
     };
     cloned
 }
@@ -621,6 +633,22 @@ pub fn cycle_error(prompt_name: &str, stack: &[String], identity: &str) -> Optio
     ))
 }
 
+/// `core/decompose.py::_execute_split_plan`'s own cycle check
+/// (`:1860-1863`) -- the size trigger's own text, distinct from
+/// [`cycle_error`]'s "decomposition of" (the score trigger's own
+/// wording).
+pub fn split_cycle_error(prompt_name: &str, stack: &[String], identity: &str) -> Option<String> {
+    if !stack.iter().any(|entry| entry == identity) {
+        return None;
+    }
+    let mut chain: Vec<&str> = stack.iter().map(String::as_str).collect();
+    chain.push(identity);
+    Some(format!(
+        "split of '{prompt_name}': cycle detected \u{2014} {}",
+        chain.join(" \u{2192} ")
+    ))
+}
+
 /// `core/decompose.py::_execute_plan`'s own child-state copy
 /// (`:700-712`): the top-level *string*-keyed entries of *ctx*, deep
 /// copied, with `prime.<result_path's second segment>` removed so the
@@ -690,6 +718,14 @@ fn declared_children_entries(
 /// (`:729-734`).
 pub fn missing_result_error(result_path: &str) -> String {
     format!("the decomposition child completed but left nothing at result_path '{result_path}'")
+}
+
+/// `core/decompose.py::_execute_split_plan`'s own missing-result text
+/// (`:1931-1934`) -- the size trigger's own text, distinct from
+/// [`missing_result_error`]'s "the decomposition child" (the score
+/// trigger's own wording).
+pub fn split_missing_result_error(result_path: &str) -> String {
+    format!("the split child completed but left nothing at result_path '{result_path}'")
 }
 
 /// `core/prompt.py:1066`'s own `self.defn.template or prompt_sent` --
@@ -1355,6 +1391,48 @@ fn serialize_message_file(source: &DispatchFile) -> Value {
 /// `core/decompose.py::_set_dotted_copy`: a shallow-structural copy of
 /// *ctx* with *value* set at the dotted *path* -- only the branch
 /// actually being modified is rebuilt.
+/// `core/prompt_compose.py::_dotted_get`: the split reference's own
+/// value lookup, unlike every other dotted-path read in this module
+/// (`exec::use_::resolve_dot_path`, ported from `use.py`'s own
+/// `_resolve_dot_path`), walks a list segment too -- `int(part)`,
+/// negative indices counting from the end, `None` (here, `Value::None`)
+/// on a non-dict/non-list segment, a missing key, a segment that isn't
+/// an integer, or an out-of-range index.
+fn dotted_get(ctx: &Value, dot_path: &str) -> Value {
+    let mut current = ctx.clone();
+    for part in dot_path.split('.') {
+        current = match &current {
+            Value::Dict(dict) => match dict.get(&Value::Str(part.to_string())) {
+                Some(next) => next.clone(),
+                None => return Value::None,
+            },
+            Value::List(items) => {
+                let Ok(index) = part.parse::<i64>() else {
+                    return Value::None;
+                };
+                match python_list_index(items.len(), index) {
+                    Some(resolved) => items[resolved].clone(),
+                    None => return Value::None,
+                }
+            }
+            _ => return Value::None,
+        };
+    }
+    current
+}
+
+/// Python list indexing (negative indices count from the end) -- `None`
+/// on any out-of-range index, never a panic.
+fn python_list_index(len: usize, index: i64) -> Option<usize> {
+    let len = len as i64;
+    let normalized = if index < 0 { index + len } else { index };
+    if normalized < 0 || normalized >= len {
+        None
+    } else {
+        Some(normalized as usize)
+    }
+}
+
 fn set_dotted_copy(ctx: &Value, path: &[&str], value: Value) -> Value {
     let Some((head, rest)) = path.split_first() else {
         return ctx.clone();
@@ -1489,7 +1567,7 @@ fn prepare_split(
         ));
     }
 
-    let value = resolve_dot_path(ctx, &reference);
+    let value = dotted_get(ctx, &reference);
     let (kind, empty): (&'static str, Value) = match &value {
         Value::Str(_) => ("string", Value::Str(String::new())),
         Value::Dict(_) => ("mapping", Value::Dict(Dict::new())),
@@ -1961,73 +2039,81 @@ fn generate_split_plan(
     Ok((parts_key, Value::Dict(plan), result_path))
 }
 
-/// PyYAML aliases a repeated *container* by Python object identity,
-/// never a scalar: `core/decompose.py::_generate_split_plan` builds
-/// *one* `forwarded_split` dict and assigns `dict(forwarded_split)` (a
-/// shallow copy) to both the map prompt's and the merge prompt's own
-/// `split:` key, so the nested `merge: {template: ...}` sub-dict --
-/// the one container value the source's own `split.merge` carries,
-/// present whenever `merge_mode == "reduce"` at all -- keeps the same
-/// identity across both copies. `yaml.safe_dump` renders its first
-/// occurrence as `merge: &id001` (with the sub-block indented under
-/// it, unchanged) and every later occurrence as a bare `merge:
-/// *id001`. electricity's own dumper has no identity-aware aliasing
-/// (every `Value` it dumps is a fresh, independently owned tree, and
-/// this module calls [`forwarded_split_config`] twice, once per
-/// generated prompt, rather than sharing one allocation) -- since this
-/// is the one place the whole dumper would ever need it, this patches
-/// the already-dumped text in place instead of teaching the dumper
-/// general identity tracking for a single call site. A no-op if the
-/// text has fewer than two `merge:`-as-its-own-line occurrences (any
-/// shape other than exactly the one this function exists for).
-fn alias_shared_merge_block(yaml_text: &str) -> String {
-    let lines: Vec<&str> = yaml_text.lines().collect();
-    let merge_line_indices: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.trim_start() == "merge:")
-        .map(|(index, _)| index)
-        .collect();
-    let [first, second] = merge_line_indices.as_slice() else {
-        return yaml_text.to_string();
-    };
-    let first_indent = lines[*first].len() - lines[*first].trim_start().len();
-    let second_indent = lines[*second].len() - lines[*second].trim_start().len();
+/// The [`electricity_yaml::MappingAlias`] groups [`generate_split_plan`]
+/// creates between the map and merge prompts, mirroring exactly what
+/// `core/decompose.py::_copy_source_fields`/`_forwarded_split_config`
+/// share by Python object identity: `schema`/`params`/`inputs`, each
+/// only if the source prompt set it (`_copy_source_fields`'s own field
+/// order, which is also `yaml.safe_dump`'s own anchor numbering order
+/// since both prompts are built field-by-field in that order), then
+/// `split.merge`, reached later through `split` -- present whenever
+/// *merge_mode* is `"reduce"` at all, since that is exactly the
+/// condition under which the source carried a `split.merge.template`
+/// to forward. [`generate_split_plan`]'s own shape is fixed rather than
+/// discovered (`effects[0].body[0]` is always the map prompt,
+/// `effects[1]` the merge prompt whenever one exists at all), so every
+/// path here is static.
+fn plan_aliases(prompt: &PromptOp, merge_mode: &str) -> Vec<electricity_yaml::MappingAlias> {
+    use electricity_yaml::{MappingAlias, PathSegment};
 
-    let mut out: Vec<String> = Vec::with_capacity(lines.len());
-    let mut index = 0usize;
-    while index < lines.len() {
-        if index == *first {
-            out.push(format!("{}merge: &id001", " ".repeat(first_indent)));
-            index += 1;
-            continue;
-        }
-        if index == *second {
-            out.push(format!("{}merge: *id001", " ".repeat(second_indent)));
-            index += 1;
-            // Skip every following line indented deeper than *second*'s own
-            // `merge:` line -- its sub-block, now replaced by the alias.
-            while index < lines.len() {
-                let line = lines[index];
-                if line.trim().is_empty() {
-                    break;
-                }
-                let indent = line.len() - line.trim_start().len();
-                if indent <= second_indent {
-                    break;
-                }
-                index += 1;
-            }
-            continue;
-        }
-        out.push(lines[index].to_string());
-        index += 1;
+    if merge_mode != "reduce" {
+        return Vec::new();
     }
-    let mut result = out.join("\n");
-    if yaml_text.ends_with('\n') {
-        result.push('\n');
+    let map_path = |field: &str| {
+        vec![
+            PathSegment::Key(key("effects")),
+            PathSegment::Index(0),
+            PathSegment::Key(key("body")),
+            PathSegment::Index(0),
+            PathSegment::Key(key(field)),
+        ]
+    };
+    let merge_path = |field: &str| {
+        vec![
+            PathSegment::Key(key("effects")),
+            PathSegment::Index(1),
+            PathSegment::Key(key(field)),
+        ]
+    };
+
+    let mut aliases = Vec::new();
+    let mut next_id = 1u32;
+    if prompt.schema.is_some() {
+        aliases.push(MappingAlias {
+            id: next_id,
+            anchor_path: map_path("schema"),
+            alias_paths: vec![merge_path("schema")],
+        });
+        next_id += 1;
     }
-    result
+    if prompt.model_params.is_some() {
+        aliases.push(MappingAlias {
+            id: next_id,
+            anchor_path: map_path("params"),
+            alias_paths: vec![merge_path("params")],
+        });
+        next_id += 1;
+    }
+    if prompt.inputs.is_some() {
+        aliases.push(MappingAlias {
+            id: next_id,
+            anchor_path: map_path("inputs"),
+            alias_paths: vec![merge_path("inputs")],
+        });
+        next_id += 1;
+    }
+    if prompt.split_merge_template.is_some() {
+        let mut map_merge = map_path("split");
+        map_merge.push(PathSegment::Key(key("merge")));
+        let mut merge_merge = merge_path("split");
+        merge_merge.push(PathSegment::Key(key("merge")));
+        aliases.push(MappingAlias {
+            id: next_id,
+            anchor_path: map_merge,
+            alias_paths: vec![merge_merge],
+        });
+    }
+    aliases
 }
 
 /// `core/decompose.py::_apply_native_merge`/`_MergeInvalidError`.
@@ -2214,7 +2300,12 @@ async fn maybe_split(
         }
     };
 
-    let plan_yaml = match electricity_yaml::dump(&plan_dict, &DumpOptions { sort_keys: false }) {
+    let aliases = plan_aliases(prompt, merge_mode);
+    let plan_yaml = match electricity_yaml::dump_aliased(
+        &plan_dict,
+        &DumpOptions { sort_keys: false },
+        &aliases,
+    ) {
         Ok(text) => text,
         Err(err) => {
             return Ok(Some(split_failure_result(
@@ -2224,11 +2315,6 @@ async fn maybe_split(
                 err.to_string(),
             )));
         }
-    };
-    let plan_yaml = if merge_mode == "reduce" {
-        alias_shared_merge_block(&plan_yaml)
-    } else {
-        plan_yaml
     };
     base.insert(key("yaml"), Value::Str(plan_yaml.clone()));
     base.insert(key("result_path"), Value::Str(result_path.clone()));
@@ -2249,7 +2335,7 @@ async fn maybe_split(
     }
 
     let identity = plan_identity(&plan_yaml);
-    if let Some(message) = cycle_error(name, frame.use_call_stack(), &identity) {
+    if let Some(message) = split_cycle_error(name, frame.use_call_stack(), &identity) {
         log::warn!(
             "Decomposition (size trigger) child failed for prompt {}",
             Value::Str(name.to_string()).py_repr()
@@ -2360,7 +2446,7 @@ async fn maybe_split(
             base,
             sset,
             "execution_failed",
-            missing_result_error(&result_path),
+            split_missing_result_error(&result_path),
         )));
     }
 
@@ -2519,6 +2605,62 @@ mod tests {
         assert_eq!(planner.decomposition, DecompositionSettings::default());
         assert!(planner.scoring.enabled);
         assert!(planner.routing.enabled);
+    }
+
+    #[test]
+    fn planner_settings_disables_splitting_too() {
+        let mut settings = ComplexitySettings::default();
+        settings.splitting.enabled = true;
+        settings.splitting.max_input_tokens = Some(10);
+        settings.splitting.on_failure = "fail".to_string();
+        let planner = planner_settings(&settings);
+        assert!(!planner.splitting.enabled);
+        assert_eq!(planner.splitting, SplittingSettings::default());
+    }
+
+    #[test]
+    fn dotted_get_walks_a_dict_then_a_list_index() {
+        let ctx = dict(vec![(
+            "input",
+            dict(vec![(
+                "docs",
+                Value::List(vec![
+                    Value::Str("first".to_string()),
+                    Value::Str("second".to_string()),
+                ]),
+            )]),
+        )]);
+        assert_eq!(
+            dotted_get(&ctx, "input.docs.0"),
+            Value::Str("first".to_string())
+        );
+        assert_eq!(
+            dotted_get(&ctx, "input.docs.1"),
+            Value::Str("second".to_string())
+        );
+    }
+
+    #[test]
+    fn dotted_get_walks_a_list_index_with_a_negative_index() {
+        let ctx = Value::List(vec![
+            Value::from(1i64),
+            Value::from(2i64),
+            Value::from(3i64),
+        ]);
+        assert_eq!(dotted_get(&ctx, "-1"), Value::from(3i64));
+    }
+
+    #[test]
+    fn dotted_get_is_none_on_a_non_integer_list_segment_or_an_out_of_range_index() {
+        let list = Value::List(vec![Value::from(1i64)]);
+        assert_eq!(dotted_get(&list, "x"), Value::None);
+        assert_eq!(dotted_get(&list, "5"), Value::None);
+    }
+
+    #[test]
+    fn dotted_get_is_none_past_a_scalar() {
+        let ctx = dict(vec![("n", Value::from(1i64))]);
+        assert_eq!(dotted_get(&ctx, "n.x"), Value::None);
     }
 
     #[test]
@@ -3027,6 +3169,25 @@ mod tests {
     }
 
     #[test]
+    fn split_cycle_error_fires_only_when_identity_is_already_on_the_stack() {
+        assert_eq!(split_cycle_error("ask", &[], "inline:abc"), None);
+        let stack = vec!["inline:abc".to_string()];
+        let message = split_cycle_error("ask", &stack, "inline:abc").unwrap();
+        assert_eq!(
+            message,
+            "split of 'ask': cycle detected \u{2014} inline:abc \u{2192} inline:abc"
+        );
+    }
+
+    #[test]
+    fn split_missing_result_error_has_the_expected_shape() {
+        assert_eq!(
+            split_missing_result_error("prime.merge.value"),
+            "the split child completed but left nothing at result_path 'prime.merge.value'"
+        );
+    }
+
+    #[test]
     fn complexity_score_reads_a_float_or_small_int_score_key() {
         let meta = dict(vec![("score", Value::Float(12.5))]);
         assert_eq!(complexity_score(Some(&meta)), Some(12.5));
@@ -3441,17 +3602,60 @@ mod tests {
     }
 
     #[test]
-    fn alias_shared_merge_block_anchors_the_first_and_aliases_the_second() {
-        let text = "effects:\n- type: prompt\n  split:\n    merge:\n      template: x\n- type: prompt\n  split:\n    merge:\n      template: x\n";
-        let aliased = alias_shared_merge_block(text);
-        assert!(aliased.contains("merge: &id001\n"));
-        assert!(aliased.contains("merge: *id001\n"));
-        assert_eq!(aliased.matches("template: x").count(), 1);
+    fn plan_aliases_is_empty_for_a_native_merge() {
+        let prompt = template_op("x");
+        assert_eq!(plan_aliases(&prompt, "join"), Vec::new());
+        assert_eq!(plan_aliases(&prompt, "concat"), Vec::new());
     }
 
     #[test]
-    fn alias_shared_merge_block_is_a_no_op_with_fewer_than_two_occurrences() {
-        let text = "split:\n  merge:\n    template: x\n";
-        assert_eq!(alias_shared_merge_block(text), text);
+    fn plan_aliases_covers_only_the_fields_the_source_actually_set() {
+        let mut prompt = template_op("x");
+        prompt.split_merge_template = Some("y".to_string());
+        let aliases = plan_aliases(&prompt, "reduce");
+        // No schema/params/inputs on this source -- only `split.merge`.
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].id, 1);
+    }
+
+    #[test]
+    fn plan_aliases_numbers_schema_params_inputs_then_merge_in_that_order() {
+        use electricity_bytecode::param::ParamNode;
+        let mut prompt = template_op("x");
+        prompt.schema = Some(Value::Dict(Dict::new()));
+        prompt.model_params = Some(ParamNode::Literal(Value::from(1i64)));
+        prompt.inputs = Some(ParamNode::Literal(Value::from(2i64)));
+        prompt.split_merge_template = Some("y".to_string());
+        let aliases = plan_aliases(&prompt, "reduce");
+        let ids: Vec<u32> = aliases.iter().map(|a| a.id).collect();
+        assert_eq!(ids, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn plan_aliases_anchor_and_alias_paths_reach_map_then_merge_prompt() {
+        use electricity_yaml::PathSegment;
+        let mut prompt = template_op("x");
+        prompt.schema = Some(Value::Dict(Dict::new()));
+        let aliases = plan_aliases(&prompt, "reduce");
+        assert_eq!(aliases.len(), 1);
+        let schema_alias = &aliases[0];
+        assert_eq!(
+            schema_alias.anchor_path,
+            vec![
+                PathSegment::Key(Value::Str("effects".to_string())),
+                PathSegment::Index(0),
+                PathSegment::Key(Value::Str("body".to_string())),
+                PathSegment::Index(0),
+                PathSegment::Key(Value::Str("schema".to_string())),
+            ]
+        );
+        assert_eq!(
+            schema_alias.alias_paths,
+            vec![vec![
+                PathSegment::Key(Value::Str("effects".to_string())),
+                PathSegment::Index(1),
+                PathSegment::Key(Value::Str("schema".to_string())),
+            ]]
+        );
     }
 }

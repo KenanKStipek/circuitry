@@ -1,0 +1,8 @@
+prime.big.parts.iter_0.map:
+  - text: '"part0"'
+prime.big.parts.iter_1.map:
+  - text: '"part1"'
+prime.big.merge:
+  - text: 'null'
+prime.big:
+  - text: '"big ran as is"'

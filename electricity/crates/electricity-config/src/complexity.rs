@@ -186,11 +186,9 @@ impl Default for DecompositionSettings {
 }
 
 /// `cli/complexity_config.py::SplittingSettings` -- the size trigger for
-/// decomposition (issue #672). electricity parses this block (so a
-/// document/config that sets it gets the same validation and error texts)
-/// but does not run the feature: a run whose effective config enables
-/// splitting, or whose prompt sets `split.budget_tokens`, is refused up
-/// front, the standard preview posture (`electricity_bytecode::refusal`).
+/// decomposition (issue #672): a prompt whose rendered input exceeds its
+/// token budget splits deterministically into parts that run in parallel
+/// and merge back at the effect's path (`electricity_vm::decompose`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplittingSettings {
     pub enabled: bool,
