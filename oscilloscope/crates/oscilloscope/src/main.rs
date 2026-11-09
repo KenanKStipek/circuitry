@@ -1692,7 +1692,7 @@ fn build_tape_if_active(
 }
 
 /// Screen 3's own model (issue #632), built only while it's actually
-/// on display -- the same performance rule `build_overview_if_active`
+/// on display -- the same performance rule `build_tape_if_active`
 /// follows, and rebuilt at the same points that one is (a rebuild, or
 /// a key that could have changed the screen, the measure or the
 /// zoom). `statuses` comes straight from `render_state.unfolded_rows`
@@ -1739,7 +1739,7 @@ fn build_cost_screen_if_active(
 }
 
 /// Screen 2's own model (issue #635), built only while it's actually
-/// on display -- the same performance rule `build_overview_if_active`/
+/// on display -- the same performance rule `build_tape_if_active`/
 /// `build_cost_screen_if_active` already follow.
 #[allow(clippy::too_many_arguments)]
 fn build_flow_screen_if_active(
