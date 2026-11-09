@@ -779,6 +779,11 @@ pub struct RunStats {
     pub p50_s: f64,
     pub p10_s: Option<f64>,
     pub p90_s: Option<f64>,
+    /// The median of the whole run's own tokens (sent + received),
+    /// over the same pool `p50_s` comes from (issue #678's "usual"
+    /// tokens, Tape's own `+12% Usual` in the Totals row) -- `None`
+    /// below [`P50_MIN_RUNS`], same threshold as `p50_s` itself.
+    pub tokens_p50: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -800,6 +805,13 @@ pub struct StepStats {
     /// never read by [`compute_eta`] itself; see
     /// [`DocumentStats::anchor_remaining_after_p50_s`].
     pub remaining_after_p50_s: Option<f64>,
+    /// The median of this step's own tokens (sent + received),
+    /// pooled the same "earlier versions" way `busy_p50_s` is
+    /// (issue #678's "usual" tokens: `usually 155 t` on a row ahead,
+    /// `+47%` beside a finished one) -- counts only the runs where
+    /// this step actually recorded a token figure (a tool step
+    /// never does), and is `None` below [`P50_MIN_RUNS`] of those.
+    pub tokens_p50: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -861,11 +873,17 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
     let same_hash_ok_count = same_hash.len();
     let whole_run = if same_hash_ok_count >= P50_MIN_RUNS {
         let wall: Vec<f64> = same_hash.iter().map(|r| r.wall_s).collect();
+        let tokens: Vec<f64> = same_hash
+            .iter()
+            .map(|r| (r.tokens_sent + r.tokens_received) as f64)
+            .collect();
         Some(RunStats {
             count: same_hash_ok_count,
             p50_s: percentile_with_threshold(&wall, 50.0, P50_MIN_RUNS).unwrap_or(0.0),
             p10_s: percentile_with_threshold(&wall, 10.0, P10_P90_MIN_RUNS),
             p90_s: percentile_with_threshold(&wall, 90.0, P10_P90_MIN_RUNS),
+            tokens_p50: percentile_with_threshold(&tokens, 50.0, P50_MIN_RUNS)
+                .map(|v| v.round() as u64),
         })
     } else {
         None
@@ -897,6 +915,14 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
             .iter()
             .filter_map(|r| r.steps.get(key).map(|s| s.end_s))
             .collect();
+        let tokens: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key))
+            .filter_map(|s| match (s.tokens_sent, s.tokens_received) {
+                (None, None) => None,
+                (sent, received) => Some((sent.unwrap_or(0) + received.unwrap_or(0)) as f64),
+            })
+            .collect();
         per_step.insert(
             key.clone(),
             StepStats {
@@ -907,6 +933,8 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
                 start_p50_s: percentile_with_threshold(&start_s, 50.0, P50_MIN_RUNS),
                 end_p50_s: percentile_with_threshold(&end_s, 50.0, P50_MIN_RUNS),
                 remaining_after_p50_s: percentile_with_threshold(&remaining, 50.0, P50_MIN_RUNS),
+                tokens_p50: percentile_with_threshold(&tokens, 50.0, P50_MIN_RUNS)
+                    .map(|v| v.round() as u64),
             },
         );
     }
@@ -1249,6 +1277,91 @@ mod tests {
         let plan_stats = stats.per_step.get("plan").unwrap();
         assert_eq!(plan_stats.start_p50_s, None);
         assert_eq!(plan_stats.end_p50_s, None);
+    }
+
+    fn step_with_tokens(sent: u64, received: u64) -> StepRecord {
+        StepRecord {
+            tokens_sent: Some(sent),
+            tokens_received: Some(received),
+            ..step(0.0, 1.0, 1.0, 1, true)
+        }
+    }
+
+    /// Issue #678's own "usual" tokens, per step: the median of
+    /// tokens sent+received, pooled across every ok run (any hash)
+    /// the same way `busy_p50_s` is.
+    #[test]
+    fn compute_stats_gives_the_median_tokens_per_step() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step_with_tokens(150, 4));
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps
+            .insert("plan".to_string(), step_with_tokens(158, 6));
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps
+            .insert("plan".to_string(), step_with_tokens(146, 6));
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        // sorted totals: 152, 154, 164 -> median 154
+        assert_eq!(plan_stats.tokens_p50, Some(154));
+    }
+
+    #[test]
+    fn compute_stats_leaves_step_tokens_unset_with_too_few_runs() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step_with_tokens(150, 4));
+        let stats = compute_stats(&[r1], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        assert_eq!(plan_stats.tokens_p50, None);
+    }
+
+    /// A step a plan-known run doesn't always run (an untaken `if`
+    /// branch, say) never recorded a token figure at all for that
+    /// run -- those runs are left out of the median, not counted as
+    /// zero tokens.
+    #[test]
+    fn compute_stats_skips_runs_with_no_token_figure_for_a_step() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("tool".to_string(), step(0.0, 1.0, 1.0, 1, true));
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps
+            .insert("tool".to_string(), step(0.0, 1.0, 1.0, 1, true));
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps
+            .insert("tool".to_string(), step(0.0, 1.0, 1.0, 1, true));
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let tool_stats = stats.per_step.get("tool").unwrap();
+        assert_eq!(tool_stats.tokens_p50, None);
+    }
+
+    /// Issue #678's own "usual" tokens, for the whole run: the
+    /// median of the run's own `tokens_sent + tokens_received`, over
+    /// the same same-hash pool `p50_s` comes from.
+    #[test]
+    fn compute_stats_gives_the_median_tokens_for_the_whole_run() {
+        fn record_with_tokens(
+            run_id: &str,
+            started_at: &str,
+            sent: u64,
+            received: u64,
+        ) -> HistoryRecord {
+            HistoryRecord {
+                tokens_sent: sent,
+                tokens_received: received,
+                ..record(run_id, started_at, 100.0, Outcome::Ok, "h1")
+            }
+        }
+        let records = vec![
+            record_with_tokens("r1", "2026-01-01T00:00:00Z", 1296, 0),
+            record_with_tokens("r2", "2026-01-01T00:01:00Z", 1386, 0),
+            record_with_tokens("r3", "2026-01-01T00:02:00Z", 1324, 0),
+        ];
+        let stats = compute_stats(&records, Some("h1"));
+        let whole_run = stats.whole_run.unwrap();
+        assert_eq!(whole_run.tokens_p50, Some(1324));
     }
 
     #[test]
@@ -2021,5 +2134,64 @@ mod tests {
             !oldest_path.unwrap().exists(),
             "the least recently written document must be evicted first"
         );
+    }
+
+    /// Issue #678's own "usual" tokens, pinned to the design's own
+    /// fixture history (`oscilloscope/design/fixtures/hist`):
+    /// `history.json` is the design builders' own summary of the
+    /// same three runs' per-step medians, not osi's own format --
+    /// this builds osi's own history record for each of `run-h1..3`
+    /// with the existing recorder (`build_record`, unmodified) and
+    /// checks the resulting medians against that summary directly.
+    ///
+    /// A tree loop's own pass (`drafts.iter_0.draft`) is pass-
+    /// stripped and summed across every pass *within one run*
+    /// already, by the recorder's own existing `display_key`
+    /// (`drafts.iter_*.draft`, `passes: 3`) -- the same key the Time
+    /// screen's ghost bars already rely on. `history.json` instead
+    /// keeps each pass index's own figure separate
+    /// (`prime.drafts.iter_0.draft` vs `.iter_1.` vs `.iter_2.`), a
+    /// distinction the recorder has never drawn (it predates this
+    /// issue) and this change does not add, since doing so would
+    /// also reshape every existing per-run figure the Time screen's
+    /// own tests already pin. The non-loop steps below (`kind`,
+    /// `gate.reply`, `summary`) and the whole run's own total all
+    /// match `history.json` exactly; this is noted rather than
+    /// asserted for `drafts`.
+    #[test]
+    fn design_fixture_history_medians_match_the_builders_own_summary() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../design/fixtures");
+        let doc = fixtures.join("demo.yml");
+        let program = crate::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .expect("demo.yml compiles");
+        let plan = PlanTree::from_program(&program);
+
+        let mut records = Vec::new();
+        for run in ["hist/run-h1", "hist/run-h2", "hist/run-h3"] {
+            let state_path = fixtures.join(run).join("state.json");
+            let state: Value =
+                serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+            let mut model = RunModel::new();
+            model.observe(&state, &plan, crate::model::ProcessState::exited(false));
+            let record = build_record(run, Some("cof"), &state, &model, &plan)
+                .expect("a finished, non-dry, non-validate-only run with a document hash");
+            records.push(record);
+        }
+        let hash = records[0].document_hash.clone();
+        let stats = compute_stats(&records, hash.as_deref());
+
+        assert_eq!(
+            stats.per_step.get("kind").and_then(|s| s.tokens_p50),
+            Some(203)
+        );
+        assert_eq!(
+            stats.per_step.get("gate.reply").and_then(|s| s.tokens_p50),
+            Some(265)
+        );
+        assert_eq!(
+            stats.per_step.get("summary").and_then(|s| s.tokens_p50),
+            Some(402)
+        );
+        assert_eq!(stats.whole_run.and_then(|r| r.tokens_p50), Some(1324));
     }
 }
