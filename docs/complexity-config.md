@@ -432,10 +432,10 @@ call with three bounded steps:
    the orchestration knows the substitution happened.
 
 The attempt is recorded at `meta.decomposition` on the effect node —
-`{decomposed, outcome, reason, score, threshold, depth, max_depth, plan,
-chunk_count, yaml, result_path, fallback_model, error}` — whether it
-decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is
-absent entirely when the feature never triggered.
+`{decomposed, trigger: "score", outcome, reason, score, threshold, depth,
+max_depth, plan, chunk_count, yaml, result_path, fallback_model, error}` —
+whether it decomposed, routed up, ran as-is, or failed. Like `meta.complexity`,
+the key is absent entirely when the feature never triggered.
 
 Chunks are scored too, inside the child, so an over-complex chunk decomposes
 again — that is what `max_depth` bounds. At the ceiling the effect **routes

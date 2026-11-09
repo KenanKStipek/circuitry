@@ -83,7 +83,7 @@ Parts that are planned in parallel, and a merge that puts them in one order.
 
 **Failure.** `on_failure` governs the three real failure paths — the planner failing, an invalid plan, the child execution failing. `route_up`, the default, falls back exactly like the depth ceiling: the original prompt runs on the catch-all band model, the failure is recorded under `meta.decomposition.reason`, and the run lives. **A decomposition attempt can never turn a working run into a failed one.** `fail` propagates like any other effect error, under the effect's own `on_error`. Either way the child's scratch state is discarded whole; nothing partial ever lands at the original path. `respect_explicit` from the routing block covers the fallback too: an effect that pins its own `model:` keeps it when route-up would otherwise substitute one.
 
-**Record.** `meta.decomposition` on the effect node carries the full decision — `{decomposed, outcome, reason, score, threshold, depth, max_depth, plan, chunk_count, yaml, result_path, fallback_model, error}` — whether it decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is absent entirely when the feature never triggered.
+**Record.** `meta.decomposition` on the effect node carries the full decision — `{decomposed, trigger: "score", outcome, reason, score, threshold, depth, max_depth, plan, chunk_count, yaml, result_path, fallback_model, error}` — whether it decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is absent entirely when the feature never triggered. The size trigger (splitting an over-budget prompt into parts, see below) shares this record with `trigger: "size"`.
 
 ## Reading the plans: `--decompose-out`
 
