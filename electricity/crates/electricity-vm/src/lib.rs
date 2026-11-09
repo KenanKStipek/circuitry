@@ -29,6 +29,7 @@ pub mod limiter;
 pub mod observer;
 pub mod params;
 pub mod retry;
+pub mod split;
 pub mod store;
 
 /// Moved to `electricity-value` (issue #449's gate lane): a `ToolCall`

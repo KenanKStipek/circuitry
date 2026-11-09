@@ -238,4 +238,16 @@ mod tests {
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("abcde"), 2);
     }
+
+    #[test]
+    fn estimate_tokens_agrees_with_splits_own_independent_copy() {
+        // `core/complexity.py::_estimate_tokens` and `core/split.py::
+        // estimate_tokens` are two independent copies of the same ceiling
+        // division, by design (this module's own doc comment) -- so are
+        // this module's and `crate::split`'s; this pins the two against
+        // drifting apart from each other.
+        for text in ["", "a", "abcd", "abcde", "\u{65e5}\u{672c}\u{8a9e}\u{8a9e}"] {
+            assert_eq!(estimate_tokens(text), crate::split::estimate_tokens(text));
+        }
+    }
 }

@@ -66,6 +66,9 @@ mod schema;
 mod tags;
 
 pub use router::{RouteDecision, route_model};
+// Issue #682: the size trigger's own split-reference picker and tag
+// rewriter need the raw tag scan this crate's scoring already keeps.
+pub use tags::{find_tags, reference_names_sorted, rewrite_tag_prefix};
 
 use electricity_config::ScoringSettings;
 use electricity_value::pycompat::{PyExc, py_int, py_strip};

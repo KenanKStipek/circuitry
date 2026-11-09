@@ -47,6 +47,10 @@ fn template_prompt(template: &str) -> PromptOp {
         description: None,
         group: None,
         split_budget_tokens: None,
+        split_enabled: None,
+        split_max_parts: None,
+        split_separator: None,
+        split_merge_template: None,
     }
 }
 

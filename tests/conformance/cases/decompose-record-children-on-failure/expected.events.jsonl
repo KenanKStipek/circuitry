@@ -1,0 +1,16 @@
+{"v":1,"seq":0,"ts":"2026-11-09T14:39:29.998Z","ev":"run_start","run_id":"b6f8b9d8-8918-458e-abbc-355f1a80110f","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":99273}
+{"v":1,"seq":1,"ts":"2026-11-09T14:39:30.002Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-09T14:39:30.003Z","ev":"start","id":1,"path":"prime.chunk_fails"}
+{"v":1,"seq":3,"ts":"2026-11-09T14:39:30.028Z","ev":"start","id":2,"path":"prime.chunk_fails.plan"}
+{"v":1,"seq":4,"ts":"2026-11-09T14:39:30.030Z","ev":"end","id":2,"path":"prime.chunk_fails.plan","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-11-09T14:39:30.030Z","ev":"start","id":3,"path":"prime.chunk_fails.check"}
+{"v":1,"seq":6,"ts":"2026-11-09T14:39:30.031Z","ev":"end","id":3,"path":"prime.chunk_fails.check","ok":true,"ms":1}
+{"v":1,"seq":7,"ts":"2026-11-09T14:39:30.032Z","ev":"start","id":4,"path":"prime.chunk_fails.result_path"}
+{"v":1,"seq":8,"ts":"2026-11-09T14:39:30.032Z","ev":"end","id":4,"path":"prime.chunk_fails.result_path","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-11-09T14:39:30.032Z","ev":"start","id":5,"path":"prime.chunk_fails.done"}
+{"v":1,"seq":10,"ts":"2026-11-09T14:39:30.033Z","ev":"end","id":5,"path":"prime.chunk_fails.done","ok":true,"ms":0}
+{"v":1,"seq":11,"ts":"2026-11-09T14:39:30.036Z","ev":"start","id":6,"path":"prime.chunk_fails.x"}
+{"v":1,"seq":12,"ts":"2026-11-09T14:39:30.036Z","ev":"end","id":6,"path":"prime.chunk_fails.x","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.chunk_fails.x'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
+{"v":1,"seq":13,"ts":"2026-11-09T14:39:30.038Z","ev":"end","id":1,"path":"prime.chunk_fails","ok":true,"ms":35}
+{"v":1,"seq":14,"ts":"2026-11-09T14:39:30.038Z","ev":"end","id":0,"path":"prime","ok":true,"ms":37}
+{"v":1,"seq":15,"ts":"2026-11-09T14:39:30.038Z","ev":"run_end","ok":true}

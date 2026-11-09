@@ -488,6 +488,44 @@ pub fn render_with_composition<R: ScopeRoot>(
     }
 }
 
+/// `core/decompose.py::_expand_sources` (issue #682): every *sources*
+/// `(label, raw text)` with `{{> name}}` expanded -- sharing one
+/// synthetic-key counter and one `extra` map across every source, so a
+/// resolved-effect-reference fragment in one source never mints the
+/// same key as one in a sibling source. Unlike [`render_with_composition`],
+/// this does not render the result -- the size trigger's own split
+/// measurement and plan generation both need the *expanded*, unrendered
+/// text (tags still intact, to count/rewrite), never a materialized value.
+pub(crate) fn expand_sources<R: ScopeRoot>(
+    sources: &[(&str, &str)],
+    ctx: &R,
+    declared_prompts: &indexmap::IndexMap<String, String>,
+    effect_names: &BTreeSet<String>,
+    splice_ctx: &dyn SpliceCtx,
+) -> Result<(Vec<String>, IndexMap<String, String>), String> {
+    let mut state = ExpandState {
+        counter: 0,
+        extra: IndexMap::new(),
+        budget: 0,
+        splice_ctx,
+    };
+    let seen = BTreeSet::new();
+    let mut expanded = Vec::with_capacity(sources.len());
+    for (label, raw) in sources {
+        let text = expand(
+            raw,
+            ctx,
+            declared_prompts,
+            effect_names,
+            label,
+            &seen,
+            &mut state,
+        )?;
+        expanded.push(text);
+    }
+    Ok((expanded, state.extra))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

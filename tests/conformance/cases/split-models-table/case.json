@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #672 acceptance case 9: splitting.models picks the budget by the resolved model",
   "description": "runtime.complexity.splitting.models names a budget for this effect's own resolved model (no routing involved -- the model the effect dispatches on, pinned by the orchestration itself); max_input_tokens is set far higher, so the models entry is the one that actually governs whether this splits.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
   "expect": "success"

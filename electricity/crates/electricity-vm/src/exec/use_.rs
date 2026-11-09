@@ -958,7 +958,6 @@ async fn attempt_once<R: ParamsCtx>(
     if let Some(refusal) = electricity_bytecode::first_unsupported(
         &child_program,
         run_ctx.complexity.decomposition.enabled,
-        run_ctx.complexity.splitting.enabled,
         &run_ctx.supported,
     ) {
         return Err(AttemptProblem::Fatal(VmError::Refused {
@@ -1004,6 +1003,7 @@ async fn attempt_once<R: ParamsCtx>(
         &child_run_ctx,
         observer,
         token,
+        true,
     )
     .await;
 
@@ -1609,6 +1609,15 @@ struct ChildObserver<'a> {
     parent: &'a dyn RunObserver,
     root_path: EffectPath,
     child_store: &'a Store,
+    /// Whether a `flow: tree` loop/dynamic inside this child forwards
+    /// its own `dispatch` announcement to *parent* at all -- `true` for
+    /// a `use` child (`core/use.py::UseRuntime.execute`'s own child
+    /// `Store` wires `concurrent_dispatch=_namespaced_dispatch_cb(...)`),
+    /// `false` for a decomposition child (`core/decompose.py::
+    /// _build_child_store` never passes `concurrent_dispatch` at all,
+    /// issue #682): the one difference between the two child shapes
+    /// this one shared wrapper otherwise treats identically.
+    forward_dispatch: bool,
     /// Throttles [`RunObserver::write`]'s own snapshot-and-graft pair
     /// (PR #472): a long loop inside the child
     /// calls `write()` once per leaf write, and a full [`Store::saved`]
@@ -1659,7 +1668,9 @@ impl RunObserver for ChildObserver<'_> {
     // [`Frame::effect_path`], already namespaced under the `use` node.
     // No rewriting needed; forward it unchanged.
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
-        self.parent.dispatch(path, branches, concurrency);
+        if self.forward_dispatch {
+            self.parent.dispatch(path, branches, concurrency);
+        }
     }
 
     fn write(&self) {
@@ -1749,6 +1760,7 @@ async fn run_isolated_inner(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
+    forward_dispatch: bool,
 ) -> (Store, Result<(), VmError>) {
     let child_store = Store::new();
     let mut initial_state = initial_state;
@@ -1762,6 +1774,7 @@ async fn run_isolated_inner(
         parent: observer,
         root_path: root_path.clone(),
         child_store: &child_store,
+        forward_dispatch,
         last_graft: std::cell::Cell::new(None),
     };
     let result = crate::exec::dynamic::execute_dynamic(
@@ -1784,6 +1797,14 @@ async fn run_isolated_inner(
 /// `core/use.py::_run_isolated` to port this from: `UseRuntime.execute`
 /// builds its own child `Store` inline, with no separate function of
 /// its own. Shared by `use` (this lane) and decomposition (lane L2).
+///
+/// Returns the [`Store`] *and* the run's own result, always, rather
+/// than discarding the store on an `Err` the way a plain `Result<Store,
+/// VmError>` would: `core/decompose.py::_execute_plan`/
+/// `_execute_split_plan` both graft `runtime.state.record_children`
+/// onto the decomposing node in a `finally`, grafting whatever the
+/// child got to even mid-failure -- the caller needs the store back on
+/// every path to do the same.
 pub async fn run_isolated(
     program: &Program,
     initial_state: Value,
@@ -1791,10 +1812,22 @@ pub async fn run_isolated(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
-) -> Result<Store, VmError> {
-    let (store, result) =
-        run_isolated_inner(program, initial_state, frame, run_ctx, observer, token).await;
-    result.map(|()| store)
+) -> (Store, Result<(), VmError>) {
+    // `false`: never forwards a `dispatch` announcement -- the one
+    // difference from `use`'s own direct call to `run_isolated_inner`
+    // (`ChildObserver::forward_dispatch`'s own doc comment), matching
+    // `core/decompose.py::_build_child_store`'s own omission of
+    // `concurrent_dispatch` (issue #682).
+    run_isolated_inner(
+        program,
+        initial_state,
+        frame,
+        run_ctx,
+        observer,
+        token,
+        false,
+    )
+    .await
 }
 
 #[cfg(test)]

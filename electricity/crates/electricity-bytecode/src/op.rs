@@ -154,6 +154,10 @@ mod python_type_name_tests {
                 description: None,
                 group: None,
                 split_budget_tokens: None,
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }))))
             .python_type_name(),
             "PromptDefinition"

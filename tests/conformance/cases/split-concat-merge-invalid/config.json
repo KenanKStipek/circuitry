@@ -1,7 +1,7 @@
 {
   "runtime": {
     "complexity": {
-      "splitting": {"enabled": true, "max_input_tokens": 10000}
+      "splitting": {"enabled": true, "max_input_tokens": 5}
     },
     "adapters": {
       "scripted": {"replies_file": "scripted-replies.yaml"}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #682: record_children still pins the parts loop after a part fails under run_as_is",
+  "description": "split-part-fails's own companion with runtime.state.record_children on: one part's own model call fails, the split fails as execution_failed and the original prompt dispatches whole (the default on_failure: run_as_is) -- but the parts loop the child run did get to before failing is still grafted onto the node, the same finally cof itself grafts in.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}
