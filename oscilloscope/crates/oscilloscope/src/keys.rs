@@ -776,11 +776,40 @@ impl App {
         self.cost_selected = Some(items[next].path.clone());
     }
 
+    /// Issue #678's own addition for the Tape: a manual move turns
+    /// follow off (the shared Overview's own plain rule, kept for
+    /// every other screen) unless it lands the selection right back
+    /// on the row follow would itself have picked -- `↑↓` past the
+    /// Now band and back, say, restores it on its own rather than
+    /// needing `f`.
+    fn lands_back_on_the_followed_row(&self, rows: &[&Row]) -> bool {
+        if self.screen != Screen::Tape {
+            return false;
+        }
+        use oscilloscope_core::model::StatusKind;
+        let target = rows
+            .iter()
+            .filter(|r| matches!(r.status.kind, StatusKind::Running))
+            .max_by_key(|r| r.depth)
+            .or_else(|| {
+                rows.iter()
+                    .filter(|r| {
+                        matches!(
+                            r.status.kind,
+                            StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                        )
+                    })
+                    .max_by_key(|r| r.depth)
+            })
+            .map(|r| r.path.as_str());
+        target.is_some() && target == self.selected_path.as_deref()
+    }
+
     fn move_or_scroll(&mut self, rows: &[&Row], state_rows: &[&StateRow], delta: i32) {
         match self.pane {
             Pane::Tree => {
                 self.move_tree_selection(rows, delta);
-                self.follow = false;
+                self.follow = self.lands_back_on_the_followed_row(rows);
             }
             Pane::State => self.move_state_selection(state_rows, delta),
             Pane::Details => self.scroll_details(delta),
