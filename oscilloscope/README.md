@@ -136,9 +136,11 @@ stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
 osi has four screens, switched with `0`-`3`: the Tape (`0`, the
 default for both `osi <doc>` and `osi watch`), Signal (`1`, the
-token trace, below), flow (`2`, the tree as control flow, below) and
+token trace, below), Flow (`2`, the rail as control flow, below) and
 cost (`3`, below). Selection, follow, folding, filters and collapsed
-rows are shared across every screen.
+rows are shared across every screen but the Signal's and the Flow's
+own, which draw their own self-contained header, status line, key
+bar and Totals row instead (below).
 
 Every screen shares one header band, status line, key bar and Totals
 row: `osi <document> · <status> <elapsed>` on the left, the `osi`
@@ -209,10 +211,11 @@ and turn follow off unless the move lands the selection right back
 on the row follow would have picked itself -- `f` toggles follow by
 hand. `T` cycles the colour theme; `?` opens Help, listing exactly
 this screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
-Tape keys at all -- they still work on the flow and cost screens
-below, which keep their own panes until their own part of this
-redesign. Below 60×24, every screen -- not only the Tape -- shows
-the too-small notice instead.
+Tape keys at all -- they still work on the Cost screen below, which
+keeps its own panes until its own part of this redesign; the Signal
+and the Flow have their own keys entirely (above, below). Below
+60×24, every screen -- not only the Tape -- shows the too-small
+notice instead.
 
 ### `--glance`
 
@@ -271,127 +274,76 @@ with a shortened title; below 80 columns the Signal isn't offered,
 bouncing back to the Tape on its own if the terminal shrinks below
 it while Signal is on screen.
 
-### Screen 2 (`flow`): the tree as control flow
+### Screen 2 (`flow`): the rail, as control flow
 
-The flow pane (left) is today's orchestration pane, plus each `if`'s own
-decision: a named `if` gets a row of its own, `◆ <name> → then`/`→ else`
-(`◆ <name> …` before the condition has been evaluated), with the untaken
-branch as one dim line underneath (`· else: <its first step>`, `(+N more)`,
-or `· else: nothing` when it's empty) — never a row per untaken step. An
-unnamed `if` writes no node and fires no event, so its own row
-(`◆ if <condition, cut short> → then`) is inferred instead: once any step
-of either branch has appeared, that branch is read as taken; with no
-`else`, it reads `◆ if … → else (nothing ran)` once the enclosing step
-has finished, or once a later step in the same chain has started, with
-nothing from either branch having started; until either happens, it
-reads `◆ if …`. When both branches would read as the same step names, it
-reads `◆ if → ?` instead of guessing. At 100 columns and wider, a
-decision's own condition (the CEL expression, or a model-mode template's
-first line, cut with `…`) is a dim second line under it; narrower, it's
-in the selected pane only. A named loop with a known total of exactly
-one pass, or an unsettled (`dynamic`) total once the loop itself has
-finished with only one pass observed, merges into one row, `⟲ <name>
-pass N of M`; more than one pass keeps one row each, as before. Two or more consecutive, finished, sub-second tool steps still
-fold into one `N quick steps` row (`⏎` expands it in place), and the
-pane's own footer totals every quick step in the run
-(`quick steps folded: 9 · 2.1s`) and gives a health line
-(`health: 0 failed · 0 retries · 0 warnings`). Columns (start, duration,
-tokens, cost) sit to the right of each row; a narrow pane
-drops them in this order — cost, start, tokens — duration always stays.
+The rail (issue #691, design v1 part 3) runs left to right instead of
+top to bottom: a station per step, plan order, forking into lanes at a
+decision or a loop and rejoining. Each station is three lines (name,
+headline, detail) -- a tool's own command and duration, a prompt's own
+tokens and deviation from its own usual. A decision forks into two
+lanes, the taken branch and the untaken one's own ghost (`· <else-
+name>`/`not taken`, one line each, no row per untaken step) -- a named
+`if`'s own branch comes straight from `meta.branch`; an unnamed one
+writes no state node of its own to read it from, so its own decision
+is inferred instead, the same rule as before (once either branch's own
+step has appeared, that branch is taken; with no `else`, the other
+reads as never going to run once the enclosing step has finished or a
+later step in the same chain has started; `if → ?` rather than
+guessing when both branches would read as the very same step names).
+A loop forks into one lane per slot: the passes actually running or
+done first, then one ahead lane per slot the loop has not reached yet
+at all, each reading its own position's history for a label standing
+in for tokens it doesn't have (`cats`), a usual token figure and its
+own queued tool's command, both still marked queued. Four or more
+lanes fold into one double-rail band (`══ 4 lanes + ══`, reading `● 2
+run · 1 wait`) by default; `+`/`-` open or fold the selected fork's own
+lanes three at a time.
 
-The selected pane (top right) shows the flow pane's own selection: a
-prompt's text, a tool's rendered command, or an agent's own first line
-of prompt text (the file's own path, for a prompt read from one) under
-"asked", what it's doing right now (a running prompt's token estimate, a
-running tool's elapsed time, or a running agent's own live summary — the
-same one the Tape's own detail pane shows, including its transcript's last
-few tool calls and the last test command's own outcome, tailed only while
-this step is selected), and, once it finishes, its
-value or reply, tokens, cost and any error under "produced" (a running step
-reads `(when done)`; a finished agent step's own "produced" additionally
-shows `meta.raw`'s own transcript path, files changed and turns). A
-decision row shows its own condition, mode, the
-branch it took and, for a model-mode condition, the model's own answer. `s`
-swaps this pane for today's state tree instead, so a named report
-(#605/#610) stays selectable; `s` again swaps back. `v` opens the full
-value or prompt, as ever.
-
-The story pane (bottom right) is the run's own notable events, oldest
-first, with clock times: run start, each decision, each report, each
-failure, and run end with its totals. It keeps at most 2,000 lines, and
-follows the latest line while scrolled to the bottom. `l` swaps it for the
-full log (the same lines `--log` prints, plus the engine's stderr) instead;
-`l` again swaps back.
+The Selected pane (bottom left, or bottom right at 100 columns and up)
+shows whichever pass or station is selected: a pass as Status (its own
+currently active step, elapsed time and slot), one row per named step
+it ran with tokens and deviation, and Produced (the last such step's
+own output); a plain station the same asked/doing/produced shape the
+Tape's own full-screen step view already has, including a running
+agent's own live transcript tail. The Story pane (bottom right, 100
+columns and 30 rows and up only) is the run's own notable events in
+order -- run start, each decision, each loop starting (`⟳ drafts · 3
+passes · 2 wide`, synthesized here since `--log` writes no event for a
+loop merely starting), each report, each failure and run end.
 
 Sizes:
 
-1. 100×30 and larger: flow pane on the left; the selected pane over the
-   story pane on the right, both splits at the golden section (62/38);
-2. 80×20 up to that: flow pane | selected pane, with the story pane
-   hidden — `l` shows the log in the selected pane's own place instead;
-3. below 80×20: one column, the selected pane over the flow pane, with no
-   story pane and the flow pane's own columns dropped to duration alone.
+1. 100×30 and up: the rail above the Selected and Story panes, side by
+   side, roughly at the golden section;
+2. 80×24 up to that: every loop's own lanes folded, and the Story pane
+   dropped -- the Selected pane takes the whole lower band;
+3. below 80×24: the Flow isn't offered, same floor as the Signal's.
 
-A `report` effect's own events (`electricity/docs/spec/runtime-semantics.md` §8.7) show up in several places.
-Once the run's first report arrives, the header shows its message
-(a warning styled in the theme's own warning colour) after the clock
-time and before the screen tabs, per the truncation order above. The
-run id lives in the root row's own details, and in a `■ run started`
-line in `--log` and the story. Every report, named or not, gets its
-own log line (`▸ <message>`, `▸ warning: <message>`), with a compact
-`data` preview after it when it has one, and joins the story the same way.
-A *named* report still writes a shadow-state node (so it has a row in the
-state pane, with its own `level`/message/clock time and `data` as pretty
-JSON once selected there) but, named or not, a report never becomes a row
-in the flow pane, and never changes how a loop pass folds.
-
-Follow is on when the TUI starts: the flow pane's own selection tracks the
-running effect, and the selected pane shows it with no key press. Any
-manual move (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`) turns follow
-off; `f` turns it back on. The flow pane scrolls, keeping the selected row
-in view, with a `12/48`-style position in its own border whenever a row is
-hidden above or below; the selected and story panes scroll the same way
-once they have focus (`tab` cycles flow → selected → story → flow).
-
-Whatever just changed gets a soft background tint that fades out over about
-a second, so the eye goes to it: a row's status, a state row, a new log
-line or the token totals. The first observation never
-highlights anything (so `osi watch` attaching to a finished run opens on a
-calm screen), and neither does elapsed time, selection, scrolling, the
-filter or a resize. `--theme <name>` (or `OSI_THEME`) paints the whole
-screen in one of ten named colour themes (`dracula`, `nord`, `solarized-
-dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
-`tokyo-night`, `one-dark`) instead of the terminal's own default colours;
-`T` cycles through them live. `--no-animation` turns the highlight fade and
-the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
+Follow is on when the TUI starts: the rail scrolls to keep Now's own
+arrow on screen as the run moves, and `←`/`→` turn it off, scrolling
+manually -- only the rail itself, once redrawn, knows its own real
+width well enough to turn follow back on again, the moment a manual
+scroll lands Now back in view on its own. `↑`/`↓` move which pass is
+selected; `⏎` opens the current selection full-screen, the same
+toggle the Tape's and Signal's own `⏎` already share. `f` follows the
+running station; `0`-`3` switch screens; `?` opens Flow's own Help,
+listing exactly its own keys and the globals every key bar shares.
 
 | Key | Action |
 |---|---|
-| `0` | the Tape |
-| `2` | flow (this screen) |
-| `1` | Signal (above) |
-| `3` | cost (below) |
-| `↑↓` / `j`/`k` | move (the focused pane's own selection, or the selected/story pane's scroll) |
-| `PgUp`/`PgDn` | move a page |
-| `Home`/`End`, `g`/`G` | jump to the first / last row |
-| `←` / `→` | collapse / expand (flow or state pane) |
-| `⏎` | expand a quick-steps row in place |
-| `z` | fold on/off (breadcrumbs, quick steps); on by default |
-| `tab` | flow → selected → story → flow |
-| `s` | swap the selected pane for today's state tree, and back |
-| `l` | swap the story pane for the full log, and back |
-| `f` | follow the running row (on by default) |
-| `e` | errors only |
-| `/` | filter |
-| `v` | show the full value; `v` again cycles between the prompt and the value when the row has both |
-| `T` | cycle the colour theme |
+| `←` / `→` | scroll the rail, turning follow off |
+| `↑` / `↓` | select a pass |
+| `+` / `-` | open / fold the selected fork's own lanes, three at a time |
+| `⏎` | open the selection full-screen, and back |
+| `f` | follow the running station (on by default) |
+| `0`-`3` | switch screens (Tape, Signal, Flow, Cost) |
+| `?` | help |
 | `c` | cancel, with a confirm (the same as a confirmed `q`) |
 | `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osi watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
 | Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osi watch` always just detaches |
-| `?` | help |
 
 The token rule is the same everywhere a count shows up (the header, the
-state pane, the selected pane and the Cost screen's treemap and table): a
+rail, the Selected pane and the Cost screen's treemap and table): a
 node's own `tokens_sent_total`/`tokens_received_total` when present,
 falling back to `tokens_sent`/`tokens_received` otherwise — the same pair
 both `cof`'s and electricity's own `runtime.last_run.totals` are built
@@ -406,66 +358,51 @@ going and `11:04:58–11:31:10` once it has ended, and the innermost loop's
 ETA as `ETA ~11:42`) go through the binary's own real local zone, resolved
 per timestamp.
 
-The flow pane folds a single-child container into one breadcrumb row
-(`review › fix › agent`) and two or more consecutive, finished, sub-second
-tool steps into one `N quick steps` row — `z` turns folding off to see the
-full tree, and `⏎` expands a quick-steps row in place. A named `if`'s own
-row never folds into a breadcrumb, so its `◆` stays visible even with a
-single child. A loop pass with more than one step is labelled
-`pass N of M` there (the state pane keeps the real `iter_N` key). A
-running `agent` tool step counts next to running prompts in any in-flight
-line that shows one (`2 prompts · 1 agent in flight`), with no token
-estimate of its own. A step with a `meta.live` whose own
-`updated_at` is within 5 seconds of now counts as running there too,
-with no `--events` needed at all; an interrupted run's own leftover
-`meta.live`, whose `updated_at` has stopped moving, reads as stopped
-instead, in the now pane and the selected pane alike, with the
-session's own last-known figures still shown underneath.
-
 The engine exiting does not, on its own, end the TUI: the header, every
-row's final status and the selected pane stay live on whatever the run
+station's final status and the Selected pane stay live on whatever the run
 ended with until the user leaves with a confirmed `q`, a Ctrl-C cancel, or
 an external `INT`/`TERM`/`HUP` to osi itself (a `SIGHUP` never waits for a
 key — the terminal is gone by definition). Short of one of those three, a
 run that finishes on its own stays up for `q`/Ctrl-C to leave.
 
 A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
-golden tests) at 100×30, a run just finished with a named decision taken,
-its untaken branch's own dim summary line, an unnamed decision inferred,
-a loop's single pass merged into one row, a quick-steps row folded with
-its own footer total, and the story:
+golden tests, `design/frames/flow--normal--120x30.mock`'s cell-exact twin)
+of `design/fixtures/run2`, replayed to 3.62 s after its own start: a
+named decision taken (`gate`) with its untaken branch's own ghost, a
+running loop folded into three observed lanes plus one ahead lane
+reading its own slot's history, the pass pane and the story:
 
 ```
-⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0 tape  [2 flow]  3 cost                           
-┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running ─────────┐┌ selected ──────────────────────────┐
-│✓ prime   2.0s                                              ││chosen                              │
-│  ✓ 2 quick steps   0.4s                                    ││tool · shell                        │
-│  ◆ gate  → then   0.0s                                     ││produced:                           │
-│    x > 1                                                   ││ok                                  │
-│    · else: other                                           ││                                    │
-│    ✓ chosen   0.3s                                         ││                                    │
-│  ◆ if y > 1  → then  (inferred)                            ││                                    │
-│    y > 1                                                   ││                                    │
-│    · else: u_else                                          ││                                    │
-│  ✓ u_then   0.2s                                           │└────────────────────────────────────┘
-│  ⟲ fan  pass 1 of 1   0.4s                                 │┌ story ─────────────────────────────┐
-│                                                            ││00:00:00 ■ run started  abc         │
-│                                                            ││00:00:00 ◆ gate → then              │
-│                                                            ││00:00:00 ◆ if y > 1 → then          │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│                                                            ││                                    │
-│quick steps folded: 4 · 0.9s                                ││                                    │
-│health: 0 failed · 0 retries · 0 warnings                   ││                                    │
-│                                                            ││                                    │
-└────────────────────────────────────────────────────────────┘└────────────────────────────────────┘
+ osi  demo.yml · ● Running 3.6s                                                                        FLOW    12:50:50 
+╭─ Flow · 6/14 · ▰ = 50 t · Following ─────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                               ▾ Now 12:50:50 · 3.6s  │
+│■ Start   ── ✓ kind    ── ✓ tests   ── ◆ gate    ─┬─ ✓ reply   ─┴── ⟳ drafts  ─┬─ ✓ draft   ── ● pause   ─┴── · flaky │
+│12:50:47     215 t +6%    3.0s         → then     │  389 t +47% │   0/3 passes │  cats 130 t   0.6s       │   tool · l│
+│cof 0.1.0    ▰▰▰▰▱▱▱▱     sleep 3      kind!=""   │  ▰▰▰▰▰▰▰▰   │   261 t      │  ▰▰▰▱▱▱▱▱     sleep 1    │   usual — │
+│                                                  └─ · reply   ─┘              ├─ ✓ draft   ── ● pause   ─┤           │
+│                                                     not taken                 │  dogs 131 t   0.6s       │           │
+│                                                                               │  ▰▰▰▱▱▱▱▱     sleep 1    │           │
+│                                                                               └─ · draft   ── · pause   ─┘           │
+│                                                                                  birds        sleep 1                │
+│                                                                                  usual 155    queued                 │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│ ◂ Start   ▸ flaky · summary · End                                                                                    │
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────────────── │
+│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
+│ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Pass 1 · cats · Selected ─────────────────────────────────╮╭─ Story · Decisions and Failures ───────────────────────╮
+│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · d2c8267e                      │
+│ Draft    ✓ Done  ↑118 ↓12 · 130 t  -16% vs usual 154 t     ││ 12:50:50 ◆ gate → then                                 │
+│ Produced Cats nap in sunbeams and judge you quietly.       ││ 12:50:50 ⟳ drafts · 3 passes · 2 wide                  │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+│                                                            ││                                                        │
+╰────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────╯
+ ✓ gate › reply finished · ↑348 ↓41 · 0.6s ago
+ ←→ Scroll  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                                        ? Help  q Quit 
 ```
 
 ### Screen 3 (`cost`): where the tokens and money went

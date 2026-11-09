@@ -2036,15 +2036,15 @@ start/duration columns additionally dropped below 90 columns. Below
 depth the same way the overview's and Flow's own small-terminal
 lists are, no axis at all.
 
-### 6.3e The Tape and the shared language (shipped, issues #678, #688)
+### 6.3e The Tape and the shared language (shipped, issues #678, #688, #691)
 
 `design/tui-design.md` is the intent for osi's screens; this section
-describes what has actually shipped of it so far -- parts 1 and 2 of
-the epic (#677): colour roles, the shared chrome, the history
-median-tokens query, the Tape (`0`), replacing the Overview, and
-Signal (`1`), replacing Time. Flow as a rail (`2`) and Store (`3`)
-are not built yet; screens `2`-`3` still render as Flow and Cost,
-§6.3/§6.3b above, under their own chip names.
+describes what has actually shipped of it so far -- parts 1 through
+3 of the epic (#677): colour roles, the shared chrome, the history
+median-tokens query, the Tape (`0`), replacing the Overview, Signal
+(`1`), replacing Time, and Flow (`2`), replacing the tree. Store
+(`3`) is not built yet; screen `3` still renders as Cost, §6.3b
+above, under its own chip name.
 
 **Colour roles.** `theme::Theme` grows the design's token set (its
 §6 table) for every shipped theme: `bg_inset`/`bg_surface`,
@@ -2348,6 +2348,65 @@ Now pane keeps only the running rows, and the title shortens to
 Tape's own key bar drops `0-3` to `0` (§4), same as before Signal
 existed to switch to at all.
 
+**The Flow** (`rail::build_rail`, `screens::build_flow`; `tui::
+draw_flow`, issue #691, design v1 part 3) replaces the tree as
+screen `2`: a left-to-right rail of stations and forks
+(`rail::RailItem`), built once per redraw straight off `render::
+Row`s rather than keeping any tree shape of its own. A `Station`
+holds §2.3's own three lines (name, headline, detail); a decision
+is a two-lane `Fork` (the taken branch, then the untaken one's own
+ghost lane -- `· <else-name>`/`not taken`) -- a named `if` reads
+its own branch from `meta.branch`, straight off its own row the
+same way `rows` already nests it; an *unnamed* one writes no state
+node, and so no row, of its own, so its own decision is spliced in
+here instead (`build_unnamed_decision`, ported from the removed
+tree screen's own `unnamed_branch_state`/`push_unnamed_decision`):
+inferred from which branch's own paths actually started
+(`PlanTree::unnamed_if_decisions`), vacuously `else` with nothing
+shown once an `if` with no `else` is settled its own `then` never
+will be (its host stopped, or a later chain step already started),
+and still a real, pending fork -- placed right after its own host,
+the same `by_host_after` fallback the tree screen used -- the
+moment neither side has started yet; two unnamed `if`s sharing one
+host still get their own distinct `.__if`/`.__if_1` paths. A loop
+is one lane per slot, the observed real passes first,
+then an `ahead_pass_lane` per slot the loop has not reached yet,
+reading its own position's history for a label, a usual token
+figure and a queued tool's own command (`cats`/`usual 155`/`sleep
+1`, §2.3's own folded-loop frame) -- never `iter_0`'s, the ahead
+lane's own template, whose history is a different slot's. Selecting
+a pass (`screens::build_selected_pass`) or a plain station/decision
+(`build_focused_step`/`SelectedDecision`) drives the Selected pane
+the same way the Tape's own full-screen view already does; the
+Story pane (`flow::build_story`, reused verbatim) adds one
+synthesized line per loop start (`⏳ drafts · 3 passes · 2 wide`,
+`--log` writes no event for a loop merely starting) since nothing
+else ever will.
+
+**Keys.** `←→` (`keys::App`'s own `flow_scroll`) scroll the rail,
+turning follow off -- `tui::draw_flow` itself is the only thing
+that knows the rail's own real width, so it (not the key handler)
+turns follow back on once a manual scroll lands Now's own arrow
+back in view, the same way the Tape's own selection rule already
+does. `↑↓` move the selected pass over the rail's own `Pass` rows;
+`+`/`-` (`flow_open_lanes`/`_fold_lanes`) open or fold a loop's own
+lanes three at a time, the selected fork's if there is one, else the
+first; `f` follow; `⏎` the same full-screen toggle the Tape and
+Signal already share. `z`, `v`, `s`, `l` and `Tab` are gone from the
+Flow, per §4: quick-steps folding and the full-value overlay have
+no Flow-side anatomy to toggle, and there is only ever the rail's
+one list.
+
+**Sizes.** 100 columns and 30 rows both: three panes, the rail above
+Selected and Story, roughly 31/60 of the lower band's own width
+(scaled from §2.3's own 120-column frame's 62/58 split); 80-99 or
+under 30 rows: every loop's own lanes fold into their own band
+(§2.3's own `══ 3 lanes + ══`) and the Story pane drops, Selected
+taking the whole lower band; below 80, the Tape's own key bar drops
+`0-3` same as every other screen. `↑↓ Lane` itself drops from the
+key bar below the three-pane threshold too, alongside Story, since
+there is no longer a second pane for it to change the selection of.
+
 **Goldens and allow-listed cells.** Every `tape--*` frame in
 `design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
 symbol, fg, bg, bold and dim per cell). The design's fixture run
@@ -2395,6 +2454,32 @@ matches_the_frame`/`_80x24`. Both pin the status line's own row as
 allow-listed, the same `gate › reply`-vs-`drafts.iter_1.draft`
 reason as the Tape's own goldens above -- every other cell matches
 exactly, no further allow-list needed.
+
+All three `flow--*` frames (Normal at 120×30 and 80×24, Folded at
+120×30 -- the lanes forced shut with `app.flow_lanes_open`, the key
+`+`/`-` itself would otherwise need a live redraw loop to reach) are
+cell-exact goldens the same way too, in `tui::tape_frame_goldens::
+flow_normal_120x30_matches_the_frame`/`_folded_120x30`/`_normal_
+80x24`, replayed to the same frozen instant and history. Each pins
+the same status-line row the Tape's and Signal's own goldens do,
+the same `gate › reply`-vs-`drafts.iter_1.draft` reason (§3.2's
+status line is shared verbatim) -- every other cell, across all
+three, matches exactly, no further allow-list needed.
+
+Engine parity for the rail follows the same pattern issue #635's
+own acceptance item set for the tree (`oscilloscope-core/tests/
+flow_parity.rs`): `flow_parity_if_taken`/`_untaken` replay both
+engines' own recorded fixtures for a *named* `if` (`do.yml`'s own
+`then`/`else` both naming their one step `chosen`, so the taken
+side's own real station must still show, never hidden alongside
+the untaken side's identical name) and find the same `gate` fork,
+branch and untaken ghost on both; `flow_parity_if_unnamed` does the
+same for an *unnamed* one, both engines inferring the same branch
+with no `meta.branch` to read at all. `rail`'s own unit tests cover
+two unnamed `if`s sharing one host directly: neither anchored yet
+(both fall back to `by_host_after`, still getting distinct
+`.__if`/`.__if_1` paths) and the first one resolved while the
+second stays pending.
 
 **From the frames, not from the design text.** A few behaviours the
 design document's own prose never states, read off the frames

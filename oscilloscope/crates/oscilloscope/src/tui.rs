@@ -5188,27 +5188,55 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
     lines
 }
 
-/// Flow/Cost's own Help: unlike the Tape and Signal, these keep
-/// `s`/`l`/`z`/`v`/`Tab` live until their own part of the redesign,
-/// so their own Help lists them rather than those screens' own key
-/// bars.
+/// The Flow's own Help (issue #691, design v1 part 3), the same
+/// fixed overlay the Tape's and Signal's own use, listing exactly
+/// §4's own Flow keys and the globals every key bar shares -- never
+/// the movement aliases, `/`, `e`, `T`, `v`, `z`, `s`, `l`, `Tab`
+/// §4 already says are gone from the Flow.
+fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        ("← →", "scroll the rail", "+ -", "open / fold loop lanes"),
+        (
+            "↑ ↓",
+            "select a pass",
+            "enter",
+            "open the selection full-screen",
+        ),
+        ("f", "follow Now", "0 1 2 3", "Tape Signal Flow Cost"),
+        ("?", "this help", "esc", "close · back"),
+        ("q", "quit · confirms if running", "c", "cancel · confirms"),
+    ];
+    let mut lines: Vec<Line<'static>> = ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    for _ in 0..7 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
+}
+
+/// Cost's own Help: unlike the Tape, Signal and now Flow, it keeps
+/// `s`/`l`/`z`/`v`/`Tab` live until its own part of the redesign, so
+/// its own Help lists them rather than its own key bar.
 fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<&'static str>) {
     use oscilloscope_core::screens::Screen;
     let (title, screen_lines): (&str, &[&str]) = match screen {
-        Screen::Flow => (
-            " Help · Flow ",
-            &[
-                "tab       cycle flow / selected / story",
-                "s         selected pane: step vs state",
-                "l         story pane: story vs log",
-                "← →       collapse / expand a row",
-            ],
-        ),
         Screen::Cost => (
             " Help · Cost ",
             &["i o $     measure: tokens in / out / cost"],
         ),
-        Screen::Tape | Screen::Signal => (" Help ", &[]),
+        Screen::Tape | Screen::Signal | Screen::Flow => (" Help ", &[]),
     };
     let mut lines = vec!["↑ ↓       select a row               0-3     Tape Signal Flow Cost"];
     lines.extend_from_slice(screen_lines);
@@ -5649,6 +5677,37 @@ fn draw_dialog_overlay(
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
+        Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Flow => {
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
+            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Flow", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(flow_help_lines(ctx))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
+        }
         Dialog::Help => {
             let (title, lines) = screen_help_text(app.screen);
             let height = (lines.len() as u16 + 2).max(HELP_OVERLAY_HEIGHT);
@@ -5700,9 +5759,11 @@ fn draw_dialog_overlay(
 /// or a selected decision's own condition/branch/answer -- never more
 /// than one of the three at once ([`oscilloscope_core::screens::
 /// FlowScreen`]'s own doc comment).
+#[allow(clippy::too_many_arguments)]
 fn draw_flow_selected_pane(
     frame: &mut Frame,
     area: Rect,
+    wide: bool,
     screen: &oscilloscope_core::screens::FlowScreen,
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
@@ -5717,7 +5778,7 @@ fn draw_flow_selected_pane(
         "Selected".to_string()
     };
     let lines = if let Some(pass) = &screen.selected_pass {
-        selected_pass_lines(pass, ctx)
+        selected_pass_lines(pass, wide, ctx)
     } else if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected_step {
@@ -5731,7 +5792,6 @@ fn draw_flow_selected_pane(
     let total = lines.len();
     app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
     let start = app.details_scroll.min(total);
-    let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
@@ -5740,6 +5800,13 @@ fn draw_flow_selected_pane(
     let inner = block.inner(area);
     frame.render_widget(block, area);
     fill_border_rows(frame, inner, border_color);
+    let content_width = inner.width.saturating_sub(1) as usize;
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(start)
+        .take(viewport)
+        .map(|line| pad_line_to_width(line, content_width, ctx.theme.text))
+        .collect();
     let paragraph = ratatui::widgets::Paragraph::new(visible_lines);
     frame.render_widget(
         paragraph,
@@ -5752,23 +5819,51 @@ fn draw_flow_selected_pane(
     );
 }
 
+/// Pads `line` to `width` cells with trailing spaces in its own
+/// last span's style (DESIGN.md's own frames: a pane's own content
+/// row's trailing blank reads in whichever colour the line's own
+/// text last used, never the border's own fill colour showing
+/// through past a short line) -- `fallback_fg` is for an empty line,
+/// which has no style of its own to extend.
+fn pad_line_to_width(line: Line<'static>, width: usize, fallback_fg: Color) -> Line<'static> {
+    let used: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+    if used >= width {
+        return line;
+    }
+    let fill_style = line
+        .spans
+        .last()
+        .map(|s| s.style)
+        .unwrap_or_else(|| Style::default().fg(fallback_fg));
+    let mut spans = line.spans;
+    spans.push(Span::styled(" ".repeat(width - used), fill_style));
+    Line::from(spans)
+}
+
 /// `Pass N · label · Selected`'s own body (DESIGN.md §2.3): Status
 /// (the pass's own currently active step, with its elapsed time and
 /// slot), one row per named step the pass ran with its tokens and
 /// deviation, and Produced -- the last such step's own output.
 fn selected_pass_lines(
     pass: &oscilloscope_core::screens::SelectedPass,
+    wide: bool,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
+    // Below the three-pane threshold (DESIGN.md's own §5, 100×30),
+    // the pane's own label column narrows and "vs usual" drops --
+    // the same cramping the Tape's own rows take at this width.
+    let label_width = if wide { 9 } else { 7 };
     let mut lines = Vec::new();
     use oscilloscope_core::render::RowKind;
     let glyph = tape_glyph(RowKind::Unknown, pass.active_status.kind);
     let glyph_style = tape_glyph_style(RowKind::Unknown, pass.active_status.kind, ctx.theme);
     let status_word = tape_status_kind_word(pass.active_status.kind);
     let mut status_spans = vec![
-        Span::styled("Status  ", Style::default().fg(ctx.theme.fg_muted)),
-        Span::styled(format!("{glyph} "), glyph_style),
-        Span::styled(format!("{status_word}  "), glyph_style),
+        Span::styled(
+            format!("{:<label_width$}", "Status"),
+            Style::default().fg(ctx.theme.fg_muted),
+        ),
+        Span::styled(format!("{glyph} {status_word}  "), glyph_style),
     ];
     let mut detail = pass.active_label.clone();
     if let Some(elapsed) = pass.active_elapsed_s {
@@ -5787,18 +5882,26 @@ fn selected_pass_lines(
         let glyph_style = tape_glyph_style(RowKind::Prompt, step.status.kind, ctx.theme);
         let mut spans = vec![
             Span::styled(
-                format!("{:<8}", step.label),
+                format!("{:<label_width$}", step.label),
                 Style::default().fg(ctx.theme.fg_muted),
             ),
-            Span::styled(format!("{glyph} "), glyph_style),
             Span::styled(
-                format!("{}  ", tape_status_kind_word(step.status.kind)),
+                format!("{glyph} {}  ", tape_status_kind_word(step.status.kind)),
                 glyph_style,
             ),
         ];
-        if let Some(total) = step.tokens {
+        let total = step.sent + step.received;
+        if total > 0 {
             spans.push(Span::styled(
-                format!("{} ", oscilloscope_core::format::format_tokens_t(total)),
+                format!(
+                    "↑{} ↓{} · ",
+                    oscilloscope_core::format::format_tokens_thousands(step.sent),
+                    oscilloscope_core::format::format_tokens_thousands(step.received)
+                ),
+                Style::default().fg(ctx.theme.text),
+            ));
+            spans.push(Span::styled(
+                format!("{}  ", oscilloscope_core::format::format_tokens_t(total)),
                 Style::default()
                     .fg(ctx.theme.text)
                     .add_modifier(Modifier::BOLD),
@@ -5809,6 +5912,12 @@ fn selected_pass_lines(
                     format!("{pct:+.0}% "),
                     tape_deviation_style(pct, ctx.theme),
                 ));
+                if wide {
+                    spans.push(Span::styled(
+                        format!("vs usual {usual} t"),
+                        Style::default().fg(ctx.theme.fg_muted),
+                    ));
+                }
             }
         }
         lines.push(Line::from(spans));
@@ -5816,7 +5925,10 @@ fn selected_pass_lines(
     if let Some(step) = pass.steps.last() {
         if let Some(produced) = &step.produced {
             lines.push(Line::from(vec![
-                Span::styled("Produced ", Style::default().fg(ctx.theme.fg_muted)),
+                Span::styled(
+                    format!("{:<label_width$}", "Produced"),
+                    Style::default().fg(ctx.theme.fg_muted),
+                ),
                 Span::styled(produced.clone(), Style::default().fg(ctx.theme.text)),
             ]));
         }
@@ -6098,9 +6210,10 @@ fn draw_flow_story_pane(
     let height = inner.height as usize;
     let total = screen.story.len();
     let start = total.saturating_sub(height);
+    let content_width = inner.width.saturating_sub(1) as usize;
     let lines: Vec<Line<'static>> = screen.story[start..total]
         .iter()
-        .map(|entry| story_entry_line(entry, ctx))
+        .map(|entry| pad_line_to_width(story_entry_line(entry, ctx), content_width, ctx.theme.text))
         .collect();
     frame.render_widget(
         Paragraph::new(lines),
@@ -6117,6 +6230,17 @@ fn draw_flow_story_pane(
 /// (`fg.faint`), the glyph (the rail's own role colour for `■`/`◆`/
 /// `⟳`/`✗`, plain otherwise), and the rest of the line in
 /// `fg.default`.
+/// The Story pane's own `run started · <run id>` (DESIGN.md §2.3):
+/// a short run id, its own first hyphen-delimited segment, never
+/// the full UUID `--log` itself writes.
+fn shorten_run_id(text: &str) -> String {
+    let Some(after) = text.strip_prefix("run started  ") else {
+        return text.to_string();
+    };
+    let short = after.split('-').next().unwrap_or(after);
+    format!("run started · {short}")
+}
+
 fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) -> Line<'static> {
     let text = &entry.text;
     let (clock, rest) = match text.split_once(' ') {
@@ -6127,13 +6251,24 @@ fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) 
     };
     let mut chars = rest.chars();
     let glyph = chars.next();
-    let after_glyph: String = chars.collect();
+    let mut rest_after_glyph: String = chars.collect();
+    let glyph_space = if rest_after_glyph.starts_with(' ') {
+        rest_after_glyph.remove(0);
+        " "
+    } else {
+        ""
+    };
+    let after_glyph: String = shorten_run_id(&rest_after_glyph);
     let glyph_style = match glyph {
         Some('■') => Style::default().fg(ctx.theme.fg_muted),
         Some('◆') | Some('⟳') => Style::default()
             .fg(ctx.theme.accent_secondary)
             .add_modifier(Modifier::BOLD),
         Some('✗') => Style::default().fg(ctx.theme.status_failed),
+        Some('▸') if rest_after_glyph.starts_with("warning: ") => {
+            Style::default().fg(ctx.theme.warning)
+        }
+        Some('▸') => Style::default().fg(ctx.theme.status_info),
         _ => Style::default().fg(ctx.theme.text),
     };
     let mut spans = Vec::new();
@@ -6144,7 +6279,7 @@ fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) 
         ));
     }
     if let Some(glyph) = glyph {
-        spans.push(Span::styled(format!("{glyph}"), glyph_style));
+        spans.push(Span::styled(format!("{glyph}{glyph_space}"), glyph_style));
     }
     spans.push(Span::styled(
         after_glyph,
@@ -6462,6 +6597,7 @@ fn flow_headline_spans(
         }
         Headline::PassLabel(label) => vec![(label.clone(), faint)],
         Headline::ToolAhead(cmd) => vec![(format!("tool · {cmd}"), faint)],
+        Headline::QueuedCommand(cmd) => vec![(cmd.clone(), faint)],
         Headline::UsualTokens(usual) => {
             let text = match usual {
                 Some(u) => format!("usual {u}"),
@@ -6476,27 +6612,36 @@ fn flow_headline_spans(
 
 fn flow_detail_spans(
     detail: &oscilloscope_core::rail::Detail,
+    status: StatusKind,
     unit: u64,
     ctx: &DrawCtx,
 ) -> Vec<(String, Style)> {
     use oscilloscope_core::rail::Detail;
     let muted = Style::default().fg(ctx.theme.fg_muted);
     let faint = Style::default().fg(ctx.theme.dim);
+    let accent = Style::default().fg(ctx.theme.accent_primary);
     match detail {
         Detail::Engine(e) => vec![(e.clone(), faint)],
         Detail::Bar { total, unit: u } => {
             let effective_unit = if *u > 0 { *u } else { unit };
             let filled = ((*total as f64 / effective_unit.max(1) as f64).round() as usize).min(8);
             let empty = 8 - filled;
-            vec![
-                (
-                    "▰".repeat(filled),
-                    Style::default().fg(ctx.theme.accent_primary),
-                ),
-                (format!("{}  ", "▱".repeat(empty)), faint),
-            ]
+            vec![(
+                format!("{}{}  ", "▰".repeat(filled), "▱".repeat(empty)),
+                accent,
+            )]
         }
-        Detail::Command(cmd) => vec![(cmd.clone(), muted)],
+        Detail::Command(cmd) => {
+            let style = if matches!(
+                status,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            ) {
+                muted
+            } else {
+                faint
+            };
+            vec![(cmd.clone(), style)]
+        }
         Detail::Condition(c) => vec![(c.clone(), faint)],
         Detail::Tokens(t) => vec![(
             format!(
@@ -6537,10 +6682,19 @@ fn flow_paint_station(
     let (glyph, glyph_style) = if station.is_edge {
         ('■', Style::default().fg(ctx.theme.fg_muted))
     } else {
-        (
-            tape_glyph(station.row_kind, station.status),
-            tape_glyph_style(station.row_kind, station.status, ctx.theme),
-        )
+        let style = if station.row_kind == oscilloscope_core::render::RowKind::Loop
+            && rail::edge_style(station.status) == EdgeStyle::Live
+        {
+            // DESIGN.md §2.3: the rail's own running loop reads in
+            // the live edge's own accent, not the decision/loop
+            // accent every other screen's glyph table always uses.
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            tape_glyph_style(station.row_kind, station.status, ctx.theme)
+        };
+        (tape_glyph(station.row_kind, station.status), style)
     };
     let name = truncate_label(&station.name, rail::STATION_WIDTH.saturating_sub(2));
     flow_paint_row(
@@ -6570,7 +6724,7 @@ fn flow_paint_station(
         visible_width,
         x,
         y0 + 2,
-        &flow_detail_spans(&station.detail, unit, ctx),
+        &flow_detail_spans(&station.detail, station.status, unit, ctx),
         rail::STATION_WIDTH,
     );
     (headline_last, detail_last)
@@ -6611,16 +6765,12 @@ fn flow_paint_ghost(
         &[("not taken".to_string(), style)],
         rail::STATION_WIDTH,
     );
-    flow_paint_row(
-        buf,
-        area,
-        scroll,
-        visible_width,
-        x,
-        y0 + 2,
-        &[(String::new(), style)],
-        rail::STATION_WIDTH,
-    );
+    // The ghost's own third line is blank, left untouched (DESIGN.md
+    // §2.3's own frame: not even a faint fill) -- unlike its first
+    // two, which fill with its own dim text all the way to wherever
+    // its own bridging gap with the rail's own next real content
+    // ends.
+    let _ = y0;
 }
 
 /// A flat run of stations and forks, drawn left to right from `x`
@@ -6640,8 +6790,10 @@ fn flow_paint_sequence(
     area_width: u16,
     unit: u64,
     ctx: &DrawCtx,
-) -> usize {
+) -> (usize, Style, Style) {
     let mut cursor = x;
+    let neutral = Style::default().fg(ctx.theme.text);
+    let mut last_styles = (neutral, neutral);
     for (i, item) in items.iter().enumerate() {
         match item {
             RailItem::Station(station) => {
@@ -6656,6 +6808,7 @@ fn flow_paint_sequence(
                     unit,
                     ctx,
                 );
+                last_styles = (h_last, d_last);
                 cursor += rail::STATION_WIDTH;
                 if let Some(RailItem::Station(next)) = items.get(i + 1) {
                     let style = Style::default()
@@ -6686,7 +6839,7 @@ fn flow_paint_sequence(
             }
             RailItem::Fork(fork) => {
                 let next_is_ahead = items.get(i + 1).is_some_and(flow_item_is_ahead);
-                cursor = flow_paint_fork(
+                let (end, h_last, d_last) = flow_paint_fork(
                     buf,
                     area,
                     scroll,
@@ -6698,12 +6851,15 @@ fn flow_paint_sequence(
                     area_width,
                     next_is_ahead,
                     unit,
+                    last_styles,
                     ctx,
                 );
+                cursor = end;
+                last_styles = (h_last, d_last);
             }
         }
     }
-    cursor
+    (cursor, last_styles.0, last_styles.1)
 }
 
 fn flow_item_is_ahead(item: &RailItem) -> bool {
@@ -6718,7 +6874,9 @@ fn flow_item_is_ahead(item: &RailItem) -> bool {
 /// other lane in its own three-row band below with a corner cap on
 /// its name row and (while it isn't the last lane) a wall continuing
 /// through the other two. Folded, the whole thing is one sixteen-
-/// character band instead. Returns the ending `x`.
+/// character band instead. Returns the ending `x` and the headline/
+/// detail rows' own trailing style, for a caller that needs to
+/// extend it into whatever follows.
 #[allow(clippy::too_many_arguments)]
 fn flow_paint_fork(
     buf: &mut ratatui::buffer::Buffer,
@@ -6732,12 +6890,36 @@ fn flow_paint_fork(
     area_width: u16,
     next_is_ahead: bool,
     unit: u64,
+    prior_styles: (Style, Style),
     ctx: &DrawCtx,
-) -> usize {
+) -> (usize, Style, Style) {
     let tee_color = flow_edge_color(rail::edge_style(fork.source_status), ctx.theme);
     let tee_style = Style::default().fg(tee_color);
     let faint = Style::default().fg(ctx.theme.dim);
+    let bold_text = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
     if flow_fork_folded(fork, app, area_width) {
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x,
+            y0 + 1,
+            "   ",
+            prior_styles.0,
+        );
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x,
+            y0 + 2,
+            "   ",
+            prior_styles.1,
+        );
         flow_put(buf, area, scroll, visible_width, x, y0, "══ ", tee_style);
         let content = format!("{} lanes + ", fork.lanes.len());
         flow_paint_row(
@@ -6775,12 +6957,7 @@ fn flow_paint_fork(
             visible_width,
             x + 3,
             y0 + 1,
-            &[(
-                format!("● {running} run"),
-                Style::default()
-                    .fg(ctx.theme.text)
-                    .add_modifier(Modifier::BOLD),
-            )],
+            &[(format!("● {running} run"), bold_text)],
             rail::STATION_WIDTH,
         );
         flow_paint_row(
@@ -6793,7 +6970,27 @@ fn flow_paint_fork(
             &[(format!("· {waiting} wait"), faint)],
             rail::STATION_WIDTH,
         );
-        return x + rail::FOLD_BAND_WIDTH;
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x + 13,
+            y0 + 1,
+            "   ",
+            bold_text,
+        );
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x + 13,
+            y0 + 2,
+            "   ",
+            faint,
+        );
+        return (x + rail::FOLD_BAND_WIDTH, bold_text, faint);
     }
     flow_put(buf, area, scroll, visible_width, x, y0, "─┬─ ", tee_style);
     let content_x = x + rail::FORK_LEAD;
@@ -6806,11 +7003,14 @@ fn flow_paint_fork(
     let wall_x = x + 1;
     let tail_x = content_x + max_lane;
     let right_wall_x = tail_x + 1;
+    let mut final_headline_style = faint;
+    let mut final_detail_style = faint;
     for (k, lane) in fork.lanes.iter().enumerate() {
         let row_y = y0 + 3 * k as u16;
-        if k == 0 {
-            match &lane.ghost {
-                Some(name) => flow_paint_ghost(
+        let is_last = k == fork.lanes.len() - 1;
+        let (lane_end, h_last, d_last) = match &lane.ghost {
+            Some(name) => {
+                flow_paint_ghost(
                     buf,
                     area,
                     scroll,
@@ -6819,23 +7019,90 @@ fn flow_paint_fork(
                     row_y,
                     name,
                     ctx,
-                ),
-                None => {
-                    flow_paint_sequence(
-                        buf,
-                        area,
-                        scroll,
-                        visible_width,
-                        &lane.items,
-                        content_x,
-                        row_y,
-                        app,
-                        area_width,
-                        unit,
-                        ctx,
-                    );
-                }
+                );
+                (content_x + rail::STATION_WIDTH, faint, faint)
             }
+            None => flow_paint_sequence(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                &lane.items,
+                content_x,
+                row_y,
+                app,
+                area_width,
+                unit,
+                ctx,
+            ),
+        };
+        if lane_end < content_x + max_lane {
+            let pad = " ".repeat(content_x + max_lane - lane_end);
+            for dy in 0..3 {
+                flow_put(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    lane_end,
+                    row_y + dy,
+                    &pad,
+                    faint,
+                );
+            }
+        }
+        if k == 0 {
+            // The top lane's own left wall mirrors the tee's own
+            // live/past/ahead colour (DESIGN.md's own frames: a
+            // running loop's left wall reads live, a resolved
+            // decision's reads faint like every other wall) -- the
+            // right wall never does, since it frames whatever comes
+            // next, not the fork's own source.
+            let left_wall_style = if rail::edge_style(fork.source_status) == EdgeStyle::Live {
+                tee_style
+            } else {
+                faint
+            };
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                x,
+                row_y + 1,
+                " ",
+                prior_styles.0,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                x,
+                row_y + 2,
+                " ",
+                prior_styles.1,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                wall_x,
+                row_y + 1,
+                "│  ",
+                left_wall_style,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                wall_x,
+                row_y + 2,
+                "│  ",
+                left_wall_style,
+            );
             let tail_style = if next_is_ahead { faint } else { tee_style };
             flow_put(
                 buf,
@@ -6847,30 +7114,25 @@ fn flow_paint_fork(
                 "─┴── ",
                 tail_style,
             );
-            let left_wall_style = if rail::edge_style(fork.source_status) == EdgeStyle::Live {
-                tee_style
-            } else {
-                faint
-            };
             flow_put(
                 buf,
                 area,
                 scroll,
                 visible_width,
-                wall_x,
-                y0 + 1,
-                "│",
-                left_wall_style,
+                tail_x,
+                row_y + 1,
+                " ",
+                h_last,
             );
             flow_put(
                 buf,
                 area,
                 scroll,
                 visible_width,
-                wall_x,
-                y0 + 2,
-                "│",
-                left_wall_style,
+                tail_x,
+                row_y + 2,
+                " ",
+                d_last,
             );
             flow_put(
                 buf,
@@ -6878,8 +7140,8 @@ fn flow_paint_fork(
                 scroll,
                 visible_width,
                 right_wall_x,
-                y0 + 1,
-                "│",
+                row_y + 1,
+                "│   ",
                 faint,
             );
             flow_put(
@@ -6888,13 +7150,12 @@ fn flow_paint_fork(
                 scroll,
                 visible_width,
                 right_wall_x,
-                y0 + 2,
-                "│",
+                row_y + 2,
+                "│   ",
                 faint,
             );
             continue;
         }
-        let is_last = k == fork.lanes.len() - 1;
         let left_corner = if is_last { '└' } else { '├' };
         let right_corner = if is_last { '┘' } else { '┤' };
         let cap_style = if lane.running {
@@ -6907,46 +7168,20 @@ fn flow_paint_fork(
             area,
             scroll,
             visible_width,
-            x,
+            wall_x,
             row_y,
-            &format!(" {left_corner}─ "),
+            &format!("{left_corner}─ "),
             cap_style,
         );
-        match &lane.ghost {
-            Some(name) => flow_paint_ghost(
-                buf,
-                area,
-                scroll,
-                visible_width,
-                content_x,
-                row_y,
-                name,
-                ctx,
-            ),
-            None => {
-                flow_paint_sequence(
-                    buf,
-                    area,
-                    scroll,
-                    visible_width,
-                    &lane.items,
-                    content_x,
-                    row_y,
-                    app,
-                    area_width,
-                    unit,
-                    ctx,
-                );
-            }
-        }
+        flow_put(buf, area, scroll, visible_width, tail_x, row_y, "─", faint);
         flow_put(
             buf,
             area,
             scroll,
             visible_width,
-            tail_x,
+            right_wall_x,
             row_y,
-            &format!("─{right_corner}"),
+            &format!("{right_corner}"),
             faint,
         );
         if !is_last {
@@ -6957,7 +7192,7 @@ fn flow_paint_fork(
                 visible_width,
                 wall_x,
                 row_y + 1,
-                "│",
+                "│  ",
                 faint,
             );
             flow_put(
@@ -6967,8 +7202,28 @@ fn flow_paint_fork(
                 visible_width,
                 wall_x,
                 row_y + 2,
-                "│",
+                "│  ",
                 faint,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                tail_x,
+                row_y + 1,
+                " ",
+                h_last,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                tail_x,
+                row_y + 2,
+                " ",
+                d_last,
             );
             flow_put(
                 buf,
@@ -6977,7 +7232,7 @@ fn flow_paint_fork(
                 visible_width,
                 right_wall_x,
                 row_y + 1,
-                "│",
+                "│   ",
                 faint,
             );
             flow_put(
@@ -6987,23 +7242,35 @@ fn flow_paint_fork(
                 visible_width,
                 right_wall_x,
                 row_y + 2,
-                "│",
+                "│   ",
                 faint,
             );
         }
+        if is_last {
+            final_headline_style = faint;
+            final_detail_style = faint;
+        }
     }
-    tail_x + rail::NORMAL_CONNECTOR + 2
+    (
+        tail_x + rail::NORMAL_CONNECTOR + 2,
+        final_headline_style,
+        final_detail_style,
+    )
 }
 
-fn flow_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
-    let mut items = vec![
-        ("←→", "Scroll"),
-        ("↑↓", "Lane"),
-        ("+/-", "Lanes"),
-        ("f", "Follow"),
-        ("enter", "Open"),
-    ];
-    if wide {
+fn flow_key_bar_items(area_width: u16) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![("←→", "Scroll")];
+    // Below the three-pane threshold (DESIGN.md's own §5, 100×30,
+    // the same one the Story pane itself drops below), `↑↓ Lane` goes
+    // too -- there's no Story pane left for it to change the
+    // selection of.
+    if area_width >= 100 {
+        items.push(("↑↓", "Lane"));
+    }
+    items.push(("+/-", "Lanes"));
+    items.push(("f", "Follow"));
+    items.push(("enter", "Open"));
+    if area_width >= 80 {
         items.push(("0-3", "Screens"));
     }
     items.push(("?", "Help"));
@@ -7059,23 +7326,12 @@ fn draw_flow_status_line(
 /// The `▾ Now <clock> · <elapsed>` line (DESIGN.md §2.3), right-
 /// aligned above whichever running stations the rail's own content
 /// row below it actually lands under.
-fn flow_now_line(
-    header: &oscilloscope_core::render::Header,
-    now: &str,
-    ctx: &DrawCtx,
-) -> Line<'static> {
+fn flow_now_text(header: &oscilloscope_core::render::Header, now: &str, ctx: &DrawCtx) -> String {
     let clock = oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
-    let text = format!(
+    format!(
         "▾ Now {clock} · {}",
         oscilloscope_core::format::format_duration(header.elapsed_s)
-    );
-    Line::from(Span::styled(
-        text,
-        Style::default()
-            .fg(ctx.theme.accent_primary)
-            .add_modifier(Modifier::BOLD),
-    ))
-    .alignment(ratatui::layout::Alignment::Right)
+    )
 }
 
 /// The indicator line (DESIGN.md §2.3's `◂ Start   ▸ flaky · summary
@@ -7163,9 +7419,37 @@ fn flow_track_line(
             Style::default().fg(ctx.theme.border),
         ));
     }
-    let mut full = vec![Span::raw(" ")];
-    full.extend(spans);
-    Line::from(full)
+    spans.push(Span::styled(" ", Style::default().fg(ctx.theme.border)));
+    Line::from(spans)
+}
+
+/// A continuation row under a fork whose own lanes are narrower
+/// than a sibling's (DESIGN.md §2.3's own frame: the gap under a
+/// plain station like `drafts`, on another fork's own lane rows)
+/// reads faint all the way up to wherever that row's own real
+/// content starts, never the pane's own unfilled border colour --
+/// swept once after painting, since no single fork painting its own
+/// lanes knows what a *later* one will still draw on the same row.
+fn flow_fill_gaps_before_content(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    untouched_fg: Color,
+    fill_fg: Color,
+) {
+    let faint = Style::default().fg(fill_fg);
+    for y in area.y + 1..area.y + area.height {
+        let Some(first_content_x) =
+            (area.x..area.x + area.width).find(|&x| buf[(x, y)].fg != untouched_fg)
+        else {
+            continue;
+        };
+        for x in first_content_x..area.x + area.width {
+            if buf[(x, y)].fg == untouched_fg {
+                let ch = buf[(x, y)].symbol().to_string();
+                buf.set_string(x, y, &ch, faint);
+            }
+        }
+    }
 }
 
 /// The rail's own bordered pane (DESIGN.md §2.3): the Now line, the
@@ -7190,7 +7474,7 @@ fn draw_flow_rail_pane(
         header.effects_planned.unwrap_or(header.effects_done),
         screen.unit
     );
-    if app.follow {
+    if app.follow && area.width >= 100 {
         title.push_str(" · Following");
     }
     let block = Block::default()
@@ -7208,14 +7492,31 @@ fn draw_flow_rail_pane(
     let visible_width = inner.width as usize;
     let scroll = flow_resolve_scroll(&screen.rail.items, app, frame_width, visible_width);
 
-    frame.render_widget(
-        Paragraph::new(flow_now_line(header, now, ctx)),
-        Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: 1,
-        },
+    let now_row = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    let arrow_x = flow_now_arrow_x(&screen.rail.items, app, frame_width).unwrap_or(0);
+    let mut now_text = flow_now_text(header, now, ctx);
+    let now_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let end_x = scroll + visible_width;
+    let now_end = arrow_x + now_text.chars().count();
+    if now_end < end_x {
+        now_text.push_str(&" ".repeat(end_x - now_end));
+    }
+    flow_put(
+        frame.buffer_mut(),
+        now_row,
+        scroll,
+        visible_width,
+        arrow_x,
+        0,
+        &now_text,
+        now_style,
     );
 
     let rail_body_rows = inner.height.saturating_sub(5);
@@ -7239,16 +7540,21 @@ fn draw_flow_rail_pane(
         screen.unit,
         ctx,
     );
+    flow_fill_gaps_before_content(buf, rail_area, border_color, ctx.theme.dim);
 
     let indicator_y = inner.y + inner.height.saturating_sub(4);
     frame.render_widget(
-        Paragraph::new(flow_indicator_line(
-            &screen.rail.items,
-            app,
-            frame_width,
-            scroll,
-            visible_width,
-            ctx,
+        Paragraph::new(pad_line_to_width(
+            flow_indicator_line(
+                &screen.rail.items,
+                app,
+                frame_width,
+                scroll,
+                visible_width,
+                ctx,
+            ),
+            inner.width.saturating_sub(1) as usize,
+            ctx.theme.fg_muted,
         )),
         Rect {
             x: inner.x + 1,
@@ -7264,13 +7570,13 @@ fn draw_flow_rail_pane(
             frame_width,
             scroll,
             visible_width,
-            inner.width.saturating_sub(1) as usize,
+            inner.width.saturating_sub(2) as usize,
             ctx,
         )),
         Rect {
-            x: inner.x,
+            x: inner.x + 1,
             y: indicator_y + 1,
-            width: inner.width,
+            width: inner.width.saturating_sub(1),
             height: 1,
         },
     );
@@ -7292,7 +7598,7 @@ fn draw_flow_rail_pane(
         header,
         false,
         None,
-        None,
+        screen.usual_so_far_tokens,
         Some(border_color),
         false,
         ctx,
@@ -7338,23 +7644,28 @@ fn draw_flow(
     draw_key_bar(
         frame,
         sections[3],
-        &flow_key_bar_items(full_area.width >= 80),
+        &flow_key_bar_items(full_area.width),
         ctx,
     );
 
     let body = sections[1];
+    // §5: the Story pane needs 100 columns and 30 rows both -- the
+    // same tier the frames' own `flow--normal--80x24` drops it at.
+    let wide = full_area.width >= 100 && full_area.height >= 30;
     if app.tape_fullscreen_step
         && (screen.selected_pass.is_some()
             || screen.selected_step.is_some()
             || screen.selected_decision.is_some())
     {
-        draw_flow_selected_pane(frame, body, screen, app, transcript_view, ctx, now);
+        draw_flow_selected_pane(frame, body, wide, screen, app, transcript_view, ctx, now);
         return;
     }
-    // §5: the Story pane needs 100 columns and 30 rows both -- the
-    // same tier the frames' own `flow--normal--80x24` drops it at.
-    let wide = full_area.width >= 100 && full_area.height >= 30;
-    let panes_height = if wide { 8 } else { 4 };
+    let base_panes_height = if wide { 8 } else { 4 };
+    // DESIGN.md's own frame fixes this at 120×30 and 80×24; a
+    // taller terminal gives the extra rows to the Selected/Story
+    // panes rather than only the rail, so a step's own `produced:`
+    // isn't cut off merely because the terminal is tall.
+    let panes_height = base_panes_height + full_area.height.saturating_sub(30) / 2;
     let rows_split = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(panes_height)])
@@ -7370,14 +7681,27 @@ fn draw_flow(
         now,
     );
     if wide {
+        // DESIGN.md's own frame: 62/58 at 120 columns -- scaled by
+        // the same ratio at every other wide width, since nothing
+        // ties this split to a rounder fraction.
+        let pass_width = (rows_split[1].width as u32 * 31 / 60) as u16;
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+            .constraints([Constraint::Length(pass_width), Constraint::Min(0)])
             .split(rows_split[1]);
-        draw_flow_selected_pane(frame, cols[0], screen, app, transcript_view, ctx, now);
+        draw_flow_selected_pane(frame, cols[0], wide, screen, app, transcript_view, ctx, now);
         draw_flow_story_pane(frame, cols[1], screen, ctx);
     } else {
-        draw_flow_selected_pane(frame, rows_split[1], screen, app, transcript_view, ctx, now);
+        draw_flow_selected_pane(
+            frame,
+            rows_split[1],
+            wide,
+            screen,
+            app,
+            transcript_view,
+            ctx,
+            now,
+        );
     }
 }
 
@@ -8487,10 +8811,11 @@ mod golden_tests {
     // no longer a real terminal size left to exercise it at.
 
     /// #610: a warning-level report is styled in the theme's own
-    /// warning colour, both in the header's own status-line slot and
-    /// in its `--log`/log-pane line -- an info-level one gets neither.
+    /// warning colour in the Flow screen's own story pane (issue
+    /// #691 replaced the generic log-pane line this used to also
+    /// check, which no screen shows any more).
     #[test]
-    fn a_warning_report_is_styled_in_the_themes_warning_colour_in_the_header_and_the_log() {
+    fn a_warning_report_is_styled_in_the_themes_warning_colour_in_the_story_pane() {
         let plan = sample_plan();
         let mut model = RunModel::new();
         model.observe_event(&Event::Report {
@@ -8535,6 +8860,7 @@ mod golden_tests {
         }];
         let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &oscilloscope_core::model::flatten_state(&state),
             &plan,
             &model,
@@ -8576,44 +8902,20 @@ mod golden_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        fn find_cell(buffer: &ratatui::buffer::Buffer, needle: char) -> (u16, u16) {
-            for y in 0..buffer.area.height {
-                for x in 0..buffer.area.width {
-                    if buffer[(x, y)].symbol() == needle.to_string() {
-                        return (x, y);
-                    }
-                }
-            }
-            panic!("{needle:?} not found in the buffer");
-        }
-
-        let (hx, hy) = find_cell(buffer, '▸');
+        // The rail's own indicator line (◂ Start ▸ ...) has an
+        // unrelated ▸ of its own, so rather than assume an ordinal
+        // position, this checks that some ▸ in the buffer carries
+        // the theme's warning colour -- the Story pane's own entry.
+        let warning_rows: Vec<u16> = (0..buffer.area.height)
+            .filter(|&y| {
+                (0..buffer.area.width)
+                    .any(|x| buffer[(x, y)].symbol() == "▸" && buffer[(x, y)].fg == theme.warning)
+            })
+            .collect();
         assert_eq!(
-            buffer[(hx, hy)].fg,
-            theme.warning,
-            "the Flow screen's own story pane report mark must use the theme's warning colour"
-        );
-        // The second `▸` in the buffer, reading left to right then
-        // top to bottom, is the shared status line's own (issue
-        // #678) -- the Flow screen's own story pane, above it, comes
-        // first.
-        let mut found = 0;
-        let mut log_cell = None;
-        for y in 0..buffer.area.height {
-            for x in 0..buffer.area.width {
-                if buffer[(x, y)].symbol() == "▸" {
-                    found += 1;
-                    if found == 2 {
-                        log_cell = Some((x, y));
-                    }
-                }
-            }
-        }
-        let (lx, ly) = log_cell.expect("a second ▸ for the log pane's own line");
-        assert_eq!(
-            buffer[(lx, ly)].fg,
-            theme.warning,
-            "the log pane's own warning report line must use the theme's warning colour"
+            warning_rows.len(),
+            1,
+            "the Flow screen's own story pane must have one warning-coloured ▸ row: {warning_rows:?}"
         );
     }
 
@@ -8662,7 +8964,7 @@ mod golden_tests {
         // (the state/log columns' own trailing blank padding) has a
         // `status` of its own to false-positive on.
         let orchestration_pane = text
-            .split_once("flow (do-thing")
+            .split_once("Flow ·")
             .map(|(_, after)| after)
             .expect("the flow pane should be in the snapshot");
         assert!(
@@ -8856,6 +9158,7 @@ mod golden_tests {
         );
         let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &oscilloscope_core::model::flatten_state(state.unwrap_or(&Value::Null)),
             plan,
             model,
@@ -11566,6 +11869,236 @@ mod tape_frame_goldens {
         );
     }
 
+    /// `main.rs`'s own `push_story_line` filter, reproduced here
+    /// rather than imported: it's a thin wrapper around a bounded
+    /// `Vec` that lives in the binary crate, not `oscilloscope-core`.
+    fn is_story_kind(kind: oscilloscope_core::diff::LogKind) -> bool {
+        use oscilloscope_core::diff::LogKind;
+        matches!(
+            kind,
+            LogKind::RunStart
+                | LogKind::RunEnd
+                | LogKind::Decision
+                | LogKind::Report
+                | LogKind::Failure
+        )
+    }
+
+    /// The run's own story lines (DESIGN.md §2.3's Story pane), from
+    /// `events` (for `■ run started` and every event-sourced line)
+    /// and the final `state` (for the state-sourced ones `diff`/
+    /// `finish` still produce).
+    fn build_story_lines(
+        events: &[serde_json::Value],
+        state: &serde_json::Value,
+        plan: &oscilloscope_core::plan::PlanTree,
+        model: &mut oscilloscope_core::model::RunModel,
+        run_ended: bool,
+    ) -> Vec<oscilloscope_core::diff::LogLine> {
+        let mut differ = oscilloscope_core::diff::Differ::new();
+        let mut story = Vec::new();
+        for raw in events {
+            let Some(event) = oscilloscope_core::observe::parse_event(raw) else {
+                continue;
+            };
+            model.observe_event(&event);
+            for line in differ.diff_event(&event, plan, model) {
+                if is_story_kind(line.kind) {
+                    story.push(line);
+                }
+            }
+        }
+        for line in differ.diff(state, plan) {
+            if is_story_kind(line.kind) {
+                story.push(line);
+            }
+        }
+        if run_ended {
+            if let Some(line) = differ.finish(state, None) {
+                if is_story_kind(line.kind) {
+                    story.push(line);
+                }
+            }
+        }
+        story
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_flow_screen(
+        plan: &oscilloscope_core::plan::PlanTree,
+        history: &crate::history_io::HistoryHandle,
+        state: &serde_json::Value,
+        events: &[serde_json::Value],
+        process: oscilloscope_core::model::ProcessState,
+        now: &str,
+        engine: &str,
+    ) -> (RenderState, oscilloscope_core::screens::FlowScreen) {
+        let mut model = oscilloscope_core::model::RunModel::new();
+        let story = build_story_lines(events, state, plan, &mut model, false);
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            engine,
+            plan,
+            &mut model,
+            Some(state),
+            process,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(history, &mut rendered.header, Some(state), plan, now);
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let flow_screen = oscilloscope_core::screens::build_flow(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &flat,
+            plan,
+            &model,
+            &rendered.header,
+            Some(state),
+            &story,
+            None,
+            &frame_zone(),
+            rendered.header.run_end_ts.as_deref(),
+            now,
+        );
+        (rendered, flow_screen)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assert_flow_frame(
+        name: &str,
+        width: u16,
+        height: u16,
+        rendered: &RenderState,
+        flow_screen: &oscilloscope_core::screens::FlowScreen,
+        now: &str,
+        app: &mut App,
+        allowed_cells: &[(u16, u16)],
+    ) {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock(name, &theme);
+        let zone = frame_zone();
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    rendered,
+                    None,
+                    &[],
+                    app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    Some(flow_screen),
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        assert_matches_mock(terminal.backend().buffer(), &mock, name, allowed_cells);
+    }
+
+    #[test]
+    fn flow_normal_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, flow_screen) = build_flow_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+        );
+        let mut app = App::new(false);
+        assert_flow_frame(
+            "flow--normal--120x30",
+            120,
+            30,
+            &rendered,
+            &flow_screen,
+            now,
+            &mut app,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
+        );
+    }
+
+    #[test]
+    fn flow_folded_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, flow_screen) = build_flow_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+        );
+        let mut app = App::new(false);
+        app.flow_lanes_open.insert("prime.drafts".to_string(), 0);
+        assert_flow_frame(
+            "flow--folded--120x30",
+            120,
+            30,
+            &rendered,
+            &flow_screen,
+            now,
+            &mut app,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
+        );
+    }
+
+    #[test]
+    fn flow_normal_80x24_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, flow_screen) = build_flow_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+        );
+        let mut app = App::new(false);
+        assert_flow_frame(
+            "flow--normal--80x24",
+            80,
+            24,
+            &rendered,
+            &flow_screen,
+            now,
+            &mut app,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
+        );
+    }
+
     fn empty_header() -> oscilloscope_core::render::Header {
         let plan = oscilloscope_core::plan::PlanTree::empty();
         let mut model = oscilloscope_core::model::RunModel::new();
@@ -11820,6 +12353,73 @@ mod tape_frame_goldens {
         assert!(
             !text.contains("errors only"),
             "not the generic list:\n{text}"
+        );
+    }
+
+    #[test]
+    fn the_flow_help_overlay_lists_flows_own_keys() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, flow_screen) = build_flow_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.dialog = Dialog::Help;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Help") && text.contains("Flow"), "{text}");
+        assert!(text.contains("scroll the rail"), "{text}");
+        assert!(text.contains("select a pass"), "{text}");
+        assert!(text.contains("open / fold loop lanes"), "{text}");
+        assert!(
+            !text.contains("fold on/off"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("errors only"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("collapse / expand a row"),
+            "not the old tree-era list:\n{text}"
         );
     }
 }

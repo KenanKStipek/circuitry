@@ -526,44 +526,18 @@ impl App {
             }
             KeyCode::Home | KeyCode::Char('g') => self.jump(rows, state_rows, true),
             KeyCode::End | KeyCode::Char('G') => self.jump(rows, state_rows, false),
-            // Not on the Tape's or Signal's own key bar (§4) --
-            // their rows are already flat, with no collapsed state
-            // of their own to toggle; still live on Flow/Cost.
-            KeyCode::Left
-                if self.pane == Pane::Tree
-                    && self.screen != Screen::Tape
-                    && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow =>
-            {
-                if let Some(path) = self.selected_path.clone() {
-                    self.collapsed.insert(path.clone());
-                    // Issue #613: the same key re-folds a quick-steps
-                    // group ⏎ had expanded in place, from any of its
-                    // steps, not only its own representative
-                    // (`expanded_quick_steps`' only key): scan backward
-                    // over same-depth rows from the selected one until
-                    // the representative's own row is found. The scan
-                    // stops at the first row that is neither itself a
-                    // quick step (`fold::is_quick_step`'s own test) nor
-                    // an unexpanded quick-steps summary row, so an
-                    // unrelated sibling between two groups -- or
-                    // before the selected row -- never gets scanned
-                    // past into an earlier group's expansion.
-                    if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
-                        let depth = rows[selected_idx].depth;
-                        for row in rows[..=selected_idx].iter().rev() {
-                            let in_group = oscilloscope_core::fold::is_quick_step(row)
-                                || row.kind == oscilloscope_core::render::RowKind::QuickSteps;
-                            if row.depth != depth || !in_group {
-                                break;
-                            }
-                            if self.expanded_quick_steps.remove(&row.path) {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            // Issue #613: ← re-folds a quick-steps group ⏎ had
+            // expanded in place, from any of its steps, not only its
+            // own representative (`expanded_quick_steps`' only key):
+            // scan backward over same-depth rows from the selected
+            // one until the representative's own row is found. The
+            // scan stops at the first row that is neither itself a
+            // quick step (`fold::is_quick_step`'s own test) nor an
+            // unexpanded quick-steps summary row, so an unrelated
+            // sibling between two groups -- or before the selected
+            // row -- never gets scanned past into an earlier group's
+            // expansion. Tried on every screen (quick steps are their
+            // own, separate concept from `collapsed` below).
             KeyCode::Right
                 if self.pane == Pane::Tree
                     && self.screen != Screen::Tape
@@ -596,6 +570,39 @@ impl App {
                 self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
             }
+            // Issue #613: ← re-folds a quick-steps group ⏎ had
+            // expanded in place, from any of its steps, not only its
+            // own representative (`expanded_quick_steps`' only key):
+            // scan backward over same-depth rows from the selected
+            // one until the representative's own row is found. The
+            // scan stops at the first row that is neither itself a
+            // quick step (`fold::is_quick_step`'s own test) nor an
+            // unexpanded quick-steps summary row, so an unrelated
+            // sibling between two groups -- or before the selected
+            // row -- never gets scanned past into an earlier group's
+            // expansion. Reached on the Tape too (quick steps are
+            // their own, separate concept from `collapsed` above,
+            // which the Signal and Flow already claimed ← for).
+            KeyCode::Left if self.pane == Pane::Tree => {
+                if let Some(path) = self.selected_path.clone() {
+                    if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
+                        let depth = rows[selected_idx].depth;
+                        for row in rows[..=selected_idx].iter().rev() {
+                            let in_group = oscilloscope_core::fold::is_quick_step(row)
+                                || row.kind == oscilloscope_core::render::RowKind::QuickSteps;
+                            if row.depth != depth || !in_group {
+                                break;
+                            }
+                            if self.expanded_quick_steps.remove(&row.path) {
+                                return Action::None;
+                            }
+                        }
+                    }
+                    if self.screen != Screen::Tape {
+                        self.collapsed.insert(path);
+                    }
+                }
+            }
             // Issue #691: `+` opens the selected fork's own lanes
             // (three at a time, DESIGN.md §2.3's folded loop), `-`
             // folds them back into the band.
@@ -615,7 +622,19 @@ impl App {
             // own answer) -- otherwise the toggle would stay armed
             // with nothing to open yet, and spring the full-screen
             // view open later, unasked, the moment a step appears.
-            KeyCode::Enter if self.screen == Screen::Tape => {
+            // A quick-steps summary row takes priority over the
+            // Tape's own fullscreen toggle (issue #613 predates
+            // #678's) -- expanding it in place, not jumping straight
+            // to a step that isn't selected yet.
+            KeyCode::Enter
+                if self.screen == Screen::Tape
+                    && !self.selected_path.as_deref().is_some_and(|path| {
+                        rows.iter().any(|r| {
+                            r.path == path
+                                && r.kind == oscilloscope_core::render::RowKind::QuickSteps
+                        })
+                    }) =>
+            {
                 self.tape_fullscreen_step = !self.tape_fullscreen_step;
             }
             KeyCode::Enter if self.screen == Screen::Signal && self.signal_has_step => {
@@ -1286,7 +1305,7 @@ mod tests {
         let rows = [row("prime.loop", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.selected_path = Some("prime.loop".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(app.collapsed.contains("prime.loop"));
@@ -1409,7 +1428,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         assert!(app.fold_enabled, "issue #613: fold is on by default");
         app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
         assert!(!app.fold_enabled);
@@ -1460,10 +1479,7 @@ mod tests {
         let rows = [quick_steps_row];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        // Quick steps are a screen 2 concept -- on the overview
-        // (the default screen), ⏎ opens screen 2 instead (issue
-        // #626).
-        app.screen = Screen::Flow;
+        assert_eq!(app.screen, Screen::Tape, "the Tape is the default screen");
         app.selected_path = Some("prime.a".to_string());
         app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
         assert!(app.expanded_quick_steps.contains("prime.a"));
@@ -1486,7 +1502,7 @@ mod tests {
         let rows = [quick("prime.a"), quick("prime.b"), quick("prime.c")];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.expanded_quick_steps.insert("prime.a".to_string());
         app.selected_path = Some("prime.b".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
@@ -1509,7 +1525,7 @@ mod tests {
         ];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.expanded_quick_steps.insert("prime.q1".to_string());
         app.selected_path = Some("prime.box".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
@@ -1722,7 +1738,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert!(matches!(app.dialog, Dialog::FullValue(_)));
         app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
@@ -1734,7 +1750,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
     }

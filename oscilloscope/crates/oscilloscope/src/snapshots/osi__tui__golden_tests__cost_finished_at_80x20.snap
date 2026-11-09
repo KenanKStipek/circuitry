@@ -1,0 +1,24 @@
+---
+source: crates/oscilloscope/src/tui.rs
+expression: text
+---
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                            osi                                                 "
+"                                                                                "
+"                     Terminal too small                                         "
+"                                                                                "
+"                 Width    80   needs 60  ✓                                      "
+"                 Height   20   needs 24  ✗                                      "
+"                                                                                "
+"      osi needs 60 columns and 24 rows · try osi --log                          "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                         q Quit "

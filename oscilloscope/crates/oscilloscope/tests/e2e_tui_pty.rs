@@ -496,8 +496,8 @@ fn screen_keys_switch_screens_during_a_live_run() {
         let after = captured_buf.lock().unwrap()[before_2..].to_vec();
         let rendered = String::from_utf8_lossy(&after);
         assert!(
-            rendered.contains("flow ("),
-            "expected the Flow screen's own flow pane after pressing 2; got:\n{rendered:?}"
+            rendered.contains("Flow \u{b7}"),
+            "expected the Flow screen's own rail pane after pressing 2; got:\n{rendered:?}"
         );
     }
 
@@ -615,10 +615,12 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #635's own acceptance item: pressing `2` during a live `cof`
-/// run of a document with a named `if` opens the Flow screen with
-/// the decision's own `◆` row and a matching story line, and `s`
-/// swaps the selected pane for the state tree.
+/// Issue #691's own acceptance item: pressing `2` during a live
+/// `cof` run of a document with a named `if` opens the Flow screen
+/// with the decision's own `◆` row and a matching story line;
+/// `⏎` opens the selection full-screen and back; `f` toggles follow
+/// (the title's own ` · Following` marker); `?` opens Flow's own
+/// Help listing §4's own keys, `esc` closes it.
 #[test]
 fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     if !e2e_enabled() {
@@ -676,30 +678,48 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
             "expected gate's own row after pressing 2; got:\n{rendered:?}"
         );
         assert!(
-            rendered.contains("story"),
-            "expected the story pane's own border title after pressing 2; got:\n{rendered:?}"
+            rendered.contains("Story"),
+            "expected the Story pane's own border title after pressing 2; got:\n{rendered:?}"
         );
     }
 
-    let before_s = captured_buf.lock().unwrap().len();
-    send_bytes(&mut master, b"s");
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(500));
+    let after_enter = captured_buf.lock().unwrap().len();
+    assert!(
+        after_enter > before_enter,
+        "expected enter to redraw opening the selection full-screen"
+    );
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Toggling follow off then on again redraws the title's own `·
+    // Following` marker twice (a differential redraw only
+    // retransmits the changed cells either way, so this checks that
+    // something redrew at all rather than guessing at the exact
+    // bytes a removal versus an addition each produce).
+    let before_f = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"f");
+    std::thread::sleep(Duration::from_millis(500));
+    let after_f = captured_buf.lock().unwrap().len();
+    assert!(after_f > before_f, "expected f to redraw the title");
+    send_bytes(&mut master, b"f");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let before_help = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"?");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_s..].to_vec();
+        let after = captured_buf.lock().unwrap()[before_help..].to_vec();
         let rendered = String::from_utf8_lossy(&after);
-        // A differential redraw only retransmits changed cells
-        // (`a_fast_exiting_engine_shows_the_real_ok_ending_not_
-        // aborted`'s own comment, below): the border title's own
-        // leading " s" can coincidentally already match the
-        // previous frame's " selected " title at the same cell and
-        // style, leaving only "tate" actually retransmitted --
-        // checked for instead of the full word for exactly that
-        // reason.
         assert!(
-            rendered.contains("tate"),
-            "expected the state tree's own border title in the selected pane's own place after pressing s; got:\n{rendered:?}"
+            rendered.contains("Help") && rendered.contains("scroll the rail"),
+            "expected ? to open the Flow's own Help; got:\n{rendered:?}"
         );
     }
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(500));
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));

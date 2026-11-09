@@ -122,6 +122,7 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
     let flat = flatten_state(&state);
     build_flow(
         &rendered.rows,
+        &rendered.unfolded_rows,
         &flat,
         &plan,
         &model,
@@ -155,6 +156,31 @@ fn find_decision_fork<'a>(
         if let RailItem::Fork(fork) = item {
             for lane in &fork.lanes {
                 if let Some(found) = find_decision_fork(&lane.items, name) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Finds the first unnamed `if`'s own decision fork -- its station
+/// path always ends `.__if` (`rail::build_unnamed_decision`'s own
+/// synthetic path), never a real node of its own to find by name.
+fn find_unnamed_decision_fork(items: &[RailItem]) -> Option<&oscilloscope_core::rail::Fork> {
+    for (i, item) in items.iter().enumerate() {
+        if let RailItem::Station(s) = item {
+            if s.path.ends_with(".__if") {
+                if let Some(RailItem::Fork(fork)) = items.get(i + 1) {
+                    if fork.kind == ForkKind::Decision {
+                        return Some(fork);
+                    }
+                }
+            }
+        }
+        if let RailItem::Fork(fork) = item {
+            for lane in &fork.lanes {
+                if let Some(found) = find_unnamed_decision_fork(&lane.items) {
                     return Some(found);
                 }
             }
@@ -235,6 +261,42 @@ fn flow_parity_if_taken() {
     assert_gate_decision(&electricity, "electricity", "then", "chosen");
     assert_story_has_run_start_decision_and_run_end(&cof, "cof", "then");
     assert_story_has_run_start_decision_and_run_end(&electricity, "electricity", "then");
+}
+
+/// The unnamed `if` (`parity_if_unnamed`) writes no node at all, so
+/// its own decision is inferred, never read from `meta.branch` --
+/// both engines still produce the same inferred branch and untaken
+/// ghost, since the inference reads only which branch's own step
+/// actually appeared.
+#[test]
+fn flow_parity_if_unnamed() {
+    let cof = build_case_flow_screen("parity_if_unnamed_cof");
+    let electricity = build_case_flow_screen("parity_if_unnamed_electricity");
+    for (case, screen) in [("cof", &cof), ("electricity", &electricity)] {
+        let decision = find_unnamed_decision_fork(&screen.rail.items)
+            .unwrap_or_else(|| panic!("{case}: no unnamed decision fork"));
+        let taken_lane = decision.lanes.first().expect("a taken lane");
+        let taken = taken_lane.items.iter().find_map(|it| match it {
+            RailItem::Station(s) if s.name == "then_branch" => Some(s),
+            _ => None,
+        });
+        let taken = taken
+            .unwrap_or_else(|| panic!("{case}: the taken branch's own 'then_branch' is missing"));
+        assert_ne!(
+            taken.status,
+            oscilloscope_core::model::StatusKind::Skipped,
+            "{case}: 'then_branch' is the taken step"
+        );
+        let ghost = decision
+            .lanes
+            .iter()
+            .find_map(|l| l.ghost.as_deref())
+            .unwrap_or_else(|| panic!("{case}: no untaken ghost lane"));
+        assert!(
+            ghost.contains("else_branch"),
+            "{case}: untaken ghost name was {ghost:?}"
+        );
+    }
 }
 
 #[test]

@@ -3415,7 +3415,8 @@ pub struct SelectedDecision {
 pub struct SelectedPassStep {
     pub label: String,
     pub status: RowStatus,
-    pub tokens: Option<u64>,
+    pub sent: u64,
+    pub received: u64,
     pub usual: Option<u64>,
     pub produced: Option<String>,
 }
@@ -3456,12 +3457,49 @@ pub struct FlowScreen {
     /// §3.2's status line: the newest finished step, shared with
     /// the Signal's own.
     pub last_finished: Option<SignalLastFinished>,
+    /// The Totals row's own deviation (§3.3): the sum of every
+    /// row's usual tokens that has actually run so far, same as the
+    /// Tape's own -- comparing against the whole run's eventual
+    /// usual instead would read wildly off on any partial run.
+    pub usual_so_far_tokens: Option<u64>,
 }
 
 /// The first pass of the first loop that is either running or, with
 /// nothing running, simply first in plan order -- the rail's own
 /// default selection (DESIGN.md's own frames: `Pass 1 · cats` is
 /// selected with no explicit selection at all).
+/// A loop's own story entry (DESIGN.md §2.3: `⟳ drafts · 3 passes
+/// · 2 wide`) -- `--log` has no such line (a loop writes no event
+/// of its own for *starting*), so this synthesises one, the same
+/// way an unnamed `if`'s own inferred decision already is.
+fn loop_story_lines(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> Vec<crate::diff::LogLine> {
+    rows.iter()
+        .filter(|r| r.kind == RowKind::Loop)
+        .filter_map(|r| {
+            let total = r.loop_progress.and_then(|p| p.total)?;
+            let wide = plan.match_path(&r.path).and_then(|m| {
+                m.entries.iter().find_map(|e| match &e.kind {
+                    PlanEntryKind::Loop {
+                        max_concurrency, ..
+                    } => *max_concurrency,
+                    _ => None,
+                })
+            })?;
+            let ts = flat.get(&r.path).and_then(|n| n.created_at.clone());
+            Some(crate::diff::LogLine {
+                ts,
+                text: format!("⟳ {} · {total} passes · {wide} wide", r.label),
+                kind: crate::diff::LogKind::Report,
+                path: Some(r.path.clone()),
+            })
+        })
+        .collect()
+}
+
 fn default_pass_path(rows: &[Row]) -> Option<&str> {
     let running = rows
         .iter()
@@ -3540,7 +3578,6 @@ fn build_selected_pass(
         .filter(|r| r.kind == RowKind::Prompt)
         .map(|r| {
             let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
-            let tokens = (sent + received > 0).then_some(sent + received);
             let usual = tape_row_usual_tokens(&r.path, plan, header);
             let produced = flat
                 .get(&r.path)
@@ -3549,7 +3586,8 @@ fn build_selected_pass(
             SelectedPassStep {
                 label: capitalize(&r.label),
                 status: r.status.clone(),
-                tokens,
+                sent,
+                received,
                 usual,
                 produced,
             }
@@ -3573,6 +3611,11 @@ fn build_selected_pass(
 #[allow(clippy::too_many_arguments)]
 pub fn build_flow(
     rows: &[Row],
+    // An unnamed `if`'s own branch evidence (`rail::build_rail`'s
+    // own use) reads this, never the possibly-folded `rows` above --
+    // `render::RenderState::unfolded_rows` is always this, same
+    // instant.
+    unfolded_rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
@@ -3584,14 +3627,16 @@ pub fn build_flow(
     run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
-    let rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
+    let rail = crate::rail::build_rail(rows, unfolded_rows, flat, plan, header, state, zone);
     let largest_usual_step = header
         .history_step_usual
         .values()
         .filter_map(|s| s.tokens_p50)
         .max();
     let unit = tape_unit(largest_usual_step);
-    let story = crate::flow::build_story(story_lines, &[], zone);
+    let mut story_lines_with_loops = story_lines.to_vec();
+    story_lines_with_loops.extend(loop_story_lines(rows, flat, plan));
+    let story = crate::flow::build_story(&story_lines_with_loops, &[], zone);
     let pass_path = selected_path
         .filter(|p| rows.iter().any(|r| r.path == *p && r.kind == RowKind::Pass))
         .map(str::to_string)
@@ -3639,6 +3684,21 @@ pub fn build_flow(
         }
     }
     let last_finished = last_finished_row(rows, flat, plan, header.run_start_ts.as_deref());
+    let usual_so_far: u64 = rows
+        .iter()
+        .filter(|row| {
+            !matches!(
+                row.kind,
+                RowKind::Root
+                    | RowKind::Pass
+                    | RowKind::QuickSteps
+                    | RowKind::Report
+                    | RowKind::Unknown
+            ) && !matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped)
+        })
+        .filter_map(|row| tape_row_usual_tokens(&row.path, plan, header))
+        .sum();
+    let usual_so_far_tokens = (usual_so_far > 0).then_some(usual_so_far);
     FlowScreen {
         rail,
         unit,
@@ -3647,6 +3707,7 @@ pub fn build_flow(
         selected_decision,
         selected_step,
         last_finished,
+        usual_so_far_tokens,
     }
 }
 
@@ -4585,6 +4646,7 @@ mod tests {
         let elapsed_at = |now: &str| {
             let screen = build_flow(
                 &rows,
+                &rows,
                 &flat,
                 &plan,
                 &model,
@@ -4760,6 +4822,7 @@ mod tests {
             None,
         );
         let screen = build_flow(
+            &rows,
             &rows,
             &flat,
             &plan,
