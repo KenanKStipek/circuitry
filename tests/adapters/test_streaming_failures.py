@@ -19,8 +19,10 @@ from curl_test_support import local_server
 
 from circuitry.adapters._retry import AdapterCallError
 from circuitry.adapters.anthropic import AnthropicAdapter
+from circuitry.adapters.base import GenerateOptions
 from circuitry.adapters.groq import GroqAdapter
 from circuitry.adapters.ollama import OllamaAdapter
+from circuitry.adapters.openai import OpenAIAdapter
 
 
 class _JsonErrorHandler(http.server.BaseHTTPRequestHandler):
@@ -170,6 +172,32 @@ class _OpenAICompatibleIncompleteNoSentinelHandler(http.server.BaseHTTPRequestHa
         self.end_headers()
         self.wfile.write(b'data: {"choices": [{"delta": {"content": "hi "}}]}\n\n')
         self.wfile.write(b'data: {"choices": [{"delta": {"content": "there"}}]}\n\n')
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+class _OpenAISseSuccessHandler(http.server.BaseHTTPRequestHandler):
+    """``openai.py``'s own streamed success path -- distinct from the
+    OpenAI-compatible family's shared ``chat_completion`` (exercised
+    above via ``groq``/``lmstudio``), since ``OpenAIAdapter.generate``
+    builds its own request and result rather than delegating."""
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(b'data: {"choices": [{"delta": {"content": "hello "}}]}\n\n')
+        self.wfile.write(
+            b'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}]}\n\n'
+        )
+        usage = (
+            '{"choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 2}}'
+        )
+        self.wfile.write(f"data: {usage}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
 
     def log_message(self, *args: object) -> None:
         pass
@@ -336,3 +364,23 @@ def test_finish_reason_length_is_read_from_the_final_sse_event(
         assert result.finish_reason == "length"
         assert result.tokens_sent == 3
         assert result.tokens_received == 2
+
+
+def test_openai_adapters_own_streamed_success_assembles_text_and_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with local_server(_OpenAISseSuccessHandler) as base_url:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        adapter = OpenAIAdapter(base_url=base_url)
+        deltas: list[str] = []
+        result = adapter.generate(
+            model="m",
+            prompt="x",
+            options=GenerateOptions(on_progress=lambda p: deltas.append(str(p.delta_chars))),
+        )
+
+        assert result.text == "hello there"
+        assert result.finish_reason == "stop"
+        assert result.tokens_sent == 4
+        assert result.tokens_received == 2
+        assert deltas == ["6", "5"]
