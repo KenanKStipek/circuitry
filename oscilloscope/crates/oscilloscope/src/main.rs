@@ -1658,44 +1658,41 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// is actually looking at once they tab onto `Pane::Details` itself
 /// to scroll it -- including a named report's own row, which never
 /// has an orchestration-tree row of its own at all to select instead.
-/// Screen 0's own model (issue #626), built only while it's actually
+/// Screen 0's own model (issue #678), built only while it's actually
 /// on display -- the performance rule ("models for screens not on
 /// display aren't built"). `flatten_state` runs again here rather
 /// than threading `RenderState`'s own internal `flat` map out of
 /// `render::build` just for this -- it's the same O(state size) walk
 /// `build` itself already does on every rebuild, and this only adds
-/// a second one while the overview is the screen being shown.
-fn build_overview_if_active(
+/// a second one while the Tape is the screen being shown.
+fn build_tape_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
     plan: &oscilloscope_core::plan::PlanTree,
     model: &oscilloscope_core::model::RunModel,
     state: Option<&serde_json::Value>,
-    log_lines: &[String],
     now: &str,
-) -> Option<oscilloscope_core::screens::Overview> {
-    if app.screen != oscilloscope_core::screens::Screen::Overview {
+) -> Option<oscilloscope_core::screens::TapeScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Tape {
         return None;
     }
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-    Some(oscilloscope_core::screens::build_overview(
+    Some(oscilloscope_core::screens::build_tape(
         &render_state.rows,
-        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
         plan,
         model,
         state,
-        &render_state.token_bar,
-        log_lines,
         app.selected_path.as_deref(),
+        app.tape_previews_on,
         now,
     ))
 }
 
 /// Screen 3's own model (issue #632), built only while it's actually
-/// on display -- the same performance rule `build_overview_if_active`
+/// on display -- the same performance rule `build_tape_if_active`
 /// follows, and rebuilt at the same points that one is (a rebuild, or
 /// a key that could have changed the screen, the measure or the
 /// zoom). `statuses` comes straight from `render_state.unfolded_rows`
@@ -1742,7 +1739,7 @@ fn build_cost_screen_if_active(
 }
 
 /// Screen 2's own model (issue #635), built only while it's actually
-/// on display -- the same performance rule `build_overview_if_active`/
+/// on display -- the same performance rule `build_tape_if_active`/
 /// `build_cost_screen_if_active` already follow.
 #[allow(clippy::too_many_arguments)]
 fn build_flow_screen_if_active(
@@ -1808,28 +1805,24 @@ fn build_time_screen_if_active(
     ))
 }
 
-/// Issue #637 (extended by #650 to screen 1): the transcript path for
-/// whichever step is actually on screen right now -- the overview's
-/// own focused step (running, last-finished, or an ended run's own
-/// stopped agent) on screen 0, Flow's and Time's own selected step on
-/// screens 2 and 1 -- `None` on every other screen. Tails a finished
+/// Issue #637 (extended by #650 to screen 1, #678 to screen 0): the
+/// transcript path for whichever step is actually on screen right now
+/// -- the Tape's own selected step on screen 0, Flow's and Time's own
+/// selected step on screens 2 and 1 -- `None` on every other screen.
+/// Tails a finished
 /// agent's own `meta.raw.transcript` too, not just a running one's
 /// `meta.live.transcript` -- the Time screen's zoom pane (issue #650)
 /// is the first thing that ever shows a finished agent's own bands,
 /// which need the transcript the same way a running one's do.
 fn focused_agent_transcript_path(
     app: &App,
-    overview: Option<&oscilloscope_core::screens::Overview>,
+    tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
     time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
 ) -> Option<String> {
-    use oscilloscope_core::screens::{FocusDetail, NowFocus, Screen};
+    use oscilloscope_core::screens::{FocusDetail, Screen};
     let step = match app.screen {
-        Screen::Overview => overview.and_then(|o| match &o.now_pane.focus {
-            NowFocus::Running(step, _) | NowFocus::LastFinished(step) => Some(step),
-            NowFocus::Ended(summary) => summary.stopped_agent.as_ref(),
-            _ => None,
-        }),
+        Screen::Tape => tape_screen.and_then(|t| t.selected.as_ref()),
         Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),
         Screen::Time => time_screen.and_then(|t| t.selected.as_ref()),
         _ => None,
@@ -1876,12 +1869,12 @@ struct TranscriptTailCache {
 /// opened for a step that isn't the one on screen.
 fn tail_focused_transcript(
     app: &App,
-    overview: Option<&oscilloscope_core::screens::Overview>,
+    tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
     time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
     cache: &mut TranscriptTailCache,
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
-    let path = focused_agent_transcript_path(app, overview, flow_screen, time_screen)?;
+    let path = focused_agent_transcript_path(app, tape_screen, flow_screen, time_screen)?;
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
     if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
         return cache.view.clone();
@@ -2113,13 +2106,12 @@ fn run_tui(
         &plan,
         &now_str,
     );
-    let mut overview = build_overview_if_active(
+    let mut tape_screen = build_tape_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         current_state.as_ref(),
-        &log_lines,
         &now_str,
     );
     let mut cost_screen = build_cost_screen_if_active(
@@ -2150,7 +2142,7 @@ fn run_tui(
     let mut transcript_cache = TranscriptTailCache::default();
     let mut transcript_view = tail_focused_transcript(
         &app,
-        overview.as_ref(),
+        tape_screen.as_ref(),
         flow_screen.as_ref(),
         time_screen.as_ref(),
         &mut transcript_cache,
@@ -2337,13 +2329,12 @@ fn run_tui(
             // pane's own focus reads that selection, so building it
             // earlier left it a tick stale on the very frame follow
             // first lands on a target.
-            overview = build_overview_if_active(
+            tape_screen = build_tape_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 current_state.as_ref(),
-                &log_lines,
                 &now_str,
             );
             cost_screen = build_cost_screen_if_active(
@@ -2373,7 +2364,7 @@ fn run_tui(
             );
             transcript_view = tail_focused_transcript(
                 &app,
-                overview.as_ref(),
+                tape_screen.as_ref(),
                 flow_screen.as_ref(),
                 time_screen.as_ref(),
                 &mut transcript_cache,
@@ -2404,12 +2395,24 @@ fn run_tui(
         } else {
             Vec::new()
         };
+        let tape_owned: Vec<oscilloscope_core::render::Row> =
+            if app.screen == oscilloscope_core::screens::Screen::Tape {
+                tape_screen
+                    .as_ref()
+                    .map(keys::visible_rows_for_tape)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         let visible = match (&flow_screen, &time_screen) {
             (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
+            }
+            _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
+                tape_owned.iter().collect()
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };
@@ -2539,13 +2542,12 @@ fn run_tui(
                         // redraw wide. `render_state` itself needs no
                         // refresh here: nothing a key does changes
                         // what it holds.
-                        overview = build_overview_if_active(
+                        tape_screen = build_tape_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             current_state.as_ref(),
-                            &log_lines,
                             &now_str,
                         );
                         cost_screen = build_cost_screen_if_active(
@@ -2575,7 +2577,7 @@ fn run_tui(
                         );
                         transcript_view = tail_focused_transcript(
                             &app,
-                            overview.as_ref(),
+                            tape_screen.as_ref(),
                             flow_screen.as_ref(),
                             time_screen.as_ref(),
                             &mut transcript_cache,
@@ -2648,7 +2650,7 @@ fn run_tui(
                     &ctx,
                     icon_frame,
                     &now_str,
-                    overview.as_ref(),
+                    tape_screen.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
                     time_screen.as_ref(),
@@ -3386,13 +3388,12 @@ fn run_tui_watch(
         &plan,
         &now_str,
     );
-    let mut overview = build_overview_if_active(
+    let mut tape_screen = build_tape_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         last_state.as_ref(),
-        &log_lines,
         &now_str,
     );
     let mut cost_screen =
@@ -3418,7 +3419,7 @@ fn run_tui_watch(
     let mut transcript_cache = TranscriptTailCache::default();
     let mut transcript_view = tail_focused_transcript(
         &app,
-        overview.as_ref(),
+        tape_screen.as_ref(),
         flow_screen.as_ref(),
         time_screen.as_ref(),
         &mut transcript_cache,
@@ -3635,13 +3636,12 @@ fn run_tui_watch(
             }
             // See `run_tui`'s own comment above -- built after
             // follow updated the selection, not before.
-            overview = build_overview_if_active(
+            tape_screen = build_tape_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 last_state.as_ref(),
-                &log_lines,
                 &now_str,
             );
             cost_screen = build_cost_screen_if_active(
@@ -3671,7 +3671,7 @@ fn run_tui_watch(
             );
             transcript_view = tail_focused_transcript(
                 &app,
-                overview.as_ref(),
+                tape_screen.as_ref(),
                 flow_screen.as_ref(),
                 time_screen.as_ref(),
                 &mut transcript_cache,
@@ -3689,12 +3689,24 @@ fn run_tui_watch(
         } else {
             Vec::new()
         };
+        let tape_owned: Vec<oscilloscope_core::render::Row> =
+            if app.screen == oscilloscope_core::screens::Screen::Tape {
+                tape_screen
+                    .as_ref()
+                    .map(keys::visible_rows_for_tape)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         let visible = match (&flow_screen, &time_screen) {
             (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
+            }
+            _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
+                tape_owned.iter().collect()
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };
@@ -3791,13 +3803,12 @@ fn run_tui_watch(
                         // See `run_tui`'s own comment above --
                         // refreshes the overview for this same
                         // frame's draw, not next iteration's.
-                        overview = build_overview_if_active(
+                        tape_screen = build_tape_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             last_state.as_ref(),
-                            &log_lines,
                             &now_str,
                         );
                         cost_screen = build_cost_screen_if_active(
@@ -3827,7 +3838,7 @@ fn run_tui_watch(
                         );
                         transcript_view = tail_focused_transcript(
                             &app,
-                            overview.as_ref(),
+                            tape_screen.as_ref(),
                             flow_screen.as_ref(),
                             time_screen.as_ref(),
                             &mut transcript_cache,
@@ -3889,7 +3900,7 @@ fn run_tui_watch(
                     &ctx,
                     icon_frame,
                     &now_str,
-                    overview.as_ref(),
+                    tape_screen.as_ref(),
                     cost_screen.as_ref(),
                     flow_screen.as_ref(),
                     time_screen.as_ref(),
@@ -4160,17 +4171,15 @@ mod tests {
             true,
             &Default::default(),
         );
-        let overview = oscilloscope_core::screens::build_overview(
+        let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
-            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
             &model,
             Some(&state),
-            &rendered.token_bar,
-            &[],
-            None,
+            Some("prime.fix"),
+            true,
             "2026-01-01T00:00:01Z",
         );
         let flow_screen = oscilloscope_core::screens::build_flow_screen(
@@ -4200,11 +4209,11 @@ mod tests {
         );
 
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Overview;
+        app.screen = oscilloscope_core::screens::Screen::Tape;
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
                 Some(&time_screen)
             ),
@@ -4215,7 +4224,7 @@ mod tests {
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
                 Some(&time_screen)
             ),
@@ -4226,7 +4235,7 @@ mod tests {
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
                 Some(&time_screen)
             ),
@@ -4237,12 +4246,12 @@ mod tests {
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
                 Some(&time_screen)
             ),
             None,
-            "no screen but overview/flow/time ever names a transcript to tail"
+            "no screen but tape/flow/time ever names a transcript to tail"
         );
     }
 
@@ -4271,23 +4280,21 @@ mod tests {
             true,
             &Default::default(),
         );
-        let overview = oscilloscope_core::screens::build_overview(
+        let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
-            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
             &model,
             Some(&state),
-            &rendered.token_bar,
-            &[],
-            None,
+            Some("prime.fix"),
+            true,
             "t2",
         );
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Overview;
+        app.screen = oscilloscope_core::screens::Screen::Tape;
         assert_eq!(
-            focused_agent_transcript_path(&app, Some(&overview), None, None),
+            focused_agent_transcript_path(&app, Some(&tape_screen), None, None),
             None
         );
     }

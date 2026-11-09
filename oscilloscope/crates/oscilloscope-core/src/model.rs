@@ -1598,13 +1598,47 @@ impl RunModel {
                 // segment as the literal string `iter_*`, DESIGN.md
                 // §5's path-display ask) — `match_path` can never match
                 // that literal text back against a real `iter_N`
-                // segment, so seeding a row for it here only ever left
-                // a stale `Pending` row beside the real per-pass rows
-                // observation produces (F8). Skip it: a real pass's own
-                // row already covers it, and an unreached/skipped loop
-                // shows via the loop container's own row, not a body
-                // template's.
-                if path.split('.').any(|seg| seg == "iter_*") {
+                // segment, so seeding a row for the template itself
+                // here would only ever leave a stale `Pending` row
+                // beside the real per-pass rows observation produces
+                // (F8); skipped below once any real pass already
+                // exists. Before the loop's first dispatch, though
+                // (issue #678's Starting/Failed states), its own
+                // eventual passes still read ahead like any other
+                // un-dispatched leaf, which needs a row of its own
+                // per pass, not the compiled template's -- inserted
+                // once the loop's own total resolves (a state node's
+                // own `progress.total`, or a plain `each.in` against
+                // the run's own input), each exactly the loop
+                // container's own status (Pending, or Skipped with
+                // its own reason, never re-derived through `infer_
+                // absent` on a synthetic path whose `earlier_siblings`/
+                // `branch_alternates` lookup is keyed by this same
+                // template string, not a concrete pass's own).
+                if let Some((loop_path, suffix)) = path.split_once(".iter_*.") {
+                    let prefix = format!("{loop_path}.");
+                    let has_real_pass = flat.keys().any(|p| {
+                        p.strip_prefix(prefix.as_str())
+                            .and_then(|rest| rest.split('.').next())
+                            .is_some_and(|seg| {
+                                seg.strip_prefix("iter_").is_some_and(|n| {
+                                    !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+                                })
+                            })
+                    });
+                    if !has_real_pass {
+                        let total = flat
+                            .get(loop_path)
+                            .and_then(|n| n.progress_total)
+                            .or_else(|| plan.resolve_each_len(loop_path, state));
+                        if let Some(total) = total {
+                            let loop_status = self.infer_absent(loop_path, &flat, plan);
+                            for i in 0..total {
+                                rows.entry(format!("{loop_path}.iter_{i}.{suffix}"))
+                                    .or_insert_with(|| loop_status.clone());
+                            }
+                        }
+                    }
                     continue;
                 }
                 rows.insert(path.clone(), self.infer_absent(path, &flat, plan));

@@ -24,7 +24,7 @@
 //! binary, the same convention `config_discovery` and
 //! `create_run_dir` already follow.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -52,6 +52,15 @@ pub const OTHER_STEP: &str = "(other)";
 const MAX_RUNS_PER_DOCUMENT: usize = 50;
 const COMPACT_AT_LINES: usize = 100;
 const MAX_STEPS_PER_RECORD: usize = 500;
+/// The most distinct loop passes a single step keeps its own
+/// literal key for, within one run (issue #678's exact-pass
+/// `drafts.iter_2.draft` lookups): a loop longer than this already
+/// falls back to the stripped key's own per-pass figure by design
+/// (`tape_row_usual_tokens`'s fallback), so the rest of its passes
+/// are never given their own entry -- otherwise a long enough loop's
+/// literal keys alone could push one record past [`MAX_LINE_BYTES`]
+/// and lose the whole run's history on read.
+const MAX_LITERAL_KEYS_PER_STEP: usize = 8;
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_DOCUMENTS: usize = 500;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
@@ -149,6 +158,25 @@ fn normalize_iter_segments(path: &str) -> String {
         .join(".")
 }
 
+/// [`display_key`]'s own path, with a loop pass's real index kept
+/// instead of written `iter_*` -- the Tape's own "usually" needs a
+/// specific pass's own median (`drafts.iter_2.draft`'s own three
+/// recorded figures), never that pass summed in with its siblings'
+/// the way the stripped key already is for the Time screen's ghost
+/// bars. `None`/`OTHER_STEP` exactly where `display_key` is.
+pub(crate) fn display_key_literal(path: &str, plan: &PlanTree) -> Option<String> {
+    let relative = path.strip_prefix("prime.")?;
+    if !plan.has_plan() {
+        let top = relative.split('.').next().unwrap_or(relative);
+        return Some(top.to_string());
+    }
+    if plan.match_path(path).is_some() {
+        Some(relative.to_string())
+    } else {
+        Some(OTHER_STEP.to_string())
+    }
+}
+
 /// Merges a set of `[start_s, end_s]` ranges into their own union,
 /// returning the total covered length -- issue #649's "time actually
 /// running, with overlapping tree passes counted once".
@@ -187,12 +215,11 @@ struct ResolvedInterval {
     cost_usd: Option<f64>,
 }
 
-fn resolve_interval(
+fn resolve_interval_with_key(
     interval: &StepInterval,
-    plan: &PlanTree,
+    key: String,
     run_start_ts: &str,
 ) -> Option<ResolvedInterval> {
-    let key = display_key(&interval.path, plan)?;
     let start_s = duration_seconds(run_start_ts, &interval.start_ts)?;
     let end_s = duration_seconds(run_start_ts, &interval.end_ts)?;
     Some(ResolvedInterval {
@@ -212,12 +239,41 @@ fn build_steps(
     run_start_ts: &str,
 ) -> BTreeMap<String, StepRecord> {
     let mut by_key: BTreeMap<String, Vec<ResolvedInterval>> = BTreeMap::new();
+    let mut literal_keys_seen: HashMap<String, BTreeSet<String>> = HashMap::new();
     for interval in model.step_intervals() {
-        if let Some(resolved) = resolve_interval(interval, plan, run_start_ts) {
-            by_key
-                .entry(resolved.key.clone())
-                .or_default()
-                .push(resolved);
+        let stripped_key = display_key(&interval.path, plan);
+        if let Some(key) = stripped_key.clone() {
+            if let Some(resolved) = resolve_interval_with_key(interval, key, run_start_ts) {
+                by_key
+                    .entry(resolved.key.clone())
+                    .or_default()
+                    .push(resolved);
+            }
+        }
+        // A loop pass's own literal key (`drafts.iter_2.draft`),
+        // kept alongside the stripped one above whenever the two
+        // differ -- the stripped key still sums every pass of the
+        // run together for the Time screen's own ghost bars, but
+        // the Tape needs this exact pass's own figure, unsummed.
+        // Capped per stripped base at `MAX_LITERAL_KEYS_PER_STEP`
+        // distinct passes; a loop pass beyond that keeps contributing
+        // to the stripped key above, it just never gets its own
+        // literal entry.
+        if let Some(base) = &stripped_key {
+            let literal_key = display_key_literal(&interval.path, plan);
+            if let Some(key) = literal_key.filter(|key| Some(key) != stripped_key.as_ref()) {
+                let seen = literal_keys_seen.entry(base.clone()).or_default();
+                let keep = seen.contains(&key) || seen.len() < MAX_LITERAL_KEYS_PER_STEP;
+                if keep {
+                    seen.insert(key.clone());
+                    if let Some(resolved) = resolve_interval_with_key(interval, key, run_start_ts) {
+                        by_key
+                            .entry(resolved.key.clone())
+                            .or_default()
+                            .push(resolved);
+                    }
+                }
+            }
         }
     }
 
@@ -273,7 +329,8 @@ fn build_steps(
         other.passes += overflow_total;
     }
 
-    cap_steps(steps)
+    let literal_keys: BTreeSet<String> = literal_keys_seen.into_values().flatten().collect();
+    cap_steps(steps, &literal_keys)
 }
 
 fn sum_optional<I: Iterator<Item = Option<u64>>>(values: I) -> Option<u64> {
@@ -297,8 +354,16 @@ fn sum_optional_f64<I: Iterator<Item = Option<f64>>>(values: I) -> Option<f64> {
 }
 
 /// Issue #649's "at most 500 steps per run. The longest are kept by
-/// `busy_s` and the rest are summed into `(other)`."
-fn cap_steps(steps: BTreeMap<String, StepRecord>) -> BTreeMap<String, StepRecord> {
+/// `busy_s` and the rest are summed into `(other)`." `literal_keys`
+/// are the per-pass keys [`build_steps`] keeps alongside a loop
+/// step's own stripped key (never on their own): their tokens and
+/// cost already count once, under that stripped key's own sum, so
+/// folding an evicted literal key's tokens into `(other)` too would
+/// count them twice -- only its `busy_s`/`passes` join `(other)`.
+fn cap_steps(
+    steps: BTreeMap<String, StepRecord>,
+    literal_keys: &BTreeSet<String>,
+) -> BTreeMap<String, StepRecord> {
     if steps.len() <= MAX_STEPS_PER_RECORD {
         return steps;
     }
@@ -316,15 +381,17 @@ fn cap_steps(steps: BTreeMap<String, StepRecord>) -> BTreeMap<String, StepRecord
         cost_usd: None,
         ok: true,
     });
-    for (_, rest) in by_busy {
+    for (key, rest) in by_busy {
         other.busy_s += rest.busy_s;
         other.passes += rest.passes;
         other.start_s = other.start_s.min(rest.start_s);
         other.end_s = other.end_s.max(rest.end_s);
         other.ok &= rest.ok;
-        other.tokens_sent = add_optional(other.tokens_sent, rest.tokens_sent);
-        other.tokens_received = add_optional(other.tokens_received, rest.tokens_received);
-        other.cost_usd = add_optional_f64(other.cost_usd, rest.cost_usd);
+        if !literal_keys.contains(&key) {
+            other.tokens_sent = add_optional(other.tokens_sent, rest.tokens_sent);
+            other.tokens_received = add_optional(other.tokens_received, rest.tokens_received);
+            other.cost_usd = add_optional_f64(other.cost_usd, rest.cost_usd);
+        }
     }
     kept.insert(OTHER_STEP.to_string(), other);
     kept
@@ -779,6 +846,11 @@ pub struct RunStats {
     pub p50_s: f64,
     pub p10_s: Option<f64>,
     pub p90_s: Option<f64>,
+    /// The median of the whole run's own tokens (sent + received),
+    /// over the same pool `p50_s` comes from (issue #678's "usual"
+    /// tokens, Tape's own `+12% Usual` in the Totals row) -- `None`
+    /// below [`P50_MIN_RUNS`], same threshold as `p50_s` itself.
+    pub tokens_p50: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -800,6 +872,13 @@ pub struct StepStats {
     /// never read by [`compute_eta`] itself; see
     /// [`DocumentStats::anchor_remaining_after_p50_s`].
     pub remaining_after_p50_s: Option<f64>,
+    /// The median of this step's own tokens (sent + received),
+    /// pooled the same "earlier versions" way `busy_p50_s` is
+    /// (issue #678's "usual" tokens: `usually 155 t` on a row ahead,
+    /// `+47%` beside a finished one) -- counts only the runs where
+    /// this step actually recorded a token figure (a tool step
+    /// never does), and is `None` below [`P50_MIN_RUNS`] of those.
+    pub tokens_p50: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -861,11 +940,17 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
     let same_hash_ok_count = same_hash.len();
     let whole_run = if same_hash_ok_count >= P50_MIN_RUNS {
         let wall: Vec<f64> = same_hash.iter().map(|r| r.wall_s).collect();
+        let tokens: Vec<f64> = same_hash
+            .iter()
+            .map(|r| (r.tokens_sent + r.tokens_received) as f64)
+            .collect();
         Some(RunStats {
             count: same_hash_ok_count,
             p50_s: percentile_with_threshold(&wall, 50.0, P50_MIN_RUNS).unwrap_or(0.0),
             p10_s: percentile_with_threshold(&wall, 10.0, P10_P90_MIN_RUNS),
             p90_s: percentile_with_threshold(&wall, 90.0, P10_P90_MIN_RUNS),
+            tokens_p50: percentile_with_threshold(&tokens, 50.0, P50_MIN_RUNS)
+                .map(|v| v.round() as u64),
         })
     } else {
         None
@@ -897,6 +982,26 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
             .iter()
             .filter_map(|r| r.steps.get(key).map(|s| s.end_s))
             .collect();
+        // Divided by the run's own `passes` on this key: a loop
+        // step's stripped key sums every pass of that one run
+        // together (`build_steps`'s own comment), so taking the
+        // median of those per-run sums would read as the usual size
+        // of the whole loop, not of one pass -- every caller of this
+        // key's own `tokens_p50` wants a single typical pass's size
+        // (the Tape's own fallback when a pass has no literal key of
+        // its own yet). A non-loop step's `passes` is always 1, so
+        // this is unchanged for it.
+        let tokens: Vec<f64> = newest_ok
+            .iter()
+            .filter_map(|r| r.steps.get(key))
+            .filter_map(|s| match (s.tokens_sent, s.tokens_received) {
+                (None, None) => None,
+                (sent, received) => {
+                    let total = sent.unwrap_or(0) + received.unwrap_or(0);
+                    Some(total as f64 / s.passes.max(1) as f64)
+                }
+            })
+            .collect();
         per_step.insert(
             key.clone(),
             StepStats {
@@ -907,6 +1012,8 @@ pub fn compute_stats(records: &[HistoryRecord], current_hash: Option<&str>) -> D
                 start_p50_s: percentile_with_threshold(&start_s, 50.0, P50_MIN_RUNS),
                 end_p50_s: percentile_with_threshold(&end_s, 50.0, P50_MIN_RUNS),
                 remaining_after_p50_s: percentile_with_threshold(&remaining, 50.0, P50_MIN_RUNS),
+                tokens_p50: percentile_with_threshold(&tokens, 50.0, P50_MIN_RUNS)
+                    .map(|v| v.round() as u64),
             },
         );
     }
@@ -1251,6 +1358,132 @@ mod tests {
         assert_eq!(plan_stats.end_p50_s, None);
     }
 
+    fn step_with_tokens(sent: u64, received: u64) -> StepRecord {
+        StepRecord {
+            tokens_sent: Some(sent),
+            tokens_received: Some(received),
+            ..step(0.0, 1.0, 1.0, 1, true)
+        }
+    }
+
+    /// Issue #678's own "usual" tokens, per step: the median of
+    /// tokens sent+received, pooled across every ok run (any hash)
+    /// the same way `busy_p50_s` is.
+    #[test]
+    fn compute_stats_gives_the_median_tokens_per_step() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step_with_tokens(150, 4));
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps
+            .insert("plan".to_string(), step_with_tokens(158, 6));
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps
+            .insert("plan".to_string(), step_with_tokens(146, 6));
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        // sorted totals: 152, 154, 164 -> median 154
+        assert_eq!(plan_stats.tokens_p50, Some(154));
+    }
+
+    /// A loop step's stripped key sums every pass of one run
+    /// together (`drafts.iter_*.draft`'s own comment) -- the median
+    /// this gives must still read as one typical pass's size, not
+    /// the whole loop's, since the Tape falls back to this key when
+    /// a specific pass has no literal history of its own yet.
+    #[test]
+    fn compute_stats_divides_a_loop_steps_tokens_by_its_own_passes() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps.insert(
+            "drafts.iter_*.draft".to_string(),
+            StepRecord {
+                tokens_sent: Some(450),
+                tokens_received: Some(0),
+                ..step(0.0, 1.0, 1.0, 3, true)
+            },
+        );
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps.insert(
+            "drafts.iter_*.draft".to_string(),
+            StepRecord {
+                tokens_sent: Some(456),
+                tokens_received: Some(0),
+                ..step(0.0, 1.0, 1.0, 3, true)
+            },
+        );
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps.insert(
+            "drafts.iter_*.draft".to_string(),
+            StepRecord {
+                tokens_sent: Some(462),
+                tokens_received: Some(0),
+                ..step(0.0, 1.0, 1.0, 3, true)
+            },
+        );
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let loop_stats = stats.per_step.get("drafts.iter_*.draft").unwrap();
+        // Per-run averages 150, 152, 154 -> median 152, never the
+        // raw per-run sums' own median of 456.
+        assert_eq!(loop_stats.tokens_p50, Some(152));
+    }
+
+    #[test]
+    fn compute_stats_leaves_step_tokens_unset_with_too_few_runs() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("plan".to_string(), step_with_tokens(150, 4));
+        let stats = compute_stats(&[r1], Some("h1"));
+        let plan_stats = stats.per_step.get("plan").unwrap();
+        assert_eq!(plan_stats.tokens_p50, None);
+    }
+
+    /// A step a plan-known run doesn't always run (an untaken `if`
+    /// branch, say) never recorded a token figure at all for that
+    /// run -- those runs are left out of the median, not counted as
+    /// zero tokens.
+    #[test]
+    fn compute_stats_skips_runs_with_no_token_figure_for_a_step() {
+        let mut r1 = record("r1", "2026-01-01T00:00:00Z", 100.0, Outcome::Ok, "h1");
+        r1.steps
+            .insert("tool".to_string(), step(0.0, 1.0, 1.0, 1, true));
+        let mut r2 = record("r2", "2026-01-01T00:01:00Z", 100.0, Outcome::Ok, "h1");
+        r2.steps
+            .insert("tool".to_string(), step(0.0, 1.0, 1.0, 1, true));
+        let mut r3 = record("r3", "2026-01-01T00:02:00Z", 100.0, Outcome::Ok, "h1");
+        r3.steps
+            .insert("tool".to_string(), step(0.0, 1.0, 1.0, 1, true));
+        let stats = compute_stats(&[r1, r2, r3], Some("h1"));
+        let tool_stats = stats.per_step.get("tool").unwrap();
+        assert_eq!(tool_stats.tokens_p50, None);
+    }
+
+    /// Issue #678's own "usual" tokens, for the whole run: the
+    /// median of the run's own `tokens_sent + tokens_received`, over
+    /// the same same-hash pool `p50_s` comes from.
+    #[test]
+    fn compute_stats_gives_the_median_tokens_for_the_whole_run() {
+        fn record_with_tokens(
+            run_id: &str,
+            started_at: &str,
+            sent: u64,
+            received: u64,
+        ) -> HistoryRecord {
+            HistoryRecord {
+                tokens_sent: sent,
+                tokens_received: received,
+                ..record(run_id, started_at, 100.0, Outcome::Ok, "h1")
+            }
+        }
+        let records = vec![
+            record_with_tokens("r1", "2026-01-01T00:00:00Z", 1296, 0),
+            record_with_tokens("r2", "2026-01-01T00:01:00Z", 1386, 0),
+            record_with_tokens("r3", "2026-01-01T00:02:00Z", 1324, 0),
+        ];
+        let stats = compute_stats(&records, Some("h1"));
+        let whole_run = stats.whole_run.unwrap();
+        assert_eq!(whole_run.tokens_p50, Some(1324));
+    }
+
     #[test]
     fn newest_20_of_more_runs_are_used_for_statistics() {
         let mut records = Vec::new();
@@ -1531,6 +1764,50 @@ mod tests {
         );
     }
 
+    /// A loop pass's own literal key is a duplicate view of tokens
+    /// already summed under its stripped sibling -- evicting a
+    /// literal key past [`MAX_STEPS_PER_RECORD`] must not also add
+    /// its tokens into `(other)`, or the same pass's tokens are
+    /// counted twice in the one record.
+    #[test]
+    fn cap_steps_never_double_counts_an_evicted_literal_keys_tokens() {
+        let mut steps: BTreeMap<String, StepRecord> = BTreeMap::new();
+        steps.insert(
+            "drafts.iter_*.draft".to_string(),
+            StepRecord {
+                tokens_sent: Some(1_000),
+                tokens_received: Some(0),
+                ..step(0.0, 1.0, 1_000.0, 500, true)
+            },
+        );
+        let mut literal_keys = BTreeSet::new();
+        for i in 0..500 {
+            let key = format!("drafts.iter_{i}.draft");
+            steps.insert(
+                key.clone(),
+                StepRecord {
+                    tokens_sent: Some(2),
+                    tokens_received: Some(0),
+                    ..step(0.0, 1.0, 0.01, 1, true)
+                },
+            );
+            literal_keys.insert(key);
+        }
+        let kept = cap_steps(steps, &literal_keys);
+        assert!(kept.len() <= MAX_STEPS_PER_RECORD);
+        let other = kept
+            .get(OTHER_STEP)
+            .expect("the low-busy_s literal keys are evicted");
+        assert_eq!(
+            other.tokens_sent, None,
+            "an evicted literal key's tokens already counted once, under its stripped sibling, must not be added to (other) too"
+        );
+        let stripped = kept
+            .get("drafts.iter_*.draft")
+            .expect("the stripped key's own high busy_s keeps it");
+        assert_eq!(stripped.tokens_sent, Some(1_000));
+    }
+
     /// Past the interval log's own cap (issue #649), a dropped
     /// pass's own path is no longer kept at all -- `build_record`
     /// folds the whole total into `(other)` rather than attributing
@@ -1726,6 +2003,173 @@ mod tests {
             .get(OTHER_STEP)
             .expect("my_use and its own undeclared child fold into (other)");
         assert!(other.passes >= 1);
+    }
+
+    /// A loop far longer than [`MAX_LITERAL_KEYS_PER_STEP`] must
+    /// never grow a record without bound: each pass past the cap
+    /// keeps contributing to the stripped `iter_*` key's own sum,
+    /// it just never earns a literal key of its own.
+    #[test]
+    fn build_record_caps_a_long_loops_literal_keys() {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopId, NodeKind, OnError, Op, Program, Region,
+        };
+
+        fn tool_op(path: EffectPath, name: &str) -> Op {
+            Op {
+                path,
+                name: Some(name.to_string()),
+                kind: NodeKind::Leaf(Box::new(LeafKind::Tool(electricity_bytecode::ToolOp {
+                    provider: "shell".to_string(),
+                    params: electricity_bytecode::ParamNode::Literal(
+                        electricity_value::Value::None,
+                    ),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: Default::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }))),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            }
+        }
+
+        let root_path = EffectPath::root();
+        let loop_path = root_path.push_name("items");
+        let pass0 = loop_path.push_pass(LoopId(0));
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path.clone(),
+                    name: Some("items".to_string()),
+                    kind: NodeKind::Control(Region::Loop {
+                        name: Some("items".to_string()),
+                        spec: electricity_bytecode::LoopSpec::Each {
+                            in_path: "prime.xs".to_string(),
+                            as_name: "x".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![tool_op(pass0.push_name("nap"), "nap")],
+                            overlay: true,
+                        }),
+                        flow: electricity_bytecode::LoopFlow::Chain,
+                        max_concurrency: None,
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        // 300 passes (issue #678's own worst case: a loop far
+        // longer than any real one is likely to run), so the record
+        // this builds must still serialise under `MAX_LINE_BYTES`
+        // and read back whole.
+        const PASSES: usize = 300;
+        let ts = |i: usize| format!("2026-01-01T00:{:02}:{:02}Z", i / 60, i % 60);
+        let mut iters = serde_json::Map::new();
+        for i in 0..PASSES {
+            iters.insert(
+                format!("iter_{i}"),
+                serde_json::json!({
+                    "value": null,
+                    "meta": {
+                        "created_at": ts(i),
+                        "completed_at": ts(i + 1),
+                    },
+                    "nap": {
+                        "value": "n",
+                        "meta": {
+                            "created_at": ts(i),
+                            "completed_at": ts(i + 1),
+                            "tokens_sent": 2,
+                            "tokens_received": 0,
+                        },
+                    },
+                }),
+            );
+        }
+        let mut items = serde_json::json!({
+            "value": null,
+            "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": ts(PASSES)},
+        });
+        items.as_object_mut().unwrap().extend(iters);
+        let state = serde_json::json!({
+            "runtime": {"last_run": {
+                "run_id": "r1", "document_hash": "h1",
+                "started_at": "2026-01-01T00:00:00Z", "completed_at": ts(PASSES),
+                "totals": {"effects_run": PASSES, "tokens_sent": 2 * PASSES, "tokens_received": 0},
+            }},
+            "prime": {
+                "value": null,
+                "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": ts(PASSES), "error": null},
+                "items": items,
+            },
+        });
+        let mut model = RunModel::new();
+        model.observe(&state, &plan, crate::model::ProcessState::exited(false));
+        let record = build_record("/doc.yml", Some("cof"), &state, &model, &plan)
+            .expect("a completed, hashed, non-dry run is recorded");
+
+        let literal_count = record
+            .steps
+            .keys()
+            .filter(|k| {
+                k.starts_with("items.iter_") && k.ends_with(".nap") && *k != "items.iter_*.nap"
+            })
+            .count();
+        assert_eq!(literal_count, MAX_LITERAL_KEYS_PER_STEP);
+
+        let stripped = record
+            .steps
+            .get("items.iter_*.nap")
+            .expect("every pass still sums into its own stripped key");
+        assert_eq!(stripped.passes, PASSES as u64);
+        assert_eq!(stripped.tokens_sent, Some(2 * PASSES as u64));
+
+        let serialized = serde_json::to_string(&record).unwrap();
+        assert!(
+            serialized.len() < MAX_LINE_BYTES,
+            "a 300-pass loop's own record must still fit under the per-line cap: {} bytes",
+            serialized.len()
+        );
+        let history_dir = tempfile::tempdir().unwrap();
+        append_record(history_dir.path(), "/doc.yml", &record).unwrap();
+        let read_back = read_records(history_dir.path(), "/doc.yml");
+        assert_eq!(
+            read_back.len(),
+            1,
+            "the 300-pass record must read back whole, not be skipped as oversized"
+        );
+        assert_eq!(read_back[0].steps.get("items.iter_*.nap"), Some(stripped));
     }
 
     /// Issue #650's own seam: a tree loop's two passes can run at
@@ -2021,5 +2465,85 @@ mod tests {
             !oldest_path.unwrap().exists(),
             "the least recently written document must be evicted first"
         );
+    }
+
+    /// Issue #678's own "usual" tokens, pinned to the design's own
+    /// fixture history (`oscilloscope/design/fixtures/hist`):
+    /// `history.json` is the design builders' own summary of the
+    /// same three runs' per-step medians, not osi's own format --
+    /// this builds osi's own history record for each of `run-h1..3`
+    /// with the existing recorder (`build_record`, unmodified) and
+    /// checks the resulting medians against that summary directly.
+    ///
+    /// A tree loop's own pass (`drafts.iter_0.draft`) is also kept
+    /// by its literal, un-stripped key (`display_key_literal`),
+    /// alongside the stripped `drafts.iter_*.draft` key the Time
+    /// screen's ghost bars already rely on (unsummed, since that one
+    /// sums every pass of the run together): `history.json` keeps
+    /// each pass index's own figure separate
+    /// (`prime.drafts.iter_0.draft` vs `.iter_1.` vs `.iter_2.`), and
+    /// the literal key now matches it exactly.
+    #[test]
+    fn design_fixture_history_medians_match_the_builders_own_summary() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../design/fixtures");
+        let doc = fixtures.join("demo.yml");
+        let program = crate::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .expect("demo.yml compiles");
+        let plan = PlanTree::from_program(&program);
+
+        let mut records = Vec::new();
+        for run in ["hist/run-h1", "hist/run-h2", "hist/run-h3"] {
+            // `state.live.json`, not `state.json`: the latter is
+            // gitignored everywhere in this repo (a real run's own
+            // leftover state is never meant to be committed), so a
+            // design fixture recorded with one was never actually
+            // pushed -- `state.live.json` is the fixture's own
+            // identical copy that is tracked.
+            let state_path = fixtures.join(run).join("state.live.json");
+            let state: Value =
+                serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+            let mut model = RunModel::new();
+            model.observe(&state, &plan, crate::model::ProcessState::exited(false));
+            let record = build_record(run, Some("cof"), &state, &model, &plan)
+                .expect("a finished, non-dry, non-validate-only run with a document hash");
+            records.push(record);
+        }
+        let hash = records[0].document_hash.clone();
+        let stats = compute_stats(&records, hash.as_deref());
+
+        assert_eq!(
+            stats.per_step.get("kind").and_then(|s| s.tokens_p50),
+            Some(203)
+        );
+        assert_eq!(
+            stats.per_step.get("gate.reply").and_then(|s| s.tokens_p50),
+            Some(265)
+        );
+        assert_eq!(
+            stats.per_step.get("summary").and_then(|s| s.tokens_p50),
+            Some(402)
+        );
+        assert_eq!(
+            stats
+                .per_step
+                .get("drafts.iter_0.draft")
+                .and_then(|s| s.tokens_p50),
+            Some(154)
+        );
+        assert_eq!(
+            stats
+                .per_step
+                .get("drafts.iter_1.draft")
+                .and_then(|s| s.tokens_p50),
+            Some(153)
+        );
+        assert_eq!(
+            stats
+                .per_step
+                .get("drafts.iter_2.draft")
+                .and_then(|s| s.tokens_p50),
+            Some(155)
+        );
+        assert_eq!(stats.whole_run.and_then(|r| r.tokens_p50), Some(1324));
     }
 }

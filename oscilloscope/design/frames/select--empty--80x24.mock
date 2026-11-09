@@ -1,0 +1,36 @@
+#! tui-mockup 1
+#! size: 80x24
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — select · nothing running
+#! state: empty
+#! theme: catppuccin-mocha
+#! note: recent runs are this project's finished demo runs (demo/run2, demo/run, demo/hist), read from their own event and state files
+#! note: the registry and process scan are the proposed discovery sources; the clock is the end of the newest finished run
+#! region r1 header 0,0,80,1
+#! region r2 list 0,1,80,21 No Running Orchestrations
+#! region r3 keybar 0,23,80,1
+#! focus r2
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}Select {/}{fg.faint on:statusbar.bg}· {/}{fg.muted bold on:statusbar.bg}◌ Nothing Running                           {/}{fg.on-accent on:accent.secondary}  SELECT  {/}{statusbar.fg on:statusbar.bg}  14:14:14 {/}
+{border.focus}╭─ {/}{fg.title bold}No Running Orchestrations {/}{border.focus}──────────────────────────────────────────────────╮{/}
+{border.focus}│ {/}{fg.muted}Looked {/}{fg.default}registry · process scan · live state in cwd                           {/}{border.focus}│{/}
+{border.focus}│ {/}{fg.muted}Found  {/}{fg.default}0 running                                                             {/}{border.focus}│{/}
+{border.focus}│                                                                              │{/}
+{border.focus}│ {/}{fg.title bold}Recent Runs · open read-only                                                 {/}{border.focus}│{/}
+{border.focus}│      {/}{table.header bold}DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME                  {/}{border.focus}│{/}
+{border.focus}│ {/}{accent.primary bold on:selection.bg} ❯ {/}{status.success on:selection.bg}✓ {/}{selection.fg on:selection.bg}demo.yml config-h3.json 14:14:09  5.0s 1,296 t ok · 1 handled failure  {/}{border.focus} │{/}
+{border.focus}│    {/}{status.success}✓ {/}{fg.default}demo.yml {/}{fg.muted}config-h2.json 14:14:03  {/}{fg.default}5.1s 1,386 t ok · 1 handled failure   {/}{border.focus}│{/}
+{border.focus}│    {/}{status.success}✓ {/}{fg.default}demo.yml {/}{fg.muted}config-h1.json 14:13:57  {/}{fg.default}5.0s 1,324 t ok · 1 handled failure   {/}{border.focus}│{/}
+{border.focus}│    {/}{status.success}✓ {/}{fg.default}demo.yml {/}{fg.muted}config.json    12:50:47  {/}{fg.default}5.1s 1,410 t ok · 1 handled failure   {/}{border.focus}│{/}
+{border.focus}│    {/}{status.error bold}✗ {/}{fg.default}demo.yml {/}{fg.muted}config.json    12:48:49  {/}{fg.default}0.0s   215 t failed · tests           {/}{border.focus}│{/}
+{border.focus}│                                                                              │{/}
+{border.focus}│ {/}{fg.title bold}Start One                                                                    {/}{border.focus}│{/}
+{border.focus}│ {/}{fg.muted}osi demo.yml config.json      run a document and attach                      {/}{border.focus}│{/}
+{border.focus}│ {/}{fg.muted}osi watch ./run                attach to a run directory                     {/}{border.focus}│{/}
+{border.focus}│ {/}{fg.muted}osi --engine electricity …     run on the Rust engine                        {/}{border.focus}│{/}
+{border.focus}│                                                                              │{/}
+{border.focus}│                                                                              │{/}
+{border.focus}│                                                                              │{/}
+{border.focus}│                                                                              │{/}
+{border.focus}╰──────────────────────────────────────────────────────────────────────────────╯{/}
+{fg.default} nothing running · refreshing every 2s{/}
+{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open                                           {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}
