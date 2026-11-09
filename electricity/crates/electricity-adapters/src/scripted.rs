@@ -235,8 +235,17 @@ enum Reply {
     },
 }
 
-/// `adapters/scripted.py::_TEXT_REPLY_KEYS`.
-const TEXT_REPLY_KEYS: &[&str] = &["text", "tokens_sent", "tokens_received", "finish_reason"];
+/// `adapters/scripted.py::_TEXT_REPLY_KEYS`. `chunks` (issue #674) is a
+/// python-only *delivery* key -- this engine never streams, so it folds
+/// straight into `text` at load time (below) rather than ever being kept
+/// on `Reply::Text` itself.
+const TEXT_REPLY_KEYS: &[&str] = &[
+    "text",
+    "chunks",
+    "tokens_sent",
+    "tokens_received",
+    "finish_reason",
+];
 /// `adapters/scripted.py::_ERROR_KEYS`.
 const ERROR_KEYS: &[&str] = &["kind", "status", "message", "code"];
 /// `adapters/scripted.py::_DEFAULT_STATUS`'s own key set.
@@ -478,9 +487,32 @@ fn parse_reply(
         return parse_error(dict, &prefix);
     }
     reject_unknown_keys(dict, TEXT_REPLY_KEYS, &prefix)?;
+    let chunks = parse_chunks(dict, &prefix)?;
+    // `entry.get("text")` in the Python original treats an absent key and
+    // an explicit `text: null` identically -- the same convention every
+    // other optional field in this reply already follows (`tokens_sent:
+    // null`, `finish_reason: null`, ...) -- so `None`/`Value::None` share
+    // one branch here too, distinct from a *present, wrong-type* value.
     let text = match dict.get(&key("text")) {
-        Some(Value::Str(s)) => s.clone(),
-        _ => {
+        None | Some(Value::None) => match chunks {
+            Some(chunks) => chunks.join(""),
+            None => {
+                return Err(scripted_error(format!(
+                    "{prefix} needs a string 'text' (or 'chunks'), or an 'error'"
+                )));
+            }
+        },
+        Some(Value::Str(s)) => {
+            if let Some(chunks) = chunks {
+                if *s != chunks.join("") {
+                    return Err(scripted_error(format!(
+                        "{prefix}: 'text' does not equal the concatenation of 'chunks'"
+                    )));
+                }
+            }
+            s.clone()
+        }
+        Some(_) => {
             return Err(scripted_error(format!(
                 "{prefix} needs a string 'text', or an 'error'"
             )));
@@ -503,6 +535,33 @@ fn parse_reply(
         tokens_received,
         finish_reason,
     })
+}
+
+/// `adapters/scripted.py::_parse_reply`'s own `chunks` handling: `None`
+/// when the key is absent, else a non-empty list of strings or a load
+/// error -- this engine never delivers them as deltas (it doesn't stream),
+/// only ever folds them into `text` (above).
+fn parse_chunks(dict: &Dict, prefix: &str) -> Result<Option<Vec<String>>, AdapterError> {
+    match dict.get(&key("chunks")) {
+        None => Ok(None),
+        Some(Value::List(items)) if !items.is_empty() => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::Str(s) => out.push(s.clone()),
+                    _ => {
+                        return Err(scripted_error(format!(
+                            "{prefix}: 'chunks' must be a non-empty list of strings"
+                        )));
+                    }
+                }
+            }
+            Ok(Some(out))
+        }
+        Some(_) => Err(scripted_error(format!(
+            "{prefix}: 'chunks' must be a non-empty list of strings"
+        ))),
+    }
 }
 
 /// `isinstance(value, int) and not isinstance(value, bool)` plus
@@ -1332,7 +1391,7 @@ mod tests {
         assert_eq!(
             err.message,
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of \
-             ['finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+             ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
         );
     }
 
@@ -1345,7 +1404,7 @@ mod tests {
         assert_eq!(
             err.message,
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of \
-             ['finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+             ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
         );
     }
 
