@@ -22,10 +22,15 @@ import shutil
 from dataclasses import dataclass
 from typing import Any
 
-from ..curl_support import curl_error_code, curl_failure_message, run_curl
+from ..curl_support import (
+    curl_error_code,
+    curl_failure_message,
+    run_curl,
+    run_curl_streaming,
+)
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
-from .base import GenerateOptions, GenerateResult, last_user_index
+from .base import GenerateOptions, GenerateProgress, GenerateResult, last_user_index
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,9 @@ class OpenAICompatibleConfig:
     api_key_env: str
     default_model: str
     chat_completions_path: str = "/chat/completions"
+    #: Whether this adapter sends ``stream: true`` by default; an instance
+    #: can build this ``False`` from ``runtime.adapters.<name>.stream``.
+    streams: bool = True
 
 
 def chat_messages(prompt: str, options: GenerateOptions) -> list[dict[str, Any]]:
@@ -107,6 +115,77 @@ def parse_chat_response(raw: dict[str, Any]) -> tuple[str, str | None]:
     return (text.strip() if isinstance(text, str) else "", finish_reason)
 
 
+def usage_tokens(usage: Any) -> tuple[int | None, int | None]:
+    if not isinstance(usage, dict):
+        return None, None
+    sent = usage.get("prompt_tokens")
+    received = usage.get("completion_tokens")
+    return (
+        int(sent) if isinstance(sent, int) else None,
+        int(received) if isinstance(received, int) else None,
+    )
+
+
+class StreamAssembly:
+    """Accumulates one SSE Chat Completions stream: the assembled text, the
+    last reported ``finish_reason`` and ``usage``, and whether any ``data:``
+    line was actually seen — a server that answers a streaming request
+    with one plain JSON body (no SSE at all) leaves this ``False``, which
+    tells :func:`chat_completion` to fall back to :func:`parse_chat_response`
+    on the whole body instead.
+    """
+
+    def __init__(self, on_progress: Any) -> None:
+        self._on_progress = on_progress
+        self.text_parts: list[str] = []
+        self.finish_reason: str | None = None
+        self.usage: Any = None
+        self.saw_data_line = False
+
+    def on_line(self, line: str) -> None:
+        line = line.strip()
+        if not line.startswith("data:"):
+            return
+        payload = line[len("data:") :].strip()
+        if not payload or payload == "[DONE]":
+            return
+        self.saw_data_line = True
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event, dict):
+            return
+        usage = event.get("usage")
+        if usage is not None:
+            self.usage = usage
+        choices = event.get("choices") or []
+        if not (choices and isinstance(choices, list) and isinstance(choices[0], dict)):
+            return
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        reason = choice.get("finish_reason")
+        if isinstance(reason, str):
+            self.finish_reason = reason
+        content = delta.get("content") if isinstance(delta, dict) else None
+        if isinstance(content, str) and content:
+            self.text_parts.append(content)
+            if self._on_progress is not None:
+                sent, received = usage_tokens(self.usage)
+                self._on_progress(
+                    GenerateProgress(
+                        delta_chars=len(content),
+                        delta_count=1,
+                        tokens_sent=sent,
+                        tokens_received=received,
+                    )
+                )
+
+    @property
+    def text(self) -> str:
+        return "".join(self.text_parts)
+
+
 def chat_completion(
     *,
     cfg: OpenAICompatibleConfig,
@@ -149,29 +228,45 @@ def chat_completion(
     if extra_body:
         payload.update(extra_body)
     payload.update(sampling_fields(options))
+    if cfg.streams:
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
 
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     headers.update(extra_headers or {})
 
-    try:
-        proc = run_curl(
-            url=url,
-            headers=headers,
-            data=json.dumps(payload),
-            timeout_seconds=timeout_seconds,
-        )
-    except FileNotFoundError as e:
-        raise RuntimeError("curl is not installed or not on PATH") from e
+    # Header values under 8 chars are treated as non-secret (a future
+    # short header like "1" shouldn't get masked wherever it appears in
+    # the message) — credentials are effectively never that short.
+    secrets = [api_key] + [v for v in (extra_headers or {}).values() if len(v) >= 8]
+
+    if cfg.streams:
+        assembly = StreamAssembly(options.on_progress)
+        try:
+            proc = run_curl_streaming(
+                url=url,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout_seconds=timeout_seconds,
+                on_line=assembly.on_line,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError("curl is not installed or not on PATH") from e
+    else:
+        assembly = None
+        try:
+            proc = run_curl(
+                url=url,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout_seconds=timeout_seconds,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError("curl is not installed or not on PATH") from e
 
     if proc.returncode != 0:
-        # Header values under 8 chars are treated as non-secret (a future
-        # short header like "1" shouldn't get masked wherever it appears in
-        # the message) — credentials are effectively never that short.
-        secrets = [api_key] + [
-            v for v in (extra_headers or {}).values() if len(v) >= 8
-        ]
         raise AdapterCallError(
             curl_failure_message(
                 source="OpenAI-compatible",
@@ -186,6 +281,25 @@ def chat_completion(
             error_code=curl_error_code(proc.stdout, secrets),
         )
 
+    if assembly is not None and assembly.saw_data_line:
+        text = assembly.text.strip()
+        finish_reason = assembly.finish_reason
+        tokens_sent, tokens_received = usage_tokens(assembly.usage)
+        raw: dict[str, Any] = {
+            "choices": [{"message": {"content": assembly.text}, "finish_reason": finish_reason}],
+            "usage": assembly.usage,
+        }
+        return GenerateResult(
+            text=text,
+            raw=raw,
+            tokens_sent=tokens_sent,
+            tokens_received=tokens_received,
+            finish_reason=finish_reason,
+        )
+
+    # Either streaming was off, or the server answered a streaming request
+    # with one plain JSON body instead of SSE — parse the whole body the
+    # non-streamed way either way, so the two paths can never drift apart.
     try:
         raw = json.loads(proc.stdout)
     except json.JSONDecodeError as e:

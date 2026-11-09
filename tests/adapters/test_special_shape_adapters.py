@@ -107,7 +107,10 @@ def test_azure_url_includes_deployment_and_api_version(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = build_adapter(adapter_name="azure-openai", runtime={})
+    adapter = build_adapter(
+        adapter_name="azure-openai",
+        runtime={"adapters": {"azure-openai": {"stream": False}}},
+    )
     result = adapter.generate(model="my-deployment", prompt="ping")
     assert result.text == "azure"
     assert validate_generate_result(result, adapter_name="azure-openai") == []
@@ -149,7 +152,10 @@ def test_azure_curl_failure_masks_api_key_sent_via_extra_headers(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = build_adapter(adapter_name="azure-openai", runtime={})
+    adapter = build_adapter(
+        adapter_name="azure-openai",
+        runtime={"adapters": {"azure-openai": {"stream": False}}},
+    )
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="dep", prompt="x")
 
@@ -191,6 +197,7 @@ def test_azure_runtime_overrides_api_version(
                 "azure-openai": {
                     "endpoint": "https://other.openai.azure.com",
                     "api_version": "2024-08-01-preview",
+                    "stream": False,
                 }
             }
         },
@@ -219,7 +226,10 @@ def test_cloudflare_resolves_account_id_from_env(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = build_adapter(adapter_name="cloudflare-workers-ai", runtime={})
+    adapter = build_adapter(
+        adapter_name="cloudflare-workers-ai",
+        runtime={"adapters": {"cloudflare-workers-ai": {"stream": False}}},
+    )
     result = adapter.generate(model="@cf/meta/llama-3.3", prompt="ping")
     assert result.text == "cf"
     url = captured["url"]
@@ -259,7 +269,7 @@ def test_cloudflare_runtime_account_id_overrides_env(
         adapter_name="cloudflare-workers-ai",
         runtime={
             "adapters": {
-                "cloudflare-workers-ai": {"account_id": "from-config"},
+                "cloudflare-workers-ai": {"account_id": "from-config", "stream": False},
             }
         },
     )
@@ -287,7 +297,10 @@ def test_databricks_resolves_host_from_env(
         return FakeProc(returncode=0, stdout=_ok_chat_payload("db"))
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
-    adapter = build_adapter(adapter_name="databricks", runtime={})
+    adapter = build_adapter(
+        adapter_name="databricks",
+        runtime={"adapters": {"databricks": {"stream": False}}},
+    )
     adapter.generate(model="endpoint-name", prompt="p")
     assert (
         captured["url"]

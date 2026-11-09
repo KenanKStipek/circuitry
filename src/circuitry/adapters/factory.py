@@ -46,8 +46,26 @@ from .xai import XaiAdapter
 AdapterBuilder = Callable[..., Adapter]
 
 
+def _stream_flag(cfg: dict[str, Any], adapter_name: str) -> bool:
+    """``runtime.adapters.<adapter_name>.stream``, defaulting to ``True``.
+
+    Only ``ollama``, ``anthropic``, ``openai`` and the OpenAI-compatible
+    family read this; every other adapter never streams and ignores it.
+    """
+    raw = cfg.get("stream", True)
+    if not isinstance(raw, bool):
+        raise ValueError(
+            f"runtime.adapters.{adapter_name}.stream must be a boolean, got {raw!r}"
+        )
+    return raw
+
+
 def _build_ollama(cfg: dict[str, Any], name: str = "ollama") -> Adapter:
-    return OllamaAdapter(name=name, base_url=cfg.get("base_url") or "http://localhost:11434")
+    return OllamaAdapter(
+        name=name,
+        base_url=cfg.get("base_url") or "http://localhost:11434",
+        streams=_stream_flag(cfg, name),
+    )
 
 
 def _build_openai(cfg: dict[str, Any], name: str = "openai") -> Adapter:
@@ -55,6 +73,7 @@ def _build_openai(cfg: dict[str, Any], name: str = "openai") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.openai.com/v1",
         default_model=cfg.get("default_model") or "gpt-4o-mini",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -64,6 +83,7 @@ def _build_anthropic(cfg: dict[str, Any], name: str = "anthropic") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.anthropic.com",
         default_model=cfg.get("default_model") or AnthropicAdapter.default_model,
         max_tokens=int(cfg.get("max_tokens") or 4096),
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -136,6 +156,7 @@ def _build_gemini(cfg: dict[str, Any], name: str = "gemini") -> Adapter:
         base_url=cfg.get("base_url")
         or "https://generativelanguage.googleapis.com/v1beta/openai",
         default_model=cfg.get("default_model") or "gemini-2.5-flash",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -147,6 +168,7 @@ def _build_groq(cfg: dict[str, Any], name: str = "groq") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.groq.com/openai/v1",
         default_model=cfg.get("default_model") or "llama-3.3-70b-versatile",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -155,6 +177,7 @@ def _build_openrouter(cfg: dict[str, Any], name: str = "openrouter") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://openrouter.ai/api/v1",
         default_model=cfg.get("default_model") or "openai/gpt-4o-mini",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -163,6 +186,7 @@ def _build_perplexity(cfg: dict[str, Any], name: str = "perplexity") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.perplexity.ai",
         default_model=cfg.get("default_model") or "sonar",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -171,6 +195,7 @@ def _build_xai(cfg: dict[str, Any], name: str = "xai") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.x.ai/v1",
         default_model=cfg.get("default_model") or "grok-2-latest",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -179,6 +204,7 @@ def _build_deepseek(cfg: dict[str, Any], name: str = "deepseek") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.deepseek.com/v1",
         default_model=cfg.get("default_model") or "deepseek-chat",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -188,6 +214,7 @@ def _build_together(cfg: dict[str, Any], name: str = "together") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.together.xyz/v1",
         default_model=cfg.get("default_model")
         or "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -197,6 +224,7 @@ def _build_fireworks(cfg: dict[str, Any], name: str = "fireworks") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.fireworks.ai/inference/v1",
         default_model=cfg.get("default_model")
         or "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -211,6 +239,7 @@ def _build_nvidia_nim(cfg: dict[str, Any], name: str = "nvidia-nim") -> Adapter:
         base_url=cfg.get("base_url") or "https://integrate.api.nvidia.com/v1",
         default_model=cfg.get("default_model") or "meta/llama-3.3-70b-instruct",
         api_key_env=api_key_env if api_key_env is not None else "NIM_API_KEY",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -219,6 +248,7 @@ def _build_vllm(cfg: dict[str, Any], name: str = "vllm") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:8000/v1",
         default_model=cfg.get("default_model") or "",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -227,6 +257,7 @@ def _build_llamacpp(cfg: dict[str, Any], name: str = "llamacpp") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:8080/v1",
         default_model=cfg.get("default_model") or "",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -235,6 +266,7 @@ def _build_lmstudio(cfg: dict[str, Any], name: str = "lmstudio") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "http://localhost:1234/v1",
         default_model=cfg.get("default_model") or "",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -243,6 +275,7 @@ def _build_mistral(cfg: dict[str, Any], name: str = "mistral") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.mistral.ai/v1",
         default_model=cfg.get("default_model") or "mistral-large-latest",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -251,6 +284,7 @@ def _build_ai21(cfg: dict[str, Any], name: str = "ai21") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.ai21.com/studio/v1",
         default_model=cfg.get("default_model") or "jamba-large",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -262,6 +296,7 @@ def _build_huggingface_inference(
         base_url=cfg.get("base_url") or "https://router.huggingface.co/v1",
         default_model=cfg.get("default_model")
         or "meta-llama/Llama-3.3-70B-Instruct",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -272,6 +307,7 @@ def _build_tgi(cfg: dict[str, Any], name: str = "tgi") -> Adapter:
         base_url=cfg.get("base_url") or "http://localhost:3000/v1",
         default_model=cfg.get("default_model") or "",
         api_key_env=api_key_env if api_key_env is not None else "",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -299,6 +335,7 @@ def _build_databricks(cfg: dict[str, Any], name: str = "databricks") -> Adapter:
         base_url=cfg.get("base_url") or "",
         default_model=cfg.get("default_model")
         or "databricks-meta-llama-3-3-70b-instruct",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -308,6 +345,7 @@ def _build_qwen_dashscope(cfg: dict[str, Any], name: str = "qwen-dashscope") -> 
         base_url=cfg.get("base_url")
         or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         default_model=cfg.get("default_model") or "qwen-max",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -316,6 +354,7 @@ def _build_cohere(cfg: dict[str, Any], name: str = "cohere") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.cohere.com",
         default_model=cfg.get("default_model") or "command-r-plus",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -328,6 +367,7 @@ def _build_cloudflare_workers_ai(
         account_id=cfg.get("account_id") or "",
         default_model=cfg.get("default_model")
         or "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        streams=_stream_flag(cfg, name),
     )
 
 
@@ -337,6 +377,7 @@ def _build_azure_openai(cfg: dict[str, Any], name: str = "azure-openai") -> Adap
         endpoint=cfg.get("endpoint") or cfg.get("base_url") or "",
         api_version=cfg.get("api_version") or "2024-10-21",
         default_model=cfg.get("default_model") or "",
+        streams=_stream_flag(cfg, name),
     )
 
 

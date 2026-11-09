@@ -6,9 +6,20 @@ import shutil
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from ..curl_support import curl_error_code, curl_failure_message, run_curl
+from ..curl_support import (
+    curl_error_code,
+    curl_failure_message,
+    run_curl,
+    run_curl_streaming,
+)
 from ..preflight import CheckResult
-from ._openai_compat import chat_messages, parse_chat_response, sampling_fields
+from ._openai_compat import (
+    StreamAssembly,
+    chat_messages,
+    parse_chat_response,
+    sampling_fields,
+    usage_tokens,
+)
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import DETERMINISTIC_SEED, GenerateOptions, GenerateResult
 
@@ -30,6 +41,7 @@ class OpenAIAdapter:
     name: str = "openai"
     base_url: str = "https://api.openai.com/v1"
     default_model: str = "gpt-4o-mini"
+    streams: bool = True
 
     def generate(
         self,
@@ -59,17 +71,32 @@ class OpenAIAdapter:
         }
         if options.deterministic:
             payload.setdefault("seed", DETERMINISTIC_SEED)
+        if self.streams:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
 
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        assembly = StreamAssembly(options.on_progress) if self.streams else None
         try:
-            proc = run_curl(
-                url=url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                data=json.dumps(payload),
-                timeout_seconds=timeout_seconds,
-            )
+            if self.streams:
+                assert assembly is not None
+                proc = run_curl_streaming(
+                    url=url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout_seconds=timeout_seconds,
+                    on_line=assembly.on_line,
+                )
+            else:
+                proc = run_curl(
+                    url=url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout_seconds=timeout_seconds,
+                )
         except FileNotFoundError as e:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
@@ -86,6 +113,24 @@ class OpenAIAdapter:
                 ),
                 retry_info=classify_curl_exit(proc.returncode, proc.stderr),
                 error_code=curl_error_code(proc.stdout, [api_key]),
+            )
+
+        if assembly is not None and assembly.saw_data_line:
+            tokens_sent, tokens_received = usage_tokens(assembly.usage)
+            return GenerateResult(
+                text=assembly.text.strip(),
+                raw={
+                    "choices": [
+                        {
+                            "message": {"content": assembly.text},
+                            "finish_reason": assembly.finish_reason,
+                        }
+                    ],
+                    "usage": assembly.usage,
+                },
+                tokens_sent=tokens_sent,
+                tokens_received=tokens_received,
+                finish_reason=assembly.finish_reason,
             )
 
         try:

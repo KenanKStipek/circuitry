@@ -21,6 +21,11 @@ _EffectCallback = Callable[[str, dict[str, Any]], None]
 #: ``Store.report`` -- ``(path, level, message, data)``.
 _ReportCallback = Callable[[str, str, str, Any], None]
 
+#: ``Store.progress`` -- ``(path, data)``, fired on a streamed prompt's
+#: own throttled publishes (#674), never on the write that starts or ends
+#: ``meta.live``.
+_ProgressCallback = Callable[[str, dict[str, Any]], None]
+
 
 def replace_node(
     state: dict[str, Any], parts: list[str], replacement: dict[str, Any]
@@ -110,6 +115,22 @@ def _prefixed_report_cb(
     return _forward
 
 
+def _prefixed_progress_cb(
+    callback: _ProgressCallback | None, prefix: str
+) -> _ProgressCallback | None:
+    """Wrap ``progress`` the same way :func:`_prefixed_report_cb` wraps
+    ``report`` (#674) — a streamed prompt running inside a parallel branch
+    must nest its progress under this store's own path too.
+    """
+    if callback is None or not prefix:
+        return callback
+
+    def _forward(path: str, data: dict[str, Any]) -> None:
+        callback(_under_prefix(prefix, path), data)
+
+    return _forward
+
+
 @dataclass
 class Store:
     """
@@ -161,6 +182,12 @@ class Store:
     #: in (see ``Store.fire_report``); ``data`` is the already-resolved
     #: value (``None`` when the report has none).
     report: _ReportCallback | None = None
+    #: Fired by a streamed prompt effect's own throttled live publisher
+    #: (#674), never by anything else -- ``(path, data)``, where ``data``
+    #: carries the same running figures ``meta.live`` does (minus its
+    #: timestamps/version), and never on the write that starts or clears
+    #: ``meta.live`` itself.
+    progress: _ProgressCallback | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     #: The top-level state dict this store is a view into; None for a root.
@@ -239,6 +266,27 @@ class Store:
             if self.on_write:
                 self.on_write(self.root_state)
 
+    def unset(self, path: str) -> None:
+        """Remove the key at *path*, if present — a no-op otherwise.
+
+        For a key a writer only carries while something is in progress
+        (a prompt effect's ``meta.live``, #674): :meth:`set` can write it
+        and overwrite it, but has no way to make it disappear again, which
+        is what a finished node needs to stay byte-identical to one that
+        never had it.
+        """
+        with self._lock:
+            parts = [p for p in path.split(".") if p]
+            if not parts:
+                raise ValueError("Path cannot be empty")
+            parent_path = ".".join(parts[:-1])
+            key = parts[-1]
+            parent = self.ensure_dict(parent_path) if parent_path else self.state
+            if key in parent:
+                del parent[key]
+                if self.on_write:
+                    self.on_write(self.root_state)
+
     def child(self, path: str) -> Store:
         """Return a child Store rooted at *path*, sharing the same lock,
         on_write callback, effect lifecycle callbacks, and root state, and
@@ -253,6 +301,7 @@ class Store:
             concurrent_dispatch=self.concurrent_dispatch,
             branch_settled=self.branch_settled,
             report=self.report,
+            progress=self.progress,
             _path_prefix=new_prefix,
             _lock=self._lock,
             _root_state=self.root_state,
@@ -317,6 +366,7 @@ class Store:
                     self.branch_settled, self._path_prefix
                 ),
                 report=_prefixed_report_cb(self.report, self._path_prefix),
+                progress=_prefixed_progress_cb(self.progress, self._path_prefix),
                 _lock=self._lock,
                 _true_root=self.true_root_state,
             )
@@ -476,6 +526,18 @@ class Store:
             return
         path = self.own_path if name is None else self.effect_path(name)
         self.report(path, level, message, data)
+
+    def fire_progress(self, name: str, data: dict[str, Any]) -> None:
+        """Notify ``progress`` (if set) of a streamed prompt effect's own
+        throttled publish (#674) — never on the write that starts or
+        clears ``meta.live``.
+
+        Unlike :meth:`fire_report`, *name* is never ``None``: a prompt
+        effect that streams is always a named effect.
+        """
+        if self.progress is None:
+            return
+        self.progress(self.effect_path(name), data)
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

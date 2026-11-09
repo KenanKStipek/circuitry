@@ -4,10 +4,12 @@ import hashlib
 import json
 import logging
 import math
+import threading
 import time
-from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, replace
+from dataclasses import field as _dataclass_field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -22,11 +24,13 @@ from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
     GenerateOptions,
+    GenerateProgress,
     GenerateResult,
     ImageInput,
     call_generate,
 )
 from ..adapters.factory import configured_timeout_seconds
+from ..agent_live import LivePublisher
 from ..allowlist_gate import AllowlistError, allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
@@ -71,6 +75,15 @@ class SchemaValidationError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+#: ``meta.live``'s own clock (#674), captured as a direct reference rather
+#: than calling ``_now_iso()`` by name: a test that monkeypatches the
+#: module attribute ``_now_iso`` to script a short, fixed sequence of
+#: timestamps for ``created_at``/``completed_at`` (see
+#: ``tests/core/test_prompt_retry_classification.py``) must not have its
+#: sequence consumed by ``meta.live``'s own, much more frequent writes.
+_live_now_iso = _now_iso
 
 
 def _elapsed_str(seconds: float) -> str:
@@ -122,6 +135,62 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     if isinstance(exc, (AnswerParseError, SchemaValidationError)):
         return RetryInfo(retryable=True)
     return classify_exception(exc)
+
+
+@dataclass
+class _LiveAttemptState:
+    """One attempt's running ``meta.live`` figures (#674), updated from
+    whichever thread the streaming adapter's own reader thread calls
+    ``on_progress`` from — never the thread running :meth:`PromptRuntime.execute`
+    itself. Protected by ``lock`` for exactly that reason.
+    """
+
+    lock: threading.Lock = _dataclass_field(default_factory=threading.Lock)
+    started_at: str = _dataclass_field(default_factory=_live_now_iso)
+    first_token_at: str | None = None
+    first_token_monotonic: float | None = None
+    tokens_sent: int | None = None
+    tokens_received: int | None = None
+    tokens_received_estimate: int = 0
+    chars_received: int = 0
+
+    def tokens_per_second(self) -> float | None:
+        if self.first_token_monotonic is None:
+            return None
+        elapsed = time.monotonic() - self.first_token_monotonic
+        if elapsed <= 0:
+            return None
+        return self.tokens_received_estimate / elapsed
+
+    def apply(self, progress: GenerateProgress) -> None:
+        if progress.delta_chars > 0:
+            self.chars_received += progress.delta_chars
+            self.tokens_received_estimate += progress.delta_count
+            if self.first_token_at is None:
+                self.first_token_at = _live_now_iso()
+                self.first_token_monotonic = time.monotonic()
+        if progress.tokens_sent is not None:
+            self.tokens_sent = progress.tokens_sent
+        if progress.tokens_received is not None:
+            self.tokens_received = progress.tokens_received
+
+    def snapshot(self, *, attempt: int, adapter: str, model: str, streaming: bool, tokens_sent_estimate: int) -> dict[str, Any]:
+        return {
+            "v": 1,
+            "attempt": attempt,
+            "adapter": adapter,
+            "model": model,
+            "started_at": self.started_at,
+            "updated_at": _live_now_iso(),
+            "streaming": streaming,
+            "first_token_at": self.first_token_at,
+            "tokens_sent": self.tokens_sent,
+            "tokens_sent_estimate": tokens_sent_estimate,
+            "tokens_received": self.tokens_received,
+            "tokens_received_estimate": self.tokens_received_estimate,
+            "chars_received": self.chars_received,
+            "tokens_per_second": self.tokens_per_second(),
+        }
 
 
 class _PromptSpinner:
@@ -717,6 +786,10 @@ class PromptRuntime:
             attempts = self._build_attempts(default_model=dispatch_model)
 
             next_delay_ms = backoff_ms
+            # Numbers meta.live.attempt across every (adapter, model) this
+            # execution tries, retries included -- never reset per pass
+            # (#674).
+            live_attempt_index = 0
             for _attempt in range(max_attempts):
                 if _attempt > 0:
                     # Cancellation-aware, not a bare time.sleep — see
@@ -769,7 +842,7 @@ class PromptRuntime:
                     else nullcontext()
                 )
                 with concurrency_cm, live_cm, model_call(store, self.defn.name):
-                    res, decoded_value, attempts_meta, generation_error = (
+                    res, decoded_value, attempts_meta, generation_error, live_attempt_index = (
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,
                             attempts=attempts,
@@ -777,6 +850,8 @@ class PromptRuntime:
                             options=options,
                             meta=meta,
                             option_warnings=option_warnings,
+                            store=store,
+                            attempt_index=live_attempt_index,
                         )
                     )
 
@@ -1293,6 +1368,79 @@ class PromptRuntime:
             logger.warning("prompt %r: %s", self.defn.name, warning)
             meta.setdefault("warnings", []).append(warning)
 
+    @contextmanager
+    def _live_attempt(
+        self,
+        *,
+        store: Store,
+        attempt_index: int,
+        adapter: Any,
+        adapter_name: str,
+        model_name: str,
+        prompt: str,
+        options: GenerateOptions,
+    ) -> Iterator[GenerateOptions]:
+        """Publish ``meta.live`` for one attempt (#674): written when this
+        attempt starts, updated from the adapter's own ``on_progress``
+        calls (through :class:`~circuitry.agent_live.LivePublisher`'s usual
+        once-a-second coalescing), and removed on every exit — success,
+        failure or cancellation alike.
+
+        Yields the ``GenerateOptions`` the caller should actually dispatch
+        with: unchanged when *adapter* does not stream, or carrying an
+        ``on_progress`` wired to this attempt's own live record when it
+        does. ``--events``' own ``progress`` line (``Store.fire_progress``)
+        rides the same publishes, so it never fires on this method's own
+        start/clear writes either.
+        """
+        from .complexity import _estimate_tokens
+
+        name = self.defn.name
+        # `is True`, not `bool(...)`: a test double built from a bare
+        # `MagicMock()` auto-creates a truthy `.streams` attribute on any
+        # access, which `bool()` would read as streaming -- the same
+        # reason `adapter_accepts_images` compares this way (#674).
+        streaming = getattr(adapter, "streams", False) is True
+        tokens_sent_estimate = _estimate_tokens(prompt)
+        live_state = _LiveAttemptState()
+
+        def _publish(snapshot: dict[str, Any]) -> None:
+            store.set(f"{name}.meta.live", snapshot)
+            store.fire_progress(
+                name,
+                {
+                    "tokens_received_estimate": snapshot["tokens_received_estimate"],
+                    "chars_received": snapshot["chars_received"],
+                    "tokens_sent": snapshot["tokens_sent"],
+                    "tokens_sent_estimate": snapshot["tokens_sent_estimate"],
+                },
+            )
+
+        def _snapshot() -> dict[str, Any]:
+            with live_state.lock:
+                return live_state.snapshot(
+                    attempt=attempt_index,
+                    adapter=adapter_name,
+                    model=model_name,
+                    streaming=streaming,
+                    tokens_sent_estimate=tokens_sent_estimate,
+                )
+
+        publisher = LivePublisher(_publish)
+
+        def _on_progress(progress: GenerateProgress) -> None:
+            with live_state.lock:
+                live_state.apply(progress)
+            publisher.update(_snapshot())
+
+        store.set(f"{name}.meta.live", _snapshot())
+        live_options = replace(options, on_progress=_on_progress) if streaming else options
+        try:
+            yield live_options
+        finally:
+            publisher.close()
+            store.unset(f"{name}.meta.live")
+
     def _generate_with_fallbacks(
         self,
         *,
@@ -1302,10 +1450,13 @@ class PromptRuntime:
         option_warnings: list[str],
         timeout_ms: int | None = None,
         options: GenerateOptions | None = None,
-    ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None]:
+        store: Store,
+        attempt_index: int = 0,
+    ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None, int]:
         """Try each ``(adapter, model)`` in order; the first reply that both
         the adapter call and decoding/schema validation accept wins:
-        ``(result, decoded value, attempt log, the last error if none did)``.
+        ``(result, decoded value, attempt log, the last error if none did,
+        the next attempt index)``.
 
         A reply a provider actually returned but this effect can't use — an
         unreadable boolean/number, or JSON that fails its schema — is treated
@@ -1326,20 +1477,36 @@ class PromptRuntime:
         the installed allowlist is a denial, not a transient failure, and
         must not silently fall through to the next adapter in the chain
         (often the run default).
+
+        ``attempt_index`` numbers ``meta.live.attempt`` across every
+        ``(adapter, model)`` this call tries, continuing from wherever the
+        last pass (an earlier retry) left off — the returned index is what
+        the next retry's own call starts from, so the count runs across the
+        whole execution rather than resetting per pass (#674).
         """
         attempts_meta: list[dict[str, Any]] = []
         last_error: Exception | None = None
+        options = options or GenerateOptions()
 
         for adapter_name, model_name in attempts:
             try:
                 adapter = self._resolve_adapter(adapter_name)
-                res = call_generate(
-                    adapter,
-                    model=model_name,
+                with self._live_attempt(
+                    store=store,
+                    attempt_index=attempt_index,
+                    adapter=adapter,
+                    adapter_name=adapter_name,
+                    model_name=model_name,
                     prompt=prompt,
-                    timeout_seconds=self._attempt_timeout_seconds(adapter_name, timeout_ms),
                     options=options,
-                )
+                ) as live_options:
+                    res = call_generate(
+                        adapter,
+                        model=model_name,
+                        prompt=prompt,
+                        timeout_seconds=self._attempt_timeout_seconds(adapter_name, timeout_ms),
+                        options=live_options,
+                    )
             except AllowlistError:
                 # A security boundary, not a dispatch failure: an adapter
                 # outside the installed allowlist must fail this effect
@@ -1349,6 +1516,7 @@ class PromptRuntime:
                 # the chain (often the run default) instead of refusing.
                 raise
             except Exception as e:
+                attempt_index += 1
                 last_error = e
                 attempts_meta.append(
                     {
@@ -1365,6 +1533,7 @@ class PromptRuntime:
                     }
                 )
                 continue
+            attempt_index += 1
 
             # Before decoding: a reply cut off mid-JSON fails to parse, and
             # the truncation warning is what explains it.
@@ -1396,9 +1565,9 @@ class PromptRuntime:
                     "tokens_received": res.tokens_received,
                 }
             )
-            return (res, decoded_value, attempts_meta, None)
+            return (res, decoded_value, attempts_meta, None, attempt_index)
 
-        return (None, None, attempts_meta, last_error)
+        return (None, None, attempts_meta, last_error, attempt_index)
 
     def _decode_and_validate(self, res: GenerateResult, *, meta: dict[str, Any]) -> Any:
         """Decode ``res.text`` per ``prompt_type`` and validate it against

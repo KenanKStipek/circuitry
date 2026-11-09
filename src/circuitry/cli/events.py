@@ -85,6 +85,21 @@ class EventLog:
         self._local = threading.local()
         self._disabled = False
         self._file: Any = None
+        # The first `progress` line for a given `start` instance id records
+        # its own `ms` as that instance's `first_token_ms`; every later
+        # `progress` line for the same id reuses it (#674) -- protected by
+        # `self._lock` like everything else that touches shared state here.
+        self._first_token_ms: dict[int, int] = {}
+        # `on_progress` fires from a streaming adapter's own reader thread
+        # or `agent_live.LivePublisher`'s own throttling thread (#674) --
+        # never the thread that called `on_start` for this path, so it
+        # cannot use `_stack_for`'s per-thread stacks the way `on_complete`
+        # does. This mirrors the *latest* open instance per path instead,
+        # updated under the same lock: one prompt effect's own path is
+        # never concurrently open with itself (a tree-flow loop's own
+        # iterations each get their own, distinct path), so "latest" and
+        # "the one this progress line belongs to" always agree in practice.
+        self._open_by_path: dict[str, tuple[int, float]] = {}
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             # Kept open for this instance's whole lifetime, closed by
@@ -185,7 +200,9 @@ class EventLog:
                     return
                 instance_id = self._next_instance_id
                 self._next_instance_id += 1
-                self._stack_for(path).append((instance_id, time.monotonic()))
+                started_at = time.monotonic()
+                self._stack_for(path).append((instance_id, started_at))
+                self._open_by_path[path] = (instance_id, started_at)
                 self._write_line(
                     {
                         "v": 1,
@@ -215,6 +232,9 @@ class EventLog:
                 if stack:
                     instance_id, started_at = stack.pop()
                     ms = max(0, round((time.monotonic() - started_at) * 1000))
+                    if self._open_by_path.get(path) == (instance_id, started_at):
+                        del self._open_by_path[path]
+                    self._first_token_ms.pop(instance_id, None)
                 else:
                     instance_id = None
                     ms = None
@@ -236,6 +256,56 @@ class EventLog:
                 self._write_line(payload)
         except Exception as exc:
             self._disable("end", exc)
+
+    def on_progress(self, path: str, data: dict[str, Any]) -> None:
+        """Write one ``progress`` line (#674): the same running figures
+        ``meta.live`` carries (``tokens_received_estimate``,
+        ``chars_received``, ``tokens_sent``, ``tokens_sent_estimate``),
+        plus ``id`` (the open ``start`` instance for *path* on this thread,
+        ``None`` if there is none) and ``ms``/``first_token_ms`` computed
+        from that instance's own start time -- the same reference
+        :meth:`on_complete`'s own ``ms`` uses, so the two can never drift.
+        Called only on a streamed prompt's own throttled publishes, never
+        on the write that starts or clears ``meta.live``.
+        """
+        if self._disabled:
+            return
+        try:
+            with self._lock:
+                if self._disabled:
+                    return
+                open_instance = self._open_by_path.get(path)
+                if open_instance is not None:
+                    instance_id, started_at = open_instance
+                    ms = max(0, round((time.monotonic() - started_at) * 1000))
+                else:
+                    instance_id = None
+                    ms = None
+                first_token_ms: int | None
+                if instance_id is None:
+                    first_token_ms = None
+                elif instance_id in self._first_token_ms:
+                    first_token_ms = self._first_token_ms[instance_id]
+                else:
+                    first_token_ms = ms
+                    self._first_token_ms[instance_id] = ms  # type: ignore[assignment]
+                payload: dict[str, Any] = {
+                    "v": 1,
+                    "seq": self._take_seq(),
+                    "ts": _now_iso_ms(),
+                    "ev": "progress",
+                    "id": instance_id,
+                    "path": path,
+                    "ms": ms,
+                    "tokens_received_estimate": data.get("tokens_received_estimate"),
+                    "chars_received": data.get("chars_received"),
+                    "tokens_sent": data.get("tokens_sent"),
+                    "tokens_sent_estimate": data.get("tokens_sent_estimate"),
+                    "first_token_ms": first_token_ms,
+                }
+                self._write_line(payload)
+        except Exception as exc:
+            self._disable("progress", exc)
 
     def on_report(self, path: str, level: str, message: str, data: Any) -> None:
         """Write one ``report`` line (#605): ``v``, ``seq``, ``ts``, ``ev``,
