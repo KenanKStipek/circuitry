@@ -141,7 +141,8 @@ pub enum ForkKind {
     /// A parallel `dynamic` (`Flow::Tree`): one lane per named child,
     /// every lane real (never a loop's own synthetic ahead lane, and
     /// never a decision's own untaken ghost) -- the plan fixes the
-    /// lane count, so there is nothing to fold or to open with `+`.
+    /// lane count, but a front end still folds it into its own band
+    /// at four lanes or more, the same as a loop (DESIGN.md §2.3/§9).
     Parallel,
 }
 
@@ -920,9 +921,11 @@ fn dynamic_is_parallel(path: &str, ctx: &Ctx<'_>) -> bool {
 }
 
 /// A parallel `dynamic`'s own fork: one lane per named child, each
-/// holding that child's own whole subtree -- never folded, never
-/// padded with an ahead lane, since the plan already names every
-/// child there will ever be.
+/// holding that child's own whole subtree -- never padded with an
+/// ahead lane, since the plan already names every child there will
+/// ever be. Whether it draws folded into its own band at four or
+/// more lanes (DESIGN.md §2.3/§9, the same rule a loop's own lanes
+/// already follow) is a display-time decision, never made here.
 fn build_parallel_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     let row = &rows[i];
     let depth = row.depth;

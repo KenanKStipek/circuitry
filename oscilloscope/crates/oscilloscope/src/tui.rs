@@ -6310,11 +6310,13 @@ fn flow_edge_color(style: EdgeStyle, theme: &Theme) -> Color {
 }
 
 /// Whether `fork`'s own lanes draw folded into their own band
-/// (DESIGN.md §2.3: "below 100 columns the lanes start folded",
-/// "a loop four or more wide starts folded") -- a decision's own two
-/// lanes (the taken branch and the untaken ghost) never fold at all.
+/// (DESIGN.md §2.3/§9: "below 100 columns the lanes start folded",
+/// "a loop four or more wide starts folded") -- every fork with four
+/// or more lanes, a loop or a parallel `dynamic` alike, starts folded
+/// the same way; a decision's own two lanes (the taken branch and
+/// the untaken ghost) never fold at all.
 fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
-    if fork.kind != ForkKind::Loop {
+    if fork.kind == ForkKind::Decision {
         return false;
     }
     if let Some(&open) = app.flow_lanes_open.get(&fork.path) {
@@ -6323,11 +6325,12 @@ fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
     fork.lanes.len() >= 4 || area_width < 100
 }
 
-/// The at most three lanes an open loop fork actually draws at
-/// once (#677 §9.3's settled "`↑↓` scrolls them"): a decision's two
-/// lanes and a parallel dynamic's own, usually few, lanes always
-/// draw in full -- only a loop's lanes can run past three, so only
-/// a loop fork ever needs a window. The window slides to keep
+/// The at most three lanes an open fork actually draws at once
+/// (#677 §9.3's settled "`↑↓` scrolls them"): a decision's own two
+/// lanes always draw in full -- a decision never folds at all, so it
+/// never needs a window either. Any other fork whose lanes run past
+/// three (a loop's passes, or a parallel `dynamic` with four or more
+/// children) windows the same way. The window slides to keep
 /// whichever lane holds the current selection in view, the same
 /// way the rail itself slides to keep Now in view; with nothing of
 /// this fork's own selected, it slides to the first running lane
@@ -6335,7 +6338,7 @@ fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
 /// is running either.
 fn flow_lane_window<'a>(fork: &'a Fork, app: &App) -> &'a [Lane] {
     const VISIBLE: usize = 3;
-    if fork.kind != ForkKind::Loop || fork.lanes.len() <= VISIBLE {
+    if fork.kind == ForkKind::Decision || fork.lanes.len() <= VISIBLE {
         return &fork.lanes;
     }
     let anchor = app
@@ -7473,6 +7476,28 @@ mod flow_layout_tests {
         })
     }
 
+    fn flow_test_row(
+        path: &str,
+        depth: usize,
+        status: StatusKind,
+    ) -> oscilloscope_core::render::Row {
+        oscilloscope_core::render::Row {
+            path: path.to_string(),
+            depth,
+            label: path.rsplit('.').next().unwrap().to_string(),
+            kind: RowKind::Tool,
+            status: oscilloscope_core::model::RowStatus {
+                kind: status,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
     fn empty_lane(running: bool, waiting: bool) -> Lane {
         Lane {
             items: Vec::new(),
@@ -7888,6 +7913,49 @@ mod flow_layout_tests {
         };
         let app = App::new(false);
         assert!(!flow_fork_folded(&fork, &app, 50));
+    }
+
+    /// Issue #691's own follow-up: the three-lane window and the
+    /// `══ N lanes + ══` band apply to every fork, not only loops --
+    /// a parallel `dynamic` with five children starts folded the
+    /// same way a four-or-more-wide loop already did.
+    #[test]
+    fn flow_fork_folded_by_lane_count_also_folds_a_parallel_dynamic() {
+        let fork = Fork {
+            path: "p".to_string(),
+            kind: ForkKind::Parallel,
+            source_status: StatusKind::Running,
+            lanes: vec![empty_lane(false, false); 5],
+        };
+        let app = App::new(false);
+        assert!(flow_fork_folded(&fork, &app, 200));
+    }
+
+    /// `+` opens exactly three of a parallel dynamic's own five
+    /// lanes at a time, up to its own real lane count -- never a
+    /// loop's own `loop_progress`-derived count (a parallel fork has
+    /// none), the plan's own named-children count instead.
+    #[test]
+    fn flow_lane_window_shows_three_of_a_five_child_parallel_forks_lanes_once_opened() {
+        let fork = Fork {
+            path: "prime.par5".to_string(),
+            kind: ForkKind::Parallel,
+            source_status: StatusKind::Running,
+            lanes: vec![empty_lane(false, false); 5],
+        };
+        let mut app = App::new(false);
+        let mut par5_row = flow_test_row("prime.par5", 1, StatusKind::Running);
+        par5_row.kind = RowKind::Dynamic;
+        app.flow_rows = std::iter::once(par5_row)
+            .chain(
+                (1..=5).map(|i| flow_test_row(&format!("prime.par5.p{i}"), 2, StatusKind::Pending)),
+            )
+            .collect();
+        app.selected_path = Some("prime.par5".to_string());
+        app.flow_open_lanes();
+        assert_eq!(app.flow_lanes_open.get("prime.par5"), Some(&3));
+        let visible = flow_lane_window(&fork, &app);
+        assert_eq!(visible.len(), 3, "{visible:?}");
     }
 }
 

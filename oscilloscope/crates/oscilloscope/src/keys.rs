@@ -377,30 +377,52 @@ impl App {
         }
     }
 
+    /// The fork at `fork_path`'s own real lane count: a loop's own
+    /// known total (or however many passes are observed so far
+    /// without one), or a parallel `dynamic`'s own named children --
+    /// the plan already knows that one in full, every immediate
+    /// child row directly under the fork's own path.
+    fn fork_lane_count(&self, fork_path: &str) -> u64 {
+        let is_loop = self
+            .flow_rows
+            .iter()
+            .any(|r| r.path == fork_path && r.kind == oscilloscope_core::render::RowKind::Loop);
+        if is_loop {
+            let observed = self
+                .flow_rows
+                .iter()
+                .filter(|r| {
+                    Self::row_is_pass(&r.path) && r.path.starts_with(&format!("{fork_path}.iter_"))
+                })
+                .count() as u64;
+            self.flow_rows
+                .iter()
+                .find(|r| r.path == fork_path)
+                .and_then(|r| r.loop_progress)
+                .and_then(|p| p.total)
+                .unwrap_or(observed)
+                .max(observed)
+        } else {
+            let prefix = format!("{fork_path}.");
+            self.flow_rows
+                .iter()
+                .filter(|r| {
+                    r.path
+                        .strip_prefix(&prefix)
+                        .is_some_and(|rest| !rest.contains('.'))
+                })
+                .count() as u64
+        }
+    }
+
     /// `+` (issue #691, §2.3): opens the selected fork's own lanes
-    /// three at a time, up to its own real lane count (the loop's
-    /// own known total, or however many passes are observed so far
-    /// without one).
+    /// three at a time, up to its own real lane count.
     pub fn flow_open_lanes(&mut self) {
-        let Some(loop_path) = self.selected_fork_path() else {
+        let Some(fork_path) = self.selected_fork_path() else {
             return;
         };
-        let observed = self
-            .flow_rows
-            .iter()
-            .filter(|r| {
-                Self::row_is_pass(&r.path) && r.path.starts_with(&format!("{loop_path}.iter_"))
-            })
-            .count() as u64;
-        let lane_count = self
-            .flow_rows
-            .iter()
-            .find(|r| r.path == loop_path)
-            .and_then(|r| r.loop_progress)
-            .and_then(|p| p.total)
-            .unwrap_or(observed)
-            .max(observed);
-        let entry = self.flow_lanes_open.entry(loop_path).or_insert(0);
+        let lane_count = self.fork_lane_count(&fork_path);
+        let entry = self.flow_lanes_open.entry(fork_path).or_insert(0);
         *entry = ((*entry as u64 + 3).min(lane_count)) as usize;
     }
 
