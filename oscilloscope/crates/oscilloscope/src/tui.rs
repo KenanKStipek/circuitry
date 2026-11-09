@@ -145,21 +145,6 @@ mod thresholds {
     /// only in the selected pane") -- checked against the whole
     /// terminal, the same way every other threshold here is.
     pub const FLOW_CONDITION_LINE_MIN_WIDTH: u16 = FLOW_THREE_PANE_MIN_WIDTH;
-
-    /// The Time screen's own thresholds (issue #650, DESIGN.md's
-    /// "Small terminals"): at this size and up, the timeline with
-    /// its strips (62% of the height) sits above the zoom pane and
-    /// the vs usual pane, side by side at 62/38. Below it (but still
-    /// at [`TIME_AXIS_ONLY_MIN_WIDTH`]/`_MIN_HEIGHT`), the timeline
-    /// and strips alone. Below that, a plain list with no axis.
-    pub const TIME_THREE_PANE_MIN_WIDTH: u16 = 100;
-    pub const TIME_THREE_PANE_MIN_HEIGHT: u16 = 26;
-    pub const TIME_AXIS_ONLY_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
-    pub const TIME_AXIS_ONLY_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
-    /// Below this, the timeline's own start/duration columns are
-    /// dropped (DESIGN.md: "Below 90 columns, the start and duration
-    /// columns go").
-    pub const TIME_START_DURATION_COLUMN_MIN_WIDTH: u16 = 90;
 }
 
 /// A scroll position suffix for a pane's own border title (issue
@@ -387,7 +372,7 @@ fn draw_tape_header_band(
     // `RunStatus`'s own "Running" (true only once it's actually
     // under way) -- the same `run_start_ts.is_none()` the Tape's own
     // head rule already keys off of.
-    // Scoped to the Tape itself: Flow/Time/Cost's own existing
+    // Scoped to the Tape itself: Flow/Signal/Cost's own existing
     // "Running" reading, even before any state has arrived at all
     // (a state-only poll's very first frame), is unrelated to issue
     // #678's own Starting state and keeps its pre-existing meaning.
@@ -736,9 +721,10 @@ fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     items
 }
 
-/// Flow/Time/Cost's own keys (§9's shared chrome around their own,
+/// Flow/Cost's own keys (§9's shared chrome around their own,
 /// unchanged panels): each screen's own existing keys, kept exactly
-/// as before, plus the globals every key bar now carries.
+/// as before, plus the globals every key bar now carries -- the
+/// Tape and Signal draw their own dedicated key bars instead.
 fn screen_key_bar_items(
     screen: oscilloscope_core::screens::Screen,
 ) -> Vec<(&'static str, &'static str)> {
@@ -751,9 +737,8 @@ fn screen_key_bar_items(
             ("z", "Fold"),
             ("v", "Full Value"),
         ]),
-        Screen::Time => items.extend([("+/-", "Zoom"), ("=", "Fit"), ("v", "Full Value")]),
         Screen::Cost => items.extend([("i/o/$", "Measure")]),
-        Screen::Tape => {}
+        Screen::Tape | Screen::Signal => {}
     }
     items.extend([("e", "Errors"), ("/", "Filter"), ("0-3", "Screens")]);
     items.push(("?", "Help"));
@@ -2932,6 +2917,1218 @@ fn draw_tape(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn draw_signal(
+    frame: &mut Frame,
+    full_area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    header: &oscilloscope_core::render::Header,
+    app: &mut App,
+    ctx: &DrawCtx,
+    icon_frame: u64,
+    now: &str,
+) {
+    if full_area.width < MIN_WIDTH || full_area.height < MIN_HEIGHT {
+        draw_too_small(frame, full_area, ctx);
+        return;
+    }
+    // §4: below 80 columns only the Tape is offered -- a resize (or
+    // a stale `1` from a wider terminal) bounces straight back to
+    // it rather than drawing a screen with no key left to leave it
+    // from.
+    if full_area.width < 80 {
+        app.screen = oscilloscope_core::screens::Screen::Tape;
+        return;
+    }
+    app.signal_now_col = screen.now_col;
+    app.signal_has_step = screen.selected.is_some();
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(full_area);
+    draw_tape_header_band(frame, sections[0], header, "SIGNAL", now, icon_frame, ctx);
+    draw_signal_status_line(frame, sections[2], screen, ctx, now);
+    draw_key_bar(
+        frame,
+        sections[3],
+        &signal_key_bar_items(full_area.width >= 80),
+        ctx,
+    );
+
+    let body = sections[1];
+    if app.tape_fullscreen_step && screen.selected.is_some() {
+        draw_signal_detail(frame, body, screen, ctx);
+        return;
+    }
+    // §5: the full layout (chart beside/above the Now pane and
+    // Readings) needs 120 columns and 30 rows both -- rows 24-29
+    // drop Readings the same way columns 80-119 do, even at full
+    // width.
+    let wide = full_area.width >= 120 && full_area.height >= 30;
+    let chart_min_rows = (SIGNAL_SENT_ROWS + 1 + SIGNAL_RECEIVED_ROWS) as u16 + 4;
+    let now_pane_max = body.height.saturating_sub(chart_min_rows).max(3);
+    let now_pane_rows = signal_now_pane_rows(screen, wide).min(now_pane_max);
+    let rows_split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(chart_min_rows),
+            Constraint::Length(now_pane_rows),
+        ])
+        .split(body);
+    draw_signal_chart(frame, rows_split[0], screen, header, wide, ctx);
+    if wide {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+            .split(rows_split[1]);
+        draw_signal_now_pane(frame, cols[0], screen, ctx, true);
+        draw_signal_readings(frame, cols[1], screen, ctx);
+    } else {
+        draw_signal_now_pane(frame, rows_split[1], screen, ctx, false);
+    }
+}
+
+fn signal_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![
+        ("←→", "Scrub"),
+        ("+/-", "Zoom"),
+        ("n", "Now"),
+        ("enter", "Open"),
+    ];
+    if wide {
+        items.push(("0-3", "Screens"));
+    }
+    items.push(("?", "Help"));
+    items.push(("q", "Quit"));
+    items
+}
+
+/// §3.2's status line: the most recently finished row, any depth.
+fn draw_signal_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    ctx: &DrawCtx,
+    now: &str,
+) {
+    let Some(last) = &screen.last_finished else {
+        frame.render_widget(Paragraph::new(Line::from("")), area);
+        return;
+    };
+    let glyph = tape_glyph(last.kind, last.status);
+    let age = last
+        .ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now));
+    let tokens = last
+        .tokens
+        .map(|(sent, received)| {
+            format!(
+                " \u{b7} \u{2191}{} \u{2193}{}",
+                oscilloscope_core::format::format_tokens_thousands(sent),
+                oscilloscope_core::format::format_tokens_thousands(received)
+            )
+        })
+        .unwrap_or_default();
+    let age_text = age
+        .map(|a| {
+            format!(
+                " \u{b7} {} ago",
+                oscilloscope_core::format::format_duration(a)
+            )
+        })
+        .unwrap_or_default();
+    let dim = Style::default().fg(ctx.theme.dim);
+    let spans = vec![
+        Span::styled(
+            format!(" {glyph} "),
+            tape_glyph_style(last.kind, last.status, ctx.theme),
+        ),
+        Span::styled(
+            format!("{} finished ", last.label),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(format!("{tokens}{age_text}").trim_start().to_string(), dim),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The Now pane's own interior height (border included), before its
+/// caller clamps it to whatever the chart can spare: the full tier
+/// (120x30 and up) shows every row the Now pane has; the 80-119
+/// tier shows the running rows alone.
+fn signal_now_pane_rows(screen: &oscilloscope_core::screens::SignalScreen, wide: bool) -> u16 {
+    let running = screen.now_pane.running.len();
+    if !wide {
+        return (running.max(1) + 2) as u16;
+    }
+    let mut content = running + screen.now_pane.waiting.len();
+    if screen.now_pane.loop_summary.is_some() {
+        content += 1;
+    }
+    content += 1; // the frame's own trailing blank row, after Next Signal
+    if screen.now_pane.last_burst.is_some() {
+        content += 1;
+    }
+    if screen.now_pane.next_signal.is_some() {
+        content += 1;
+    }
+    (content.max(1) + 2) as u16
+}
+
+fn signal_title(screen: &oscilloscope_core::screens::SignalScreen, wide: bool) -> String {
+    let column_text = if screen.column_ms >= 1000 {
+        format!("{} s", screen.column_ms / 1000)
+    } else {
+        format!("{} ms", screen.column_ms)
+    };
+    match (&screen.model_label, wide) {
+        (Some(model), true) => format!(
+            "Signal \u{b7} Tokens to {model} \u{b7} Sent Above \u{b7} Received Below \u{b7} {column_text} per Column \u{b7} Fixed Scale"
+        ),
+        (None, true) => format!(
+            "Signal \u{b7} Sent Above \u{b7} Received Below \u{b7} {column_text} per Column \u{b7} Fixed Scale"
+        ),
+        (_, false) => {
+            "Signal \u{b7} Sent Above \u{b7} Received Below \u{b7} Fixed Scale".to_string()
+        }
+    }
+}
+
+/// `frac` in `[0, 1]`: one of the eight lower-anchored block glyphs
+/// (a bar growing from this cell's own bottom edge, continuing the
+/// solid fill below it), rounded to the nearest eighth.
+fn signal_sent_partial_glyph(frac: f64) -> char {
+    const GLYPHS: [char; 8] = [
+        '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
+        '\u{2588}',
+    ];
+    let level = (frac.clamp(0.0, 1.0) * 7.0).round() as usize;
+    GLYPHS[level.min(7)]
+}
+
+/// `frac` in `(0, 1]`: Unicode names only two upper-anchored partial
+/// blocks (`▔` an eighth, `▀` a half) -- a received bar's own
+/// partial cell (always filled from its own top edge, continuing
+/// the solid fill above it) rounds to the nearer of the two, or a
+/// full block past three-quarters.
+fn signal_received_partial_glyph(frac: f64) -> char {
+    if frac >= 0.75 {
+        '\u{2588}'
+    } else if frac >= 0.3125 {
+        '\u{2580}'
+    } else {
+        '\u{2594}'
+    }
+}
+
+/// One column's own sent bar: `rows` cells, index 0 the topmost
+/// (farthest from the axis), index `rows-1` adjacent to it.
+fn signal_sent_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<char>> {
+    let mut out = vec![None; rows];
+    if value == 0 || axis_top == 0 || rows == 0 {
+        return out;
+    }
+    let unit = axis_top as f64 / rows as f64;
+    let full = ((value as f64 / unit).floor() as usize).min(rows);
+    for i in 0..full {
+        out[rows - 1 - i] = Some('\u{2588}');
+    }
+    let remainder = value as f64 - full as f64 * unit;
+    if full < rows && remainder > 0.0 {
+        out[rows - 1 - full] = Some(signal_sent_partial_glyph(remainder / unit));
+    }
+    out
+}
+
+/// One column's own received bar: `rows` cells, index 0 adjacent to
+/// the axis, index `rows-1` the farthest from it.
+fn signal_received_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<char>> {
+    let mut out = vec![None; rows];
+    if value == 0 || axis_top == 0 || rows == 0 {
+        return out;
+    }
+    let unit = axis_top as f64 / rows as f64;
+    let full = ((value as f64 / unit).floor() as usize).min(rows);
+    for cell in out.iter_mut().take(full) {
+        *cell = Some('\u{2588}');
+    }
+    let remainder = value as f64 - full as f64 * unit;
+    if full < rows && remainder > 0.0 {
+        out[full] = Some(signal_received_partial_glyph(remainder / unit));
+    }
+    out
+}
+
+const SIGNAL_SENT_ROWS: usize = 5;
+const SIGNAL_RECEIVED_ROWS: usize = 2;
+
+/// The visible window's own leftmost column: `focus_col` (the scrub
+/// cursor, or Now while following it) stays on screen, with up to a
+/// quarter of `data_width` still ahead of it once the trace has run
+/// longer than the pane is wide -- a run that still fits inside
+/// `data_width` columns never scrolls at all, column 0 stays the
+/// left edge.
+fn signal_window_start(focus_col: usize, data_width: usize) -> usize {
+    focus_col.saturating_sub(data_width * 3 / 4)
+}
+
+fn draw_signal_chart(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    header: &oscilloscope_core::render::Header,
+    wide: bool,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border_focused;
+    let title = signal_title(screen, wide);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+
+    let chart_rows = SIGNAL_SENT_ROWS + 1 + SIGNAL_RECEIVED_ROWS;
+    if inner.height < chart_rows as u16 + 2 {
+        return;
+    }
+    let axis_row_y = inner.y + SIGNAL_SENT_ROWS as u16;
+
+    // The label field's own width: wide enough for the widest of the
+    // four axis labels (`1,200 t`, past three digits on a long or
+    // history-heavy run, not just `600 t`), plus the one blank
+    // gutter column before the trace itself starts.
+    let sent_top_label = oscilloscope_core::format::format_tokens_t(screen.sent_axis_top);
+    let sent_half_label = oscilloscope_core::format::format_tokens_t(screen.sent_axis_top / 2);
+    let received_top_label = oscilloscope_core::format::format_tokens_t(screen.received_axis_top);
+    let label_width = [
+        "0",
+        sent_top_label.as_str(),
+        sent_half_label.as_str(),
+        received_top_label.as_str(),
+    ]
+    .iter()
+    .map(|s| s.chars().count())
+    .max()
+    .unwrap_or(1) as u16;
+    let gutter = label_width + 1;
+    let data_x = inner.x + gutter;
+    let data_width = (inner.width as usize).saturating_sub(gutter as usize);
+    let buf = frame.buffer_mut();
+
+    let dim = Style::default().fg(ctx.theme.dim);
+    let border_style = Style::default().fg(border_color);
+    // A label right-aligned in its own field: the padding before it
+    // stays border-coloured, only the text itself is `fg.faint`
+    // (from the frames: `80 t`, shorter than `600 t`, is not drawn
+    // with a dim leading space).
+    let axis_label = |buf: &mut ratatui::buffer::Buffer, y: u16, text: &str| {
+        let pad = (label_width as usize).saturating_sub(text.chars().count());
+        buf.set_string(inner.x, y, " ".repeat(pad), border_style);
+        buf.set_string(inner.x + pad as u16, y, text, dim);
+    };
+    axis_label(buf, inner.y, &sent_top_label);
+    axis_label(buf, inner.y + SIGNAL_SENT_ROWS as u16 / 2, &sent_half_label);
+    axis_label(buf, axis_row_y, "0");
+    buf.set_string(data_x - 1, axis_row_y, " ", dim);
+    axis_label(buf, inner.y + chart_rows as u16 - 1, &received_top_label);
+
+    let sent_style = Style::default().fg(ctx.theme.accent_primary);
+    let received_style = Style::default().fg(ctx.theme.status_done);
+    let dim_sent_style = sent_style.add_modifier(Modifier::DIM);
+    let dim_received_style = received_style.add_modifier(Modifier::DIM);
+    let now_sweep_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+
+    // The trace's own visible window: a run that outgrows the pane's
+    // own width keeps scrolling so the scrub cursor (or Now, while
+    // following it) never runs off the right edge -- every bucket,
+    // mark, step row and seconds label below reads at `start_col +
+    // col`, never the bare column index on its own.
+    let now_col_abs = screen.now_col.unwrap_or(0);
+    let focus_col = screen.cursor_col.unwrap_or(now_col_abs);
+    let start_col = signal_window_start(focus_col, data_width);
+    // `None` (no run started yet) must stay sweep-less, never fall
+    // back to column 0 the way `now_col_abs`'s own window-math
+    // default does.
+    let sweep_col = screen
+        .now_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width)
+        .unwrap_or(usize::MAX);
+    let cursor_col = screen
+        .cursor_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width);
+
+    // Two passes: first every column's own glyphs (if any), so the
+    // second pass can tell each sent/received row's own blank cells
+    // apart by whether they come before or after that row's own
+    // first real glyph (from the frames: a row with two separate
+    // bars stays accent/received-tinted across the gap between
+    // them, not just at the bars themselves).
+    let mut sent_glyphs = vec![vec![None; data_width]; SIGNAL_SENT_ROWS];
+    let mut received_glyphs = vec![vec![None; data_width]; SIGNAL_RECEIVED_ROWS];
+    let mut sent_live_cols = vec![false; data_width];
+    let mut received_live_cols = vec![false; data_width];
+    for col in 0..data_width {
+        let bucket = screen.buckets.get(start_col + col);
+        let (sent, sent_live) = bucket.map(|b| (b.sent, b.sent_live)).unwrap_or((0, false));
+        let (received, received_live) = bucket
+            .map(|b| (b.received, b.received_live))
+            .unwrap_or((0, false));
+        sent_live_cols[col] = sent_live;
+        received_live_cols[col] = received_live;
+        for (i, cell) in signal_sent_column(sent, screen.sent_axis_top, SIGNAL_SENT_ROWS)
+            .into_iter()
+            .enumerate()
+        {
+            sent_glyphs[i][col] = cell;
+        }
+        for (i, cell) in
+            signal_received_column(received, screen.received_axis_top, SIGNAL_RECEIVED_ROWS)
+                .into_iter()
+                .enumerate()
+        {
+            received_glyphs[i][col] = cell;
+        }
+    }
+    for (i, row) in sent_glyphs.iter().enumerate() {
+        let labeled = i == 0 || i == SIGNAL_SENT_ROWS / 2;
+        let first_filled = row.iter().position(Option::is_some).unwrap_or(usize::MAX);
+        let y = inner.y + i as u16;
+        let gutter_style = if labeled {
+            dim
+        } else {
+            Style::default().fg(border_color)
+        };
+        buf.set_string(data_x - 1, y, " ", gutter_style);
+        for col in 0..data_width {
+            let x = data_x + col as u16;
+            if col > sweep_col {
+                buf.set_string(x, y, " ", now_sweep_style);
+            } else if let Some(ch) = row[col] {
+                // A filled cell keeps its own sent/live colour even
+                // at the sweep -- only an empty one there draws the
+                // sweep's own rule instead (a running prompt's live
+                // estimate must still read `≈`, not the sweep's own
+                // bold accent, once it lands in the Now column).
+                let style = if sent_live_cols[col] {
+                    dim_sent_style
+                } else {
+                    sent_style
+                };
+                buf.set_string(x, y, ch.to_string(), style);
+            } else if col == sweep_col {
+                buf.set_string(x, y, "\u{2503}", now_sweep_style);
+            } else if col >= first_filled {
+                buf.set_string(x, y, " ", sent_style);
+            } else {
+                let style = if labeled {
+                    dim
+                } else {
+                    Style::default().fg(border_color)
+                };
+                buf.set_string(x, y, " ", style);
+            }
+        }
+    }
+    for (i, row) in received_glyphs.iter().enumerate() {
+        let labeled = i == SIGNAL_RECEIVED_ROWS - 1;
+        let first_filled = row.iter().position(Option::is_some).unwrap_or(usize::MAX);
+        let y = axis_row_y + 1 + i as u16;
+        let gutter_style = if labeled {
+            dim
+        } else {
+            Style::default().fg(border_color)
+        };
+        buf.set_string(data_x - 1, y, " ", gutter_style);
+        for col in 0..data_width {
+            let x = data_x + col as u16;
+            if col > sweep_col {
+                buf.set_string(x, y, " ", now_sweep_style);
+            } else if let Some(ch) = row[col] {
+                let style = if received_live_cols[col] {
+                    dim_received_style
+                } else {
+                    received_style
+                };
+                buf.set_string(x, y, ch.to_string(), style);
+            } else if col == sweep_col {
+                buf.set_string(x, y, "\u{2503}", now_sweep_style);
+            } else if col >= first_filled {
+                buf.set_string(x, y, " ", received_style);
+            } else {
+                let style = if labeled {
+                    dim
+                } else {
+                    Style::default().fg(border_color)
+                };
+                buf.set_string(x, y, " ", style);
+            }
+        }
+    }
+
+    // The axis row: `─` for the past, `╌` for the plan ahead, the
+    // run's own marks (`✓`/`◆`) over whichever it is.
+    let marks: std::collections::BTreeMap<usize, oscilloscope_core::screens::SignalMark> =
+        screen.marks.iter().copied().collect();
+    for col in 0..data_width {
+        let x = data_x + col as u16;
+        let ahead = col > sweep_col;
+        let (ch, style) = if col == sweep_col {
+            ('\u{2503}', now_sweep_style)
+        } else {
+            match marks.get(&(start_col + col)) {
+                Some(oscilloscope_core::screens::SignalMark::Done) => {
+                    ('\u{2713}', Style::default().fg(ctx.theme.status_done))
+                }
+                Some(oscilloscope_core::screens::SignalMark::Decision) => (
+                    '\u{25c6}',
+                    Style::default()
+                        .fg(ctx.theme.accent_secondary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                None if ahead => ('\u{254c}', dim),
+                None => ('\u{2500}', Style::default().fg(ctx.theme.border)),
+            }
+        };
+        buf.set_string(x, axis_row_y, ch.to_string(), style);
+    }
+
+    // The scrub cursor, once it differs from Now: a distinct
+    // selection tint down the whole chart's own height, never the
+    // sweep's own bold accent -- the two stay visually apart even
+    // when only one column separates them.
+    if let Some(c) = cursor_col {
+        if c != sweep_col {
+            let cursor_rect = Rect {
+                x: data_x + c as u16,
+                y: inner.y,
+                width: 1,
+                height: chart_rows as u16,
+            };
+            buf.set_style(cursor_rect, Style::default().bg(ctx.theme.selection_bg));
+        }
+    }
+
+    draw_signal_seconds_row(
+        frame, inner, data_x, data_width, start_col, screen, wide, ctx,
+    );
+    let step_rows_y = axis_row_y + 1 + SIGNAL_RECEIVED_ROWS as u16 + 1;
+    let step_rows_available = (inner.y + inner.height)
+        .saturating_sub(step_rows_y)
+        .saturating_sub(2); // the separator and Totals rows
+    draw_signal_step_rows(
+        frame,
+        Rect {
+            x: inner.x,
+            y: step_rows_y,
+            width: inner.width,
+            height: step_rows_available,
+        },
+        data_x,
+        start_col,
+        screen,
+        ctx,
+    );
+    let totals_y = inner.y + inner.height - 1;
+    let sep_y = totals_y - 1;
+    frame.buffer_mut().set_string(
+        inner.x,
+        sep_y,
+        "\u{2500}".repeat(inner.width as usize),
+        Style::default().fg(ctx.theme.border),
+    );
+    draw_totals_row(
+        frame,
+        Rect {
+            x: inner.x,
+            y: totals_y,
+            width: inner.width,
+            height: 1,
+        },
+        header,
+        false,
+        None,
+        screen.usual_so_far_tokens,
+        Some(border_color),
+        false,
+        ctx,
+    );
+}
+
+/// The seconds-mark row: ticks spaced at least about six columns
+/// apart (`cols_per_second`'s own interval at the default 100 ms per
+/// column, a wider few-second step once zoomed out enough that a
+/// one-second step would overlap its own labels), replaced at the
+/// Now column by its own label and, at the full width tier, `Ahead
+/// · plan order · usually ends <clock>` after it.
+#[allow(clippy::too_many_arguments)]
+fn draw_signal_seconds_row(
+    frame: &mut Frame,
+    inner: Rect,
+    data_x: u16,
+    data_width: usize,
+    start_col: usize,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    wide: bool,
+    ctx: &DrawCtx,
+) {
+    let y = inner.y + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+    let dim = Style::default().fg(ctx.theme.dim);
+    // The whole data region starts dim (from the frames: the design
+    // text never says so, but every cell past the gutter on this
+    // row, ticks and the gaps between them alike, reads `fg.faint`
+    // in the frame, not a plain border-coloured blank).
+    frame
+        .buffer_mut()
+        .set_string(data_x, y, " ".repeat(data_width), dim);
+
+    let now_label_col = screen
+        .now_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width)
+        .map(|c| c.saturating_sub(1));
+    let now_x = now_label_col.map(|c| data_x + c as u16);
+    let now_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let now_label = now_x.map(|_| {
+        let clock = screen
+            .now_ts
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+            .unwrap_or_default();
+        let elapsed = screen
+            .now_elapsed_s
+            .map(oscilloscope_core::format::format_duration)
+            .unwrap_or_default();
+        format!("Now {clock} \u{b7} {elapsed}  ")
+    });
+    let ahead_x = match (now_x, &now_label) {
+        (Some(x), Some(l)) => Some(x + l.chars().count() as u16),
+        _ => None,
+    };
+    let ahead_label = ahead_x.map(|_| {
+        if !wide {
+            "Ahead \u{25b8}".to_string()
+        } else {
+            match screen
+                .ahead_eta_ts
+                .as_deref()
+                .and_then(|eta| oscilloscope_core::format::format_clock_time(eta, ctx.zone))
+            {
+                Some(eta_clock) => {
+                    format!("Ahead \u{b7} plan order \u{b7} usually ends {eta_clock}")
+                }
+                None => "Ahead".to_string(),
+            }
+        }
+    });
+    let occupied_end = match (ahead_x, &ahead_label) {
+        (Some(x), Some(l)) => x + l.chars().count() as u16,
+        _ => now_label_col.map(|c| data_x + c as u16).unwrap_or(data_x),
+    };
+
+    let cols_per_second = (1000.0 / screen.column_ms.max(1) as f64).round().max(1.0) as u64;
+    // At least six columns between tick labels: at 100 ms per
+    // column (ten columns a second) that's every second, same as
+    // always; past that, whichever whole number of seconds first
+    // keeps consecutive labels from overlapping.
+    let seconds_step = (6u64).div_ceil(cols_per_second).max(1);
+    let mut seconds = 0u64;
+    loop {
+        let abs_col = seconds * cols_per_second;
+        if abs_col < start_col as u64 {
+            seconds += seconds_step;
+            continue;
+        }
+        let col = (abs_col - start_col as u64) as usize;
+        if col >= data_width {
+            break;
+        }
+        let x = data_x + col as u16;
+        let text = format!("{seconds}s");
+        let text_end = x + text.chars().count() as u16;
+        let before_now = now_x.is_none_or(|n| text_end <= n);
+        let after_everything = wide && x >= occupied_end;
+        if before_now {
+            frame.buffer_mut().set_string(x, y, &text, dim);
+        } else if after_everything {
+            frame.buffer_mut().set_string(x, y, &text, dim);
+            break;
+        }
+        seconds += seconds_step;
+    }
+
+    if let (Some(x), Some(label)) = (now_x, &now_label) {
+        frame.buffer_mut().set_string(x, y, label, now_style);
+    }
+    if let (Some(x), Some(label)) = (ahead_x, &ahead_label) {
+        frame.buffer_mut().set_string(x, y, label, dim);
+    }
+}
+
+/// One step row's own styled fragments (§2.2's "step rows under the
+/// axis"), already positioned left to right -- the caller draws each
+/// in turn, clipping to the pane's own right edge. Only ever called
+/// for a row whose own start column (`row.col`) is already inside
+/// the trace's own visible window; a tool bar that started before
+/// it but is still running draws its own plain continuation instead
+/// ([`draw_signal_step_rows`]'s own `clipped` branch).
+fn signal_step_row_spans(
+    row: &oscilloscope_core::screens::SignalStepRow,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    is_last: bool,
+    ctx: &DrawCtx,
+) -> Vec<(String, Style)> {
+    use oscilloscope_core::screens::SignalStepKind;
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let faint = Style::default().fg(ctx.theme.dim);
+    let default = Style::default().fg(ctx.theme.text);
+    let bold = default.add_modifier(Modifier::BOLD);
+    let mut spans = Vec::new();
+    match &row.kind {
+        SignalStepKind::Prompt { rest } => {
+            let glyph = tape_glyph(row.row_kind, row.status);
+            spans.push((
+                format!("{glyph} {} ", row.label),
+                tape_glyph_style(row.row_kind, row.status, ctx.theme),
+            ));
+            spans.push((rest.clone(), muted));
+        }
+        SignalStepKind::Tool { end_col, text } => {
+            let style = tape_glyph_style(row.row_kind, row.status, ctx.theme);
+            let prefix = format!("\u{2501} {text} ");
+            let used_cols = row.col + prefix.chars().count();
+            let fill = end_col.saturating_add(1).saturating_sub(used_cols);
+            spans.push((format!("{prefix}{}", "\u{2501}".repeat(fill)), style));
+        }
+        SignalStepKind::Decision { released, suffix } => {
+            spans.push((
+                format!("\u{25c6} {} \u{b7} ", row.label),
+                Style::default()
+                    .fg(ctx.theme.accent_secondary)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            for (i, item) in released.iter().enumerate() {
+                if i > 0 {
+                    spans.push((" \u{b7} ".to_string(), muted));
+                }
+                spans.push((format!("{} ", item.label), default));
+                if let Some(tokens) = item.tokens {
+                    spans.push((
+                        format!(
+                            "{} t ",
+                            oscilloscope_core::format::format_tokens_thousands(tokens)
+                        ),
+                        bold,
+                    ));
+                }
+                if let Some(dev) = item.dev_pct {
+                    spans.push((
+                        format!("{dev:+.0}% "),
+                        tape_deviation_style(dev, ctx.theme).add_modifier(Modifier::BOLD),
+                    ));
+                }
+            }
+            if !suffix.is_empty() {
+                spans.push((suffix.clone(), muted));
+            }
+        }
+        SignalStepKind::Loop { status_text } => {
+            spans.push((
+                format!("\u{27f3} {} ", row.label),
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push((format!("{status_text}  "), bold));
+            if is_last {
+                if let Some(suffix) = &screen.ahead_suffix {
+                    spans.push((suffix.clone(), faint));
+                }
+            }
+        }
+    }
+    if is_last && !matches!(row.kind, SignalStepKind::Loop { .. }) {
+        if let Some(suffix) = &screen.ahead_suffix {
+            spans.push(("  ".to_string(), faint));
+            spans.push((suffix.clone(), faint));
+        }
+    }
+    spans
+}
+
+/// A step row visible in the trace's own current window: `visible_col`
+/// is where it actually starts drawing (never before the window's
+/// own left edge), `clipped` when that's later than the row's own
+/// real start column -- a tool bar already running when the window
+/// scrolled past its own start.
+struct SignalVisibleStepRow<'a> {
+    row: &'a oscilloscope_core::screens::SignalStepRow,
+    orig_index: usize,
+    visible_col: usize,
+    clipped: bool,
+}
+
+fn draw_signal_step_rows(
+    frame: &mut Frame,
+    area: Rect,
+    data_x: u16,
+    start_col: usize,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    ctx: &DrawCtx,
+) {
+    use oscilloscope_core::screens::SignalStepKind;
+    if area.height == 0 {
+        return;
+    }
+    let last_idx = screen.step_rows.len().saturating_sub(1);
+    let right_edge = area.x + area.width;
+
+    // Scrolled off the window's own left edge entirely: a plain
+    // point-in-time row (a finished prompt, a decision, a loop's own
+    // heading) just isn't there any more; a tool's own bar keeps
+    // showing, clipped to the window's own edge, for as long as it
+    // is still running past it.
+    let mut visible: Vec<SignalVisibleStepRow> = Vec::new();
+    for (i, row) in screen.step_rows.iter().enumerate() {
+        match &row.kind {
+            SignalStepKind::Tool { end_col, .. } => {
+                if *end_col < start_col {
+                    continue;
+                }
+                let clipped = row.col < start_col;
+                visible.push(SignalVisibleStepRow {
+                    row,
+                    orig_index: i,
+                    visible_col: row.col.max(start_col),
+                    clipped,
+                });
+            }
+            _ => {
+                if row.col < start_col {
+                    continue;
+                }
+                visible.push(SignalVisibleStepRow {
+                    row,
+                    orig_index: i,
+                    visible_col: row.col,
+                    clipped: false,
+                });
+            }
+        }
+    }
+    // More rows fit in the window than fit the pane's own height:
+    // the most recent ones win, the same way the trace itself keeps
+    // whichever end is actually in view on screen.
+    let shown_from = visible.len().saturating_sub(area.height as usize);
+    for (slot, v) in visible[shown_from..].iter().enumerate() {
+        let y = area.y + slot as u16;
+        let mut x = data_x + (v.visible_col - start_col) as u16;
+        if x >= right_edge {
+            continue;
+        }
+        let spans: Vec<(String, Style)> = if v.clipped {
+            match &v.row.kind {
+                SignalStepKind::Tool { end_col, .. } => {
+                    let style = tape_glyph_style(v.row.row_kind, v.row.status, ctx.theme);
+                    let fill = end_col.saturating_add(1).saturating_sub(start_col);
+                    vec![("\u{2501}".repeat(fill), style)]
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            signal_step_row_spans(v.row, screen, v.orig_index == last_idx, ctx)
+        };
+        let mut last_style = None;
+        for (text, style) in spans {
+            if x >= right_edge {
+                break;
+            }
+            let budget = (right_edge - x) as usize;
+            // A plain hard cut, not truncate_text's own ellipsis
+            // marker (from the frames: the design text names no
+            // such marker here, and the frame's own rows run right
+            // up to the border with a clean cut instead).
+            let clipped: String = text.chars().take(budget).collect();
+            let width = clipped.chars().count() as u16;
+            frame.buffer_mut().set_string(x, y, &clipped, style);
+            x += width;
+            last_style = Some(style);
+        }
+        // The row's own last span's style continues through its
+        // own trailing blanks to the pane's right edge (from the
+        // frames: the design text never says this, the frame draws
+        // every step row's own tail this way).
+        if let Some(style) = last_style {
+            if x < right_edge {
+                let fill = (right_edge - x) as usize;
+                frame.buffer_mut().set_string(x, y, " ".repeat(fill), style);
+            }
+        }
+    }
+}
+
+/// Pads `spans` out to `width` columns with its own last span's
+/// style (from the frames: the design text never says this, but
+/// every row in the Now pane and Readings draws its own trailing
+/// blanks in whichever style ended the row, not a plain
+/// border-coloured blank).
+fn pad_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let style = spans.last().map(|s| s.style).unwrap_or_default();
+    let mut spans = spans;
+    if used < width {
+        spans.push(Span::styled(" ".repeat(width - used), style));
+    }
+    Line::from(spans)
+}
+
+fn draw_signal_now_pane(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    ctx: &DrawCtx,
+    wide: bool,
+) {
+    let border_color = ctx.theme.border;
+    let title = screen
+        .now_pane
+        .slots_text
+        .as_deref()
+        .map(|s| format!("Now \u{b7} {s}"))
+        .unwrap_or_else(|| "Now".to_string());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let faint = Style::default().fg(ctx.theme.dim);
+    let running_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut y = inner.y;
+    let bottom = inner.y + inner.height;
+    for row in &screen.now_pane.running {
+        if y >= bottom {
+            return;
+        }
+        let slot = row
+            .slot
+            .map(|s| format!(" \u{b7} slot {s}"))
+            .unwrap_or_default();
+        let line = pad_line(
+            vec![
+                Span::styled("\u{25cf} ", running_style),
+                Span::styled(format!("{:<26}", row.label), bold),
+                Span::styled(format!("{}{slot}", row.what), muted),
+            ],
+            (inner.width - 1) as usize,
+        );
+        frame
+            .buffer_mut()
+            .set_line(inner.x + 1, y, &line, inner.width - 1);
+        y += 1;
+    }
+    if !wide {
+        return;
+    }
+    for (label, text) in &screen.now_pane.waiting {
+        if y >= bottom {
+            return;
+        }
+        let line = pad_line(
+            vec![
+                Span::styled(format!("\u{b7} {label:<26}"), faint),
+                Span::styled(text.clone(), faint),
+            ],
+            (inner.width - 1) as usize,
+        );
+        frame
+            .buffer_mut()
+            .set_line(inner.x + 1, y, &line, inner.width - 1);
+        y += 1;
+    }
+    if let Some((label, status_text)) = &screen.now_pane.loop_summary {
+        if y >= bottom {
+            return;
+        }
+        let accent_secondary_bold = Style::default()
+            .fg(ctx.theme.accent_secondary)
+            .add_modifier(Modifier::BOLD);
+        let line = pad_line(
+            vec![
+                Span::styled(format!("\u{27f3} {label}  "), accent_secondary_bold),
+                Span::styled(status_text.clone(), Style::default().fg(ctx.theme.text)),
+            ],
+            (inner.width - 1) as usize,
+        );
+        frame
+            .buffer_mut()
+            .set_line(inner.x + 1, y, &line, inner.width - 1);
+        y += 1;
+    }
+    if let Some(text) = &screen.now_pane.last_burst {
+        if y < bottom {
+            let (age, rest) = text.split_once(" \u{b7} ").unwrap_or((text.as_str(), ""));
+            let line = pad_line(
+                vec![
+                    Span::styled("Last Burst  ", muted),
+                    Span::styled(format!("{age} "), Style::default().fg(ctx.theme.text)),
+                    Span::styled(format!("\u{b7} {rest}"), muted),
+                ],
+                (inner.width - 1) as usize,
+            );
+            frame
+                .buffer_mut()
+                .set_line(inner.x + 1, y, &line, inner.width - 1);
+            y += 1;
+        }
+    }
+    if let Some(text) = &screen.now_pane.next_signal {
+        if y < bottom {
+            let (label, rest) = text.split_once(" \u{b7} ").unwrap_or((text.as_str(), ""));
+            let line = pad_line(
+                vec![
+                    Span::styled("Next Signal ", muted),
+                    Span::styled(format!("{label} "), Style::default().fg(ctx.theme.text)),
+                    Span::styled(format!("\u{b7} {rest}"), muted),
+                ],
+                (inner.width - 1) as usize,
+            );
+            frame
+                .buffer_mut()
+                .set_line(inner.x + 1, y, &line, inner.width - 1);
+        }
+    }
+}
+
+fn draw_signal_readings(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Readings", border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let bold = default.add_modifier(Modifier::BOLD);
+    let readings = &screen.readings;
+    let line_width = (inner.width - 1) as usize;
+    let mut lines = vec![
+        pad_line(
+            vec![
+                Span::styled("Sent     ", muted),
+                Span::styled(
+                    format!(
+                        "{} t",
+                        oscilloscope_core::format::format_tokens_thousands(readings.sent)
+                    ),
+                    default,
+                ),
+            ],
+            line_width,
+        ),
+        pad_line(
+            vec![
+                Span::styled("Received ", muted),
+                Span::styled(
+                    format!(
+                        "{} t",
+                        oscilloscope_core::format::format_tokens_thousands(readings.received)
+                    ),
+                    default,
+                ),
+            ],
+            line_width,
+        ),
+    ];
+    lines.push(pad_line(
+        vec![
+            Span::styled("Ratio    ", muted),
+            Span::styled(
+                readings
+                    .ratio
+                    .map(|r| format!("{r:.1} : 1"))
+                    .unwrap_or_else(|| "\u{2014}".to_string()),
+                default,
+            ),
+        ],
+        line_width,
+    ));
+    lines.push(pad_line(
+        match &readings.peak {
+            Some((tokens, ts)) => vec![
+                Span::styled("Peak     ", muted),
+                Span::styled(
+                    format!(
+                        "{} t ",
+                        oscilloscope_core::format::format_tokens_thousands(*tokens)
+                    ),
+                    bold,
+                ),
+                Span::styled(
+                    format!(
+                        "at {}",
+                        oscilloscope_core::format::format_clock_time(ts, ctx.zone)
+                            .unwrap_or_default()
+                    ),
+                    muted,
+                ),
+            ],
+            None => vec![
+                Span::styled("Peak     ", muted),
+                Span::styled("\u{2014}", muted),
+            ],
+        },
+        line_width,
+    ));
+    lines.push(pad_line(
+        match &readings.largest {
+            Some((label, tokens)) => vec![
+                Span::styled("Largest  ", muted),
+                Span::styled(
+                    format!(
+                        "{label} {} t",
+                        oscilloscope_core::format::format_tokens_thousands(*tokens)
+                    ),
+                    default,
+                ),
+            ],
+            None => vec![
+                Span::styled("Largest  ", muted),
+                Span::styled("\u{2014}", muted),
+            ],
+        },
+        line_width,
+    ));
+    lines.push(pad_line(
+        match readings.quiet_s {
+            Some(s) => vec![
+                Span::styled("Quiet    ", muted),
+                Span::styled(
+                    format!(
+                        "{} since the last burst",
+                        oscilloscope_core::format::format_duration(s)
+                    ),
+                    default,
+                ),
+            ],
+            None => vec![
+                Span::styled("Quiet    ", muted),
+                Span::styled("\u{2014}", muted),
+            ],
+        },
+        line_width,
+    ));
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width - 1,
+            height: inner.height,
+        },
+    );
+}
+
+/// `enter`'s own full-screen step view (§4: "opens the step under
+/// the cursor"), reusing the same [`FocusedStep`] the Tape's own
+/// detail pane builds theirs from -- a simpler block than the
+/// Tape's own (no history/share lines, since Signal's own model
+/// carries none of that per row), good enough to read a step's
+/// prompt and reply in full without leaving the screen.
+fn draw_signal_detail(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    ctx: &DrawCtx,
+) {
+    let Some(step) = &screen.selected else {
+        return;
+    };
+    let border_color = ctx.theme.border_focused;
+    let title = format!("{} \u{b7} Selected", step.breadcrumb);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(" Status  ", muted),
+        Span::styled(
+            format!(
+                "{} ",
+                oscilloscope_core::format::format_duration(step.elapsed_s.unwrap_or(0.0))
+            ),
+            default,
+        ),
+    ])];
+    if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
+        lines.push(Line::from(""));
+        lines.push(Line::styled(" Reply", muted));
+        if let Some(snippet) = snippet {
+            for line in snippet.lines() {
+                lines.push(Line::styled(format!(" {line}"), default));
+            }
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width.saturating_sub(1),
+            height: inner.height,
+        },
+    );
+}
+
 /// A running (or just-stopped) agent's own `meta.live` summary
 /// (issue #637), shared by every pane that shows one: the Flow
 /// screen's own selected pane and the Tape's detail pane -- model/
@@ -3284,16 +4481,6 @@ fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], log_total: u64,
     let paragraph =
         Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" log "));
     frame.render_widget(paragraph, area);
-}
-
-/// A strip label too long for `max`, cut from the right with no
-/// ellipsis -- unlike [`truncate_label`], a strip's own label set is
-/// small and fixed (`events/min (state)`, `decisions`, `in flight`),
-/// so cutting it ever actually losing a character would read as a
-/// bug rather than an unavoidable abbreviation; this exists only so
-/// a pathologically narrow pane doesn't panic slicing past the end.
-fn truncate_strip_label(label: &str, max: usize) -> String {
-    label.chars().take(max).collect()
 }
 
 /// A label too long for `max`, truncated from the *right*, trailing
@@ -4277,7 +5464,7 @@ fn draw_overlay_at(
 /// never a leftover key from an older draft of this same screen,
 /// or one some *other* screen's own key bar still has.
 const HELP_ROWS: &[(&str, &str, &str, &str)] = &[
-    ("↑ ↓", "select a row", "0 1 2 3", "Tape Time Flow Cost"),
+    ("↑ ↓", "select a row", "0 1 2 3", "Tape Signal Flow Cost"),
     ("enter", "open the step", "?", "this help"),
     ("p", "prompt previews on or off", "esc", "close · back"),
     (
@@ -4367,10 +5554,51 @@ fn tape_help_lines(ctx: &DrawCtx, unit: u64, history_runs: Option<usize>) -> Vec
 const HELP_OVERLAY_WIDTH: u16 = 72;
 const HELP_OVERLAY_HEIGHT: u16 = 18;
 
-/// Flow/Time/Cost's own Help (issue #678): unlike the Tape, these
-/// keep `s`/`l`/`z`/`v`/`Tab` live until their own part of the
-/// redesign, so their own Help lists them rather than the Tape's
-/// key bar.
+/// §4's own Signal keys, plus the globals every screen's key bar
+/// shares -- the only keys Signal's own key bar advertises, so the
+/// only ones its own Help lists.
+fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        (
+            "← →",
+            "scrub the cursor along the axis",
+            "+ -",
+            "zoom: 50 ms to 1 s a column",
+        ),
+        (
+            "n",
+            "cursor back to Now",
+            "enter",
+            "open the step under the cursor",
+        ),
+        ("0 1 2 3", "Tape Signal Flow Cost", "?", "this help"),
+        ("esc", "close · back", "q", "quit · confirms if running"),
+        ("c", "cancel · confirms", "", ""),
+    ];
+    let mut lines: Vec<Line<'static>> = ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    for _ in 0..7 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
+}
+
+/// Flow/Cost's own Help: unlike the Tape and Signal, these keep
+/// `s`/`l`/`z`/`v`/`Tab` live until their own part of the redesign,
+/// so their own Help lists them rather than those screens' own key
+/// bars.
 fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<&'static str>) {
     use oscilloscope_core::screens::Screen;
     let (title, screen_lines): (&str, &[&str]) = match screen {
@@ -4383,22 +5611,13 @@ fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<
                 "← →       collapse / expand a row",
             ],
         ),
-        Screen::Time => (
-            " Help · Time ",
-            &[
-                "tab       cycle timeline / zoom / vs usual",
-                "+ -       zoom the axis in / out",
-                "=         fit the whole run",
-                "← →       collapse / expand a row",
-            ],
-        ),
         Screen::Cost => (
             " Help · Cost ",
             &["i o $     measure: tokens in / out / cost"],
         ),
-        Screen::Tape => (" Help ", &[]),
+        Screen::Tape | Screen::Signal => (" Help ", &[]),
     };
-    let mut lines = vec!["↑ ↓       select a row               0-3     Tape Time Flow Cost"];
+    let mut lines = vec!["↑ ↓       select a row               0-3     Tape Signal Flow Cost"];
     lines.extend_from_slice(screen_lines);
     lines.extend_from_slice(&[
         "v         full value overlay          z       fold on/off",
@@ -4416,9 +5635,12 @@ fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<
 /// by every screen (replacing the old three-row one), then the
 /// screen currently on display (`app.screen`) — screen 2 (`Flow`,
 /// issue #635) is the tree as control flow, the selected step and the
-/// run's story; screen 1 (`Time`) isn't built yet and draws nothing.
-/// `overview`/`cost_screen`/`flow_screen` are screens 0, 3 and 2's own
-/// models, `Some` only while that screen is actually on display
+/// run's story; screen 1 (`Signal`) draws its own header, body and
+/// key bar entirely on its own, before this function's shared layout
+/// is even reached.
+/// `overview`/`cost_screen`/`flow_screen`/`signal_screen` are
+/// screens 0, 3, 2 and 1's own models, `Some` only while that screen
+/// is actually on display
 /// (issue #626's own performance rule: "models for screens not on
 /// display aren't built"); `cost_layout` is the Cost screen's own
 /// squarify-layout cache, re-laid out only when its own tree or area
@@ -4441,7 +5663,7 @@ pub fn draw(
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     cost_screen: Option<&oscilloscope_core::screens::CostScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
-    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
+    signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     cost_layout: &mut CostLayoutCache,
 ) {
@@ -4508,9 +5730,46 @@ pub fn draw(
         return;
     }
 
+    // Signal (issue #688) draws its own header band, status line and
+    // key bar too, the same self-contained way the Tape does -- its
+    // own panels (the trace, the Now pane, Readings) never share the
+    // generic layout Flow/Cost still use below.
+    if app.screen == oscilloscope_core::screens::Screen::Signal {
+        if let Some(signal_screen) = signal_screen {
+            draw_signal(
+                frame,
+                area,
+                signal_screen,
+                &state.header,
+                app,
+                ctx,
+                icon_frame,
+                now,
+            );
+        }
+        let status_line = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(2),
+            width: area.width,
+            height: 1,
+        };
+        dim_backdrop_for_dialog(frame, area, Some(status_line), app, ctx);
+        draw_dialog_overlay(
+            frame,
+            area,
+            app,
+            details,
+            raw_state,
+            ctx,
+            signal_screen.map(|s| s.unit).unwrap_or(50),
+            state.header.history_same_hash_count,
+        );
+        return;
+    }
+
     // Issue #678's R3: the header band, the Totals row, the status
     // line and the key bar are the outer frame shared by every
-    // screen now, not just the Tape -- Flow/Time/Cost keep their own
+    // screen now, not just the Tape -- Flow/Cost keep their own
     // inner panels and their own keys exactly as before, drawn into
     // whatever's left of `area` below the band and above the other
     // three rows.
@@ -4526,7 +5785,7 @@ pub fn draw(
         .split(area);
     let chip = match app.screen {
         oscilloscope_core::screens::Screen::Tape => "TAPE",
-        oscilloscope_core::screens::Screen::Time => "TIME",
+        oscilloscope_core::screens::Screen::Signal => "SIGNAL",
         oscilloscope_core::screens::Screen::Flow => "FLOW",
         oscilloscope_core::screens::Screen::Cost => "COST",
     };
@@ -4553,7 +5812,7 @@ pub fn draw(
     };
     let body = sections[1];
     match app.screen {
-        oscilloscope_core::screens::Screen::Tape => {}
+        oscilloscope_core::screens::Screen::Tape | oscilloscope_core::screens::Screen::Signal => {}
         oscilloscope_core::screens::Screen::Cost => {
             if let Some(cost_screen) = cost_screen {
                 draw_cost_screen(
@@ -4584,21 +5843,6 @@ pub fn draw(
                 );
             }
         }
-        oscilloscope_core::screens::Screen::Time => {
-            if let Some(time_screen) = time_screen {
-                draw_time_screen(
-                    frame,
-                    reduced_area,
-                    body,
-                    state,
-                    time_screen,
-                    app,
-                    transcript_view,
-                    ctx,
-                    now,
-                );
-            }
-        }
     }
 
     draw_totals_row(
@@ -4619,9 +5863,10 @@ pub fn draw(
     draw_dialog_overlay(frame, area, app, details, raw_state, ctx, 50, None);
 }
 
-/// Flow/Time/Cost's own status line (§3.2), until their own part of
-/// the redesign gives them a bespoke one the way the Tape has -- the
-/// run's own latest report, in the theme's own warning/error colour,
+/// Flow/Cost's own status line (§3.2), until their own part of the
+/// redesign gives them a bespoke one the way the Tape and Signal
+/// already have -- the run's own latest report, in the theme's own
+/// warning/error colour,
 /// collapsed to a bare `▸` when it would not fit (issue #610's
 /// behaviour, carried over from the one-line header this replaces),
 /// else the newest line already in the run's own log.
@@ -4756,6 +6001,37 @@ fn draw_dialog_overlay(
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
+        Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Signal => {
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
+            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Signal", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(signal_help_lines(ctx))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
+        }
         Dialog::Help => {
             let (title, lines) = screen_help_text(app.screen);
             let height = (lines.len() as u16 + 2).max(HELP_OVERLAY_HEIGHT);
@@ -4826,7 +6102,7 @@ fn flow_row_lines(
             // glyph is never replaced by `⟲` -- merged (a single
             // observed pass) or not (`loop_progress` still set, more
             // than one pass), it always shows both, the same order
-            // the Time screen's own loop rows already do.
+            // the Tape's own loop rows already do.
             let is_loop_row = row.merged_pass || row.loop_progress.is_some();
             let prefix = if is_loop_row {
                 format!("{indent}{} ⟲ ", status_glyph(row.status.kind))
@@ -5857,1832 +7133,6 @@ fn draw_flow_screen(
     }
 }
 
-// ---------------------------------------------------------------------
-// The Time screen (issue #650)
-// ---------------------------------------------------------------------
-
-/// The timeline's and the strips' own shared layout, computed once
-/// per frame so both panes bucket onto -- and draw -- the exact same
-/// columns (DESIGN.md: the strips are "on the same axis" as the
-/// bars): the gutter (label + start/duration column) width, the bar
-/// width itself, and the visible window `+`/`-`/`=` currently zoom
-/// to. Every strip buckets against this same bar width and window,
-/// rather than its own fixed resolution, so none of them can ever
-/// run past the now line the bars themselves line up with.
-struct TimeLayout {
-    label_width: usize,
-    show_columns: bool,
-    bar_width: usize,
-    vis_start_s: f64,
-    vis_end_s: f64,
-}
-
-fn time_layout(
-    screen: &oscilloscope_core::screens::TimeScreen,
-    app: &App,
-    area_width: u16,
-    frame_width: u16,
-) -> TimeLayout {
-    let show_columns = frame_width >= thresholds::TIME_START_DURATION_COLUMN_MIN_WIDTH;
-    let label_width = 22usize.min((area_width as usize).saturating_sub(10));
-    // A row reads `label_width` + 1 (the gutter space) + the bar,
-    // plus 19 more (`"  " + 9 + 7` + a trailing space before the
-    // border) when the start/duration columns are shown -- all
-    // inside the box's own inner width, 2 columns narrower than
-    // `area_width` for its left/right border.
-    let column_width = if show_columns { 19 } else { 0 };
-    let bar_width = (area_width as usize)
-        .saturating_sub(label_width + 1 + column_width + 2)
-        .max(4);
-    let run_start_ts = screen.axis.start_ts.as_deref();
-    let full_end_s = run_start_ts
-        .and_then(|s| oscilloscope_core::observe::duration_seconds(s, &screen.axis.end_ts))
-        .unwrap_or(0.0);
-    let (vis_start_s, vis_end_s) = time_visible_window(screen, app, full_end_s);
-    TimeLayout {
-        label_width,
-        show_columns,
-        bar_width,
-        vis_start_s,
-        vis_end_s,
-    }
-}
-
-/// `run_start_ts` plus `offset_s` (run-relative seconds), formatted
-/// in the local zone -- `None` only when `run_start_ts` itself fails
-/// to parse (never true of a real run's own start, which
-/// `oscilloscope_core::diff::parse_instant` already produced once).
-fn offset_clock_label(
-    run_start_ts: &str,
-    offset_s: f64,
-    zone: &dyn oscilloscope_core::format::ClockZone,
-    fmt: &str,
-) -> Option<String> {
-    let dt = oscilloscope_core::diff::parse_instant(run_start_ts)?
-        + chrono::Duration::milliseconds((offset_s * 1000.0) as i64);
-    Some(
-        zone.local(dt.with_timezone(&chrono::Utc))
-            .format(fmt)
-            .to_string(),
-    )
-}
-
-/// Writes `┃` (DESIGN.md's now line) into `bar` at `now_s`'s own
-/// column -- a running row's own head (`▶`) is one cell to the
-/// left of it instead of under it, so the two glyphs stay visible
-/// side by side rather than the now line simply overwriting the head
-/// (the mockup's own `█▶┃`).
-fn overlay_now_line(bar: &mut String, now_s: Option<f64>, layout: &TimeLayout, running: bool) {
-    let Some(now_s) = now_s else { return };
-    let Some(col) = oscilloscope_core::time::now_column(
-        layout.vis_start_s,
-        layout.vis_end_s,
-        layout.bar_width,
-        now_s,
-    ) else {
-        return;
-    };
-    let mut chars: Vec<char> = bar.chars().collect();
-    if col >= chars.len() {
-        return;
-    }
-    if running && chars[col] == '▶' && col > 0 {
-        chars[col - 1] = '▶';
-    }
-    chars[col] = '┃';
-    *bar = chars.into_iter().collect();
-}
-
-/// One row the timeline actually draws: a real folded row, one of an
-/// expanded loop's own passes (with its own indent depth, since a
-/// pass sits one level deeper than its loop row), or the timeline's
-/// own trailing `planned` ghost row (DESIGN.md: "The last row,
-/// `planned`, runs from now to the ETA").
-enum TimeDrawRow<'a> {
-    Row(&'a oscilloscope_core::time::TimeRow),
-    Pass(&'a oscilloscope_core::screens::TimeLoopPassRow, usize),
-    Planned(oscilloscope_core::time::GhostBar),
-}
-
-/// The timeline's own drawable rows, in display order -- `visible`
-/// already has collapsed/filtered/under-a-loop rows dropped
-/// (`draw_time_timeline`'s own job, same rule `draw_flow_pane` builds
-/// its own `drawable` list under); this splices each expanded loop's
-/// own passes in right after it, the one thing `screen.rows` already
-/// orders correctly but `visible` (built from the base tree, which
-/// never shows a pass row at all) can't.
-fn time_drawable_rows<'a>(
-    visible: &[&Row],
-    by_path: &std::collections::BTreeMap<String, &'a oscilloscope_core::time::TimeRow>,
-    passes: &std::collections::BTreeMap<
-        String,
-        Vec<&'a oscilloscope_core::screens::TimeLoopPassRow>,
-    >,
-    planned: Option<oscilloscope_core::time::GhostBar>,
-    app: &App,
-) -> Vec<TimeDrawRow<'a>> {
-    let mut out = Vec::new();
-    for row in visible {
-        let Some(time_row) = by_path.get(row.path.as_str()) else {
-            continue;
-        };
-        out.push(TimeDrawRow::Row(time_row));
-        if time_row.loop_expandable && app.time_expanded_loops.contains(&row.path) {
-            if let Some(rows) = passes.get(&row.path) {
-                for pass in rows {
-                    out.push(TimeDrawRow::Pass(pass, time_row.depth + 1));
-                }
-            }
-        }
-    }
-    if let Some(ghost) = planned {
-        out.push(TimeDrawRow::Planned(ghost));
-    }
-    out
-}
-
-fn time_height_glyph(h: u64, max: u64) -> char {
-    const GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    if max == 0 || h == 0 {
-        return ' ';
-    }
-    let level = ((h as f64 / max as f64) * 7.0).round() as usize;
-    GLYPHS[level.min(7)]
-}
-
-/// One row's own bar, drawn onto exactly `width` columns of
-/// `[vis_start_s, vis_end_s]` -- `▁`-less partial blocks
-/// (`oscilloscope_core::time::bar_cells`/`partial_block`), a `▶`
-/// head in place of the bar's own end while `running`, and a ghost
-/// (`░`) for a pending step with one (DESIGN.md's own glyphs).
-#[allow(clippy::too_many_arguments)]
-fn time_bar_string(
-    start_s: Option<f64>,
-    duration_s: Option<f64>,
-    running: bool,
-    ghost: Option<oscilloscope_core::time::GhostBar>,
-    failed: bool,
-    vis_start_s: f64,
-    vis_end_s: f64,
-    width: usize,
-) -> String {
-    let mut out = vec![' '; width];
-    if let Some(ghost) = ghost {
-        if ghost.end_s >= vis_start_s && ghost.start_s <= vis_end_s {
-            let cells = oscilloscope_core::time::bar_cells(
-                vis_start_s,
-                vis_end_s,
-                width,
-                ghost.start_s,
-                ghost.end_s,
-            );
-            for slot in out
-                .iter_mut()
-                .take((cells.start_col + cells.full_cells).min(width))
-                .skip(cells.start_col)
-            {
-                *slot = '░';
-            }
-        }
-    }
-    let Some(start_s) = start_s else {
-        return out.into_iter().collect();
-    };
-    let end_s = start_s + duration_s.unwrap_or(0.0);
-    if end_s < vis_start_s || start_s > vis_end_s {
-        return out.into_iter().collect();
-    }
-    let cells = oscilloscope_core::time::bar_cells(vis_start_s, vis_end_s, width, start_s, end_s);
-    for slot in out
-        .iter_mut()
-        .take((cells.start_col + cells.full_cells).min(width))
-        .skip(cells.start_col)
-    {
-        *slot = '█';
-    }
-    let mut end_idx = cells.start_col + cells.full_cells;
-    if let Some(partial) = cells.partial_end {
-        if end_idx < width {
-            out[end_idx] = partial;
-        }
-    }
-    if running {
-        end_idx = end_idx.min(width.saturating_sub(1));
-        out[end_idx] = '▶';
-    } else if failed && end_idx > 0 {
-        out[(end_idx - 1).min(width - 1)] = '✗';
-    }
-    out.into_iter().collect()
-}
-
-/// A zoom-pane band row's own line (DESIGN.md: "one band per kind of
-/// tool ... from the transcript's `tool_start`/`tool_end` times"):
-/// unlike [`time_bar_string`], a kind can have more than one segment
-/// on the same row (an agent calls the same kind of tool more than
-/// once in a session), so each of `segments` (`start_s, end_s,
-/// running`) is drawn in turn, the last one still running getting
-/// its own `▶` head.
-fn multi_segment_bar(
-    segments: &[(f64, f64, bool)],
-    axis_start_s: f64,
-    axis_end_s: f64,
-    width: usize,
-    fill: char,
-) -> String {
-    let mut out = vec![' '; width];
-    for &(start, end, running) in segments {
-        if end < axis_start_s || start > axis_end_s {
-            continue;
-        }
-        let cells = oscilloscope_core::time::bar_cells(axis_start_s, axis_end_s, width, start, end);
-        for slot in out
-            .iter_mut()
-            .take((cells.start_col + cells.full_cells).min(width))
-            .skip(cells.start_col)
-        {
-            *slot = fill;
-        }
-        let mut end_idx = cells.start_col + cells.full_cells;
-        if let Some(partial) = cells.partial_end {
-            if end_idx < width {
-                // `partial_block` reads a near-full fraction as a
-                // solid `'█'` regardless of the band it's filling --
-                // right for a single-fill status bar, but a stray
-                // bash-looking glyph inside a `'▓'`/`'▒'` band here.
-                // This band's own fill reads as "nearly full" just as
-                // well.
-                out[end_idx] = if partial == '█' { fill } else { partial };
-            }
-        }
-        if running {
-            end_idx = end_idx.min(width.saturating_sub(1));
-            out[end_idx] = '▶';
-        }
-    }
-    out.into_iter().collect()
-}
-
-#[cfg(test)]
-mod time_bar_tests {
-    use super::*;
-
-    /// A tick label too close to the bar's own right edge to fit in
-    /// full is left out entirely -- never cut to a stray, unreadable
-    /// fragment -- while every other tick still shows in full and
-    /// the rule row's own tick marks land on every column regardless.
-    #[test]
-    fn tick_axis_rows_never_cuts_a_label_that_would_overflow() {
-        let ticks = vec![
-            (0usize, 0.0, "00:00".to_string()),
-            (10usize, 600.0, "00:10".to_string()),
-            (18usize, 1080.0, "00:18".to_string()),
-        ];
-        let (labels, rule) = tick_axis_rows(20, &ticks);
-        let text: String = labels.iter().collect();
-        assert!(text.starts_with("00:00"), "{text:?}");
-        assert!(text.contains("00:10"), "{text:?}");
-        assert!(
-            !text.contains("00:18"),
-            "the last tick's label runs past column 20 and must not appear at all, cut or not: {text:?}"
-        );
-        assert_eq!(
-            &labels[18..20],
-            [' ', ' '],
-            "left blank rather than cut: {labels:?}"
-        );
-        assert_eq!(rule[0], '├', "{rule:?}");
-        assert_eq!(
-            rule[18], '┼',
-            "a tick mark lands on its column even with no label: {rule:?}"
-        );
-    }
-
-    #[test]
-    fn decisions_line_places_a_mark_by_its_own_fraction_of_the_window() {
-        // A decision at 300s into a 0..600s/10-column window belongs
-        // at column 5 (300/600 of the way across) -- raw seconds
-        // divided by a column *count* (`d / width`) would instead put
-        // it at column 30, clamped to the last one.
-        let line = decisions_line(&[300.0], 0.0, 600.0, 10);
-        let col = line.chars().position(|c| c == '◆');
-        assert_eq!(col, Some(5));
-    }
-
-    #[test]
-    fn zoom_container_budget_reserves_a_row_for_plus_n_more_once_it_overflows() {
-        assert_eq!(
-            zoom_container_budget(3, 5),
-            5,
-            "everything fits, no +N more row needed"
-        );
-        assert_eq!(
-            zoom_container_budget(5, 3),
-            2,
-            "one row reserved for +N more"
-        );
-    }
-
-    #[test]
-    fn a_running_bars_own_head_is_drawn() {
-        // 0..5s over a 0..10s/10-column window: columns 0..4 fill,
-        // the head lands in column 5 (`bar_cells`' own `end_idx`).
-        let bar = time_bar_string(Some(0.0), Some(5.0), true, None, false, 0.0, 10.0, 10);
-        assert_eq!(bar.chars().nth(5), Some('▶'));
-    }
-
-    #[test]
-    fn a_failed_bars_own_end_is_drawn() {
-        let bar = time_bar_string(Some(0.0), Some(5.0), false, None, true, 0.0, 10.0, 10);
-        assert_eq!(bar.chars().nth(4), Some('✗'));
-    }
-
-    #[test]
-    fn a_ghost_bar_draws_without_a_real_start() {
-        let ghost = oscilloscope_core::time::GhostBar {
-            start_s: 5.0,
-            end_s: 8.0,
-        };
-        let bar = time_bar_string(None, None, false, Some(ghost), false, 0.0, 10.0, 10);
-        let chars: Vec<char> = bar.chars().collect();
-        assert_eq!(&chars[5..8], ['░', '░', '░']);
-    }
-
-    #[test]
-    fn overlay_now_line_puts_a_running_heads_own_bar_one_cell_before_the_now_line() {
-        let layout = TimeLayout {
-            label_width: 0,
-            show_columns: false,
-            bar_width: 10,
-            vis_start_s: 0.0,
-            vis_end_s: 10.0,
-        };
-        let mut bar = time_bar_string(Some(0.0), Some(5.0), true, None, false, 0.0, 10.0, 10);
-        assert_eq!(bar.chars().nth(5), Some('▶'), "the head before any overlay");
-        overlay_now_line(&mut bar, Some(5.0), &layout, true);
-        let chars: Vec<char> = bar.chars().collect();
-        assert_eq!(
-            chars[4], '▶',
-            "the head moved one cell left of the now line"
-        );
-        assert_eq!(chars[5], '┃', "the now line itself stays visible");
-    }
-
-    #[test]
-    fn overlay_now_line_on_a_finished_row_just_overlays_the_now_line() {
-        let layout = TimeLayout {
-            label_width: 0,
-            show_columns: false,
-            bar_width: 10,
-            vis_start_s: 0.0,
-            vis_end_s: 10.0,
-        };
-        let mut bar = time_bar_string(Some(0.0), Some(8.0), false, None, false, 0.0, 10.0, 10);
-        overlay_now_line(&mut bar, Some(4.0), &layout, false);
-        assert_eq!(bar.chars().nth(4), Some('┃'));
-    }
-
-    #[test]
-    fn multi_segment_bar_draws_more_than_one_segment_on_one_row() {
-        let segments = [(0.0, 2.0, false), (5.0, 8.0, true)];
-        let bar = multi_segment_bar(&segments, 0.0, 10.0, 10, '█');
-        let chars: Vec<char> = bar.chars().collect();
-        assert_eq!(&chars[0..2], ['█', '█']);
-        assert_eq!(chars[8], '▶', "the running segment's own head");
-    }
-
-    /// A near-full end cell reads as a solid `'█'` from `partial_block`
-    /// alone, which looks like a `bash` band dropped into the middle
-    /// of any other one -- this band's own fill must show instead.
-    #[test]
-    fn multi_segment_bar_uses_its_own_fill_for_a_near_full_end_cell() {
-        let segments = [(0.0, 1.99, false)];
-        let bar = multi_segment_bar(&segments, 0.0, 10.0, 10, '▓');
-        let chars: Vec<char> = bar.chars().collect();
-        assert_eq!(&chars[0..2], ['▓', '▓'], "{bar:?}");
-    }
-
-    /// A leaf two loops deep maps to the outer loop's row, the only
-    /// one of the two the timeline draws, so follow still highlights
-    /// a row and scrolls to it.
-    #[test]
-    fn a_leaf_under_nested_loops_maps_to_the_outermost_loop_row() {
-        let mut outer = test_time_row(Some(0.0), None, StatusKind::Running);
-        outer.path = "prime.outer".to_string();
-        outer.kind = oscilloscope_core::render::RowKind::Loop;
-        let mut inner = test_time_row(Some(0.0), None, StatusKind::Running);
-        inner.path = "prime.outer.iter_1.inner".to_string();
-        inner.kind = oscilloscope_core::render::RowKind::Loop;
-        let mut by_path = std::collections::BTreeMap::new();
-        by_path.insert(outer.path.clone(), &outer);
-        by_path.insert(inner.path.clone(), &inner);
-        assert_eq!(
-            outermost_ancestor_loop_path(&by_path, "prime.outer.iter_1.inner.iter_2.x"),
-            Some("prime.outer")
-        );
-        assert_eq!(
-            outermost_ancestor_loop_path(&by_path, "prime.outer.iter_0.y"),
-            Some("prime.outer")
-        );
-        assert_eq!(outermost_ancestor_loop_path(&by_path, "prime.other"), None);
-    }
-
-    fn test_time_row(
-        start_s: Option<f64>,
-        duration_s: Option<f64>,
-        status_kind: StatusKind,
-    ) -> oscilloscope_core::time::TimeRow {
-        oscilloscope_core::time::TimeRow {
-            path: "prime.a".to_string(),
-            depth: 1,
-            label: "a".to_string(),
-            kind: oscilloscope_core::render::RowKind::Tool,
-            status: oscilloscope_core::model::RowStatus {
-                kind: status_kind,
-                skip_reason: None,
-                retrying: false,
-            },
-            start_s,
-            duration_s,
-            loop_progress: None,
-            has_children: false,
-            loop_expandable: false,
-            ghost: None,
-        }
-    }
-
-    fn test_draw_ctx<'a>(
-        theme: &'a crate::theme::Theme,
-        tracker: &'a crate::highlight::Tracker,
-        zone: &'a chrono::FixedOffset,
-    ) -> DrawCtx<'a> {
-        DrawCtx {
-            theme,
-            highlights: tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone,
-            no_animation: false,
-        }
-    }
-
-    /// A running step's own time line always reads `→ now`, growing
-    /// with `now_s` itself, not a stored duration.
-    #[test]
-    fn zoom_axis_line_a_running_step_reads_arrow_now() {
-        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let tracker = crate::highlight::Tracker::new();
-        let zone = test_zone();
-        let ctx = test_draw_ctx(&theme, &tracker, &zone);
-        let row = test_time_row(Some(10.0), None, StatusKind::Running);
-        let line = zoom_axis_line(&row, "2026-01-01T00:00:00Z", 70.0, &ctx).unwrap();
-        assert!(line.contains("\u{2192} now"), "{line:?}");
-        assert!(line.contains("1m00s"), "{line:?}");
-    }
-
-    /// Both `…` and `›` are multi-byte in UTF-8 -- cutting by byte
-    /// index instead of char index would panic or split one in half.
-    /// A title long enough that it actually needs cutting (not merely
-    /// short enough to pass through unchanged) exercises that path.
-    #[test]
-    fn truncate_title_from_left_cuts_a_multi_byte_title() {
-        let title = "fan › pass 1 of 8 › leaf";
-        assert!(title.chars().count() > 12);
-        let cut = truncate_title_from_left(title, 12);
-        assert_eq!(cut.chars().count(), 12, "{cut:?}");
-        assert!(cut.starts_with('…'), "{cut:?}");
-        assert!(cut.ends_with("leaf"), "{cut:?}");
-    }
-
-    /// A cancelled step with no real duration of its own must not
-    /// keep growing with how long ago `now_s` is -- its own time line
-    /// reads the same regardless of how far in the future `now_s` is.
-    #[test]
-    fn zoom_axis_line_a_cancelled_step_does_not_grow_with_now() {
-        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let tracker = crate::highlight::Tracker::new();
-        let zone = test_zone();
-        let ctx = test_draw_ctx(&theme, &tracker, &zone);
-        let row = test_time_row(Some(10.0), None, StatusKind::Cancelled);
-        let soon = zoom_axis_line(&row, "2026-01-01T00:00:00Z", 15.0, &ctx).unwrap();
-        let much_later = zoom_axis_line(&row, "2026-01-01T00:00:00Z", 10_000.0, &ctx).unwrap();
-        assert_eq!(soon, much_later, "{soon:?} vs {much_later:?}");
-        assert!(!soon.contains("now"), "{soon:?}");
-    }
-}
-
-/// The decisions strip's own line (DESIGN.md: "a `◆` at the time each
-/// named `if` decided") -- each of `decisions` (run-relative
-/// seconds) bucketed by [`oscilloscope_core::time::bucket_weighted`],
-/// the same window and width every other strip and the bars
-/// themselves use, so a mark lands under its own real time rather
-/// than at whatever column its own raw seconds happen to divide into.
-fn decisions_line(decisions: &[f64], vis_start_s: f64, vis_end_s: f64, width: usize) -> String {
-    let points: Vec<(f64, u64)> = decisions.iter().map(|&d| (d, 1)).collect();
-    let heights = oscilloscope_core::time::bucket_weighted(vis_start_s, vis_end_s, width, &points);
-    heights
-        .iter()
-        .map(|h| if *h > 0 { '◆' } else { ' ' })
-        .collect()
-}
-
-/// How many of a container's own children the zoom pane actually
-/// draws (DESIGN.md's "`+N more` when they don't fit") -- every one
-/// of them when they all fit in `viewport`, one row short of it
-/// otherwise, leaving room for the `+N more` line itself.
-fn zoom_container_budget(total: usize, viewport: usize) -> usize {
-    if total > viewport {
-        viewport.saturating_sub(1)
-    } else {
-        viewport
-    }
-}
-
-/// The visible window (issue #650's `+`/`-`/`=`): the whole axis by
-/// default, narrowed by `app.time_zoom` around now (while following)
-/// or around the selected row's own bar (otherwise), clamped back
-/// inside `[0, full_end_s]`.
-fn time_visible_window(
-    screen: &oscilloscope_core::screens::TimeScreen,
-    app: &App,
-    full_end_s: f64,
-) -> (f64, f64) {
-    let Some(fraction) = app.time_zoom else {
-        return (0.0, full_end_s);
-    };
-    let window = (full_end_s * fraction).max(1.0);
-    let center = if app.follow {
-        screen.now_s.unwrap_or(full_end_s)
-    } else {
-        app.selected_path
-            .as_deref()
-            .and_then(|path| {
-                screen.rows.iter().find_map(|r| match r {
-                    oscilloscope_core::screens::TimeDisplayRow::Row(row) if row.path == path => {
-                        row.start_s.map(|s| s + row.duration_s.unwrap_or(0.0) / 2.0)
-                    }
-                    _ => None,
-                })
-            })
-            .unwrap_or(full_end_s / 2.0)
-    };
-    let half = window / 2.0;
-    let mut start = center - half;
-    let mut end = center + half;
-    if start < 0.0 {
-        end += -start;
-        start = 0.0;
-    }
-    if end > full_end_s {
-        start -= end - full_end_s;
-        end = full_end_s;
-        start = start.max(0.0);
-    }
-    (start, end)
-}
-
-/// Splits `screen.rows` into its own loop rows (by path) and each
-/// loop's own pass rows, grouped by the loop row they immediately
-/// follow -- `draw_time_timeline` interleaves a loop's own passes
-/// right after it, only when that loop's own path is both visible
-/// and in `app.time_expanded_loops`.
-fn time_row_groups(
-    rows: &[oscilloscope_core::screens::TimeDisplayRow],
-) -> (
-    std::collections::BTreeMap<String, &oscilloscope_core::time::TimeRow>,
-    std::collections::BTreeMap<String, Vec<&oscilloscope_core::screens::TimeLoopPassRow>>,
-) {
-    let mut by_path = std::collections::BTreeMap::new();
-    let mut passes: std::collections::BTreeMap<
-        String,
-        Vec<&oscilloscope_core::screens::TimeLoopPassRow>,
-    > = std::collections::BTreeMap::new();
-    let mut current_loop: Option<String> = None;
-    for row in rows {
-        match row {
-            oscilloscope_core::screens::TimeDisplayRow::Row(r) => {
-                by_path.insert(r.path.clone(), r);
-                current_loop = Some(r.path.clone());
-            }
-            oscilloscope_core::screens::TimeDisplayRow::Pass(p) => {
-                if let Some(path) = &current_loop {
-                    passes.entry(path.clone()).or_default().push(p);
-                }
-            }
-        }
-    }
-    (by_path, passes)
-}
-
-/// The outermost loop row `path` sits under, if any -- a leaf under
-/// a *collapsed* loop never gets a drawn row of its own at all (its
-/// path is always filtered out of the timeline's own
-/// `visible`/`drawable` rows, expanded or not -- expanded shows
-/// separate pass rows instead), so follow selecting it must
-/// highlight and scroll to a loop row instead. Only the outermost
-/// one is drawn: a loop row under another loop is filtered out the
-/// same way its leaves are, so a leaf two loops deep maps to the
-/// outer loop's row, not the inner one's.
-fn outermost_ancestor_loop_path<'a>(
-    by_path: &std::collections::BTreeMap<String, &'a oscilloscope_core::time::TimeRow>,
-    path: &str,
-) -> Option<&'a str> {
-    by_path
-        .values()
-        .filter(|r| {
-            r.kind == oscilloscope_core::render::RowKind::Loop
-                && path.starts_with(&format!("{}.", r.path))
-        })
-        .min_by_key(|r| r.path.len())
-        .map(|r| r.path.as_str())
-}
-
-/// The clock axis's own tick-label and rule rows (DESIGN.md: a
-/// labelled tick row plus a `├─┤` rule), built from
-/// [`oscilloscope_core::time::axis_tick_columns`]'s own output -- a
-/// label that would run past `bar_width` is left out entirely rather
-/// than cut to a stray, unreadable fragment; the rule row's own tick
-/// mark still lands on its column either way.
-fn tick_axis_rows(bar_width: usize, ticks: &[(usize, f64, String)]) -> (Vec<char>, Vec<char>) {
-    let mut tick_label_row = vec![' '; bar_width];
-    let mut tick_rule_row = vec!['─'; bar_width];
-    for (col, _offset_s, label) in ticks {
-        let col = *col;
-        tick_rule_row[col] = if col == 0 {
-            '├'
-        } else if col == bar_width.saturating_sub(1) {
-            '┤'
-        } else {
-            '┼'
-        };
-        if col + label.chars().count() <= tick_label_row.len() {
-            for (i, ch) in label.chars().enumerate() {
-                tick_label_row[col + i] = ch;
-            }
-        }
-    }
-    (tick_label_row, tick_rule_row)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_time_timeline(
-    frame: &mut Frame,
-    area: Rect,
-    state: &oscilloscope_core::render::RenderState,
-    screen: &oscilloscope_core::screens::TimeScreen,
-    layout: &TimeLayout,
-    app: &mut App,
-    ctx: &DrawCtx,
-) {
-    let all_visible = visible_rows(&state.rows, app);
-    let (by_path, passes) = time_row_groups(&screen.rows);
-    // DESIGN.md: "Loops are collapsed by default: one row" -- a
-    // loop's own passes never appear as the base tree's own rows
-    // here (breadcrumbed or not), only as this screen's own
-    // `expand_loop` rows, spliced in below exactly when the loop
-    // itself is in `app.time_expanded_loops`.
-    // The trailing `.` is appended once per loop row here, not once
-    // per (row × loop row) pair inside the filter below -- a `format!`
-    // there cost `O(rows × loop rows)` allocations on every redraw.
-    let loop_prefixes: Vec<String> = by_path
-        .values()
-        .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-        .map(|r| format!("{}.", r.path))
-        .collect();
-    let is_under_a_loop = |path: &str| loop_prefixes.iter().any(|p| path.starts_with(p.as_str()));
-    let visible: Vec<&Row> = all_visible
-        .into_iter()
-        .filter(|r| !is_under_a_loop(&r.path))
-        .collect();
-    let drawable = time_drawable_rows(&visible, &by_path, &passes, screen.planned, app);
-    let run_start_ts = screen.axis.start_ts.as_deref();
-
-    // Follow can select a leaf hidden under a collapsed loop (its
-    // own row never drawn at all) -- the nearest ancestor row that
-    // *is* drawn stands in for it, both for the highlight below and
-    // for scrolling it into view.
-    let effective_selected_path: Option<&str> = app.selected_path.as_deref().map(|p| {
-        if is_under_a_loop(p) {
-            outermost_ancestor_loop_path(&by_path, p).unwrap_or(p)
-        } else {
-            p
-        }
-    });
-    let selected_idx = effective_selected_path.and_then(|p| {
-        drawable
-            .iter()
-            .position(|r| matches!(r, TimeDrawRow::Row(tr) if tr.path == p))
-    });
-    // The clock axis's own tick-label and rule rows (DESIGN.md: a
-    // labelled tick row plus a `├─┤` rule) sit above the bars, so the
-    // viewport the bars themselves scroll through is two rows
-    // shorter than the pane's own interior height.
-    let axis_rows = 2usize;
-    let viewport = (area.height as usize).saturating_sub(2 + axis_rows);
-    app.tree_viewport = viewport;
-    let line_counts = vec![1usize; drawable.len()];
-    app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
-
-    let gutter = " ".repeat(layout.label_width + 1);
-    let (tick_label_row, mut tick_rule_row) = run_start_ts.map_or_else(
-        || (vec![' '; layout.bar_width], vec!['─'; layout.bar_width]),
-        |rs| {
-            let ticks = oscilloscope_core::time::axis_tick_columns(
-                rs,
-                layout.vis_start_s,
-                layout.vis_end_s,
-                layout.bar_width,
-                ctx.zone,
-            );
-            tick_axis_rows(layout.bar_width, &ticks)
-        },
-    );
-    if let Some(now_s) = screen.now_s {
-        if let Some(col) = oscilloscope_core::time::now_column(
-            layout.vis_start_s,
-            layout.vis_end_s,
-            layout.bar_width,
-            now_s,
-        ) {
-            tick_rule_row[col] = '╂';
-        }
-    }
-    let mut lines: Vec<Line<'static>> = vec![
-        Line::styled(
-            format!("{gutter}{}", tick_label_row.into_iter().collect::<String>()),
-            Style::default().fg(ctx.theme.dim),
-        ),
-        Line::styled(
-            format!("{gutter}{}", tick_rule_row.into_iter().collect::<String>()),
-            Style::default().fg(ctx.theme.dim),
-        ),
-    ];
-
-    for item in drawable.iter().skip(app.tree_scroll).take(viewport) {
-        match item {
-            TimeDrawRow::Row(time_row) => {
-                let selected = effective_selected_path == Some(time_row.path.as_str());
-                let indent = "  ".repeat(time_row.depth);
-                let glyph = status_glyph(time_row.status.kind);
-                let mut label = format!("{indent}{glyph} {}", time_row.label);
-                if let Some(progress) = &time_row.loop_progress {
-                    let total = progress
-                        .total
-                        .map(|t| t.to_string())
-                        .unwrap_or_else(|| "?".to_string());
-                    label.push_str(&format!(" ⟲ {}/{total}", progress.done));
-                }
-                let label = truncate_label(&label, layout.label_width);
-                let mut bar = time_bar_string(
-                    time_row.start_s,
-                    time_row.duration_s,
-                    time_row.status.kind == StatusKind::Running,
-                    time_row.ghost,
-                    time_row.status.kind == StatusKind::Failed,
-                    layout.vis_start_s,
-                    layout.vis_end_s,
-                    layout.bar_width,
-                );
-                overlay_now_line(
-                    &mut bar,
-                    screen.now_s,
-                    layout,
-                    time_row.status.kind == StatusKind::Running,
-                );
-                let label_width = layout.label_width;
-                let mut spans = vec![
-                    Span::styled(
-                        format!("{label:<label_width$} "),
-                        status_style(time_row.status.kind, ctx.theme),
-                    ),
-                    Span::styled(
-                        bar,
-                        Style::default().fg(status_color(time_row.status.kind, ctx.theme)),
-                    ),
-                ];
-                if layout.show_columns {
-                    let start_text = time_row
-                        .start_s
-                        .zip(run_start_ts)
-                        .and_then(|(s, start_ts)| {
-                            offset_clock_label(start_ts, s, ctx.zone, "%H:%M:%S")
-                        })
-                        .unwrap_or_default();
-                    let duration_text = time_row
-                        .duration_s
-                        .map(oscilloscope_core::format::format_duration)
-                        .unwrap_or_default();
-                    spans.push(Span::styled(
-                        format!("  {start_text:<9}{duration_text:>7} "),
-                        Style::default().fg(ctx.theme.dim),
-                    ));
-                }
-                let style = if selected {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-                lines.push(Line::styled("", style).spans(spans).style(style));
-            }
-            TimeDrawRow::Pass(pass, depth) => {
-                let pass_indent = "  ".repeat(*depth);
-                let pass_glyph = status_glyph(pass.status.kind);
-                let label_width = layout.label_width;
-                let pass_label = truncate_label(
-                    &format!("{pass_indent}{pass_glyph} {}", pass.label),
-                    label_width,
-                );
-                let mut pass_bar = time_bar_string(
-                    pass.start_s,
-                    pass.duration_s,
-                    pass.status.kind == StatusKind::Running,
-                    None,
-                    pass.status.kind == StatusKind::Failed,
-                    layout.vis_start_s,
-                    layout.vis_end_s,
-                    layout.bar_width,
-                );
-                overlay_now_line(
-                    &mut pass_bar,
-                    screen.now_s,
-                    layout,
-                    pass.status.kind == StatusKind::Running,
-                );
-                let mut pass_spans = vec![
-                    Span::styled(
-                        format!("{pass_label:<label_width$} "),
-                        status_style(pass.status.kind, ctx.theme),
-                    ),
-                    Span::styled(
-                        pass_bar,
-                        Style::default().fg(status_color(pass.status.kind, ctx.theme)),
-                    ),
-                ];
-                if layout.show_columns {
-                    let start_text = pass
-                        .start_s
-                        .zip(run_start_ts)
-                        .and_then(|(s, start_ts)| {
-                            offset_clock_label(start_ts, s, ctx.zone, "%H:%M:%S")
-                        })
-                        .unwrap_or_default();
-                    let duration_text = pass
-                        .duration_s
-                        .map(oscilloscope_core::format::format_duration)
-                        .unwrap_or_default();
-                    pass_spans.push(Span::styled(
-                        format!("  {start_text:<9}{duration_text:>7} "),
-                        Style::default().fg(ctx.theme.dim),
-                    ));
-                }
-                lines.push(Line::from(pass_spans));
-            }
-            TimeDrawRow::Planned(ghost) => {
-                let label_width = layout.label_width;
-                let label = truncate_label("planned", label_width);
-                let mut bar = vec![' '; layout.bar_width];
-                let cells = oscilloscope_core::time::bar_cells(
-                    layout.vis_start_s,
-                    layout.vis_end_s,
-                    layout.bar_width,
-                    ghost.start_s,
-                    ghost.end_s,
-                );
-                for slot in bar
-                    .iter_mut()
-                    .take((cells.start_col + cells.full_cells).min(layout.bar_width))
-                    .skip(cells.start_col)
-                {
-                    *slot = '░';
-                }
-                let mut bar_str: String = bar.into_iter().collect();
-                overlay_now_line(&mut bar_str, screen.now_s, layout, false);
-                let mut spans = vec![
-                    Span::styled(
-                        format!("{label:<label_width$} "),
-                        Style::default().fg(ctx.theme.dim),
-                    ),
-                    Span::styled(bar_str, Style::default().fg(ctx.theme.dim)),
-                ];
-                if layout.show_columns {
-                    let eta_text = run_start_ts
-                        .and_then(|rs| offset_clock_label(rs, ghost.end_s, ctx.zone, "%H:%M"))
-                        .map(|t| format!("~{t}"))
-                        .unwrap_or_default();
-                    let dur_text = format!(
-                        "~{}",
-                        oscilloscope_core::format::format_duration(ghost.end_s - ghost.start_s)
-                    );
-                    spans.push(Span::styled(
-                        format!("  {eta_text:<9}{dur_text:>7} "),
-                        Style::default().fg(ctx.theme.dim),
-                    ));
-                }
-                lines.push(Line::from(spans));
-            }
-        }
-    }
-    let title = scroll_indicator(selected_idx, drawable.len(), drawable.len() > viewport)
-        .map(|s| format!(" timeline{s}"))
-        .unwrap_or_else(|| " timeline ".to_string());
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)),
-        area,
-    );
-}
-
-fn draw_time_strips(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::screens::TimeScreen,
-    layout: &TimeLayout,
-) {
-    let width = layout.bar_width;
-    let events_heights = oscilloscope_core::time::bucket_weighted(
-        layout.vis_start_s,
-        layout.vis_end_s,
-        width,
-        &screen.strips.events_points,
-    );
-    let events_max = events_heights.iter().copied().max().unwrap_or(0);
-    let mut events_line: String = events_heights
-        .iter()
-        .map(|h| time_height_glyph(*h, events_max))
-        .collect();
-    let events_label = if screen.strips.events_from_state {
-        "events/min (state)"
-    } else {
-        "events/min"
-    };
-
-    let in_flight_heights = oscilloscope_core::time::in_flight_heights(
-        layout.vis_start_s,
-        layout.vis_end_s,
-        width,
-        &screen.strips.in_flight_intervals,
-    );
-    let in_flight_max = in_flight_heights.iter().copied().max().unwrap_or(0);
-    let mut in_flight_line: String = in_flight_heights
-        .iter()
-        .map(|h| time_height_glyph(*h, in_flight_max))
-        .collect();
-
-    let mut decisions_line = decisions_line(
-        &screen.strips.decisions,
-        layout.vis_start_s,
-        layout.vis_end_s,
-        width,
-    );
-
-    // DESIGN.md: the now line runs "through every row and strip".
-    for line in [&mut events_line, &mut decisions_line, &mut in_flight_line] {
-        if let Some(now_s) = screen.now_s {
-            if let Some(col) = oscilloscope_core::time::now_column(
-                layout.vis_start_s,
-                layout.vis_end_s,
-                layout.bar_width,
-                now_s,
-            ) {
-                let mut chars: Vec<char> = line.chars().collect();
-                if col < chars.len() {
-                    chars[col] = '┃';
-                }
-                *line = chars.into_iter().collect();
-            }
-        }
-    }
-
-    // A row's own bar starts at `label_width + 2`: the timeline box's
-    // left border (1), then its label padded to `label_width`, then
-    // one space. This pane has no border of its own, so its gutter
-    // needs that same two-space width between the label and the bar,
-    // not one, to actually land on the same column as the bars
-    // themselves. Each label is also truncated to `label_width`, not
-    // just padded -- `{:<width$}` never cuts a longer string down, so
-    // a label that overflowed would shift everything after it right
-    // by however much it overran.
-    let label_width = layout.label_width;
-    let events_label = truncate_strip_label(events_label, label_width);
-    let decisions_label = truncate_strip_label("decisions", label_width);
-    let in_flight_label = truncate_strip_label("in flight", label_width);
-    let lines = if layout.show_columns {
-        let in_flight_suffix = if screen.strips.queued > 0 {
-            format!("max {in_flight_max} · {} queued", screen.strips.queued)
-        } else {
-            format!("max {in_flight_max}")
-        };
-        let events_suffix = if screen.strips.quiet_agent {
-            "quiet = agent"
-        } else {
-            ""
-        };
-        vec![
-            Line::from(format!(
-                "{events_label:<label_width$}  {events_line}  {events_suffix}"
-            )),
-            Line::from(format!("{decisions_label:<label_width$}  {decisions_line}")),
-            Line::from(format!(
-                "{in_flight_label:<label_width$}  {in_flight_line}  {in_flight_suffix}"
-            )),
-        ]
-    } else {
-        vec![
-            Line::from(format!("{events_label:<label_width$}  {events_line}")),
-            Line::from(format!("{decisions_label:<label_width$}  {decisions_line}")),
-            Line::from(format!("{in_flight_label:<label_width$}  {in_flight_line}")),
-        ]
-    };
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-const TIME_ZOOM_AGENT_BAND_LABELS: [&str; 5] = ["think", "read", "edit", "bash", "other"];
-
-/// The zoom pane's own label column width: sized to the longest
-/// label it will actually draw (the agent's own band names, or a
-/// container's children, whichever this selection calls for), up to
-/// a third of the pane's own width -- a fixed 8 columns would leave
-/// every pass of a loop reading a truncated `✓ pass…` instead. `0`
-/// for a selection with no padded label column at all (a step's own
-/// bar, or nothing selected).
-fn time_zoom_label_width(
-    screen: &oscilloscope_core::screens::TimeScreen,
-    pane_width: u16,
-) -> usize {
-    let max_label_len = match (&screen.selected, &screen.zoom_extra) {
-        (Some(step), _)
-            if matches!(
-                step.detail,
-                oscilloscope_core::screens::FocusDetail::Agent { .. }
-            ) =>
-        {
-            TIME_ZOOM_AGENT_BAND_LABELS
-                .iter()
-                .map(|s| s.chars().count())
-                .max()
-                .unwrap_or(0)
-        }
-        (Some(_), Some(oscilloscope_core::screens::TimeZoomExtra::Container { children, .. })) => {
-            children
-                .iter()
-                .map(|c| {
-                    format!("{} {}", status_glyph(c.status.kind), c.label)
-                        .chars()
-                        .count()
-                })
-                .max()
-                .unwrap_or(0)
-        }
-        _ => 0,
-    };
-    if max_label_len == 0 {
-        return 0;
-    }
-    let cap = ((pane_width as usize) / 3).max(2);
-    (max_label_len + 1).min(cap)
-}
-
-/// The zoom pane's own axis line (DESIGN.md's zoom pane: start and
-/// end as clock times, plus the duration), for every kind -- a
-/// container, a prompt, a tool or an agent alike. `None` only
-/// without a `since_ts` at all (a step that has never actually
-/// started).
-/// The selected row's own time line (DESIGN.md): its own `start_s`/
-/// `duration_s` -- the same fields its bar draws from, never
-/// `FocusedStep::since_ts`/`elapsed_s`, which fall back to `now -
-/// created_at` for a cancelled, aborted, or likely-running/queued
-/// step with no `completed_at` of its own and so keep growing for as
-/// long as the TUI stays open. Any status still unfinished and in
-/// progress (`Running`/`LikelyRunning`/`RunningOrQueued`) reads
-/// `→ now`; every other status reads its own real end, already
-/// capped at the run's own end once it has ended (`render`'s own
-/// `duration_s` fallback chain).
-fn zoom_axis_line(
-    row: &oscilloscope_core::time::TimeRow,
-    run_start_ts: &str,
-    now_s: f64,
-    ctx: &DrawCtx,
-) -> Option<String> {
-    let start_s = row.start_s?;
-    let is_in_progress = matches!(
-        row.status.kind,
-        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
-    );
-    let (end_s, end_text) = if is_in_progress {
-        (now_s, "now".to_string())
-    } else {
-        let end_s = start_s + row.duration_s.unwrap_or(0.0);
-        let end_text = offset_clock_label(run_start_ts, end_s, ctx.zone, "%H:%M:%S")?;
-        (end_s, end_text)
-    };
-    let start_text = offset_clock_label(run_start_ts, start_s, ctx.zone, "%H:%M:%S")?;
-    Some(format!(
-        "{start_text} → {end_text} · {}",
-        oscilloscope_core::format::format_duration(end_s - start_s)
-    ))
-}
-
-/// The selected step's own nearest ancestor loop row's plain label
-/// (never the `⟲ N/total` suffix, added only at draw time) -- the
-/// loop row stays in `screen.rows` whether it's collapsed or
-/// expanded, so this answers the same whichever the loop is;
-/// `max_by_key` on path length picks the closest ancestor when more
-/// than one loop wraps the selection.
-fn time_zoom_ancestor_loop_label<'a>(
-    screen: &'a oscilloscope_core::screens::TimeScreen,
-    path: &str,
-) -> Option<&'a str> {
-    screen
-        .rows
-        .iter()
-        .filter_map(|r| match r {
-            oscilloscope_core::screens::TimeDisplayRow::Row(tr)
-                if tr.kind == oscilloscope_core::render::RowKind::Loop
-                    && path.starts_with(&format!("{}.", tr.path)) =>
-            {
-                Some(tr)
-            }
-            _ => None,
-        })
-        .max_by_key(|tr| tr.path.len())
-        .map(|tr| tr.label.as_str())
-}
-
-/// A title too long for `max`, cut from the *left* with a leading
-/// `…` -- unlike [`truncate_label`], the zoom pane's own title ends
-/// in the selected step's own name (`fan › pass 1 of 3 › leaf`), the
-/// most specific and identifying part, so losing characters from the
-/// front keeps it visible instead of the outer, already-less-useful
-/// context.
-fn truncate_title_from_left(label: &str, max: usize) -> String {
-    let count = label.chars().count();
-    if count <= max {
-        label.to_string()
-    } else {
-        let skip = count - max.saturating_sub(1);
-        format!("…{}", label.chars().skip(skip).collect::<String>())
-    }
-}
-
-fn draw_time_zoom_pane(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::screens::TimeScreen,
-    app: &mut App,
-    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
-    ctx: &DrawCtx,
-    now: &str,
-) {
-    let label_width = time_zoom_label_width(screen, area.width);
-    let bar_width = (area.width as usize).saturating_sub(2 + label_width).max(4);
-    let (by_path, _) = time_row_groups(&screen.rows);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    match &screen.selected {
-        None => lines.push(Line::styled(
-            "nothing selected",
-            Style::default().fg(ctx.theme.dim),
-        )),
-        Some(step) => {
-            let selected_row = app.selected_path.as_deref().and_then(|p| by_path.get(p));
-            if let Some(row) = selected_row {
-                if let (Some(run_start_ts), Some(now_s)) = (
-                    screen.axis.start_ts.as_deref(),
-                    screen
-                        .axis
-                        .start_ts
-                        .as_deref()
-                        .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now)),
-                ) {
-                    if let Some(axis_line) = zoom_axis_line(row, run_start_ts, now_s, ctx) {
-                        lines.push(Line::styled(axis_line, Style::default().fg(ctx.theme.dim)));
-                    }
-                }
-            }
-            match &step.detail {
-                oscilloscope_core::screens::FocusDetail::Agent {
-                    live,
-                    raw_turns,
-                    raw_tool_calls,
-                    raw_tool_counts,
-                    ..
-                } => {
-                    let run_start_ts = screen.axis.start_ts.clone();
-                    let session_start_s = step
-                        .since_ts
-                        .as_deref()
-                        .zip(run_start_ts.as_deref())
-                        .and_then(|(s, rs)| oscilloscope_core::observe::duration_seconds(rs, s))
-                        .unwrap_or(0.0);
-                    let now_s = run_start_ts
-                        .as_deref()
-                        .and_then(|rs| oscilloscope_core::observe::duration_seconds(rs, now))
-                        .unwrap_or(session_start_s);
-                    // Only while the agent is actually running: an
-                    // interrupted run's own leftover `meta.live` (issue
-                    // #637) must not keep the think band, the footer's
-                    // running-tool time or this axis growing forever --
-                    // `step.elapsed_s` alone would, since a cancelled
-                    // step with no `completed_at` reads `now - created_
-                    // at` the same as a running one does.
-                    let running = step.status.kind == StatusKind::Running && live.is_some();
-                    // The session's own end: `now` while it's still
-                    // running, else the row's own real (frozen) span,
-                    // else the run's own end (issue #654: a stopped
-                    // agent's row with no resolvable duration must not
-                    // keep reaching for `now` either) -- falling back
-                    // further still to the leftover live summary's own
-                    // last heartbeat when the run itself hasn't ended
-                    // yet (an interrupted session, the rest of the run
-                    // still going elsewhere).
-                    let axis_end_s = if running {
-                        now_s
-                    } else {
-                        selected_row
-                            .and_then(|row| row.start_s.zip(row.duration_s))
-                            .map(|(s, d)| s + d)
-                            .or_else(|| {
-                                (!screen.axis.show_now)
-                                    .then_some(run_start_ts.as_deref())
-                                    .flatten()
-                                    .and_then(|rs| {
-                                        oscilloscope_core::observe::duration_seconds(
-                                            rs,
-                                            &screen.axis.end_ts,
-                                        )
-                                    })
-                            })
-                            .or_else(|| {
-                                live.as_deref()
-                                    .and_then(|l| l.updated_at.as_deref())
-                                    .zip(run_start_ts.as_deref())
-                                    .and_then(|(u, rs)| {
-                                        oscilloscope_core::observe::duration_seconds(rs, u)
-                                    })
-                            })
-                            .unwrap_or(now_s)
-                    };
-                    if let (Some(view), Some(run_start_ts)) =
-                        (transcript_view, run_start_ts.as_deref())
-                    {
-                        let bands = oscilloscope_core::time::agent_zoom_bands(
-                            &view.calls,
-                            session_start_s,
-                            now_s,
-                            run_start_ts,
-                            running,
-                        );
-                        // DESIGN.md: "the bands start where the window
-                        // starts, after a dim `…`" -- shown only when the
-                        // window itself is actually cut off and the
-                        // earliest band really does start right at it (a
-                        // band starting later than the session's own
-                        // start is ordinary thinking time, not a gap the
-                        // window missed).
-                        if view.truncated
-                            && bands
-                                .first()
-                                .is_some_and(|b| (b.start_s - session_start_s).abs() < 1e-6)
-                        {
-                            lines.push(Line::styled("…", Style::default().fg(ctx.theme.dim)));
-                        }
-                        const ORDER: [oscilloscope_core::time::ZoomBandKind; 5] = [
-                            oscilloscope_core::time::ZoomBandKind::Think,
-                            oscilloscope_core::time::ZoomBandKind::Read,
-                            oscilloscope_core::time::ZoomBandKind::Edit,
-                            oscilloscope_core::time::ZoomBandKind::Bash,
-                            oscilloscope_core::time::ZoomBandKind::Other,
-                        ];
-                        for kind in ORDER {
-                            let segments: Vec<(f64, f64, bool)> = bands
-                                .iter()
-                                .filter(|b| b.kind == kind)
-                                .map(|b| (b.start_s, b.end_s, b.running))
-                                .collect();
-                            if segments.is_empty() {
-                                continue;
-                            }
-                            let (label, fill) = match kind {
-                                oscilloscope_core::time::ZoomBandKind::Think => ("think", '▓'),
-                                oscilloscope_core::time::ZoomBandKind::Read => ("read", '░'),
-                                oscilloscope_core::time::ZoomBandKind::Edit => ("edit", '▒'),
-                                oscilloscope_core::time::ZoomBandKind::Bash => ("bash", '█'),
-                                oscilloscope_core::time::ZoomBandKind::Other => ("other", '·'),
-                            };
-                            let bar = multi_segment_bar(
-                                &segments,
-                                session_start_s,
-                                axis_end_s,
-                                bar_width,
-                                fill,
-                            );
-                            lines.push(Line::from(format!("{label:<label_width$}{bar}")));
-                        }
-                    } else if let Some(current) =
-                        live.as_deref().and_then(|l| l.current_tool.as_ref())
-                    {
-                        // DESIGN.md: "With no transcript, the footer and
-                        // a `running: <tool>` line (from `current_tool`)
-                        // are all it shows."
-                        lines.push(Line::styled(
-                            format!("running: {}", current.name),
-                            Style::default().fg(ctx.theme.dim),
-                        ));
-                    } else {
-                        lines.push(Line::styled(
-                            oscilloscope_core::screens::AGENT_LIVE_DATA_NOTE,
-                            Style::default().fg(ctx.theme.dim),
-                        ));
-                    }
-                    // `meta.live`'s own tools/turns/tool_calls while
-                    // running, `meta.raw`'s once finished (DESIGN.md).
-                    let tools = live
-                        .as_deref()
-                        .map(|l| l.tools.clone())
-                        .unwrap_or_else(|| raw_tool_counts.clone());
-                    let turns = live.as_deref().and_then(|l| l.turns).or(*raw_turns);
-                    let tool_calls = live
-                        .as_deref()
-                        .and_then(|l| l.tool_calls)
-                        .or(*raw_tool_calls);
-                    let elapsed = (axis_end_s - session_start_s).max(0.0);
-                    // Only while the agent is actually live: a
-                    // finished session's own transcript can end in an
-                    // unmatched `tool_start` (an interrupted call that
-                    // was never followed by a `tool_end`), which would
-                    // otherwise add wall-clock time to a call that
-                    // isn't running any more, growing for as long as
-                    // the TUI stays open.
-                    let running_tool = running
-                        .then(|| {
-                            live.as_deref().and_then(|l| {
-                                let rs = run_start_ts.as_deref()?;
-                                let calls =
-                                    transcript_view.map(|v| v.calls.as_slice()).unwrap_or(&[]);
-                                let current = l
-                                    .current_tool
-                                    .as_ref()
-                                    .map(|c| (c.name.as_str(), c.started_at.as_str()));
-                                oscilloscope_core::time::running_tool_elapsed_ms(
-                                    calls, current, now_s, rs,
-                                )
-                            })
-                        })
-                        .flatten();
-                    let footer = oscilloscope_core::time::zoom_agent_footer(
-                        turns,
-                        tool_calls,
-                        &tools,
-                        elapsed,
-                        running_tool,
-                    );
-                    let mut footer_parts = Vec::new();
-                    if let Some(turns) = footer.turns {
-                        footer_parts.push(format!("turn {turns}"));
-                    }
-                    if let Some(calls) = footer.tool_calls {
-                        footer_parts.push(format!("{calls} tools"));
-                    }
-                    if let Some((name, ms, pct)) = footer.busiest_tool {
-                        footer_parts.push(format!(
-                            "{name} {} ({pct:.0}%)",
-                            oscilloscope_core::format::format_duration(ms as f64 / 1000.0)
-                        ));
-                    }
-                    if !footer_parts.is_empty() {
-                        lines.push(Line::styled(
-                            footer_parts.join(" · "),
-                            Style::default().fg(ctx.theme.dim),
-                        ));
-                    }
-                }
-                _ => match &screen.zoom_extra {
-                    Some(oscilloscope_core::screens::TimeZoomExtra::Container {
-                        children,
-                        start_s,
-                        axis_end_s,
-                    }) => {
-                        let viewport = (area.height.saturating_sub(2) as usize).max(1);
-                        let budget = zoom_container_budget(children.len(), viewport);
-                        for child in children.iter().take(budget) {
-                            let glyph = status_glyph(child.status.kind);
-                            let label = truncate_label(
-                                &format!("{glyph} {}", child.label),
-                                label_width - 1,
-                            );
-                            let bar = time_bar_string(
-                                child.start_s,
-                                child.duration_s,
-                                child.status.kind == StatusKind::Running,
-                                child.ghost,
-                                child.status.kind == StatusKind::Failed,
-                                *start_s,
-                                *axis_end_s,
-                                bar_width,
-                            );
-                            lines.push(Line::styled(
-                                format!("{label:<label_width$}{bar}"),
-                                status_style(child.status.kind, ctx.theme),
-                            ));
-                        }
-                        let more = children.len().saturating_sub(budget);
-                        if more > 0 {
-                            lines.push(Line::styled(
-                                format!("+{more} more"),
-                                Style::default().fg(ctx.theme.dim),
-                            ));
-                        }
-                    }
-                    Some(oscilloscope_core::screens::TimeZoomExtra::StepBar {
-                        start_s,
-                        p50_s,
-                        p90_s,
-                        axis_end_s,
-                        waiting_label,
-                    }) => {
-                        // Wide enough to also show p50/p90 when either
-                        // falls past the step's own real end (DESIGN.md:
-                        // "with its p50 and p90 marked on the axis").
-                        let window_end_s = axis_end_s
-                            .max(start_s + p50_s.unwrap_or(0.0))
-                            .max(start_s + p90_s.unwrap_or(0.0));
-                        let mut bar: Vec<char> = time_bar_string(
-                            Some(*start_s),
-                            Some(axis_end_s - start_s),
-                            waiting_label.is_some(),
-                            None,
-                            step.error.is_some(),
-                            *start_s,
-                            window_end_s,
-                            bar_width,
-                        )
-                        .chars()
-                        .collect();
-                        for (offset, mark) in [(*p50_s, '┆'), (*p90_s, '┄')] {
-                            if let Some(offset) = offset {
-                                if let Some(col) = oscilloscope_core::time::now_column(
-                                    *start_s,
-                                    window_end_s,
-                                    bar_width,
-                                    start_s + offset,
-                                ) {
-                                    if col < bar.len() {
-                                        bar[col] = mark;
-                                    }
-                                }
-                            }
-                        }
-                        lines.push(Line::from(bar.into_iter().collect::<String>()));
-                        let mut marks = Vec::new();
-                        if let Some(p50) = p50_s {
-                            marks.push(format!(
-                                "p50 {}",
-                                oscilloscope_core::format::format_duration(*p50)
-                            ));
-                        }
-                        if let Some(p90) = p90_s {
-                            marks.push(format!(
-                                "p90 {}",
-                                oscilloscope_core::format::format_duration(*p90)
-                            ));
-                        }
-                        if !marks.is_empty() {
-                            lines.push(Line::styled(
-                                marks.join(" · "),
-                                Style::default().fg(ctx.theme.dim),
-                            ));
-                        }
-                        if let Some(label) = waiting_label {
-                            lines.push(Line::styled(*label, Style::default().fg(ctx.theme.dim)));
-                        }
-                    }
-                    None => {
-                        lines.push(Line::from(step.breadcrumb.clone()));
-                        if let Some(since) = step
-                            .since_ts
-                            .as_deref()
-                            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                        {
-                            lines.push(Line::styled(
-                                format!("since {since}"),
-                                Style::default().fg(ctx.theme.dim),
-                            ));
-                        }
-                    }
-                },
-            }
-        }
-    }
-    let max_scroll = lines
-        .len()
-        .saturating_sub(area.height.saturating_sub(2) as usize);
-    app.time_zoom_viewport = area.height.saturating_sub(2) as usize;
-    app.time_zoom_scroll = app.time_zoom_scroll.min(max_scroll);
-    let visible_lines: Vec<Line<'static>> = lines.into_iter().skip(app.time_zoom_scroll).collect();
-    let title = match &screen.selected {
-        Some(step) => {
-            let breadcrumb = match time_zoom_ancestor_loop_label(screen, &step.path) {
-                Some(loop_label) => format!("{loop_label} › {}", step.breadcrumb),
-                None => step.breadcrumb.clone(),
-            };
-            let budget = (area.width as usize).saturating_sub(" zoom ·  ".chars().count() + 2);
-            format!(" zoom · {} ", truncate_title_from_left(&breadcrumb, budget))
-        }
-        None => " zoom ".to_string(),
-    };
-    frame.render_widget(
-        Paragraph::new(visible_lines).block(Block::default().borders(Borders::ALL).title(title)),
-        area,
-    );
-}
-
-fn draw_time_vs_usual_pane(
-    frame: &mut Frame,
-    area: Rect,
-    state: &oscilloscope_core::render::RenderState,
-    screen: &oscilloscope_core::screens::TimeScreen,
-    app: &mut App,
-    ctx: &DrawCtx,
-) {
-    // `now`, `p50` and the mark each take a fixed width (10 + 10 +
-    // 1); the label gets whatever is left of the pane's own inner
-    // width (2 narrower than `area.width` for its own border), cut
-    // with the usual truncation rather than pushing the fixed columns
-    // past it.
-    let inner_width = (area.width as usize).saturating_sub(2);
-    // `now`/`p50`/the mark take 10 + 10 + 1 columns; the extra 1
-    // reserves a gutter space so a full-width label never runs
-    // straight into the `now` column with nothing between them.
-    let label_width = inner_width.saturating_sub(22);
-    // `build_vs_usual_pane` has no view of the user's own collapse or
-    // filter state -- it must list exactly the timeline's own visible
-    // rows (DESIGN.md), so a row collapsed with `←`, or hidden by `/`
-    // or `e`, is filtered out here instead.
-    let visible_paths: std::collections::BTreeSet<&str> =
-        crate::keys::visible_rows_for_time(&state.rows, &screen.rows, app)
-            .into_iter()
-            .map(|r| r.path.as_str())
-            .collect();
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some((count, threshold)) = screen.vs_usual.too_few_runs {
-        lines.push(Line::styled(
-            format!("history: {count} of {threshold} runs of this version"),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    } else {
-        for row in screen
-            .vs_usual
-            .rows
-            .iter()
-            .filter(|r| visible_paths.contains(r.path.as_str()))
-        {
-            let mark = match row.mark {
-                oscilloscope_core::time::VsUsualMark::Slower => '▲',
-                oscilloscope_core::time::VsUsualMark::Faster => '▼',
-                oscilloscope_core::time::VsUsualMark::Usual => '≈',
-            };
-            let now_text = oscilloscope_core::format::format_duration(row.now_s);
-            let now_text = if row.running {
-                format!("{now_text}…")
-            } else {
-                now_text
-            };
-            let p50_text = oscilloscope_core::format::format_duration(row.p50_s);
-            let label = truncate_label(&row.label, label_width);
-            lines.push(Line::from(format!(
-                "{label:<label_width$} {now_text:<10}{p50_text:<10}{mark}"
-            )));
-        }
-        let hhmm = |ts: &str| {
-            oscilloscope_core::format::format_clock_time(ts, ctx.zone)
-                .map(|hhmmss| hhmmss[..5.min(hhmmss.len())].to_string())
-        };
-        let mut footer = Vec::new();
-        if let Some(finish) = screen.vs_usual.finish_ts.as_deref().and_then(hhmm) {
-            footer.push(format!("finish ~{finish}"));
-        }
-        if let (Some(low), Some(high)) = (
-            screen.vs_usual.usual_low_ts.as_deref().and_then(hhmm),
-            screen.vs_usual.usual_high_ts.as_deref().and_then(hhmm),
-        ) {
-            footer.push(format!("usual {low}–{high}"));
-        }
-        // Issue #654: `screen.vs_usual.from_runs` pools across
-        // every row `build_vs_usual_pane` ever computed, collapsed
-        // or filtered out or not -- recomputed here from only the
-        // rows actually drawn above, the same `visible_paths` filter,
-        // whenever it's a per-row pooled figure at all (`earlier_
-        // versions`; otherwise it's the whole run's own current-hash
-        // count, which no row filtering could ever change).
-        let from_runs = if screen.vs_usual.earlier_versions {
-            screen
-                .vs_usual
-                .rows
-                .iter()
-                .filter(|r| visible_paths.contains(r.path.as_str()))
-                .map(|r| r.pooled_count)
-                .max()
-        } else {
-            screen.vs_usual.from_runs
-        };
-        if let Some(runs) = from_runs {
-            footer.push(format!("from {runs} runs"));
-        }
-        // Drops whole parts from the end (`from N runs` first, then
-        // the usual range) until what's left fits the pane -- never a
-        // part cut to a partial fragment.
-        while footer.join(" · ").chars().count() > inner_width && !footer.is_empty() {
-            footer.pop();
-        }
-        if !footer.is_empty() {
-            lines.push(Line::styled(
-                footer.join(" · "),
-                Style::default().fg(ctx.theme.dim),
-            ));
-        }
-    }
-    let title = if screen.vs_usual.earlier_versions {
-        " vs usual · earlier versions "
-    } else {
-        " vs usual "
-    };
-    let max_scroll = lines
-        .len()
-        .saturating_sub(area.height.saturating_sub(2) as usize);
-    app.time_vs_usual_viewport = area.height.saturating_sub(2) as usize;
-    app.time_vs_usual_scroll = app.time_vs_usual_scroll.min(max_scroll);
-    let visible_lines: Vec<Line<'static>> =
-        lines.into_iter().skip(app.time_vs_usual_scroll).collect();
-    frame.render_widget(
-        Paragraph::new(visible_lines).block(Block::default().borders(Borders::ALL).title(title)),
-        area,
-    );
-}
-
-/// The plain list the Time screen falls back to below 80x20
-/// (DESIGN.md's "Small terminals": "a list of status, step, start
-/// and duration, with no axis").
-fn draw_time_plain_list(
-    frame: &mut Frame,
-    area: Rect,
-    state: &oscilloscope_core::render::RenderState,
-    screen: &oscilloscope_core::screens::TimeScreen,
-    app: &mut App,
-    ctx: &DrawCtx,
-) {
-    let all_visible = visible_rows(&state.rows, app);
-    let (by_path, _) = time_row_groups(&screen.rows);
-    let loop_prefixes: Vec<String> = by_path
-        .values()
-        .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-        .map(|r| format!("{}.", r.path))
-        .collect();
-    let is_under_a_loop = |path: &str| loop_prefixes.iter().any(|p| path.starts_with(p.as_str()));
-    let visible: Vec<&Row> = all_visible
-        .into_iter()
-        .filter(|r| !is_under_a_loop(&r.path))
-        .collect();
-    let effective_selected_path: Option<&str> = app.selected_path.as_deref().map(|p| {
-        if is_under_a_loop(p) {
-            outermost_ancestor_loop_path(&by_path, p).unwrap_or(p)
-        } else {
-            p
-        }
-    });
-    let selected_idx =
-        effective_selected_path.and_then(|p| visible.iter().position(|r| r.path == p));
-    let viewport = (area.height as usize).max(1);
-    app.tree_viewport = viewport;
-    let line_counts = vec![1usize; visible.len()];
-    app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
-    let run_start_ts = screen.axis.start_ts.as_deref();
-    let mut lines = Vec::new();
-    for row in visible.iter().skip(app.tree_scroll).take(viewport) {
-        let Some(time_row) = by_path.get(row.path.as_str()) else {
-            continue;
-        };
-        let indent = "  ".repeat(time_row.depth);
-        let glyph = status_glyph(time_row.status.kind);
-        let mut label = format!("{indent}{glyph} {}", time_row.label);
-        if let Some(progress) = &time_row.loop_progress {
-            let total = progress
-                .total
-                .map(|t| t.to_string())
-                .unwrap_or_else(|| "?".to_string());
-            label.push_str(&format!(" ⟲ {}/{total}", progress.done));
-        }
-        let start_text = time_row
-            .start_s
-            .zip(run_start_ts)
-            .and_then(|(s, rs)| {
-                oscilloscope_core::diff::parse_instant(rs)
-                    .map(|dt| dt + chrono::Duration::milliseconds((s * 1000.0) as i64))
-            })
-            .map(|dt| {
-                ctx.zone
-                    .local(dt.with_timezone(&chrono::Utc))
-                    .format("%H:%M:%S")
-                    .to_string()
-            })
-            .unwrap_or_default();
-        let duration_text = time_row
-            .duration_s
-            .map(oscilloscope_core::format::format_duration)
-            .unwrap_or_default();
-        let selected = effective_selected_path == Some(row.path.as_str());
-        let style = if selected {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::styled(
-            format!(
-                "{:<30}{start_text:<9}{duration_text:>7}",
-                truncate_label(&label, 30)
-            ),
-            style,
-        ));
-    }
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_time_screen(
-    frame: &mut Frame,
-    frame_area: Rect,
-    body: Rect,
-    state: &oscilloscope_core::render::RenderState,
-    screen: &oscilloscope_core::screens::TimeScreen,
-    app: &mut App,
-    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
-    ctx: &DrawCtx,
-    now: &str,
-) {
-    let three_pane = frame_area.width >= thresholds::TIME_THREE_PANE_MIN_WIDTH
-        && frame_area.height >= thresholds::TIME_THREE_PANE_MIN_HEIGHT;
-    let axis_only = frame_area.width >= thresholds::TIME_AXIS_ONLY_MIN_WIDTH
-        && frame_area.height >= thresholds::TIME_AXIS_ONLY_MIN_HEIGHT;
-
-    if !axis_only {
-        app.time_zoom_viewport = 0;
-        app.time_vs_usual_viewport = 0;
-        draw_time_plain_list(frame, body, state, screen, app, ctx);
-        return;
-    }
-
-    // Below three_pane's own threshold, neither the zoom nor the vs-
-    // usual pane is drawn at all -- the timeline and its strips take
-    // the whole body rather than reserving a golden-ratio minor
-    // section underneath that neither pane would then ever fill.
-    let timeline_rows = if three_pane {
-        oscilloscope_core::layout::golden_major_section(body.height)
-    } else {
-        body.height
-    };
-    let top_bottom = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(timeline_rows),
-            Constraint::Min(body.height.saturating_sub(timeline_rows)),
-        ])
-        .split(body);
-    let timeline_strip_rows = top_bottom[0].height.saturating_sub(3);
-    let timeline_area_split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(timeline_strip_rows), Constraint::Length(3)])
-        .split(top_bottom[0]);
-    // One layout, shared by the timeline and the strips, so both
-    // bucket and draw onto exactly the same columns (DESIGN.md: the
-    // strips are "on the same axis" as the bars) -- both panes have
-    // the same width, `timeline_area_split` only having split their
-    // shared column vertically.
-    let layout = time_layout(screen, app, timeline_area_split[0].width, frame_area.width);
-    draw_time_timeline(
-        frame,
-        timeline_area_split[0],
-        state,
-        screen,
-        &layout,
-        app,
-        ctx,
-    );
-    draw_time_strips(frame, timeline_area_split[1], screen, &layout);
-
-    if three_pane {
-        let left_width = oscilloscope_core::layout::left_column_width(top_bottom[1].width);
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(left_width),
-                Constraint::Length(top_bottom[1].width - left_width),
-            ])
-            .split(top_bottom[1]);
-        draw_time_zoom_pane(frame, columns[0], screen, app, transcript_view, ctx, now);
-        draw_time_vs_usual_pane(frame, columns[1], state, screen, app, ctx);
-    } else {
-        app.time_zoom_viewport = 0;
-        app.time_vs_usual_viewport = 0;
-    }
-}
-
 #[cfg(test)]
 mod golden_tests {
     use super::*;
@@ -7961,509 +7411,6 @@ mod golden_tests {
             })
             .unwrap();
         terminal.backend().to_string()
-    }
-
-    fn overview_running_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
-            "a": {"value": "ok\n", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "provider": "shell", "exit_code": 0}},
-            "b": {"value": null, "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": null, "provider": "shell"}}
-        }})
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn time_snapshot_at(
-        width: u16,
-        height: u16,
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-        selected_path: Option<&str>,
-        expanded_loops: &std::collections::BTreeSet<String>,
-        with_history: bool,
-    ) -> String {
-        let mut rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            plan,
-            model,
-            state,
-            process.clone(),
-            300.0,
-            "2026-01-01T00:05:00Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        if with_history {
-            rendered.header.history_eta_ts = Some("2026-01-01T00:12:00Z".to_string());
-            rendered.header.history_eta_remaining_s = Some(420.0);
-            rendered.header.history_eta_low_ts = Some("2026-01-01T00:11:00Z".to_string());
-            rendered.header.history_eta_high_ts = Some("2026-01-01T00:14:00Z".to_string());
-            rendered.header.history_vs_usual_s = Some(30.0);
-            rendered.header.history_usual_total_s = Some(660.0);
-            rendered.header.history_same_hash_count = Some(7);
-            rendered.header.history_step_usual.insert(
-                "a".to_string(),
-                oscilloscope_core::history::StepStats {
-                    count: 7,
-                    busy_p50_s: Some(60.0),
-                    busy_p10_s: Some(50.0),
-                    busy_p90_s: Some(70.0),
-                    start_p50_s: Some(0.0),
-                    end_p50_s: Some(60.0),
-                    ..Default::default()
-                },
-            );
-            rendered.header.history_step_usual.insert(
-                "b".to_string(),
-                oscilloscope_core::history::StepStats {
-                    count: 7,
-                    busy_p50_s: Some(300.0),
-                    busy_p10_s: Some(240.0),
-                    busy_p90_s: Some(360.0),
-                    start_p50_s: Some(60.0),
-                    end_p50_s: Some(360.0),
-                    ..Default::default()
-                },
-            );
-        }
-        let empty = Value::Null;
-        let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            plan,
-            model,
-            &rendered.header,
-            state,
-            &[],
-            selected_path,
-            expanded_loops,
-            "2026-01-01T00:05:00Z",
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.selected_path = selected_path.map(str::to_string);
-        app.time_expanded_loops = expanded_loops.clone();
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    state,
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:05:00Z",
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        terminal.backend().to_string()
-    }
-
-    /// vs usual lists only the timeline's own currently visible rows
-    /// (DESIGN.md) -- collapsing `prime` with `←` hides its own
-    /// children `a` and `b` from the timeline, so neither belongs in
-    /// vs usual either, even though both still have history stats of
-    /// their own.
-    #[test]
-    fn time_vs_usual_pane_excludes_a_row_collapsed_out_of_the_timeline() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_running_state();
-        let now = "2026-01-01T00:05:00Z";
-        let mut rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            300.0,
-            now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        rendered.header.history_same_hash_count = Some(7);
-        rendered.header.history_step_usual.insert(
-            "a".to_string(),
-            oscilloscope_core::history::StepStats {
-                count: 7,
-                busy_p50_s: Some(60.0),
-                busy_p10_s: Some(50.0),
-                busy_p90_s: Some(70.0),
-                ..Default::default()
-            },
-        );
-        rendered.header.history_step_usual.insert(
-            "b".to_string(),
-            oscilloscope_core::history::StepStats {
-                count: 7,
-                busy_p50_s: Some(300.0),
-                busy_p10_s: Some(240.0),
-                busy_p90_s: Some(360.0),
-                ..Default::default()
-            },
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            now,
-        );
-        // Both rows are really there before any collapsing -- proves
-        // the fixture itself would otherwise show them.
-        assert_eq!(
-            time_screen
-                .vs_usual
-                .rows
-                .iter()
-                .map(|r| r.label.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"]
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.collapsed.insert("prime".to_string());
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(100, 30);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        let vs_usual_pane: String = text
-            .lines()
-            .filter(|l| l.contains("vs usual") || l.contains('\u{2502}'))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !vs_usual_pane.contains('≈')
-                && !vs_usual_pane.contains('▲')
-                && !vs_usual_pane.contains('▼'),
-            "no row's own mark may still be drawn once both rows are collapsed out: {vs_usual_pane}"
-        );
-    }
-
-    /// Issue #654: "earlier versions" pools a different run count per
-    /// step -- the footer's own `from N runs` must come only from the
-    /// rows actually shown, same as the row list right above it, not
-    /// from a row collapsed away even though it has the larger
-    /// pooled count.
-    #[test]
-    fn time_vs_usual_pane_from_runs_excludes_a_filtered_rows_own_pooled_count() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_running_state();
-        let now = "2026-01-01T00:05:00Z";
-        let mut rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            300.0,
-            now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        // Below the same-hash threshold, with pooled history -- "earlier
-        // versions" applies, and `from_runs` pools per step.
-        rendered.header.history_same_hash_count = Some(1);
-        rendered.header.history_step_usual.insert(
-            "a".to_string(),
-            oscilloscope_core::history::StepStats {
-                // `vs_usual_mark` needs at least 3 runs to produce a
-                // mark at all; 3 is still fewer than `b`'s 5, so the
-                // visible-only max below has to actually come from
-                // this row, not `b`'s.
-                count: 3,
-                busy_p50_s: Some(60.0),
-                busy_p10_s: Some(50.0),
-                busy_p90_s: Some(70.0),
-                ..Default::default()
-            },
-        );
-        rendered.header.history_step_usual.insert(
-            "b".to_string(),
-            oscilloscope_core::history::StepStats {
-                count: 5,
-                busy_p50_s: Some(300.0),
-                busy_p10_s: Some(240.0),
-                busy_p90_s: Some(360.0),
-                ..Default::default()
-            },
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            None,
-            &Default::default(),
-            now,
-        );
-        assert!(time_screen.vs_usual.earlier_versions);
-        assert_eq!(
-            time_screen
-                .vs_usual
-                .rows
-                .iter()
-                .map(|r| (r.path.as_str(), r.pooled_count))
-                .collect::<Vec<_>>(),
-            vec![("prime.a", 3), ("prime.b", 5)]
-        );
-        // The pane's own pre-pooled figure (across both rows) would
-        // read 5 -- the point of this test is that the front end must
-        // not just use it as-is once `b` is collapsed away.
-        assert_eq!(time_screen.vs_usual.from_runs, Some(5));
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        // `a`/`b` are both leaves, so collapsing either hides nothing
-        // of its own -- the filter, matching `a`'s own path/label but
-        // not `b`'s, is what actually removes `b` from the timeline.
-        app.filter = Some("a".to_string());
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        // 34 tall, not 30: issue #678's shared chrome reserves 4 of
-        // those rows outside the body, so the Time screen's own vs-
-        // usual pane (below) needs 4 more than it used to for the
-        // same effective body height.
-        let backend = TestBackend::new(100, 34);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(text.contains("from 3 runs"), "{text}");
-        assert!(!text.contains("from 5 runs"), "{text}");
-    }
-
-    fn many_steps_plan(n: usize) -> PlanTree {
-        let root_path = EffectPath::root();
-        let ops: Vec<Op> = (0..n)
-            .map(|i| {
-                tool(
-                    root_path.clone().push_name(format!("s{i}")),
-                    &format!("s{i}"),
-                    OnError::Fail,
-                )
-            })
-            .collect();
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops,
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        PlanTree::from_program(&Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        })
-    }
-
-    /// Below 80x20 the Time screen falls back to a plain list
-    /// (DESIGN.md's "Small terminals") -- it must follow the
-    /// selection the same way every other list does, not render every
-    /// row starting from the top regardless of height.
-    #[test]
-    fn time_plain_list_below_80x20_scrolls_to_follow_the_selection() {
-        let n = 30;
-        let plan = many_steps_plan(n);
-        let mut model = RunModel::new();
-        let mut state = serde_json::Map::new();
-        for i in 0..n {
-            state.insert(
-                format!("s{i}"),
-                json!({"value": "ok", "meta": {
-                    "created_at": format!("2026-01-01T00:{:02}:00Z", i),
-                    "completed_at": format!("2026-01-01T00:{:02}:01Z", i)
-                }}),
-            );
-        }
-        let state = json!({"prime": Value::Object(state)});
-        let now = "2026-01-01T00:30:00Z";
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            1800.0,
-            now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let last = format!("prime.s{}", n - 1);
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            Some(&last),
-            &Default::default(),
-            now,
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.selected_path = Some(last.clone());
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        // Below the Time screen's own width threshold (80) --
-        // the plain-list fallback, regardless of height.
-        let backend = TestBackend::new(70, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains(&format!("s{}", n - 1)),
-            "the selected, last row must be visible: {text}"
-        );
-        assert!(
-            !text.contains("s0 "),
-            "scrolled past the first row, which must no longer show: {text}"
-        );
     }
 
     /// Issue #637: a single top-level `agent` tool step, still
@@ -8758,15 +7705,6 @@ mod golden_tests {
             })
             .unwrap();
         terminal.backend().to_string()
-    }
-
-    fn overview_finished_state() -> Value {
-        json!({
-            "runtime": {"last_run": {"completed_at": "2026-01-01T00:05:00Z", "totals": {"wall_time_s": 300.0, "effects_run": 2, "tokens_sent": 10, "tokens_received": 20, "cost_usd": 1.5}}},
-            "prime": {"value": true, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:05:00Z", "error": null},
-            "a": {"value": "ok\n", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "provider": "shell", "exit_code": 0}},
-            "b": {"value": "ok\n", "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": "2026-01-01T00:02:00Z", "provider": "shell", "exit_code": 0}}
-        }})
     }
 
     #[test]
@@ -11117,30 +10055,28 @@ mod golden_tests {
             "redrawing the Cost screen with nothing changed took {cached_elapsed:?} -- the layout cache should have skipped squarify entirely"
         );
 
-        // Issue #650: the Time screen's own model and drawing are
-        // built only while screen 1 is actually on display, same
+        // Issue #688: Signal's own model and drawing are built
+        // only while screen 1 is actually on display, same
         // performance rule as every other screen above -- on the
-        // same 2,000-node state, and only the rows actually in view
-        // (120x40's own viewport) are drawn.
-        let time_start = std::time::Instant::now();
-        let time_screen = oscilloscope_core::screens::build_time_screen(
+        // same 2,000-node state.
+        let signal_start = std::time::Instant::now();
+        let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.header,
             &flat,
             &plan,
             &model,
-            &rendered.header,
             Some(&state),
-            &story_2000,
-            Some("n0"),
-            &Default::default(),
+            100,
+            None,
             "t2001",
         );
-        let mut time_app = App::new(false);
-        time_app.screen = oscilloscope_core::screens::Screen::Time;
-        time_app.selected_path = Some("n0".to_string());
-        let time_backend = TestBackend::new(120, 40);
-        let mut time_terminal = Terminal::new(time_backend).unwrap();
-        time_terminal
+        let mut signal_app = App::new(false);
+        signal_app.screen = oscilloscope_core::screens::Screen::Signal;
+        signal_app.selected_path = Some("n0".to_string());
+        let signal_backend = TestBackend::new(120, 40);
+        let mut signal_terminal = Terminal::new(signal_backend).unwrap();
+        signal_terminal
             .draw(|f| {
                 draw(
                     f,
@@ -11148,7 +10084,7 @@ mod golden_tests {
                     None,
                     &[],
                     0,
-                    &mut time_app,
+                    &mut signal_app,
                     Some(&state),
                     &test_ctx,
                     0,
@@ -11156,433 +10092,16 @@ mod golden_tests {
                     None,
                     None,
                     None,
-                    Some(&time_screen),
+                    Some(&signal_screen),
                     None,
                     &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
-        let time_elapsed = time_start.elapsed();
+        let signal_elapsed = signal_start.elapsed();
         assert!(
-            time_elapsed < std::time::Duration::from_millis(500),
-            "building and drawing the Time screen for a 2000-node state took {time_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
-        );
-    }
-
-    /// [`redraw_from_a_2000_node_state_...`]'s own 2,000-node state
-    /// uses `"t{i}"` timestamps, which `duration_seconds` can't
-    /// parse at all -- every bar and strip in that test's own Time
-    /// screen is blank, so its timing never actually exercises
-    /// `bar_cells`/`bucket_weighted`/`in_flight_heights` at scale.
-    /// This one uses real RFC 3339 clock times instead, one second
-    /// apart, so the bars and strips really do get built.
-    #[test]
-    fn time_screen_performance_on_a_2000_node_state_with_real_clock_times() {
-        let plan = PlanTree::empty();
-        let mut prime = serde_json::Map::new();
-        prime.insert("value".to_string(), Value::Null);
-        let mut prime_meta = serde_json::Map::new();
-        prime_meta.insert(
-            "created_at".to_string(),
-            Value::String("2026-01-01T00:00:00Z".to_string()),
-        );
-        prime_meta.insert("completed_at".to_string(), Value::Null);
-        prime.insert("meta".to_string(), Value::Object(prime_meta));
-        for i in 0..2000 {
-            let mut meta = serde_json::Map::new();
-            meta.insert(
-                "created_at".to_string(),
-                Value::String(format!("2026-01-01T00:{:02}:{:02}Z", (i / 60) % 60, i % 60)),
-            );
-            if i == 1999 {
-                meta.insert("completed_at".to_string(), Value::Null);
-                meta.insert("provider".to_string(), Value::String("shell".to_string()));
-            } else {
-                meta.insert(
-                    "completed_at".to_string(),
-                    Value::String(format!(
-                        "2026-01-01T00:{:02}:{:02}Z",
-                        ((i + 1) / 60) % 60,
-                        (i + 1) % 60
-                    )),
-                );
-                meta.insert("provider".to_string(), Value::String("shell".to_string()));
-            }
-            let mut node = serde_json::Map::new();
-            node.insert("value".to_string(), Value::String(format!("ok{i}\n")));
-            node.insert("meta".to_string(), Value::Object(meta));
-            prime.insert(format!("n{i}"), Value::Object(node));
-        }
-        let mut root = serde_json::Map::new();
-        root.insert("prime".to_string(), Value::Object(prime));
-        let state = Value::Object(root);
-
-        let mut model = RunModel::new();
-        let now = "2026-01-01T00:33:20Z";
-        let rendered = render::build(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            2000.0,
-            now,
-            &[],
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let start = std::time::Instant::now();
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            Some("prime.n1999"),
-            &Default::default(),
-            now,
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.selected_path = Some("prime.n1999".to_string());
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let elapsed = start.elapsed();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains('█') || text.contains('▶'),
-            "a real-clock state must actually draw a bar, or this timing proves nothing:\n{text}"
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(500),
-            "building and drawing the Time screen for a 2000-node real-clock state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
-        );
-    }
-
-    /// `RunModel::step_interval_offsets`'s own cache parses each
-    /// logged interval's timestamps once, not four RFC 3339 parses
-    /// per interval (`run_start_ts` included, twice over) on every
-    /// redraw -- this is that cache's own 50,000-entry cap.
-    #[test]
-    fn time_screen_performance_with_50_000_logged_intervals() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap();
-        for i in 0..50_000i64 {
-            let start = (base + chrono::Duration::milliseconds(10 * i))
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let end = (base + chrono::Duration::milliseconds(10 * i + 5))
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            model.observe_event(&Event::Start {
-                ts: start,
-                id: Some(i),
-                path: "prime.nap".to_string(),
-            });
-            model.observe_event(&Event::End {
-                ts: end,
-                id: Some(i),
-                path: "prime.nap".to_string(),
-                ok: true,
-                ms: Some(5),
-                error: None,
-            });
-        }
-        assert_eq!(model.step_intervals().len(), 50_000);
-        let state = json!({"prime": {"value": null, "meta": {
-            "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-        }}});
-        let now = (base + chrono::Duration::milliseconds(10 * 50_000))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            500.0,
-            &now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        // Three redraws, the same way a real TUI session's own poll
-        // loop would call `build_time_screen` again on every tick --
-        // the cache only pays off from the second one on.
-        let start_time = std::time::Instant::now();
-        for _ in 0..3 {
-            let time_screen = oscilloscope_core::screens::build_time_screen(
-                &rendered.rows,
-                &flat,
-                &plan,
-                &model,
-                &rendered.header,
-                Some(&state),
-                &[],
-                None,
-                &Default::default(),
-                &now,
-            );
-            terminal
-                .draw(|f| {
-                    draw(
-                        f,
-                        &rendered,
-                        None,
-                        &[],
-                        0,
-                        &mut app,
-                        Some(&state),
-                        &test_ctx,
-                        0,
-                        &now,
-                        None,
-                        None,
-                        None,
-                        Some(&time_screen),
-                        None,
-                        &mut CostLayoutCache::default(),
-                    )
-                })
-                .unwrap();
-        }
-        let elapsed = start_time.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "building the strips and drawing three times over a 50,000-interval log took {elapsed:?}, a generous bound even for a debug build"
-        );
-    }
-
-    fn unnamed_loop_plan_for_tui() -> PlanTree {
-        use electricity_bytecode::{LoopFlow, LoopSpec, Region};
-        let root_path = EffectPath::root();
-        let loop_path = root_path.clone();
-        let body_path = loop_path.clone().push_name("nap");
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![Op {
-                    path: loop_path,
-                    name: None,
-                    kind: NodeKind::Control(Region::Loop {
-                        name: None,
-                        spec: LoopSpec::Each {
-                            in_path: "prime.items".to_string(),
-                            as_name: "item".to_string(),
-                            truncate: false,
-                        },
-                        body: Box::new(Region::Block {
-                            ops: vec![tool(body_path, "nap", OnError::Fail)],
-                            overlay: true,
-                        }),
-                        flow: LoopFlow::Chain,
-                        max_concurrency: None,
-                        max_iterations: None,
-                        min_iterations: 0,
-                        collect: None,
-                    }),
-                    on_error: OnError::Fail,
-                    labels: None,
-                    enabled: true,
-                }],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        PlanTree::from_program(&Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        })
-    }
-
-    /// The same 50,000-interval log as the test above, but logged at
-    /// an unnamed loop's own body path on a real compiled plan --
-    /// `build_time_rows`'s own loop-progress count
-    /// (`is_unnamed_loop_body_path`, `step_intervals` filtered by
-    /// path) must stay as cheap as a plain leaf's, not re-scan the
-    /// whole log on every redraw.
-    #[test]
-    fn time_screen_performance_with_50_000_logged_intervals_on_an_unnamed_loop() {
-        let plan = unnamed_loop_plan_for_tui();
-        let mut model = RunModel::new();
-        let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap();
-        for i in 0..50_000i64 {
-            let start = (base + chrono::Duration::milliseconds(10 * i))
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let end = (base + chrono::Duration::milliseconds(10 * i + 5))
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            model.observe_event(&Event::Start {
-                ts: start,
-                id: Some(i),
-                path: "prime.nap".to_string(),
-            });
-            model.observe_event(&Event::End {
-                ts: end,
-                id: Some(i),
-                path: "prime.nap".to_string(),
-                ok: true,
-                ms: Some(5),
-                error: None,
-            });
-        }
-        assert_eq!(model.step_intervals().len(), 50_000);
-        let state = json!({"prime": {"value": null, "meta": {
-            "created_at": "2026-01-01T00:00:00Z", "completed_at": null
-        }}});
-        let now = (base + chrono::Duration::milliseconds(10 * 50_000))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            500.0,
-            &now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        {
-            let time_screen = oscilloscope_core::screens::build_time_screen(
-                &rendered.rows,
-                &flat,
-                &plan,
-                &model,
-                &rendered.header,
-                Some(&state),
-                &[],
-                None,
-                &Default::default(),
-                &now,
-            );
-            assert!(
-                time_screen.rows.iter().any(|r| matches!(
-                    r,
-                    oscilloscope_core::screens::TimeDisplayRow::Row(row)
-                        if row.loop_progress.is_some()
-                )),
-                "the unnamed loop's own body row must carry a real pass count"
-            );
-        }
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let start_time = std::time::Instant::now();
-        for _ in 0..3 {
-            let time_screen = oscilloscope_core::screens::build_time_screen(
-                &rendered.rows,
-                &flat,
-                &plan,
-                &model,
-                &rendered.header,
-                Some(&state),
-                &[],
-                None,
-                &Default::default(),
-                &now,
-            );
-            terminal
-                .draw(|f| {
-                    draw(
-                        f,
-                        &rendered,
-                        None,
-                        &[],
-                        0,
-                        &mut app,
-                        Some(&state),
-                        &test_ctx,
-                        0,
-                        &now,
-                        None,
-                        None,
-                        None,
-                        Some(&time_screen),
-                        None,
-                        &mut CostLayoutCache::default(),
-                    )
-                })
-                .unwrap();
-        }
-        let elapsed = start_time.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "building the strips and drawing three times over a 50,000-interval unnamed-loop log took {elapsed:?}, a generous bound even for a debug build"
+            signal_elapsed < std::time::Duration::from_millis(500),
+            "building and drawing Signal for a 2000-node state took {signal_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
     }
 
@@ -12600,1197 +11119,6 @@ mod golden_tests {
             "the selected row must be drawn above the footer, not under or inside it: {text}"
         );
         insta::assert_snapshot!(text);
-    }
-    #[test]
-    fn time_running_with_history_at_120x40() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_running_state();
-        let text = time_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.b"),
-            &Default::default(),
-            true,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_running_with_history_at_100x30() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_running_state();
-        let text = time_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.b"),
-            &Default::default(),
-            true,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_running_without_history_at_80x24() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_running_state();
-        let text = time_snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.b"),
-            &Default::default(),
-            false,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// The now line must sit at the exact same column in every
-    /// timeline row and every strip, with and without `--events` --
-    /// the strips' own gutter must not leave out the timeline box's
-    /// left border, which would land it one column short.
-    #[test]
-    fn time_strip_and_row_now_columns_always_match() {
-        for use_events in [false, true] {
-            let plan = sample_plan();
-            let mut model = RunModel::new();
-            if use_events {
-                model.observe_event(&oscilloscope_core::observe::Event::Start {
-                    ts: "2026-01-01T00:00:00Z".to_string(),
-                    id: Some(1),
-                    path: "prime.a".to_string(),
-                });
-            }
-            let state = overview_running_state();
-            let text = time_snapshot_at(
-                100,
-                30,
-                &plan,
-                &mut model,
-                Some(&state),
-                ProcessState::Running,
-                Some("prime.b"),
-                &Default::default(),
-                false,
-            );
-            let now_cols: Vec<usize> = text
-                .lines()
-                .filter_map(|l| l.chars().position(|c| c == '┃'))
-                .collect();
-            assert!(
-                now_cols.len() >= 2,
-                "expected both bar rows and strips to show a now line (events={use_events})"
-            );
-            assert!(
-                now_cols.windows(2).all(|w| w[0] == w[1]),
-                "now column must line up everywhere (events={use_events}): {now_cols:?}"
-            );
-        }
-    }
-
-    /// The same now-column alignment, at the two smaller widths the
-    /// start/duration columns are first shown or first dropped at
-    /// (`thresholds::TIME_START_DURATION_COLUMN_MIN_WIDTH`) -- a
-    /// layout miscalculation at either boundary would show up as a
-    /// now line that lines up at 100 columns but not at one just
-    /// above or below the threshold.
-    #[test]
-    fn time_strip_and_row_now_columns_always_match_at_80x24_and_85x24() {
-        for (width, height) in [(80u16, 24u16), (85u16, 24u16)] {
-            let plan = sample_plan();
-            let mut model = RunModel::new();
-            model.observe_event(&oscilloscope_core::observe::Event::Start {
-                ts: "2026-01-01T00:00:00Z".to_string(),
-                id: Some(1),
-                path: "prime.a".to_string(),
-            });
-            let state = overview_running_state();
-            let text = time_snapshot_at(
-                width,
-                height,
-                &plan,
-                &mut model,
-                Some(&state),
-                ProcessState::Running,
-                Some("prime.b"),
-                &Default::default(),
-                false,
-            );
-            let now_cols: Vec<usize> = text
-                .lines()
-                .filter_map(|l| l.chars().position(|c| c == '┃'))
-                .collect();
-            assert!(
-                now_cols.len() >= 2,
-                "expected both bar rows and strips to show a now line at {width}x{height}"
-            );
-            assert!(
-                now_cols.windows(2).all(|w| w[0] == w[1]),
-                "now column must line up everywhere at {width}x{height}: {now_cols:?}"
-            );
-        }
-    }
-
-    /// A golden with the short `events/min` label (no `(state)`
-    /// suffix) -- the strips' own gutter must still line up with the
-    /// bars with it too, not just the longer one.
-    #[test]
-    fn time_strip_labels_at_100x30_with_the_short_events_label() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        model.observe_event(&oscilloscope_core::observe::Event::Start {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            id: Some(1),
-            path: "prime.a".to_string(),
-        });
-        let state = overview_running_state();
-        let text = time_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.b"),
-            &Default::default(),
-            false,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_finished_without_history_at_70x20() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_finished_state();
-        let text = time_snapshot_at(
-            70,
-            20,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(false),
-            Some("prime.b"),
-            &Default::default(),
-            false,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_finished_with_history_at_120x40() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_finished_state();
-        let text = time_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(false),
-            Some("prime.b"),
-            &Default::default(),
-            true,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_finished_with_history_at_80x24() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_finished_state();
-        let text = time_snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(false),
-            Some("prime.b"),
-            &Default::default(),
-            true,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_running_without_history_at_70x20() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = overview_running_state();
-        let text = time_snapshot_at(
-            70,
-            20,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.b"),
-            &Default::default(),
-            false,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    fn each_loop_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
-            "items": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null, "progress": {"done": 1, "total": 2}},
-                "iter_0": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z"},
-                    "nap": {"value": "n0", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:10Z", "provider": "shell"}}
-                },
-                "iter_1": {"value": null, "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": null},
-                    "nap": {"value": null, "meta": {"created_at": "2026-01-01T00:00:10Z", "completed_at": null, "provider": "shell"}}
-                }
-            }
-        }})
-    }
-
-    fn each_loop_plan_for_tui() -> PlanTree {
-        use electricity_bytecode::{Program, Region};
-        let root_path = EffectPath::root();
-        let loop_path = root_path.push_name("items");
-        let pass0 = loop_path.push_pass(LoopId(0));
-        let nap = tool(pass0.push_name("nap"), "nap", OnError::Fail);
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![Op {
-                    path: loop_path.clone(),
-                    name: Some("items".to_string()),
-                    kind: NodeKind::Control(Region::Loop {
-                        name: Some("items".to_string()),
-                        spec: LoopSpec::Each {
-                            in_path: "prime.xs".to_string(),
-                            as_name: "x".to_string(),
-                            truncate: false,
-                        },
-                        body: Box::new(Region::Block {
-                            ops: vec![nap],
-                            overlay: true,
-                        }),
-                        flow: LoopFlow::Chain,
-                        max_concurrency: None,
-                        max_iterations: None,
-                        min_iterations: 0,
-                        collect: None,
-                    }),
-                    on_error: OnError::Fail,
-                    labels: None,
-                    enabled: true,
-                }],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        let program = Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        };
-        PlanTree::from_program(&program)
-    }
-
-    #[test]
-    fn time_collapsed_loop_at_100x30() {
-        let plan = each_loop_plan_for_tui();
-        let mut model = RunModel::new();
-        let state = each_loop_state();
-        let text = time_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.items"),
-            &Default::default(),
-            false,
-        );
-        assert!(
-            text.contains('⟲'),
-            "a collapsed loop row shows its own progress:\n{text}"
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// Follow picking a running leaf inside a collapsed loop (the
-    /// leaf's own breadcrumb row never appears in the timeline
-    /// itself) must still name it in the zoom title -- the loop's
-    /// own label, then the leaf's own breadcrumb.
-    #[test]
-    fn time_zoom_title_names_a_running_leaf_under_a_collapsed_loop() {
-        let plan = each_loop_plan_for_tui();
-        let mut model = RunModel::new();
-        let state = each_loop_state();
-        // 34 tall, not 30: issue #678's shared chrome reserves 4 of
-        // those rows outside the body, so the zoom pane below needs
-        // 4 more than it used to for the same effective body height.
-        let text = time_snapshot_at(
-            100,
-            34,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.items.iter_1.nap"),
-            &Default::default(),
-            false,
-        );
-        assert!(
-            text.contains("zoom · items › pass 2 of 2 › nap"),
-            "the zoom title must name the selected leaf and its loop:\n{text}"
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    fn many_steps_then_a_named_loop_plan(n: usize) -> PlanTree {
-        let root_path = EffectPath::root();
-        let mut ops: Vec<Op> = (0..n)
-            .map(|i| {
-                tool(
-                    root_path.clone().push_name(format!("s{i}")),
-                    &format!("s{i}"),
-                    OnError::Fail,
-                )
-            })
-            .collect();
-        let loop_path = root_path.clone().push_name("items");
-        let pass0 = loop_path.clone().push_pass(LoopId(0));
-        let nap = tool(pass0.push_name("nap"), "nap", OnError::Fail);
-        ops.push(Op {
-            path: loop_path.clone(),
-            name: Some("items".to_string()),
-            kind: NodeKind::Control(Region::Loop {
-                name: Some("items".to_string()),
-                spec: LoopSpec::Each {
-                    in_path: "prime.xs".to_string(),
-                    as_name: "x".to_string(),
-                    truncate: false,
-                },
-                body: Box::new(Region::Block {
-                    ops: vec![nap],
-                    overlay: true,
-                }),
-                flow: LoopFlow::Chain,
-                max_concurrency: None,
-                max_iterations: None,
-                min_iterations: 0,
-                collect: None,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        });
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops,
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        PlanTree::from_program(&Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        })
-    }
-
-    /// A leaf hidden under a collapsed loop (DESIGN.md: "Loops are
-    /// collapsed by default") has no row of its own in the timeline
-    /// at all -- follow selecting it must highlight and scroll to its
-    /// loop row, the nearest one actually drawn, not give up and
-    /// leave the viewport wherever it was.
-    #[test]
-    fn time_timeline_scrolls_to_a_collapsed_loops_row_for_a_hidden_leafs_selection() {
-        let n = 30;
-        let plan = many_steps_then_a_named_loop_plan(n);
-        let mut model = RunModel::new();
-        let mut state = serde_json::Map::new();
-        for i in 0..n {
-            state.insert(
-                format!("s{i}"),
-                json!({"value": "ok", "meta": {
-                    "created_at": format!("2026-01-01T00:{:02}:00Z", i),
-                    "completed_at": format!("2026-01-01T00:{:02}:01Z", i)
-                }}),
-            );
-        }
-        state.insert(
-            "items".to_string(),
-            json!({"value": null, "meta": {
-                    "created_at": "2026-01-01T00:30:00Z", "completed_at": null
-                },
-                "iter_0": {"value": null, "meta": {
-                        "created_at": "2026-01-01T00:30:00Z", "completed_at": "2026-01-01T00:30:10Z"
-                    },
-                    "nap": {"value": "n0", "meta": {
-                        "created_at": "2026-01-01T00:30:00Z", "completed_at": "2026-01-01T00:30:10Z", "provider": "shell"
-                    }}
-                },
-                "iter_1": {"value": null, "meta": {
-                        "created_at": "2026-01-01T00:30:10Z", "completed_at": null
-                    },
-                    "nap": {"value": null, "meta": {
-                        "created_at": "2026-01-01T00:30:10Z", "completed_at": null, "provider": "shell"
-                    }}
-                }
-            }),
-        );
-        let state = json!({"prime": Value::Object(state)});
-        let now = "2026-01-01T00:30:15Z";
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            900.0,
-            now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            Some("prime.items.iter_1.nap"),
-            &Default::default(),
-            now,
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.selected_path = Some("prime.items.iter_1.nap".to_string());
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(100, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains("items"),
-            "the selected leaf's own loop row must be scrolled into view: {text}"
-        );
-        assert!(
-            !text.contains("s0 "),
-            "scrolled past the first row, which must no longer show: {text}"
-        );
-    }
-
-    /// DESIGN.md's own performance rule: "A 400-pass loop collapsed
-    /// is one row."
-    #[test]
-    fn a_400_pass_loop_collapses_to_one_row() {
-        let plan = each_loop_plan_for_tui();
-        // Real, parseable RFC 3339 timestamps -- not `"t0"`..`"t400"`,
-        // which `oscilloscope_core::observe::duration_seconds` can't
-        // parse at all, so every row's own `start_s`/`duration_s`
-        // silently read `None` and no bar this test could have caught
-        // ever actually drew. 400 passes 700ms apart stay inside
-        // `time_snapshot_at`'s own fixed 5-minute `now`.
-        let ts = |i: i64| -> String {
-            (chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap()
-                + chrono::Duration::milliseconds(700 * i))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        };
-        let mut prime = serde_json::Map::new();
-        prime.insert("value".to_string(), Value::Null);
-        let mut prime_meta = serde_json::Map::new();
-        prime_meta.insert("created_at".to_string(), Value::String(ts(0)));
-        prime_meta.insert("completed_at".to_string(), Value::Null);
-        prime.insert("meta".to_string(), Value::Object(prime_meta));
-        let mut iters = serde_json::Map::new();
-        for i in 0..400 {
-            let mut nap_meta = serde_json::Map::new();
-            nap_meta.insert("created_at".to_string(), Value::String(ts(i)));
-            nap_meta.insert("completed_at".to_string(), Value::String(ts(i + 1)));
-            nap_meta.insert("provider".to_string(), Value::String("shell".to_string()));
-            let mut nap = serde_json::Map::new();
-            nap.insert("value".to_string(), Value::String("ok\n".to_string()));
-            nap.insert("meta".to_string(), Value::Object(nap_meta));
-            let mut iter_meta = serde_json::Map::new();
-            iter_meta.insert("created_at".to_string(), Value::String(ts(i)));
-            iter_meta.insert("completed_at".to_string(), Value::String(ts(i + 1)));
-            let mut iter = serde_json::Map::new();
-            iter.insert("value".to_string(), Value::Null);
-            iter.insert("meta".to_string(), Value::Object(iter_meta));
-            iter.insert("nap".to_string(), Value::Object(nap));
-            iters.insert(format!("iter_{i}"), Value::Object(iter));
-        }
-        let mut items_meta = serde_json::Map::new();
-        items_meta.insert("created_at".to_string(), Value::String(ts(0)));
-        items_meta.insert("completed_at".to_string(), Value::String(ts(400)));
-        items_meta.insert(
-            "progress".to_string(),
-            serde_json::json!({"done": 400, "total": 400}),
-        );
-        let mut items = serde_json::Map::new();
-        items.insert("value".to_string(), Value::Null);
-        items.insert("meta".to_string(), Value::Object(items_meta));
-        for (k, v) in iters {
-            items.insert(k, v);
-        }
-        prime.insert("items".to_string(), Value::Object(items));
-        let mut root = serde_json::Map::new();
-        root.insert("prime".to_string(), Value::Object(prime));
-        let state = Value::Object(root);
-
-        let mut model = RunModel::new();
-        let text = time_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(false),
-            Some("prime.items"),
-            &Default::default(),
-            false,
-        );
-        assert_eq!(
-            text.matches('⟲').count(),
-            1,
-            "a 400-pass loop collapsed is one row:\n{text}"
-        );
-        assert!(
-            text.contains("400/400"),
-            "the collapsed row shows the real pass count:\n{text}"
-        );
-        // Only the timeline pane itself (above the zoom pane, which
-        // always lists the selected container's own children
-        // regardless of whether its loop row is collapsed) must have
-        // no per-pass row of its own.
-        let timeline_text = text
-            .lines()
-            .take_while(|l| !l.contains("zoom"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !timeline_text.contains("pass "),
-            "a collapsed loop's own timeline shows no per-pass rows:\n{timeline_text}"
-        );
-    }
-
-    #[test]
-    fn time_expanded_loop_at_100x30() {
-        let plan = each_loop_plan_for_tui();
-        let mut model = RunModel::new();
-        let state = each_loop_state();
-        let mut expanded = std::collections::BTreeSet::new();
-        expanded.insert("prime.items".to_string());
-        let text = time_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.items"),
-            &expanded,
-            false,
-        );
-        assert!(
-            text.contains("pass 1"),
-            "an expanded loop shows one row per pass:\n{text}"
-        );
-        assert!(
-            text.contains("pass 2"),
-            "an expanded loop shows one row per pass:\n{text}"
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn time_agent_zoom_pane_at_120x40() {
-        // Not `time_snapshot_at`: that helper's own hardcoded `now`
-        // (`"2026-01-01T00:05:00Z"`) belongs to `sample_plan`'s own
-        // state, not `agent_running_state`'s real clock
-        // (`11:46:43`-`11:52:54`) -- a real transcript, tailed and
-        // drawn the way `main.rs`'s own `tail_focused_transcript`
-        // would, is also why this test exists at all.
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = agent_running_state();
-        let now = "2026-01-01T11:52:55Z";
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            372.0,
-            now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            Some("prime.fix"),
-            &Default::default(),
-            now,
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.selected_path = Some("prime.fix".to_string());
-        let transcript = agent_running_transcript();
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    Some(&transcript),
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        insta::assert_snapshot!(text);
-    }
-
-    /// A finished agent's own transcript can end in an unmatched
-    /// `tool_start` (the session stopped mid-call) -- the footer's
-    /// busiest-tool figure must come from `meta.raw`'s own aggregate
-    /// alone, never grow with how long ago `now` is from that stale
-    /// call.
-    #[test]
-    fn time_agent_zoom_pane_footer_does_not_grow_for_a_finished_agent() {
-        let plan = sample_plan();
-        let mut state = agent_finished_state();
-        state["prime"]["fix"]["meta"]["raw"]["tool_counts"] = json!({
-            "bash": {"calls": 3, "ms": 2_500},
-            "edit": {"calls": 2, "ms": 900},
-        });
-        let transcript = agent_running_transcript();
-        let footer_line = |now: &str| -> String {
-            let mut model = RunModel::new();
-            let rendered = render::build_folded(
-                "do-thing.yml",
-                "cof",
-                &plan,
-                &mut model,
-                Some(&state),
-                ProcessState::exited(true),
-                372.0,
-                now,
-                &[],
-                true,
-                &Default::default(),
-            );
-            let flat = oscilloscope_core::model::flatten_state(&state);
-            let time_screen = oscilloscope_core::screens::build_time_screen(
-                &rendered.rows,
-                &flat,
-                &plan,
-                &model,
-                &rendered.header,
-                Some(&state),
-                &[],
-                Some("prime.fix"),
-                &Default::default(),
-                now,
-            );
-            let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Time;
-            app.selected_path = Some("prime.fix".to_string());
-            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-            let test_tracker = crate::highlight::Tracker::new();
-            let test_ctx = DrawCtx {
-                theme: &test_theme,
-                highlights: &test_tracker,
-                now: Instant::now(),
-                color_mode: ColorMode::TrueColor,
-                theme_banner: None,
-                zone: &test_zone(),
-                no_animation: false,
-            };
-            let backend = TestBackend::new(120, 40);
-            let mut terminal = Terminal::new(backend).unwrap();
-            terminal
-                .draw(|f| {
-                    draw(
-                        f,
-                        &rendered,
-                        None,
-                        &[],
-                        0,
-                        &mut app,
-                        Some(&state),
-                        &test_ctx,
-                        0,
-                        now,
-                        None,
-                        None,
-                        None,
-                        Some(&time_screen),
-                        Some(&transcript),
-                        &mut CostLayoutCache::default(),
-                    )
-                })
-                .unwrap();
-            terminal
-                .backend()
-                .to_string()
-                .lines()
-                .find(|l| l.contains("tools"))
-                .unwrap()
-                .to_string()
-        };
-        let right_after = footer_line("2026-01-01T11:52:55Z");
-        let hours_later = footer_line("2026-01-01T13:00:00Z");
-        assert_eq!(
-            right_after, hours_later,
-            "the footer must not keep growing once the agent has finished"
-        );
-        assert!(
-            right_after.contains("bash 2.5s"),
-            "the busiest tool must come from meta.raw alone: {right_after:?}"
-        );
-    }
-
-    /// Issue #637: an interrupted agent's own `meta.live` is left
-    /// behind with no `completed_at` of its own, and its transcript
-    /// can end in an unmatched `tool_start` (the call that was running
-    /// when the run was cancelled). The think band's own end, the
-    /// footer's running-tool time and the zoom axis must all come
-    /// from the row's own (frozen) status, never keep extending to
-    /// `now`.
-    #[test]
-    fn time_agent_zoom_pane_does_not_grow_for_a_cancelled_agent_with_leftover_live() {
-        let plan = sample_plan();
-        let state = agent_cancelled_state();
-        let transcript = oscilloscope_core::transcript::build_transcript_view(
-            &[json!({
-                "t": "2026-01-01T11:46:50Z", "type": "tool_start", "id": 1,
-                "tool": "bash", "target": "pytest -q"
-            })],
-            false,
-        );
-        let snapshot_at = |now: &str| -> String {
-            let mut model = RunModel::new();
-            let rendered = render::build_folded(
-                "do-thing.yml",
-                "cof",
-                &plan,
-                &mut model,
-                Some(&state),
-                ProcessState::exited(true),
-                11.0,
-                now,
-                &[],
-                true,
-                &Default::default(),
-            );
-            let flat = oscilloscope_core::model::flatten_state(&state);
-            let time_screen = oscilloscope_core::screens::build_time_screen(
-                &rendered.rows,
-                &flat,
-                &plan,
-                &model,
-                &rendered.header,
-                Some(&state),
-                &[],
-                Some("prime.fix"),
-                &Default::default(),
-                now,
-            );
-            let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Time;
-            app.selected_path = Some("prime.fix".to_string());
-            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-            let test_tracker = crate::highlight::Tracker::new();
-            let test_ctx = DrawCtx {
-                theme: &test_theme,
-                highlights: &test_tracker,
-                now: Instant::now(),
-                color_mode: ColorMode::TrueColor,
-                theme_banner: None,
-                zone: &test_zone(),
-                no_animation: false,
-            };
-            let backend = TestBackend::new(120, 40);
-            let mut terminal = Terminal::new(backend).unwrap();
-            terminal
-                .draw(|f| {
-                    draw(
-                        f,
-                        &rendered,
-                        None,
-                        &[],
-                        0,
-                        &mut app,
-                        Some(&state),
-                        &test_ctx,
-                        0,
-                        now,
-                        None,
-                        None,
-                        None,
-                        Some(&time_screen),
-                        Some(&transcript),
-                        &mut CostLayoutCache::default(),
-                    )
-                })
-                .unwrap();
-            terminal
-                .backend()
-                .to_string()
-                .lines()
-                .skip(1)
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        let right_after = snapshot_at("2026-01-01T11:46:55Z");
-        let hours_later = snapshot_at("2026-01-01T13:00:00Z");
-        assert_eq!(
-            right_after, hours_later,
-            "the zoom pane must not keep growing once the run has ended, even with meta.live left over"
-        );
-    }
-
-    /// Issue #654: a stopped agent's own row can have no resolvable
-    /// `duration_s` at all (known only from `--events`, with no
-    /// matching end event before the run was killed) -- its zoom
-    /// axis must still end at the run's own end, never at `now`.
-    #[test]
-    fn time_agent_zoom_pane_with_no_resolvable_duration_ends_its_axis_at_the_runs_end() {
-        use oscilloscope_core::model::{AgentLiveToolUsage, RowStatus};
-        use oscilloscope_core::render::RowKind;
-        use oscilloscope_core::screens::{
-            FocusDetail, FocusedStep, TimeDisplayRow, TimeScreen, TimeStrips, TimeVsUsualPane,
-        };
-        use oscilloscope_core::time::{AxisSpan, TimeRow};
-
-        let run_start_ts = "2026-01-01T11:46:43Z";
-        let run_end_ts = "2026-01-01T11:46:54Z";
-        let status = RowStatus {
-            kind: StatusKind::Cancelled,
-            skip_reason: None,
-            retrying: false,
-        };
-        let row = TimeRow {
-            path: "prime.fan.iter_1".to_string(),
-            depth: 1,
-            label: "iter_1".to_string(),
-            kind: RowKind::Tool,
-            status: status.clone(),
-            start_s: Some(0.0),
-            duration_s: None,
-            loop_progress: None,
-            has_children: false,
-            loop_expandable: false,
-            ghost: None,
-        };
-        let mut tools = std::collections::BTreeMap::new();
-        tools.insert(
-            "bash".to_string(),
-            AgentLiveToolUsage {
-                calls: 1,
-                ms: 2_000,
-            },
-        );
-        let selected = FocusedStep {
-            path: row.path.clone(),
-            breadcrumb: "fan › iter_1".to_string(),
-            kind_label: "agent",
-            provider_or_model: Some("agent".to_string()),
-            since_ts: Some(run_start_ts.to_string()),
-            elapsed_s: Some(11.0),
-            detail: FocusDetail::Agent {
-                asked: Some("Fix the bug.".to_string()),
-                live: None,
-                stale: true,
-                current_tool_elapsed_s: None,
-                note: "",
-                raw_transcript: None,
-                raw_files_changed: None,
-                raw_turns: Some(1),
-                raw_tool_calls: Some(1),
-                raw_tool_counts: tools,
-            },
-            status,
-            error: None,
-            value: None,
-            received: None,
-            tokens: None,
-            cost_usd: None,
-            usual_busy_p50_s: None,
-            usual_busy_p90_s: None,
-        };
-        let footer_line = |now: &str| -> String {
-            let screen = TimeScreen {
-                rows: vec![TimeDisplayRow::Row(row.clone())],
-                axis: AxisSpan {
-                    start_ts: Some(run_start_ts.to_string()),
-                    end_ts: run_end_ts.to_string(),
-                    show_now: false,
-                },
-                now_s: None,
-                planned: None,
-                strips: TimeStrips {
-                    events_points: Vec::new(),
-                    events_from_state: false,
-                    decisions: Vec::new(),
-                    in_flight_intervals: Vec::new(),
-                    queued: 0,
-                    quiet_agent: false,
-                },
-                selected: Some(selected.clone()),
-                zoom_extra: None,
-                vs_usual: TimeVsUsualPane::default(),
-            };
-            let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Time;
-            app.selected_path = Some(row.path.clone());
-            let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-            let test_tracker = crate::highlight::Tracker::new();
-            let test_ctx = DrawCtx {
-                theme: &test_theme,
-                highlights: &test_tracker,
-                now: Instant::now(),
-                color_mode: ColorMode::TrueColor,
-                theme_banner: None,
-                zone: &test_zone(),
-                no_animation: false,
-            };
-            let backend = TestBackend::new(100, 24);
-            let mut terminal = Terminal::new(backend).unwrap();
-            terminal
-                .draw(|f| {
-                    let area = f.area();
-                    draw_time_zoom_pane(f, area, &screen, &mut app, None, &test_ctx, now);
-                })
-                .unwrap();
-            terminal
-                .backend()
-                .to_string()
-                .lines()
-                .find(|l| l.contains("tools"))
-                .unwrap()
-                .to_string()
-        };
-        let right_after = footer_line("2026-01-01T11:46:55Z");
-        let hours_later = footer_line("2026-01-01T13:00:00Z");
-        assert_eq!(
-            right_after, hours_later,
-            "the zoom axis must not keep reaching for `now` once the run has ended"
-        );
-        assert!(
-            right_after.contains("18%"),
-            "the footer must read the fixed 2s/11s share, not a share against `now`: {right_after:?}"
-        );
-    }
-
-    /// DESIGN.md's zoom pane: "With no transcript, the footer and a
-    /// `running: <tool>` line (from `current_tool`) are all it
-    /// shows" -- `time_snapshot_at` never attaches a transcript at
-    /// all, so the running agent's own zoom pane must fall back to
-    /// `meta.live.current_tool` instead of the brief-window note.
-    #[test]
-    fn time_agent_zoom_pane_with_no_transcript_falls_back_to_current_tool() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = agent_running_state();
-        let text = time_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            Some("prime.fix"),
-            &Default::default(),
-            false,
-        );
-        assert!(
-            text.contains("running: bash"),
-            "no transcript at all falls back to current_tool:\n{text}"
-        );
-        assert!(!text.contains(oscilloscope_core::screens::AGENT_LIVE_DATA_NOTE));
-    }
-
-    /// DESIGN.md's zoom pane: "the bands start where the window
-    /// starts, after a dim `…`" -- shown only once
-    /// `TranscriptView::truncated` actually says the tail read
-    /// didn't reach the session's own start.
-    #[test]
-    fn time_agent_zoom_pane_marks_a_truncated_transcript_window() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = agent_running_state();
-        let now = "2026-01-01T11:52:55Z";
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            372.0,
-            now,
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let time_screen = oscilloscope_core::screens::build_time_screen(
-            &rendered.rows,
-            &flat,
-            &plan,
-            &model,
-            &rendered.header,
-            Some(&state),
-            &[],
-            Some("prime.fix"),
-            &Default::default(),
-            now,
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Time;
-        app.selected_path = Some("prime.fix".to_string());
-        let mut transcript = agent_running_transcript();
-        transcript.truncated = true;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&time_screen),
-                    Some(&transcript),
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains("│…"),
-            "a truncated window's own leading gap reads as cut off, not as thinking:\n{text}"
-        );
     }
 }
 
@@ -15771,15 +13099,14 @@ mod tape_frame_goldens {
             //   is `fg.dim`/`fg.faint` instead. Every other cell on
             //   both rows, including their own trailing blanks
             //   elsewhere, matches exactly.
-            // - (52,6)-(68,6): the help overlay's own `0 1 2 3`
-            //   row names the screens `Tape Signal Flow Store` --
-            //   the design document's own names for `1`/`3`
-            //   (§2.2, §2.4). This codebase still calls those two
-            //   Time and Cost (issue #678's R3: an unported screen
-            //   keeps its current chip name until its own part
-            //   lands), so matching the frame's own text here would
-            //   mean renaming them two parts early, not fixing a
-            //   real bug.
+            // - (64,6)-(68,6): the help overlay's own `0 1 2 3`
+            //   row names screen `3` `Store` (§2.4); this codebase
+            //   still calls it Cost, since an unported screen keeps
+            //   its current chip name until its own part lands, so
+            //   matching the frame's own text here would mean
+            //   renaming it a part early, not fixing a real bug.
+            //   `Signal` (part 2) now matches the frame exactly, so
+            //   every other cell on this row does too.
             // - the status line's own row (y=28), below the modal:
             //   same reason as the Normal/Usual goldens' own
             //   (`STATUS_LINE_READS_AN_EARLIER_STEP_120X30`'s own
@@ -15787,18 +13114,8 @@ mod tape_frame_goldens {
             &[
                 (119, 0),
                 (119, 29),
-                (52, 6),
-                (54, 6),
-                (55, 6),
-                (56, 6),
-                (57, 6),
-                (58, 6),
-                (59, 6),
-                (60, 6),
-                (61, 6),
-                (62, 6),
-                (63, 6),
                 (64, 6),
+                (65, 6),
                 (66, 6),
                 (67, 6),
                 (68, 6),
@@ -15929,6 +13246,514 @@ mod tape_frame_goldens {
         assert!(
             text.contains("ETA — · no history yet"),
             "Run End's own row must read the §3.5 fallback text without history"
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_signal_screen(
+        plan: &oscilloscope_core::plan::PlanTree,
+        history: &crate::history_io::HistoryHandle,
+        state: &serde_json::Value,
+        events: &[serde_json::Value],
+        process: oscilloscope_core::model::ProcessState,
+        now: &str,
+        engine: &str,
+        column_ms: u64,
+    ) -> (RenderState, oscilloscope_core::screens::SignalScreen) {
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, events);
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            engine,
+            plan,
+            &mut model,
+            Some(state),
+            process,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(history, &mut rendered.header, Some(state), plan, now);
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let signal_screen = oscilloscope_core::screens::build_signal(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            plan,
+            &model,
+            Some(state),
+            column_ms,
+            None,
+            now,
+        );
+        (rendered, signal_screen)
+    }
+
+    /// Signal's own status line (§3.2's "newest finished step"):
+    /// `drafts.iter_1.draft` finishes 2 ms after `gate.reply`, but
+    /// the frame still reads `gate › reply finished` -- at the
+    /// 120x30 tier's own row (y=28).
+    const SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30: [(u16, u16); 42] = [
+        (3, 28),
+        (4, 28),
+        (5, 28),
+        (6, 28),
+        (7, 28),
+        (8, 28),
+        (10, 28),
+        (11, 28),
+        (12, 28),
+        (13, 28),
+        (14, 28),
+        (15, 28),
+        (16, 28),
+        (17, 28),
+        (18, 28),
+        (20, 28),
+        (21, 28),
+        (22, 28),
+        (23, 28),
+        (24, 28),
+        (25, 28),
+        (26, 28),
+        (27, 28),
+        (28, 28),
+        (29, 28),
+        (30, 28),
+        (31, 28),
+        (32, 28),
+        (33, 28),
+        (34, 28),
+        (35, 28),
+        (36, 28),
+        (38, 28),
+        (39, 28),
+        (40, 28),
+        (41, 28),
+        (42, 28),
+        (43, 28),
+        (44, 28),
+        (45, 28),
+        (46, 28),
+        (47, 28),
+    ];
+
+    /// Same reason as
+    /// [`SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30`], at the
+    /// 80x24 tier's own row (y=22).
+    const SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24: [(u16, u16); 42] = [
+        (3, 22),
+        (4, 22),
+        (5, 22),
+        (6, 22),
+        (7, 22),
+        (8, 22),
+        (10, 22),
+        (11, 22),
+        (12, 22),
+        (13, 22),
+        (14, 22),
+        (15, 22),
+        (16, 22),
+        (17, 22),
+        (18, 22),
+        (20, 22),
+        (21, 22),
+        (22, 22),
+        (23, 22),
+        (24, 22),
+        (25, 22),
+        (26, 22),
+        (27, 22),
+        (28, 22),
+        (29, 22),
+        (30, 22),
+        (31, 22),
+        (32, 22),
+        (33, 22),
+        (34, 22),
+        (35, 22),
+        (36, 22),
+        (38, 22),
+        (39, 22),
+        (40, 22),
+        (41, 22),
+        (42, 22),
+        (43, 22),
+        (44, 22),
+        (45, 22),
+        (46, 22),
+        (47, 22),
+    ];
+
+    #[allow(clippy::too_many_arguments)]
+    fn assert_signal_frame(
+        name: &str,
+        width: u16,
+        height: u16,
+        rendered: &RenderState,
+        signal_screen: &oscilloscope_core::screens::SignalScreen,
+        now: &str,
+        allowed_cells: &[(u16, u16)],
+    ) {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock(name, &theme);
+        let zone = frame_zone();
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Signal;
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(signal_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        assert_matches_mock(terminal.backend().buffer(), &mock, name, allowed_cells);
+    }
+
+    #[test]
+    fn signal_normal_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, signal_screen) = build_signal_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            100,
+        );
+        assert_signal_frame(
+            "signal--normal--120x30",
+            120,
+            30,
+            &rendered,
+            &signal_screen,
+            now,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
+        );
+    }
+
+    #[test]
+    fn signal_normal_80x24_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, signal_screen) = build_signal_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            100,
+        );
+        assert_signal_frame(
+            "signal--normal--80x24",
+            80,
+            24,
+            &rendered,
+            &signal_screen,
+            now,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
+        );
+    }
+
+    fn empty_header() -> oscilloscope_core::render::Header {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        oscilloscope_core::render::build_folded(
+            "demo.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        )
+        .header
+    }
+
+    fn draw_chart_only(
+        screen: &oscilloscope_core::screens::SignalScreen,
+        width: u16,
+        height: u16,
+        wide: bool,
+    ) -> ratatui::buffer::Buffer {
+        let header = empty_header();
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_signal_chart(f, area, screen, &header, wide, &ctx);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// A running prompt's own live estimate, landing in the Now
+    /// column exactly as the model already marks it, draws its own
+    /// bar in the faint live style -- never the sweep's own bold
+    /// accent, which would make `≈` indistinguishable from an
+    /// ordinary finished bar.
+    #[test]
+    fn the_live_column_draws_its_bar_faint_not_in_the_sweeps_own_bold_style() {
+        let mut screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(0),
+            cursor_col: Some(0),
+            ..Default::default()
+        };
+        screen
+            .buckets
+            .push(oscilloscope_core::screens::SignalBucket {
+                sent: 300,
+                sent_live: true,
+                ..Default::default()
+            });
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        // The block border takes the first row and column; the
+        // gutter (`600 t` etc., width 6) the next six, then the
+        // bottom-most sent row (index 4) is five rows down.
+        let y = buffer.area.y + 1 + (SIGNAL_SENT_ROWS as u16 - 1);
+        let x = buffer.area.x + 1 + 6;
+        let cell = &buffer[(x, y)];
+        assert_ne!(
+            cell.symbol(),
+            "\u{2503}",
+            "a filled live column keeps its own bar glyph"
+        );
+        assert!(
+            cell.modifier.contains(Modifier::DIM),
+            "a live column's own bar is faint"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::BOLD),
+            "never the sweep's own bold style"
+        );
+    }
+
+    /// A run many times longer than the pane is wide still keeps Now
+    /// on screen -- the trace scrolls rather than losing the sweep
+    /// (and everything after it) off the right edge.
+    #[test]
+    fn the_trace_scrolls_to_keep_now_in_view_on_a_long_run() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(300), // 30s at the default 100ms/column
+            cursor_col: Some(300),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 301],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let axis_row_y = buffer.area.y + SIGNAL_SENT_ROWS as u16;
+        let has_sweep =
+            (0..buffer.area.width).any(|x| buffer[(x, axis_row_y)].symbol() == "\u{2503}");
+        assert!(
+            has_sweep,
+            "Now's own sweep must still be drawn somewhere on screen"
+        );
+    }
+
+    /// The scrub cursor, once it differs from Now, is drawn with its
+    /// own distinct tint -- pressing ←→ must change something visible,
+    /// not just which step `enter` would open.
+    #[test]
+    fn a_scrubbed_cursor_is_drawn_distinctly_from_the_now_sweep() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(10),
+            cursor_col: Some(5),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 11],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let y = buffer.area.y + 1;
+        let cursor_x = buffer.area.x + 1 + 6 + 5;
+        let elsewhere_x = buffer.area.x + 1 + 6 + 2;
+        assert_eq!(
+            buffer[(cursor_x, y)].bg,
+            theme.selection_bg,
+            "the cursor's own column is tinted"
+        );
+        assert_ne!(
+            buffer[(elsewhere_x, y)].bg,
+            theme.selection_bg,
+            "only the cursor's own column is"
+        );
+    }
+
+    /// An axis top of 1,200 or more still fits its own label field,
+    /// with the thousands separator §3.8 asks for -- not cut down to
+    /// `1200` the way a fixed five-character field would.
+    #[test]
+    fn an_axis_top_in_the_thousands_is_never_cut() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 1200,
+            received_axis_top: 80,
+            now_col: Some(0),
+            cursor_col: Some(0),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default()],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let row: String = (0..7)
+            .map(|i| {
+                buffer[(buffer.area.x + 1 + i, buffer.area.y + 1)]
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(row, "1,200 t");
+    }
+
+    /// At a coarse zoom (1 s per column here), second marks keep at
+    /// least six columns between labels rather than printing one
+    /// every column and overlapping -- `0s` and `6s`, not `0s6s`.
+    #[test]
+    fn seconds_marks_stay_spaced_out_at_a_coarse_zoom() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            column_ms: 1000,
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 16, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+        let x0 = buffer.area.x + 1 + 6;
+        let row: Vec<String> = (0..16)
+            .map(|i| buffer[(x0 + i, y)].symbol().to_string())
+            .collect();
+        assert_eq!(row[0], "0", "{row:?}");
+        assert_eq!(row[1], "s", "{row:?}");
+        assert_eq!(row[6], "6", "{row:?}");
+        assert_eq!(row[7], "s", "{row:?}");
+        assert!(
+            row[2..6].iter().all(|c| c == " "),
+            "no overlap between labels: {row:?}"
+        );
+    }
+
+    /// The Help overlay on Signal lists its own keys (§4), not an
+    /// older generic list that has none of them.
+    #[test]
+    fn the_signal_help_overlay_lists_signals_own_keys() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, signal_screen) = build_signal_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            100,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Signal;
+        app.dialog = Dialog::Help;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&signal_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Help") && text.contains("Signal"), "{text}");
+        assert!(text.contains("Scrub"), "{text}");
+        assert!(text.contains("Zoom"), "{text}");
+        assert!(text.contains("Now"), "{text}");
+        assert!(
+            !text.contains("fold on/off"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("errors only"),
+            "not the generic list:\n{text}"
         );
     }
 }
