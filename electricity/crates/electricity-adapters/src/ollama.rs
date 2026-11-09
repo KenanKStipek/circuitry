@@ -457,6 +457,7 @@ mod tests {
             path,
             timeout_seconds: 5,
             token,
+            on_progress: None,
         }
     }
 

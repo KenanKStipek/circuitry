@@ -67,6 +67,22 @@ pub struct EventLog {
     /// the end, so a path with more than one call open at once still
     /// pairs each `end` with its *own* `start`.
     stacks: RefCell<HashMap<String, Vec<(u64, Instant)>>>,
+    /// Every instance id's own start [`Instant`], by id -- what
+    /// [`EventLog::on_progress`] computes its own `ms` from, since a
+    /// progress line always already knows the exact instance it
+    /// belongs to (passed in directly, never re-derived from *path*
+    /// the way Python's own `_open_by_path` fallback has to be).
+    /// Inserted by [`EventLog::on_start`], removed by
+    /// [`EventLog::on_complete`].
+    instant_by_id: RefCell<HashMap<u64, Instant>>,
+    /// The first `progress` line for a given instance id's own
+    /// current attempt records its own `ms` as that attempt's
+    /// `first_token_ms`; every later `progress` line for the same
+    /// instance *and* attempt reuses it (#674/#676) -- reset when a
+    /// new attempt's own first delta arrives, so a failed earlier
+    /// attempt's `first_token_ms` never leaks into the next one's.
+    first_token_ms: RefCell<HashMap<u64, i64>>,
+    first_token_ms_attempt: RefCell<HashMap<u64, u32>>,
     disabled: Cell<bool>,
 }
 
@@ -81,6 +97,9 @@ impl EventLog {
             seq: Cell::new(0),
             next_instance_id: Cell::new(0),
             stacks: RefCell::new(HashMap::new()),
+            instant_by_id: RefCell::new(HashMap::new()),
+            first_token_ms: RefCell::new(HashMap::new()),
+            first_token_ms_attempt: RefCell::new(HashMap::new()),
             disabled: Cell::new(false),
         };
         let opened = path
@@ -218,11 +237,13 @@ impl EventLog {
         }
         let instance_id = self.next_instance_id.get();
         self.next_instance_id.set(instance_id + 1);
+        let started_at = Instant::now();
         self.stacks
             .borrow_mut()
             .entry(path.to_string())
             .or_default()
-            .push((instance_id, Instant::now()));
+            .push((instance_id, started_at));
+        self.instant_by_id.borrow_mut().insert(instance_id, started_at);
         let mut payload = Dict::new();
         payload.insert(Value::Str("v".to_string()), Value::from(1i64));
         payload.insert(
@@ -268,6 +289,9 @@ impl EventLog {
         let (id_value, ms_value) = match popped {
             Some((instance_id, started_at)) => {
                 let ms = started_at.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                self.instant_by_id.borrow_mut().remove(&instance_id);
+                self.first_token_ms.borrow_mut().remove(&instance_id);
+                self.first_token_ms_attempt.borrow_mut().remove(&instance_id);
                 (Value::from(instance_id as i64), Some(ms))
             }
             None => (Value::None, None),
@@ -345,6 +369,90 @@ impl EventLog {
             }
         }
         self.write_line("report", Value::Dict(payload));
+    }
+
+    /// One `progress` line (#674/#676): the same running figures
+    /// `meta.live` carries (`tokens_received_estimate`,
+    /// `chars_received`, `tokens_sent`, `tokens_sent_estimate`), plus
+    /// `id`/`ms`/`first_token_ms` computed from *instance*'s own start
+    /// time -- the same reference [`EventLog::on_complete`]'s own `ms`
+    /// uses, so the two can never drift. Ports `cli/events.py::
+    /// EventLog.on_progress`; unlike that port, *instance* is always
+    /// the exact id the matching [`EventLog::on_start`] call returned
+    /// (electricity's own [`electricity_vm::observer::RunObserver::
+    /// effect_start`] hands it back directly to its caller), so this
+    /// never needs Python's own `_open_by_path` fallback lookup at
+    /// all.
+    pub fn on_progress(
+        &self,
+        path: &str,
+        instance: u64,
+        attempt: u32,
+        data: &electricity_vm::observer::ProgressData,
+    ) {
+        if self.disabled.get() {
+            return;
+        }
+        let ms = self
+            .instant_by_id
+            .borrow()
+            .get(&instance)
+            .map(|started_at| started_at.elapsed().as_millis().min(i64::MAX as u128) as i64);
+        if ms.is_some() {
+            let mut attempt_map = self.first_token_ms_attempt.borrow_mut();
+            if attempt_map.get(&instance) != Some(&attempt) {
+                // A new attempt's own first delta -- the previous
+                // attempt's `first_token_ms`, if any, belongs to a
+                // failed try and must not leak into this one's.
+                self.first_token_ms.borrow_mut().remove(&instance);
+                attempt_map.insert(instance, attempt);
+            }
+        }
+        let first_token_ms = ms.map(|ms_value| {
+            *self
+                .first_token_ms
+                .borrow_mut()
+                .entry(instance)
+                .or_insert(ms_value)
+        });
+        let mut payload = Dict::new();
+        payload.insert(Value::Str("v".to_string()), Value::from(1i64));
+        payload.insert(
+            Value::Str("seq".to_string()),
+            Value::from(self.take_seq() as i64),
+        );
+        payload.insert(Value::Str("ts".to_string()), Value::Str(now_iso_ms()));
+        payload.insert(
+            Value::Str("ev".to_string()),
+            Value::Str("progress".to_string()),
+        );
+        payload.insert(Value::Str("id".to_string()), Value::from(instance as i64));
+        payload.insert(Value::Str("path".to_string()), Value::Str(path.to_string()));
+        payload.insert(
+            Value::Str("ms".to_string()),
+            ms.map(Value::from).unwrap_or(Value::None),
+        );
+        payload.insert(
+            Value::Str("tokens_received_estimate".to_string()),
+            Value::from(data.tokens_received_estimate),
+        );
+        payload.insert(
+            Value::Str("chars_received".to_string()),
+            Value::from(data.chars_received),
+        );
+        payload.insert(
+            Value::Str("tokens_sent".to_string()),
+            data.tokens_sent.map(Value::from).unwrap_or(Value::None),
+        );
+        payload.insert(
+            Value::Str("tokens_sent_estimate".to_string()),
+            Value::from(data.tokens_sent_estimate),
+        );
+        payload.insert(
+            Value::Str("first_token_ms".to_string()),
+            first_token_ms.map(Value::from).unwrap_or(Value::None),
+        );
+        self.write_line("progress", Value::Dict(payload));
     }
 
     pub fn run_end(&self, ok: bool, error: Option<&str>, signal: Option<&str>) {

@@ -583,6 +583,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("m", "hi", &GenerateOptions::default(), &call)

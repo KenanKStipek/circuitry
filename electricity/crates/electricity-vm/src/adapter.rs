@@ -54,8 +54,28 @@ pub struct ImageInput {
     pub url: Option<String>,
 }
 
+/// One delta of a streamed reply, handed to a streaming adapter's own
+/// `on_progress` callback (`adapters/base.py::GenerateProgress`, field
+/// for field). `delta_count` is always `1` (one call per provider
+/// chunk). `tokens_sent`/`tokens_received` are the provider's own
+/// exact figures once it has reported them on this call (Anthropic's
+/// `message_start` reports `tokens_sent` before any text arrives;
+/// every streaming protocol reports `tokens_received` only on its
+/// final event) -- `None` until then.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GenerateProgress {
+    pub delta_chars: usize,
+    pub delta_count: u32,
+    pub tokens_sent: Option<i64>,
+    pub tokens_received: Option<i64>,
+}
+
 /// Per-call generation settings a `prompt` effect hands its adapter
-/// (`adapters/base.py::GenerateOptions`, field for field).
+/// (`adapters/base.py::GenerateOptions`, field for field). Streaming's
+/// own progress callback is not one of these fields -- see
+/// [`CallContext::on_progress`] -- since it is borrowed for the one
+/// call rather than owned data a cloned/compared `GenerateOptions`
+/// would need to carry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerateOptions {
     pub temperature: Option<f64>,
@@ -110,6 +130,15 @@ pub struct CallContext<'a> {
     pub path: &'a EffectPath,
     pub timeout_seconds: u32,
     pub token: &'a CancellationToken,
+    /// Called once per chunk a streaming adapter reads from its
+    /// provider (`adapters/base.py::GenerateOptions.on_progress`,
+    /// ported here rather than onto [`GenerateOptions`] itself: this
+    /// callback is borrowed for the one call, never owned/cloned/
+    /// compared data a [`GenerateOptions`] value would need to
+    /// carry). An adapter that does not stream a given call never
+    /// calls it; `None` for a call with no live-progress bookkeeping
+    /// at all (every non-prompt call site).
+    pub on_progress: Option<&'a dyn Fn(GenerateProgress)>,
 }
 
 /// A failed [`Adapter::generate`]/[`Adapter::check`]/registry build --
@@ -181,6 +210,18 @@ pub trait Adapter {
     /// adapter that doesn't override this -- the common case; only a
     /// handful of Python adapters accept images at all.
     fn accepts_images(&self) -> bool {
+        false
+    }
+
+    /// Whether this adapter instance sends `stream: true` and calls
+    /// [`GenerateOptions::on_progress`] (`getattr(adapter, "streams",
+    /// False) is True` in Python, read off a config-built boolean
+    /// field rather than a trait default any struct literal might
+    /// accidentally pick up via `..Default::default()`): `false` for
+    /// every adapter that doesn't override this -- most of them;
+    /// only `ollama`/`openai`/`anthropic`/the OpenAI-compatible family/
+    /// `scripted` ever stream.
+    fn streams(&self) -> bool {
         false
     }
 }
@@ -570,6 +611,7 @@ mod tests {
             path: &path,
             timeout_seconds: 30,
             token: &token,
+            on_progress: None,
         };
         let err = NotImplementedAdapter
             .generate("m", "p", &GenerateOptions::default(), &call)

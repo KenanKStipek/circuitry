@@ -338,6 +338,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
@@ -366,6 +367,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)

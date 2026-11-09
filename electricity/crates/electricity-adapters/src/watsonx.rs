@@ -470,6 +470,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let result = adapter
             .generate("m", "hi", &GenerateOptions::default(), &call)
@@ -575,6 +576,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
 
         for _ in 0..2 {
@@ -631,6 +633,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let adapter_a = WatsonXAdapter {
             name: "watsonx".to_string(),
@@ -699,6 +702,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("m", "hi", &GenerateOptions::default(), &call)

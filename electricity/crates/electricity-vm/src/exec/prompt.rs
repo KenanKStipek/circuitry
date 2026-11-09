@@ -11,12 +11,14 @@
 
 pub(crate) mod answers;
 mod decode;
+mod live;
 mod options;
 
 use std::rc::Rc;
 
+use crate::adapter::GenerateProgress;
 use crate::exec::{CtxChain, CtxSource, live_scope};
-use crate::observer::InstanceId;
+use crate::observer::{InstanceId, ProgressData};
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::effects::{PromptContent, PromptOp, PromptType, Role};
 use electricity_bytecode::{EffectPath, OnError, Op, ParamNode};
@@ -470,6 +472,9 @@ async fn generate_with_fallbacks(
     run_ctx: &RunContext<'_>,
     call_path: &EffectPath,
     token: &CancellationToken,
+    observer: &dyn RunObserver,
+    instance: InstanceId,
+    live_attempt: &mut u32,
 ) -> Result<PassOutcome, HardStop> {
     let mut attempts_meta: Vec<Value> = Vec::new();
     let mut last_failure: Option<LastFailure> = None;
@@ -534,17 +539,13 @@ async fn generate_with_fallbacks(
                         bare: None,
                         cause: electricity_tools::ErrorCause::None,
                     });
+                    *live_attempt += 1;
                     continue;
                 }
             }
         };
 
         let timeout_seconds = attempt_timeout_seconds(adapter_name, timeout_ms, run_ctx);
-        let call = crate::adapter::CallContext {
-            path: call_path,
-            timeout_seconds,
-            token,
-        };
         let generate_options = crate::adapter::GenerateOptions {
             temperature: built.temperature,
             max_tokens: built.max_tokens,
@@ -554,6 +555,94 @@ async fn generate_with_fallbacks(
             messages: messages.to_vec(),
             images: images.to_vec(),
             json_schema: json_schema.cloned(),
+        };
+
+        // `core/prompt.py::PromptRuntime._live_attempt` (#674/#676),
+        // ported: `meta.live` is written for *every* attempt (streaming
+        // or not) right before dispatch, updated from a streaming
+        // adapter's own progress callback, and always removed once
+        // this attempt's own `generate()` call resolves -- success,
+        // failure or cancellation alike. No lock/background publisher
+        // thread is needed the way Python's own port has one: this
+        // executor is single-threaded, so `on_progress` runs
+        // synchronously on the same stack as the `.await` below, and
+        // `Cell`/`RefCell` give it the one mutation point it needs.
+        let streaming = adapter_holder.as_ref().streams();
+        let attempt_number = *live_attempt;
+        let tokens_sent_estimate = live::estimate_tokens(prompt_sent);
+        let live_state = std::cell::RefCell::new(live::LiveAttemptState::new());
+        let next_meta_due = std::cell::Cell::new(None::<std::time::Instant>);
+        let last_progress_fired_at = std::cell::Cell::new(None::<std::time::Instant>);
+        set_leaf(
+            store,
+            meta_node,
+            "live",
+            live_state.borrow().snapshot(
+                attempt_number,
+                adapter_name,
+                model_name,
+                streaming,
+                tokens_sent_estimate,
+            ),
+        );
+        observer.write();
+
+        struct ClearLiveOnDrop<'a> {
+            meta_node: &'a NodeRef,
+            observer: &'a dyn RunObserver,
+        }
+        impl Drop for ClearLiveOnDrop<'_> {
+            fn drop(&mut self) {
+                pop_leaf(self.meta_node, "live");
+                self.observer.write();
+            }
+        }
+        let _clear_live = ClearLiveOnDrop { meta_node, observer };
+
+        let on_progress = |progress: GenerateProgress| {
+            live_state.borrow_mut().apply(&progress);
+            let now = std::time::Instant::now();
+            let meta_due = match next_meta_due.get() {
+                Some(due) => now >= due,
+                None => true,
+            };
+            if meta_due {
+                let snapshot = live_state.borrow().snapshot(
+                    attempt_number,
+                    adapter_name,
+                    model_name,
+                    streaming,
+                    tokens_sent_estimate,
+                );
+                set_leaf(store, meta_node, "live", snapshot);
+                observer.write();
+                next_meta_due.set(Some(now + std::time::Duration::from_secs(1)));
+            }
+            if progress.delta_chars == 0 {
+                return;
+            }
+            let progress_due = match last_progress_fired_at.get() {
+                Some(fired_at) => now.duration_since(fired_at) >= std::time::Duration::from_secs(1),
+                None => true,
+            };
+            if !progress_due {
+                return;
+            }
+            last_progress_fired_at.set(Some(now));
+            let state = live_state.borrow();
+            let data = ProgressData {
+                tokens_received_estimate: state.tokens_received_estimate(),
+                chars_received: state.chars_received(),
+                tokens_sent: state.tokens_sent(),
+                tokens_sent_estimate,
+            };
+            observer.progress(call_path, instance, attempt_number, &data);
+        };
+        let call = crate::adapter::CallContext {
+            path: call_path,
+            timeout_seconds,
+            token,
+            on_progress: streaming.then_some(&on_progress as &dyn Fn(GenerateProgress)),
         };
 
         // The backoff sleep and the limiter acquire already race
@@ -569,6 +658,8 @@ async fn generate_with_fallbacks(
             () = token.cancelled() => return Err(HardStop::Refused(VmError::Cancelled)),
             result = adapter_holder.as_ref().generate(model_name, prompt_sent, &generate_options, &call) => result,
         };
+        drop(_clear_live);
+        *live_attempt += 1;
         match generate_outcome {
             Err(err) => {
                 attempts_meta.push(
@@ -1235,6 +1326,10 @@ pub(crate) async fn execute_prompt(
     let mut attempts_meta_outer: Vec<Value> = Vec::new();
     let mut totals: (Option<i64>, Option<i64>) = (None, None);
     let mut next_delay_ms = backoff_ms;
+    // `meta.live.attempt` (#674/#676): numbered across every
+    // `(adapter, model)` this prompt effect tries, continuing from
+    // wherever the last retry pass left off -- never reset per pass.
+    let mut live_attempt: u32 = 0;
 
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
@@ -1336,6 +1431,9 @@ pub(crate) async fn execute_prompt(
             run_ctx,
             &call_path,
             token,
+            observer,
+            instance,
+            &mut live_attempt,
         )
         .await;
         drop(guard);
