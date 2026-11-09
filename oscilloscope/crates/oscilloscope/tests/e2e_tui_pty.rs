@@ -2658,7 +2658,9 @@ fn a_slow_streaming_prompt_shows_live_token_figures_then_settles() {
     }
 
     send_bytes(&mut master, b"q");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // The waits above can take 20 s (the alternate screen on a cold runner) plus 10 s (for
+    // the first rate) before the streamed run itself ends, so the cap sits well past their sum.
+    let status = wait_with_timeout(child, Duration::from_secs(90));
     assert!(status.success(), "osi should exit 0, got {status:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
@@ -2739,7 +2741,9 @@ fn a_slow_streaming_prompt_shows_live_token_figures_then_settles_on_electricity(
     }
 
     send_bytes(&mut master, b"q");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // The waits above can take 20 s (the alternate screen on a cold runner) plus 10 s (for
+    // the first rate) before the streamed run itself ends, so the cap sits well past their sum.
+    let status = wait_with_timeout(child, Duration::from_secs(90));
     assert!(status.success(), "osi should exit 0, got {status:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
