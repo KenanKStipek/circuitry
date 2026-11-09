@@ -3530,7 +3530,7 @@ fn loop_story_lines(
         .collect()
 }
 
-fn default_pass_path(rows: &[Row]) -> Option<&str> {
+pub(crate) fn default_pass_path(rows: &[Row]) -> Option<&str> {
     let running = rows
         .iter()
         .find(|r| r.kind == RowKind::Pass && r.status.kind == StatusKind::Running);

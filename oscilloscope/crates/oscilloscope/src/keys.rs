@@ -308,6 +308,7 @@ impl App {
             None => paths.len() - 1,
         };
         self.select_tree_path(Some(paths[next].to_string()));
+        self.follow = self.lands_back_on_the_followed_row(rows);
     }
 
     /// The loop `+`/`-` act on (issue #677 §9.3's "the selected
@@ -901,26 +902,48 @@ impl App {
     /// Now band and back, say, restores it on its own rather than
     /// needing `f`.
     fn lands_back_on_the_followed_row(&self, rows: &[&Row]) -> bool {
-        if self.screen != Screen::Tape {
-            return false;
-        }
-        use oscilloscope_core::model::StatusKind;
-        let target = rows
-            .iter()
-            .filter(|r| matches!(r.status.kind, StatusKind::Running))
-            .max_by_key(|r| r.depth)
-            .or_else(|| {
-                rows.iter()
-                    .filter(|r| {
-                        matches!(
-                            r.status.kind,
-                            StatusKind::LikelyRunning | StatusKind::RunningOrQueued
-                        )
-                    })
+        match self.screen {
+            Screen::Tape => {
+                use oscilloscope_core::model::StatusKind;
+                let target = rows
+                    .iter()
+                    .filter(|r| matches!(r.status.kind, StatusKind::Running))
                     .max_by_key(|r| r.depth)
-            })
-            .map(|r| r.path.as_str());
-        target.is_some() && target == self.selected_path.as_deref()
+                    .or_else(|| {
+                        rows.iter()
+                            .filter(|r| {
+                                matches!(
+                                    r.status.kind,
+                                    StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                                )
+                            })
+                            .max_by_key(|r| r.depth)
+                    })
+                    .map(|r| r.path.as_str());
+                target.is_some() && target == self.selected_path.as_deref()
+            }
+            // The Flow screen's own default pass (the Selected
+            // pane's own fallback, `screens::default_pass_path`'s
+            // own rule) is the row `↑↓` is really "following" there
+            // -- the running pass, or else the first one in plan
+            // order.
+            Screen::Flow => {
+                use oscilloscope_core::model::StatusKind;
+                let target = rows
+                    .iter()
+                    .find(|r| {
+                        r.kind == oscilloscope_core::render::RowKind::Pass
+                            && r.status.kind == StatusKind::Running
+                    })
+                    .or_else(|| {
+                        rows.iter()
+                            .find(|r| r.kind == oscilloscope_core::render::RowKind::Pass)
+                    })
+                    .map(|r| r.path.as_str());
+                target.is_some() && target == self.selected_path.as_deref()
+            }
+            _ => false,
+        }
     }
 
     fn move_or_scroll(&mut self, rows: &[&Row], state_rows: &[&StateRow], delta: i32) {
@@ -1821,6 +1844,38 @@ mod tests {
         assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_1"));
         app.handle_key(key(KeyCode::Up), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
+    }
+
+    /// Issue #691's own follow-up: `↑↓` turns follow off once it
+    /// moves the selection away from the pass the Flow screen's own
+    /// Selected pane would otherwise default to (the running one),
+    /// and turns it back on by itself the moment the selection lands
+    /// back on that same pass -- the Tape's own land-back rule.
+    #[test]
+    fn flow_up_down_turns_follow_off_and_back_on_the_same_way_the_tape_does() {
+        let mut loop_row = row("prime.drafts", 1, StatusKind::Running);
+        loop_row.kind = RowKind::Loop;
+        let mut pass0 = row("prime.drafts.iter_0", 2, StatusKind::Running);
+        pass0.kind = RowKind::Pass;
+        let mut pass1 = row("prime.drafts.iter_1", 2, StatusKind::Pending);
+        pass1.kind = RowKind::Pass;
+        let rows = [loop_row, pass0, pass1];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        assert!(app.follow);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
+        assert!(app.follow, "landed on the running pass: follow stays on");
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_1"));
+        assert!(!app.follow, "moved off the running pass: follow turns off");
+        app.handle_key(key(KeyCode::Up), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
+        assert!(
+            app.follow,
+            "landed back on the running pass: follow resumes"
+        );
     }
 
     #[test]
