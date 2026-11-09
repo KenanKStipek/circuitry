@@ -590,21 +590,23 @@ impl App {
                 self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
             }
-            // Issue #613: ← re-folds a quick-steps group ⏎ had
-            // expanded in place, from any of its steps, not only its
-            // own representative (`expanded_quick_steps`' only key):
-            // scan backward over same-depth rows from the selected
-            // one until the representative's own row is found. The
-            // scan stops at the first row that is neither itself a
-            // quick step (`fold::is_quick_step`'s own test) nor an
+            // Not on the Tape's own key bar (§4) -- its rows are
+            // already flat, with no collapsed state of their own to
+            // toggle; still live on Flow/Time/Cost. Issue #613: the
+            // same key re-folds a quick-steps group ⏎ had expanded
+            // in place, from any of its steps, not only its own
+            // representative (`expanded_quick_steps`' own key): scan
+            // backward over same-depth rows from the selected one
+            // until the representative's own row is found. The scan
+            // stops at the first row that is neither itself a quick
+            // step (`fold::is_quick_step`'s own test) nor an
             // unexpanded quick-steps summary row, so an unrelated
             // sibling between two groups -- or before the selected
             // row -- never gets scanned past into an earlier group's
-            // expansion. Reached on the Tape too (quick steps are
-            // their own, separate concept from `collapsed` above,
-            // which the Signal and Flow already claimed ← for).
-            KeyCode::Left if self.pane == Pane::Tree => {
+            // own expansion.
+            KeyCode::Left if self.pane == Pane::Tree && self.screen != Screen::Tape => {
                 if let Some(path) = self.selected_path.clone() {
+                    self.collapsed.insert(path.clone());
                     if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
                         let depth = rows[selected_idx].depth;
                         for row in rows[..=selected_idx].iter().rev() {
@@ -614,12 +616,9 @@ impl App {
                                 break;
                             }
                             if self.expanded_quick_steps.remove(&row.path) {
-                                return Action::None;
+                                break;
                             }
                         }
-                    }
-                    if self.screen != Screen::Tape {
-                        self.collapsed.insert(path);
                     }
                 }
             }
@@ -642,19 +641,7 @@ impl App {
             // own answer) -- otherwise the toggle would stay armed
             // with nothing to open yet, and spring the full-screen
             // view open later, unasked, the moment a step appears.
-            // A quick-steps summary row takes priority over the
-            // Tape's own fullscreen toggle (issue #613 predates
-            // #678's) -- expanding it in place, not jumping straight
-            // to a step that isn't selected yet.
-            KeyCode::Enter
-                if self.screen == Screen::Tape
-                    && !self.selected_path.as_deref().is_some_and(|path| {
-                        rows.iter().any(|r| {
-                            r.path == path
-                                && r.kind == oscilloscope_core::render::RowKind::QuickSteps
-                        })
-                    }) =>
-            {
+            KeyCode::Enter if self.screen == Screen::Tape => {
                 self.tape_fullscreen_step = !self.tape_fullscreen_step;
             }
             KeyCode::Enter if self.screen == Screen::Signal && self.signal_has_step => {
@@ -1515,16 +1502,21 @@ mod tests {
 
     #[test]
     fn enter_expands_a_quick_steps_row_and_left_folds_it_again() {
+        // Cost's own `⏎` is already claimed, unconditionally, by its
+        // own treemap zoom (`handle_cost_key`) -- the expand step here
+        // sets `expanded_quick_steps` directly, the same state `⏎`
+        // used to reach through the tree screen this replaced; `←`'s
+        // own re-fold is exercised for real, the same key Cost still
+        // reaches it through today.
         let mut quick_steps_row = row("prime.a", 1, StatusKind::Done);
         quick_steps_row.label = "3 quick steps".to_string();
         quick_steps_row.kind = RowKind::QuickSteps;
         let rows = [quick_steps_row];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        assert_eq!(app.screen, Screen::Tape, "the Tape is the default screen");
+        app.screen = Screen::Cost;
         app.selected_path = Some("prime.a".to_string());
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
-        assert!(app.expanded_quick_steps.contains("prime.a"));
+        app.expanded_quick_steps.insert("prime.a".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(!app.expanded_quick_steps.contains("prime.a"));
     }
