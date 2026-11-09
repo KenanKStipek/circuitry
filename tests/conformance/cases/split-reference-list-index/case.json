@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #682: a split reference ending in a list index",
+  "description": "{{{input.docs.0}}} picks a list element by index, same as a dict key -- core/prompt_compose.py's own _dotted_get walks a list segment with int(part), unlike use.py's own _resolve_dot_path (dict-only), which this trigger's result-path reads still use.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "docs=[\"aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh\", \"short\"]"],
+  "expect": "success"
+}

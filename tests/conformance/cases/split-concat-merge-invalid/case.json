@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #682: a concat merge whose own result fails the source's schema",
+  "description": "split-list-concat's own failure companion: uniqueItems: true passes each part's own slice (no duplicate within either), but the concatenated merge repeats one entry across parts and fails schema validation (merge_invalid), so the prompt runs as-is (the default on_failure) on its own original path instead.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "items=[\"aa\", \"bb\", \"cc\", \"dd\", \"ee\", \"aa\"]"],
+  "expect": "success"
+}

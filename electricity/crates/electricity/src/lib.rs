@@ -1658,12 +1658,8 @@ pub async fn run_orchestration_with_config(
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(
-        &program,
-        complexity.decomposition.enabled,
-        complexity.splitting.enabled,
-        &supported,
-    ) {
+    if let Some(refusal) = first_unsupported(&program, complexity.decomposition.enabled, &supported)
+    {
         return RunResult {
             ok: false,
             out_path: None,
@@ -1686,7 +1682,6 @@ pub async fn run_orchestration_with_config(
         &loaded.document,
         Some(&req.orchestration_path),
         complexity.decomposition.enabled,
-        complexity.splitting.enabled,
         &supported,
     ) {
         return RunResult {
@@ -2233,6 +2228,10 @@ mod tests {
             description: None,
             group: None,
             split_budget_tokens: None,
+            split_enabled: None,
+            split_max_parts: None,
+            split_separator: None,
+            split_merge_template: None,
         }
     }
 

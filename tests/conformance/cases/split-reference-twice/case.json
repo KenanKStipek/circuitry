@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #672 acceptance case 6: a reference used twice halves the room each part has",
   "description": "The template reads input.doc twice (two occurrences of the split reference) -- the room each part has is the budget minus fixed text, divided by the occurrence count, so more/smaller parts than a single-occurrence template at the same budget.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
   "expect": "success"

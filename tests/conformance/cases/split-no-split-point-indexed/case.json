@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #672 acceptance case 7: a template that indexes into the would-be split reference records no_split_point",
   "description": "The template reaches into input.items with a further path (input.items.0) alongside the whole-list reference -- a reference cannot be sliced while something also indexes into it, so meta.decomposition records reason: no_split_point naming the extending tag.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "cli_args": ["-e", "items=[\"aa\", \"bb\", \"cc\", \"dd\", \"ee\", \"ff\"]"],
   "expect": "success"

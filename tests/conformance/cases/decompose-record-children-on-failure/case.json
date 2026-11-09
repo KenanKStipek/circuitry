@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #682: record_children still pins the score trigger's child after a chunk fails under run_as_is",
+  "description": "decompose-execution-failed's own companion with runtime.state.record_children on: chunk x's own model call fails, the decomposition fails as execution_failed and the source prompt dispatches whole (the default on_failure: run_as_is) -- but the plan's own chunk x the child run did get to before failing is still grafted onto the node.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

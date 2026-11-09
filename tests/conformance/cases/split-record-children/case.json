@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #672 acceptance case 10: runtime.state.record_children keeps the split child's parts under the node",
   "description": "With record_children on, the parts loop's own declared effect (parts, with each iter_N's own map prompt) is grafted alongside value/meta on the decomposing node, in the shape live state already shows them.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
   "expect": "success"

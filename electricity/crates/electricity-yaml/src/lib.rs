@@ -17,7 +17,7 @@ mod fences;
 mod scalar;
 
 pub use compose::{load_yaml, load_yaml_last_key_wins};
-pub use dump::{DumpError, DumpOptions, dump};
+pub use dump::{DumpError, DumpOptions, MappingAlias, PathSegment, dump, dump_aliased};
 pub use error::{Mark, YamlError};
 pub use fences::clean_yaml_fences;
 

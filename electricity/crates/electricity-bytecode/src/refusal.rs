@@ -174,21 +174,6 @@ pub enum RefusalReason {
     /// An `http` effect's `params` name `save_to` (issue #602): `cof run`
     /// writes the response body to that file as bytes; this build does not.
     HttpSaveTo,
-    /// This run's own effective config enables the size trigger for
-    /// decomposition (`electricity_config::SplittingSettings::enabled`),
-    /// and [`Supported::splitting`] is `false` (issue #672) — a Python-only
-    /// preview feature, parity tracked as a follow-up. Same posture as
-    /// [`RefusalReason::DecompositionEnabled`]: not a [`Supported`] flag
-    /// `first_unsupported` can read off *program* alone, so the caller
-    /// passes it in as *splitting_enabled*.
-    SplittingEnabled,
-    /// A `prompt` effect's own `split.budget_tokens` is set (issue #672):
-    /// that splits the effect even when the run's effective config has
-    /// splitting disabled entirely, so this refuses regardless of
-    /// *splitting_enabled* — discovered on the compiled [`Program`] itself
-    /// (`PromptOp::split_budget_tokens`), unlike [`RefusalReason::
-    /// SplittingEnabled`].
-    SplitBudget,
 }
 
 /// The first effect path (and why) [`first_unsupported`] found the
@@ -254,13 +239,6 @@ pub struct Supported<'a> {
     /// successor to what [`Supported::complexity`] used to gate (issue
     /// #516 §4(b)).
     pub decomposition: bool,
-    /// Issue #672: this run's own effective config may enable the size
-    /// trigger for decomposition (`RefusalReason::SplittingEnabled`), or a
-    /// prompt effect may set `split.budget_tokens` on itself
-    /// (`RefusalReason::SplitBudget`, refused regardless of this flag or
-    /// the run's own config) — `false` until a follow-up milestone builds
-    /// the feature.
-    pub splitting: bool,
     /// Extra provider names accepted on top of `json` (always on) and
     /// the four capability flags above -- only ever non-empty for the
     /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
@@ -298,7 +276,6 @@ impl<'a> Supported<'a> {
             tool_validate_yaml: false,
             complexity: false,
             decomposition: false,
-            splitting: false,
             providers,
         }
     }
@@ -358,8 +335,7 @@ impl<'a> Supported<'a> {
             complexity: true,
             // lane L2b (#448, #522)
             decomposition: true,
-            // issue #672: Python-only preview, parity a follow-up
-            splitting: false,
+            // issue #682: the size trigger for decomposition
             providers,
         }
     }
@@ -392,19 +368,12 @@ impl<'a> Supported<'a> {
 pub fn first_unsupported(
     program: &Program,
     decomposition_enabled: bool,
-    splitting_enabled: bool,
     supported: &Supported<'_>,
 ) -> Option<Refusal> {
     if decomposition_enabled && !supported.decomposition {
         return Some(Refusal {
             path: EffectPath::root(),
             reason: RefusalReason::DecompositionEnabled,
-        });
-    }
-    if splitting_enabled && !supported.splitting {
-        return Some(Refusal {
-            path: EffectPath::root(),
-            reason: RefusalReason::SplittingEnabled,
         });
     }
     if !supported.declared_prompts && !program.prompts.is_empty() {
@@ -451,12 +420,9 @@ fn refusal(path: &EffectPath, reason: RefusalReason) -> Option<Refusal> {
 
 fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> Option<Refusal> {
     match leaf {
-        LeafKind::Prompt(prompt_op) => {
+        LeafKind::Prompt(_prompt_op) => {
             if !supported.prompt {
                 return refusal(path, RefusalReason::Prompt);
-            }
-            if !supported.splitting && prompt_op.split_budget_tokens.is_some() {
-                return refusal(path, RefusalReason::SplitBudget);
             }
             None
         }
@@ -855,7 +821,7 @@ mod tests {
             LeafKind::Tool(tool_op(ParamNode::Map(IndexMap::new()))),
         );
         let program = program_with_root(root_block(vec![tool]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     fn tool_op_with_provider(provider: &str, params: ParamNode) -> ToolOp {
@@ -876,7 +842,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("shell".to_string())
@@ -900,7 +866,7 @@ mod tests {
             tools_process: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -919,7 +885,7 @@ mod tests {
             );
             let program = program_with_root(root_block(vec![tool]));
             assert!(
-                first_unsupported(&program, false, false, &supported).is_none(),
+                first_unsupported(&program, false, &supported).is_none(),
                 "{provider} should be accepted once tools_process is set"
             );
         }
@@ -936,7 +902,7 @@ mod tests {
                 )),
             );
             let program = program_with_root(root_block(vec![tool]));
-            let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+            let refusal = first_unsupported(&program, false, &m0()).unwrap();
             assert_eq!(
                 refusal.reason,
                 RefusalReason::UnsupportedToolProvider(provider.to_string())
@@ -959,7 +925,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![tool]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     #[test]
@@ -978,7 +944,7 @@ mod tests {
                 )),
             );
             let program = program_with_root(root_block(vec![tool]));
-            let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+            let refusal = first_unsupported(&program, false, &m0()).unwrap();
             assert_eq!(
                 refusal.reason,
                 RefusalReason::UnsupportedToolProvider(provider.to_string())
@@ -1000,7 +966,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("systemone".to_string())
@@ -1034,7 +1000,6 @@ mod tests {
         let refusal = first_unsupported(
             &program_with_root(root_block(vec![tool])),
             false,
-            false,
             &with_http,
         )
         .unwrap();
@@ -1059,7 +1024,6 @@ mod tests {
             first_unsupported(
                 &program_with_root(root_block(vec![tool])),
                 false,
-                false,
                 &with_http
             )
             .map(|r| r.reason),
@@ -1076,7 +1040,6 @@ mod tests {
         assert_eq!(
             first_unsupported(
                 &program_with_root(root_block(vec![tool])),
-                false,
                 false,
                 &with_http
             ),
@@ -1117,7 +1080,7 @@ mod tests {
                 LeafKind::Tool(tool_op_with_provider("http", params)),
             );
             let program = program_with_root(root_block(vec![tool]));
-            let refusal = first_unsupported(&program, false, false, &with_http).unwrap();
+            let refusal = first_unsupported(&program, false, &with_http).unwrap();
             assert_eq!(refusal.reason, RefusalReason::SecretReference);
             let text = crate::refusal_text::format_refusal(&refusal);
             assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
@@ -1133,7 +1096,6 @@ mod tests {
         assert_eq!(
             first_unsupported(
                 &program_with_root(root_block(vec![plain])),
-                false,
                 false,
                 &with_http
             ),
@@ -1169,7 +1131,6 @@ mod tests {
             first_unsupported(
                 &program_with_root(root_block(vec![tool])),
                 false,
-                false,
                 &with_http,
             )
             .map(|refusal| refusal.reason)
@@ -1199,7 +1160,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("cel".to_string())
@@ -1231,7 +1192,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![unknown, known_unbuilt]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("mcp".to_string())
@@ -1254,7 +1215,7 @@ mod tests {
             );
             let program = program_with_root(root_block(vec![tool]));
             assert!(
-                first_unsupported(&program, false, false, &supported).is_none(),
+                first_unsupported(&program, false, &supported).is_none(),
                 "{provider} should be accepted once tools_stdlib is set"
             );
         }
@@ -1274,7 +1235,7 @@ mod tests {
             tools_process: true,
             ..m0()
         };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("fs".to_string())
@@ -1295,7 +1256,7 @@ mod tests {
             tool_regex: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1312,7 +1273,7 @@ mod tests {
             tool_http: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1329,7 +1290,7 @@ mod tests {
             tool_validate_yaml: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1342,7 +1303,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("validate_yaml".to_string())
@@ -1360,7 +1321,7 @@ mod tests {
             )),
         );
         let program = program_with_root(root_block(vec![tool]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     #[test]
@@ -1382,15 +1343,10 @@ mod tests {
         );
         let program = program_with_root(root_block(vec![tool]));
         assert_eq!(
-            first_unsupported(&program, false, false, &m0())
-                .unwrap()
-                .path,
+            first_unsupported(&program, false, &m0()).unwrap().path,
             tool_path
         );
-        assert!(
-            first_unsupported(&program, false, false, &Supported::m0(&["json", "ripgrep"]))
-                .is_none()
-        );
+        assert!(first_unsupported(&program, false, &Supported::m0(&["json", "ripgrep"])).is_none());
     }
 
     #[test]
@@ -1410,7 +1366,7 @@ mod tests {
                 )),
             );
             let program = program_with_root(root_block(vec![tool]));
-            assert!(first_unsupported(&program, false, false, &m0()).is_none());
+            assert!(first_unsupported(&program, false, &m0()).is_none());
         }
     }
 
@@ -1420,7 +1376,7 @@ mod tests {
         program
             .prompts
             .insert("greeting".to_string(), "hi".to_string());
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::DeclaredPrompts);
     }
 
@@ -1434,7 +1390,7 @@ mod tests {
             declared_prompts: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1450,9 +1406,7 @@ mod tests {
         // which resolves a real `runtime.complexity` config with
         // scoring/routing on and checks the walker doesn't refuse it.
         let program = program_with_root(root_block(vec![]));
-        assert!(
-            first_unsupported(&program, false, false, &Supported::current(&["json"])).is_none()
-        );
+        assert!(first_unsupported(&program, false, &Supported::current(&["json"])).is_none());
     }
 
     #[test]
@@ -1464,7 +1418,7 @@ mod tests {
         // refuses even a program with no prompt/tool effects in it
         // whatsoever.
         let program = program_with_root(root_block(vec![]));
-        let refusal = first_unsupported(&program, true, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, true, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::DecompositionEnabled);
         assert_eq!(refusal.path, EffectPath::root());
     }
@@ -1476,52 +1430,21 @@ mod tests {
             decomposition: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, true, false, &supported).is_none());
+        assert!(first_unsupported(&program, true, &supported).is_none());
     }
 
     #[test]
     fn decomposition_disabled_is_fine_even_under_m0() {
         let program = program_with_root(root_block(vec![]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     #[test]
-    fn splitting_enabled_refuses_even_an_otherwise_empty_document() {
-        // Issue #672: electricity only parses `runtime.complexity.
-        // splitting`, it never runs the size trigger -- *splitting_enabled*
-        // is `first_unsupported`'s own argument (the caller's resolved
-        // effective config), not something read off `program`, so this
-        // refuses even a program with no prompt effects in it at all.
-        let program = program_with_root(root_block(vec![]));
-        let refusal = first_unsupported(&program, false, true, &m0()).unwrap();
-        assert_eq!(refusal.reason, RefusalReason::SplittingEnabled);
-        assert_eq!(refusal.path, EffectPath::root());
-    }
-
-    #[test]
-    fn splitting_enabled_is_accepted_once_its_own_flag_is_set() {
-        let program = program_with_root(root_block(vec![]));
-        let supported = Supported {
-            splitting: true,
-            ..m0()
-        };
-        assert!(first_unsupported(&program, false, true, &supported).is_none());
-    }
-
-    #[test]
-    fn splitting_disabled_is_fine_even_under_m0() {
-        let program = program_with_root(root_block(vec![]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
-    }
-
-    #[test]
-    fn a_prompts_own_split_budget_tokens_refuses_regardless_of_splitting_enabled() {
-        // `RefusalReason::SplitBudget`: a prompt effect's own `split.
-        // budget_tokens` splits even with the runtime switch off
-        // (`core/decompose.py::_resolve_split_budget`'s own precedence), so
-        // this refuses discovered on the compiled program itself --
-        // unlike `SplittingEnabled` above, *splitting_enabled* being
-        // `false` here changes nothing.
+    fn a_prompt_with_split_budget_tokens_is_never_refused() {
+        // Issue #682: the size trigger is a supported feature now --
+        // `split.budget_tokens` on a prompt effect compiles cleanly and
+        // never trips this walker, which no longer has any splitting-
+        // specific check at all.
         let prompt = leaf_op(
             EffectPath::root().push_name("ask"),
             LeafKind::Prompt(PromptOp {
@@ -1541,6 +1464,10 @@ mod tests {
                 description: None,
                 group: None,
                 split_budget_tokens: Some(1000),
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }),
         );
         let program = program_with_root(root_block(vec![prompt]));
@@ -1548,79 +1475,7 @@ mod tests {
             prompt: true,
             ..m0()
         };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
-        assert_eq!(refusal.reason, RefusalReason::SplitBudget);
-    }
-
-    #[test]
-    fn a_prompt_with_split_budget_tokens_is_accepted_once_splitting_is_supported() {
-        let prompt = leaf_op(
-            EffectPath::root().push_name("ask"),
-            LeafKind::Prompt(PromptOp {
-                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
-                prompt_type: PromptType::Text,
-                schema: None,
-                model: None,
-                provider: None,
-                provider_fallbacks: Vec::new(),
-                routing_override: None,
-                model_params: None,
-                timeout_ms: None,
-                deterministic: false,
-                inputs: None,
-                assets: Vec::new(),
-                retries: None,
-                description: None,
-                group: None,
-                split_budget_tokens: Some(1000),
-            }),
-        );
-        let program = program_with_root(root_block(vec![prompt]));
-        let supported = Supported {
-            prompt: true,
-            splitting: true,
-            ..m0()
-        };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
-    }
-
-    #[test]
-    fn a_prompt_with_split_enabled_false_alone_is_never_refused() {
-        // `split: {enabled: false}` compiles to `split_budget_tokens: None`
-        // (the compiler only ever retains `budget_tokens`, #672's own
-        // scope) -- so a prompt that only opts itself *out* of splitting
-        // is indistinguishable, at this walker, from one with no `split:`
-        // block at all, and is never refused on that account.
-        let prompt = leaf_op(
-            EffectPath::root().push_name("ask"),
-            LeafKind::Prompt(PromptOp {
-                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
-                prompt_type: PromptType::Text,
-                schema: None,
-                model: None,
-                provider: None,
-                provider_fallbacks: Vec::new(),
-                routing_override: None,
-                model_params: None,
-                timeout_ms: None,
-                deterministic: false,
-                inputs: None,
-                assets: Vec::new(),
-                retries: None,
-                description: None,
-                group: None,
-                split_budget_tokens: None,
-            }),
-        );
-        let program = program_with_root(root_block(vec![prompt]));
-        let supported = Supported {
-            prompt: true,
-            ..m0()
-        };
-        // Neither trigger-level flag is on here (document-level
-        // splitting stays off), isolating this to the per-prompt check
-        // `walk_leaf` makes on `split_budget_tokens` alone.
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1632,7 +1487,7 @@ mod tests {
         );
         let mut program = program_with_root(root_block(vec![tool]));
         program.adapter = Some("openai".to_string());
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::DocumentAdapter("openai".to_string())
@@ -1648,14 +1503,14 @@ mod tests {
             preflight: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
     fn a_document_level_adapter_is_stripped_the_same_way_cof_run_strips_it() {
         let mut program = program_with_root(root_block(vec![]));
         program.adapter = Some("  openai \t".to_string());
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::DocumentAdapter("openai".to_string())
@@ -1666,7 +1521,7 @@ mod tests {
     fn a_document_level_adapter_that_is_blank_after_stripping_is_not_refused() {
         let mut program = program_with_root(root_block(vec![]));
         program.adapter = Some("   ".to_string());
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     /// U+2003 (EM SPACE) is Unicode `White_Space`, so `char::is_whitespace()`
@@ -1677,7 +1532,7 @@ mod tests {
     fn a_document_level_adapter_of_only_an_em_space_is_not_refused() {
         let mut program = program_with_root(root_block(vec![]));
         program.adapter = Some("\u{2003}".to_string());
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     /// \x1c (FILE SEPARATOR) is a C0 control character Python's
@@ -1688,7 +1543,7 @@ mod tests {
     fn a_document_level_adapter_of_only_a_file_separator_control_is_not_refused() {
         let mut program = program_with_root(root_block(vec![]));
         program.adapter = Some("\x1c".to_string());
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     /// U+00A0 (NO-BREAK SPACE) and U+2003 (EM SPACE) bracket "openai" --
@@ -1698,7 +1553,7 @@ mod tests {
     fn a_document_level_adapter_strips_unicode_whitespace_around_the_name() {
         let mut program = program_with_root(root_block(vec![]));
         program.adapter = Some("\u{a0}openai\u{2003}".to_string());
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(
             refusal.reason,
             RefusalReason::DocumentAdapter("openai".to_string())
@@ -1722,7 +1577,7 @@ mod tests {
             }),
         );
         let program = program_with_root(root_block(vec![use_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1748,7 +1603,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![if_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::ModelCondition);
     }
 
@@ -1778,7 +1633,7 @@ mod tests {
             model_condition: true,
             ..m0()
         };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1819,7 +1674,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![if_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1850,7 +1705,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![if_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1870,7 +1725,7 @@ mod tests {
             vec![use_leaf(use_path.clone())],
         );
         let program = program_with_root(root_block(vec![inner]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1899,7 +1754,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![inner]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1931,7 +1786,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![loop_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Loop);
     }
 
@@ -1967,7 +1822,7 @@ mod tests {
             loop_: true,
             ..m0()
         };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -1980,7 +1835,7 @@ mod tests {
         });
         let tool = leaf_op(EffectPath::root().push_name("fetch"), LeafKind::Tool(op));
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::ModelExpect);
     }
 
@@ -1996,7 +1851,7 @@ mod tests {
             model_expect: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -2022,7 +1877,7 @@ mod tests {
         );
         let program = program_with_root(root_block(vec![use_op]));
         let supported = Supported { use_: true, ..m0() };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(refusal.reason, RefusalReason::ModelExpect);
         assert_eq!(refusal.path, use_path);
     }
@@ -2050,7 +1905,7 @@ mod tests {
             model_expect: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -2086,7 +1941,7 @@ mod tests {
             loop_: true,
             ..m0()
         };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(refusal.reason, RefusalReason::ModelCondition);
     }
 
@@ -2122,7 +1977,7 @@ mod tests {
             use_: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -2142,7 +1997,7 @@ mod tests {
             LeafKind::Tool(tool_op(ParamNode::Map(params))),
         );
         let program = program_with_root(root_block(vec![tool]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     #[test]
@@ -2166,6 +2021,10 @@ mod tests {
                 description: None,
                 group: None,
                 split_budget_tokens: None,
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }),
         );
         let use_op = leaf_op(
@@ -2182,7 +2041,7 @@ mod tests {
             }),
         );
         let program = program_with_root(root_block(vec![prompt, use_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Prompt);
     }
 
@@ -2207,6 +2066,10 @@ mod tests {
                 description: None,
                 group: None,
                 split_budget_tokens: None,
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }),
         );
         let program = program_with_root(root_block(vec![prompt]));
@@ -2214,7 +2077,7 @@ mod tests {
             prompt: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -2228,14 +2091,14 @@ mod tests {
             }),
         );
         let program = program_with_root(root_block(vec![yield_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Yield);
 
         let supported = Supported {
             yield_: true,
             ..m0()
         };
-        assert!(first_unsupported(&program, false, false, &supported).is_none());
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -2257,14 +2120,14 @@ mod tests {
             }),
         );
         let program = program_with_root(root_block(vec![reflector_op]));
-        let refusal = first_unsupported(&program, false, false, &m0()).unwrap();
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Reflector);
 
         let supported = Supported {
             reflector: true,
             ..m0()
         };
-        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -2287,7 +2150,7 @@ mod tests {
             ..nested_dynamic("d", EffectPath::root().push_name("d"), vec![disabled_use])
         };
         let program = program_with_root(root_block(vec![disabled_dynamic]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     /// A disabled op's own M0 golden case is unaffected: the compiler
@@ -2307,6 +2170,6 @@ mod tests {
             ..use_leaf(use_path)
         };
         let program = program_with_root(root_block(vec![tool, disabled_use]));
-        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 }
