@@ -1,5 +1,5 @@
 """Standalone driver for the streaming-SIGINT test
-(`test_run_cancel_signal_delivery.py`): runs one `prompt` effect through the
+(`test_run_streaming_cancel.py`): runs one `prompt` effect through the
 `ollama` adapter against a caller-given `base_url`, wrapped in
 `circuitry.cli.interrupts.sigterm_as_interrupt` exactly like `cof run`
 itself, and exits with the same 130/143/129/1/0 convention `cli.app` uses.
