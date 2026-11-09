@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #672 acceptance case 3: a list input is cut into whole-item slices",
   "description": "runtime.complexity.splitting.max_input_tokens: 5. input.items (6 strings) is cut into two whole-item slices; each part's own prompt_type: array schema validates its reply, and the merged array (concatenated, in part order) is validated against the source schema before it lands at the effect's path.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "cli_args": ["-e", "items=[\"aa\", \"bb\", \"cc\", \"dd\", \"ee\", \"ff\"]"],
   "expect": "success"

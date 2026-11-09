@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #672 acceptance case 8: with both triggers on, size splits first, and the parts decompose by complexity at depth 1",
   "description": "runtime.complexity.splitting and runtime.complexity.decomposition are both enabled. The source prompt is over the size budget; size runs first (no score read yet), splitting it into parts. Each part keeps the same keyword-heavy fixed text, so each part's own score (checked at depth 1, after size acted at depth 0) is still above the decomposition threshold, and each part itself decomposes through the planner.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
   "expect": "success"
