@@ -74,7 +74,7 @@
 
 use crate::exec::live_scope::LiveRoot;
 use crate::exec::{CtxChain, store_err};
-use crate::observer::InstanceId;
+use crate::observer::{InstanceId, ProgressData};
 use crate::params::ParamsCtx;
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
@@ -1728,6 +1728,14 @@ impl RunObserver for ChildObserver<'_> {
 
     fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
         self.parent.clear_tree_branches(node_path, branches);
+    }
+
+    // A streamed prompt's own progress line already carries its own,
+    // already-namespaced path and the parent's own instance id (both
+    // passed through unchanged, same reasoning as `dispatch`/`report`
+    // above) -- no rewriting needed, just forwarding.
+    fn progress(&self, path: &EffectPath, instance: InstanceId, attempt: u32, data: &ProgressData) {
+        self.parent.progress(path, instance, attempt, data);
     }
 }
 
