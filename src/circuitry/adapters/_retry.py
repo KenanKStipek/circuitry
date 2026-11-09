@@ -54,7 +54,9 @@ RETRY_BACKOFF_CAP_MS = 60_000
 #: body with fewer bytes delivered than promised (18 — the shape a streamed
 #: reply's own mid-stream disconnect takes, #674). Every one of these is a
 #: transient, infrastructure-level failure worth retrying regardless of
-#: what the request was.
+#: what the request was. Shared with electricity's own native-HTTP
+#: transport (``transport::is_retryable_exit``), which must reproduce this
+#: exact set.
 RETRYABLE_CURL_EXIT_CODES = frozenset({6, 7, 18, 28, 35, 52, 56})
 
 #: ``--fail-with-body`` always exits 22 on an HTTP error; curl still writes
