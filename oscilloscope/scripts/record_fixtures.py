@@ -31,6 +31,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +70,15 @@ class Case:
     #: run a real (fake) CLI with real `sleep`s in it, several seconds
     #: slower than every other case's scripted, instant replies.
     timeout_s: float | None = None
+    #: Overrides `default_adapter`/`default_model` (issue #675's own
+    #: streaming-prompt case, the only one whose own document names a
+    #: real adapter -- `ollama`, against a raw mock standing in for a
+    #: real server -- rather than `scripted`).
+    default_adapter: str = "scripted"
+    default_model: str = "scripted-model"
+    #: K1's own adapter check, against `default_adapter` above rather
+    #: than a hardcoded `"scripted"`, for the same case.
+    expected_adapter: str = "scripted"
 
 
 CASES: list[Case] = [
@@ -673,6 +683,97 @@ effects:
 ]
 
 
+# Issue #675's own fixture: a real, slow-streaming prompt, recorded
+# against both engines (`PROMPT_LIVE_STREAM_CASES` below pairs them
+# the same way `COST_FIXTURE_CASES` does). The `scripted` adapter's
+# own `chunks` deliver every delta at once, with no delay between
+# them for a `--live-state` poll to ever catch mid-stream -- a raw
+# loopback server standing in for a real `ollama`, answering on its
+# own real delay, is the only way either engine's `meta.live`/
+# `progress` actually gets caught partway through (the same
+# substitution `oscilloscope/crates/oscilloscope/tests/e2e_tui_pty.rs`'s
+# own `spawn_slow_ollama_mock` already makes for the same reason).
+def spawn_slow_ollama_mock() -> int:
+    """Binds an ephemeral port, answers every connection, and returns
+    the port. Both engines' own preflight `check()` (ahead of the real
+    call) sends a plain `GET /api/tags`, answered instantly and empty;
+    a `POST .../api/generate` gets two NDJSON deltas on a real delay,
+    then a `done: true` carrying `prompt_eval_count`/`eval_count` --
+    one listener, not one single-shot connection, since a run that
+    probes before it calls needs both answered."""
+    import socket
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    port = listener.getsockname()[1]
+
+    def handle(conn: socket.socket) -> None:
+        with conn:
+            try:
+                request = conn.recv(8192)
+            except OSError:
+                return
+            if b"/api/generate" not in request:
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                return
+            # Nothing streamed yet -- `meta.live`/`progress` read
+            # `waiting_for_first_token` for as long as this lasts.
+            time.sleep(1.5)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n"
+                b"Connection: close\r\n\r\n"
+            )
+            conn.sendall(b'{"model":"demo","response":"Thanks ","done":false}\n')
+            time.sleep(1.2)
+            conn.sendall(
+                b'{"model":"demo","response":"for the report.","done":false}\n'
+            )
+            time.sleep(0.3)
+            conn.sendall(
+                b'{"model":"demo","response":"","done":true,"done_reason":"stop",'
+                b'"prompt_eval_count":8,"eval_count":4}\n'
+            )
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return port
+
+
+PROMPT_LIVE_STREAM_CASES: list[Case] = [
+    Case(
+        name="prompt_live_stream",
+        timeout_s=10.0,
+        doc="""\
+adapter: ollama
+model: demo
+effects:
+  - name: ask
+    type: prompt
+    template: "Say hi."
+""",
+        default_adapter="ollama",
+        default_model="demo",
+        expected_adapter="ollama",
+        # `extra_runtime`'s own `base_url` is filled in per engine run
+        # (a fresh mock, a fresh port, right before each `record_one`
+        # call below) -- this placeholder is only ever read after
+        # `main()` overwrites it.
+        extra_runtime={"adapters": {"ollama": {"base_url": ""}}},
+    ),
+]
+
+
 def record_one(
     case: Case,
     engine_bin: str,
@@ -705,8 +806,8 @@ def record_one(
         # is always set, even with no replies, so `resolve_effective_
         # settings` has a concrete adapter config to report regardless.
         config: dict = {
-            "default_adapter": "scripted",
-            "default_model": "scripted-model",
+            "default_adapter": case.default_adapter,
+            "default_model": case.default_model,
             "runtime": {"adapters": {"scripted": {}}},
         }
         if case.replies is not None:
@@ -850,10 +951,9 @@ def record_one(
                 "from the final state entirely — the scripted adapter's own "
                 "selection can't be checked at all (K1)"
             )
-            assert observed_adapter == "scripted", (
+            assert observed_adapter == case.expected_adapter, (
                 f"{case.name}: runtime.effective_settings.adapter was "
-                f"{observed_adapter!r}, not 'scripted' — the scripted "
-                "adapter was never selected (K1)"
+                f"{observed_adapter!r}, not {case.expected_adapter!r} (K1)"
             )
 
         events_text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
@@ -1068,6 +1168,29 @@ def main() -> int:
     if "--parity-only" not in sys.argv:
         for case in AGENT_LIVE_CASES:
             record_one(case, cof_bin, engine="cof")
+
+    # PROMPT_LIVE_STREAM_CASES (issue #675): same both-engines pairing
+    # as COST_FIXTURE_CASES, each run against its own fresh mock (a
+    # single-connection server, never reused across the two engines).
+    if "--parity-only" not in sys.argv:
+        for case in PROMPT_LIVE_STREAM_CASES:
+            cof_port = spawn_slow_ollama_mock()
+            case.extra_runtime = {"adapters": {"ollama": {"base_url": f"http://127.0.0.1:{cof_port}"}}}
+            record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")
+            if electricity_bin is not None:
+                electricity_port = spawn_slow_ollama_mock()
+                case.extra_runtime = {
+                    "adapters": {"ollama": {"base_url": f"http://127.0.0.1:{electricity_port}"}}
+                }
+                record_one(
+                    case, electricity_bin, engine="electricity", out_name=f"{case.name}_electricity"
+                )
+            else:
+                print(
+                    f"record_fixtures.py: 'electricity' not found on PATH; "
+                    f"skipping the electricity half of {case.name}",
+                    file=sys.stderr,
+                )
 
     return check_no_leaked_paths()
 

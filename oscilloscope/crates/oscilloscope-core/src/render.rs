@@ -252,6 +252,20 @@ pub struct Header {
     pub effects_planned_full: Option<u64>,
     pub tokens_sent: u64,
     pub tokens_received: u64,
+    /// Every currently running prompt's own live estimate (issue
+    /// #675) -- `tokens_sent`/`tokens_received` once the provider has
+    /// reported one, else its own estimate, summed separately from
+    /// the exact pair above so a front end can draw it in the faint
+    /// "live" style and add it on top. A node's own exact tokens and
+    /// this estimate are never both counted: `tokens_sent`/`_received`
+    /// above only ever reads a *finished* node's `meta.tokens_sent`/
+    /// `_received` (always `null` while running), and this only ever
+    /// sums a node still running right now -- the instant a poll
+    /// catches one finished, it drops out of this sum and its own
+    /// exact figure joins the pair above instead, once each, never
+    /// both in the same frame.
+    pub tokens_sent_live_estimate: u64,
+    pub tokens_received_live_estimate: u64,
     pub innermost_loop_eta_s: Option<f64>,
     /// `innermost_loop_eta_s`, as an absolute clock time (`now` plus
     /// the ETA) rather than a remaining duration (issue #613: "the
@@ -1576,6 +1590,41 @@ fn build_header(
             })
         });
 
+    // Issue #675: every currently running prompt's own live
+    // estimate, summed separately -- gated on `statuses` reading
+    // `Running` for the path, not merely on `flat` still carrying a
+    // `meta.live` object, so a run that was killed mid-attempt (whose
+    // leftover `meta.live` stops updating but is never removed) drops
+    // out of this sum the same frame `statuses` stops calling it
+    // `Running`, rather than staying counted for as long as that
+    // state is open. A path `--events` alone has confirmed `Running`
+    // but that has no node in `flat` at all (`osi watch` with no
+    // live state) still counts, from the latest `progress` line, so
+    // the Totals row gets an events-only estimate too; `is_running_
+    // prompt` still gates a real node, so this never double-counts
+    // one running a tool.
+    let (tokens_sent_live_estimate, tokens_received_live_estimate) = statuses
+        .iter()
+        .filter(|(_, status)| status.kind == StatusKind::Running)
+        .filter_map(|(path, _)| {
+            let node = flat.get(path.as_str());
+            let is_prompt = match node {
+                Some(node) => crate::model::is_running_prompt(node),
+                None => model.progress_at(path).is_some(),
+            };
+            is_prompt.then(|| crate::model::prompt_live_figures(node, path, model, now))
+        })
+        .flatten()
+        .fold((0u64, 0u64), |(sent, recv), live| {
+            (
+                sent + live.tokens_sent.or(live.tokens_sent_estimate).unwrap_or(0),
+                recv + live
+                    .tokens_received
+                    .or(live.tokens_received_estimate)
+                    .unwrap_or(0),
+            )
+        });
+
     // The innermost running loop's own ETA (§6.3: "There is no
     // run-level ETA") — the running loop with the deepest path, since
     // a nested loop's own progress is more specific than its
@@ -1624,6 +1673,8 @@ fn build_header(
         effects_planned_full,
         tokens_sent,
         tokens_received,
+        tokens_sent_live_estimate,
+        tokens_received_live_estimate,
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
         // Issue #649: `build`/`build_header` have no history of
@@ -2230,6 +2281,18 @@ fn walk_rows(
 ) {
     let node = flat.get(path);
     let kind = row_kind_for(path, plan, flat);
+    // Issue #675's events-only attach: a path `--events` has
+    // confirmed with no state node at all (`osi watch` on `--events`
+    // alone) has nothing of its own in `flat` or `plan` for
+    // `row_kind_for` to classify by, so it reads `Unknown` even when
+    // it is in fact the running prompt the latest `progress` line
+    // names -- read as a prompt here instead, the one case `Unknown`
+    // plus a progress sample for this exact path can mean.
+    let kind = if kind == RowKind::Unknown && node.is_none() && model.progress_at(path).is_some() {
+        RowKind::Prompt
+    } else {
+        kind
+    };
     let last_segment = path.rsplit('.').next().unwrap_or(path);
     let label = if pass_index(last_segment).is_some() {
         pass_row_label(path, flat)
@@ -5063,6 +5126,71 @@ mod tests {
         );
         assert_eq!(rendered.token_bar.agents_running, 0);
         assert_eq!(rendered.token_bar.prompts_running, 1);
+        // Issue #675: the header's own live estimate reads the
+        // running prompt's `tokens_sent_estimate`/`tokens_received_
+        // estimate` (neither is exact yet), on top of the exact
+        // pair above, which stays zero while it runs.
+        assert_eq!(rendered.header.tokens_sent, 0);
+        assert_eq!(rendered.header.tokens_received, 0);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 3);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 2);
+    }
+
+    /// Issue #675's "no double counting": the same prompt, observed
+    /// once still running (its tokens only in the live estimate) and
+    /// once finished (its tokens only in the exact pair) -- never
+    /// both at once for the same instant.
+    #[test]
+    fn a_prompt_that_finishes_between_two_polls_is_counted_exactly_once() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "p": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                    "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                    "streaming": true, "first_token_at": "2026-10-08T11:46:43.6Z",
+                    "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                    "tokens_received_estimate": 8, "chars_received": 30,
+                    "tokens_per_second": null}}}
+        }});
+        let running = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&running_state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:44Z",
+            &[],
+        );
+        assert_eq!(running.header.tokens_sent, 0);
+        assert_eq!(running.header.tokens_received, 0);
+        assert_eq!(running.header.tokens_sent_live_estimate, 10);
+        assert_eq!(running.header.tokens_received_live_estimate, 8);
+
+        let finished_state = json!({"prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:45Z"},
+            "p": {"value": "ok", "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": "2026-10-08T11:46:45Z",
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "tokens_sent": 10, "tokens_received": 12}}
+        }});
+        let finished = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&finished_state),
+            ProcessState::Running,
+            2.0,
+            "2026-10-08T11:46:46Z",
+            &[],
+        );
+        assert_eq!(finished.header.tokens_sent, 10);
+        assert_eq!(finished.header.tokens_received, 12);
+        assert_eq!(finished.header.tokens_sent_live_estimate, 0);
+        assert_eq!(finished.header.tokens_received_live_estimate, 0);
     }
 
     /// An interrupted run's own leftover `meta.live` (DESIGN.md) must
