@@ -5,32 +5,24 @@
 //! directly, mirroring `oscilloscope-core`'s own "no terminal code"
 //! split one level up.
 
-use std::time::Instant;
-
 use oscilloscope_core::model::{RunStatus, StatusKind};
-use oscilloscope_core::render::{Details, Row, StateRow};
+use oscilloscope_core::render::Details;
 use oscilloscope_core::treemap::{Measure, TreemapNode};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::highlight::Tracker;
-use crate::keys::{App, Dialog, Pane, visible_rows};
-use crate::theme::{ColorMode, Theme};
+use crate::keys::{App, Dialog, Pane};
+use crate::theme::Theme;
 
-/// Everything a draw function needs to style a cell (issue #535): the
-/// active theme, and the update-highlight tracker with the clock
-/// reading and colour mode its own `style_for` needs. Threaded by
-/// reference through every `draw_*` function below so none of them
-/// ever reach for a `Color::` literal of their own or call `Instant::
-/// now()` themselves.
+/// Everything a draw function needs to style a cell: the active
+/// theme. Threaded by reference through every `draw_*` function
+/// below so none of them ever reach for a `Color::` literal of
+/// their own.
 pub struct DrawCtx<'a> {
     pub theme: &'a Theme,
-    pub highlights: &'a Tracker,
-    pub now: Instant,
-    pub color_mode: ColorMode,
     /// `t`'s own banner (issue #535): the theme's name, shown in the
     /// header for about 2 seconds after a switch. `None` the rest of
     /// the time.
@@ -51,31 +43,6 @@ pub struct DrawCtx<'a> {
 #[cfg(test)]
 fn test_zone() -> chrono::FixedOffset {
     chrono::FixedOffset::east_opt(0).unwrap()
-}
-
-impl DrawCtx<'_> {
-    fn highlight(&self, key: &str) -> Option<Style> {
-        self.highlights
-            .style_for(key, self.now, self.theme, self.color_mode)
-    }
-}
-
-/// Overlays an update-highlight's own style onto `style` (issue
-/// #535): the highlight's background, when it has one, replaces
-/// `style`'s; its modifiers (bold, on a 16-colour terminal or `NO_
-/// COLOR`) are added, never replacing `style`'s own foreground or
-/// other modifiers (a selected row's `REVERSED` stays, for one).
-fn with_highlight(style: Style, highlight: Option<Style>) -> Style {
-    match highlight {
-        None => style,
-        Some(h) => {
-            let style = match h.bg {
-                Some(bg) => style.bg(bg),
-                None => style,
-            };
-            style.add_modifier(h.add_modifier)
-        }
-    }
 }
 
 /// Issue #527's own small-terminal fallback thresholds: below each,
@@ -117,175 +84,7 @@ mod thresholds {
     /// own two-column layout collapses at.
     pub const COST_TREEMAP_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
     pub const COST_TREEMAP_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
-
-    /// The Flow screen's own thresholds (issue #635): at this size
-    /// and up, flow | (selected over story), 62/38 both ways. Below
-    /// it (but still at [`FLOW_TWO_PANE_MIN_WIDTH`]/`_MIN_HEIGHT`),
-    /// the story pane is dropped -- flow | selected, with `l`
-    /// swapping the log into the selected pane's own place. Below
-    /// that, one column: selected over flow, no story, the flow
-    /// pane's own columns dropped to duration alone.
-    pub const FLOW_THREE_PANE_MIN_WIDTH: u16 = 100;
-    pub const FLOW_THREE_PANE_MIN_HEIGHT: u16 = 26;
-    pub const FLOW_TWO_PANE_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
-    pub const FLOW_TWO_PANE_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
-    /// Below this flow-pane width, the cost column is dropped first
-    /// (issue #635: "narrow panes drop columns in this order: cost,
-    /// start, tokens").
-    pub const FLOW_COST_COLUMN_MIN_WIDTH: u16 = 95;
-    // The flow pane's own width is a golden-section share of the
-    // body, never the whole terminal's -- at the widest required
-    // size (120 columns), the pane itself is about 74 columns wide,
-    // so a threshold above that can never show the start column at
-    // any supported terminal size at all.
-    pub const FLOW_START_COLUMN_MIN_WIDTH: u16 = 70;
-    pub const FLOW_TOKENS_COLUMN_MIN_WIDTH: u16 = 65;
-    /// The condition dim second line (issue #635's Decisions: "a dim
-    /// second line at 100 columns and wider; otherwise it appears
-    /// only in the selected pane") -- checked against the whole
-    /// terminal, the same way every other threshold here is.
-    pub const FLOW_CONDITION_LINE_MIN_WIDTH: u16 = FLOW_THREE_PANE_MIN_WIDTH;
 }
-
-/// A scroll position suffix for a pane's own border title (issue
-/// #527: "show a scroll indicator or a position ... in the border"),
-/// only when some row is actually hidden above or below --
-/// `hides_something` is the caller's own call, not `total >
-/// viewport` here: issue #643's fifth follow-up is exactly that
-/// comparing a plain row count against a *line* budget drifts once
-/// some rows draw as more than one line apiece (the Flow pane's own
-/// decision rows, with their own condition line) -- the caller sums
-/// each row's real line count instead.
-fn scroll_indicator(
-    selected: Option<usize>,
-    total: usize,
-    hides_something: bool,
-) -> Option<String> {
-    if !hides_something {
-        return None;
-    }
-    let position = selected.map(|idx| idx + 1).unwrap_or(1);
-    Some(format!(" {position}/{total} "))
-}
-
-/// Unit tests for [`scroll_indicator`] on their own,
-/// beyond the rendered goldens that already exercise it indirectly.
-#[cfg(test)]
-mod scroll_tests {
-    use super::*;
-
-    #[test]
-    fn scroll_indicator_is_none_when_everything_already_fits() {
-        assert_eq!(scroll_indicator(Some(0), 4, false), None);
-    }
-
-    #[test]
-    fn scroll_indicator_shows_a_one_based_position_and_the_total() {
-        assert_eq!(
-            scroll_indicator(Some(6), 10, true),
-            Some(" 7/10 ".to_string())
-        );
-    }
-
-    #[test]
-    fn scroll_indicator_defaults_the_position_to_one_with_no_selection() {
-        assert_eq!(scroll_indicator(None, 10, true), Some(" 1/10 ".to_string()));
-    }
-
-    /// Issue #643's fifth follow-up: `hides_something` is the
-    /// caller's own call, decoupled from the row `total` shown --
-    /// a row count that would alone read as "everything fits" must
-    /// still show the indicator once the caller (comparing real
-    /// line counts, for a pane with multi-line rows) says something
-    /// is hidden.
-    #[test]
-    fn scroll_indicator_follows_hides_something_not_the_row_count() {
-        assert_eq!(
-            scroll_indicator(Some(2), 4, true),
-            Some(" 3/4 ".to_string())
-        );
-    }
-
-    #[test]
-    fn clamp_state_scroll_keeps_a_two_line_entry_fully_in_view() {
-        // Finding F3: 10 one-line entries except entry 7, which takes
-        // two lines (it has a token line) -- an 8-line viewport with
-        // entry 7 selected must put the top at entry 1, not entry 4
-        // (a naive by-entry-count clamp over an 8-row viewport would
-        // have put the top there, rendering past the bottom edge).
-        let mut line_counts = vec![1usize; 10];
-        line_counts[7] = 2;
-        assert_eq!(clamp_state_scroll(0, Some(7), &line_counts, 8), 1);
-    }
-
-    #[test]
-    fn clamp_state_scroll_moves_up_to_a_selection_above_the_viewport() {
-        let line_counts = vec![1usize; 10];
-        assert_eq!(clamp_state_scroll(5, Some(2), &line_counts, 4), 2);
-    }
-
-    #[test]
-    fn clamp_state_scroll_settles_on_the_selection_itself_when_it_alone_overflows() {
-        // A single entry needing more lines than the whole viewport
-        // has: nothing smaller can satisfy the bound, so the top is
-        // the selection itself rather than scrolling arbitrarily far.
-        let line_counts = vec![1, 1, 5];
-        assert_eq!(clamp_state_scroll(0, Some(2), &line_counts, 2), 2);
-    }
-}
-
-/// The orchestration pane's own title (issue #527): ` orchestration
-/// <name> `, `<name>` the top-level document's file name without its
-/// extension — orchestration documents have no `name:` field of
-/// their own.
-fn orchestration_name(document: &str) -> &str {
-    std::path::Path::new(document)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(document)
-}
-
-/// DESIGN.md §6.3's own glyph table. `Aborted` and `LikelyRunning`/
-/// `RunningOrQueued` have no glyph of their own in that table — `?`
-/// for an abort (nothing else in the set means "unknown"), and the
-/// same `◐`/`◌` a confirmed running/queued row uses for a guess at
-/// one. `row_line`'s own style ([`status_style`], review finding 16
-/// on #458's comment 3) is what tells a guess apart from the real
-/// thing instead: dim and italic, rather than a second glyph
-/// DESIGN.md's table has no room for.
-fn status_glyph(kind: StatusKind) -> char {
-    match kind {
-        StatusKind::Pending => '·',
-        StatusKind::Running | StatusKind::LikelyRunning => '◐',
-        StatusKind::RunningOrQueued => '◌',
-        StatusKind::Done => '✓',
-        StatusKind::Failed => '✗',
-        StatusKind::FailedHandled => '!',
-        StatusKind::Skipped => '↷',
-        StatusKind::Cancelled => '⊘',
-        StatusKind::Aborted => '?',
-    }
-}
-
-fn status_color(kind: StatusKind, theme: &Theme) -> Color {
-    theme.status_color(kind)
-}
-
-/// `status_color`'s own `Style`, with `LikelyRunning`'s guess
-/// (DESIGN.md §2.1 rule 7's "likely" statuses: a row inferred from
-/// the run's own exit, never actually observed running) additionally
-/// dim and italic -- visibly distinct from a *confirmed* `Running`
-/// row, which keeps the plain, full-brightness style (review finding
-/// 16 on #458's comment 3).
-fn status_style(kind: StatusKind, theme: &Theme) -> Style {
-    let style = Style::default().fg(status_color(kind, theme));
-    if kind == StatusKind::LikelyRunning {
-        style.add_modifier(Modifier::DIM | Modifier::ITALIC)
-    } else {
-        style
-    }
-}
-
 // ---------------------------------------------------------------------
 // The Tape (screen 0, issue #678)
 // ---------------------------------------------------------------------
@@ -835,9 +634,6 @@ mod tape_token_bar_tests {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -4417,12 +4213,6 @@ mod truncate_tests {
     }
 }
 
-/// `log_total` is the plain running count of every line ever pushed
-/// onto `log_lines` (finding 4), not `log_lines.len()` -- a line's
-/// own highlight key is its own sequence number
-/// (`log_total - log_lines.len() + its own index`), which survives
-/// `MAX_LOG_LINES`' own trim from the front; a plain buffer index
-/// would shift under an already-marked key the moment the trim ran.
 /// `print_line`/`format_log_line`'s own clock prefix, `HH:MM:SS `
 /// (`main.rs::Clock::format` plus the one space that always follows
 /// it) -- always this many bytes, since the clock is always exactly
@@ -4444,48 +4234,12 @@ fn is_warning_report_log_line(line: &str) -> bool {
         .is_some_and(|rest| rest.starts_with("▸ warning: "))
 }
 
-fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], log_total: u64, ctx: &DrawCtx) {
-    let height = area.height.saturating_sub(2) as usize;
-    let start = log_lines.len().saturating_sub(height);
-    let seq_start = log_total.saturating_sub(log_lines.len() as u64);
-    // A report's own `data` preview is capped to 200 characters when
-    // the line is built (`diff::report_line`, the same cap `--log`
-    // uses, since there is no pane to fit there) -- narrower still
-    // once an actual TUI pane is this width, which `truncate_label`
-    // clips further here, with its own `…`, same as every other
-    // pane-width cut this crate makes. Only a report's own line gets
-    // this: every other kind already keeps well under a usable pane's
-    // width on its own (a fixed, short cap of its own, DESIGN.md
-    // §2.4), so clipping them too would just risk changing their
-    // look for no reason.
-    let pane_width = area.width.saturating_sub(2) as usize;
-    let text: Vec<Line> = log_lines[start..]
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
-            let seq = seq_start + (start + i) as u64;
-            let base = if is_warning_report_log_line(l) {
-                Style::default().fg(ctx.theme.warning)
-            } else {
-                Style::default()
-            };
-            let style = with_highlight(base, ctx.highlight(&format!("log:{seq}")));
-            let shown = if is_report_log_line(l) {
-                truncate_label(l, pane_width)
-            } else {
-                l.clone()
-            };
-            Line::from(shown).style(style)
-        })
-        .collect();
-    let paragraph =
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" log "));
-    frame.render_widget(paragraph, area);
+fn status_color(kind: StatusKind, theme: &Theme) -> Color {
+    theme.status_color(kind)
 }
 
-/// A label too long for `max`, truncated from the *right*, trailing
-/// `…` (treemap cell labels, pane border titles): the start of the
-/// text is usually the more identifying part there.
+/// Cuts `label` to `max` characters, with a trailing `…` when it did
+/// (§3.8's own row-text ellipsis).
 fn truncate_label(label: &str, max: usize) -> String {
     let count = label.chars().count();
     if count <= max {
@@ -4499,167 +4253,6 @@ fn truncate_label(label: &str, max: usize) -> String {
                 .collect::<String>()
         )
     }
-}
-
-/// [`clamp_scroll`]'s own job, but counting *lines* rather than
-/// entries (finding F3): a state-pane entry with a token line takes
-/// two of the pane's interior lines, not one, so clamping by entry
-/// count alone could keep the selected entry's own second line (or
-/// all of it) scrolled out of the viewport even though `scroll` said
-/// it was "in view". `line_counts[i]` is how many lines entry `i`
-/// takes; the search for the smallest `top` that still fits
-/// `line_counts[top..=selected]` within `viewport` uses prefix sums
-/// so it stays `O(log n)` beyond building them, not the `O(n)` a
-/// linear walk per redraw would cost against issue #527's own
-/// redraw-cost acceptance.
-fn clamp_state_scroll(
-    scroll: usize,
-    selected: Option<usize>,
-    line_counts: &[usize],
-    viewport: usize,
-) -> usize {
-    let viewport = viewport.max(1);
-    let total = line_counts.len();
-    if total == 0 {
-        return 0;
-    }
-    let mut top = scroll.min(total - 1);
-    let Some(idx) = selected else {
-        return top;
-    };
-    if idx < top {
-        return idx;
-    }
-    let mut prefix = vec![0usize; total + 1];
-    for (i, count) in line_counts.iter().enumerate() {
-        prefix[i + 1] = prefix[i] + count;
-    }
-    let target = prefix[idx + 1];
-    if target - prefix[top] > viewport {
-        let (mut lo, mut hi) = (top, idx);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if target - prefix[mid] <= viewport {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        top = lo;
-    }
-    top
-}
-
-/// The state pane (issue #527): the state's effect nodes, most
-/// recently updated first (`render::build_state_rows`' own order),
-/// with an independent selection and scroll from the orchestration
-/// pane's. Finding F3: scrolling is clamped and sliced by *lines*,
-/// not by entry count, since a token line makes most entries two
-/// lines tall rather than one.
-fn draw_state(
-    frame: &mut Frame,
-    area: Rect,
-    state_rows: &[&StateRow],
-    app: &mut App,
-    ctx: &DrawCtx,
-) {
-    let viewport = area.height.saturating_sub(2) as usize;
-    let total = state_rows.len();
-    let line_counts: Vec<usize> = state_rows
-        .iter()
-        .map(|r| if r.tokens.is_some() { 2 } else { 1 })
-        .collect();
-    let selected_idx = app
-        .state_selected_path
-        .as_deref()
-        .and_then(|p| state_rows.iter().position(|r| r.path == p));
-    app.state_scroll = clamp_state_scroll(app.state_scroll, selected_idx, &line_counts, viewport);
-
-    let start = app.state_scroll.min(total);
-    let mut end = start;
-    let mut used = 0usize;
-    while end < total && used + line_counts[end] <= viewport {
-        used += line_counts[end];
-        end += 1;
-    }
-    if end == start && total > start {
-        // Nothing fits whole; show the top entry anyway rather than
-        // an empty pane.
-        end += 1;
-    }
-    app.state_viewport = (end - start).max(1);
-    let visible_slice = &state_rows[start..end.min(total)];
-
-    let mut lines: Vec<Line> = Vec::new();
-    for row in visible_slice {
-        let selected = app.state_selected_path.as_deref() == Some(row.path.as_str());
-        let indent = "  ".repeat(row.depth);
-        let collapse_marker = if row.has_children {
-            if app.state_collapsed.contains(&row.path) {
-                "+ "
-            } else {
-                ""
-            }
-        } else {
-            ""
-        };
-        let mut spans = vec![
-            Span::styled(
-                format!(
-                    "{indent}{collapse_marker}{} ",
-                    status_glyph(row.status.kind)
-                ),
-                status_style(row.status.kind, ctx.theme),
-            ),
-            Span::raw(row.key.clone()),
-        ];
-        if let Some(dim) = &row.dim {
-            spans.push(Span::styled(
-                format!("  {dim}"),
-                Style::default().fg(ctx.theme.dim),
-            ));
-        }
-        let mut line = Line::from(spans);
-        let mut style = if selected {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
-        style = with_highlight(style, ctx.highlight(&format!("state:{}", row.path)));
-        line = line.style(style);
-        lines.push(line);
-        if let Some((sent, received)) = row.tokens {
-            lines.push(Line::styled(
-                format!(
-                    "{indent}  ↑{} ↓{}",
-                    oscilloscope_core::format::format_tokens(sent),
-                    oscilloscope_core::format::format_tokens(received)
-                ),
-                Style::default().fg(ctx.theme.dim),
-            ));
-        }
-    }
-
-    let border_style = if app.pane == Pane::State {
-        Style::default().fg(ctx.theme.border_focused)
-    } else {
-        Style::default().fg(ctx.theme.border)
-    };
-    let mut title = " state".to_string();
-    let all_visible = start == 0 && end >= total;
-    if all_visible {
-        title.push(' ');
-    } else {
-        let position = selected_idx.map(|i| i + 1).unwrap_or(1);
-        title.push_str(&format!(" {position}/{total} "));
-    }
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style),
-    );
-    frame.render_widget(paragraph, area);
 }
 
 /// Issue #637's Cost section: "the per-turn strip comes from `turn_
@@ -5654,7 +5247,6 @@ pub fn draw(
     state: &oscilloscope_core::render::RenderState,
     details: Option<&Details>,
     log_lines: &[String],
-    log_total: u64,
     app: &mut App,
     raw_state: Option<&serde_json::Value>,
     ctx: &DrawCtx,
@@ -5767,6 +5359,45 @@ pub fn draw(
         return;
     }
 
+    // The Flow rail (issue #691, part 3 of #677) draws its own header
+    // band, status line and key bar too, the same self-contained way
+    // the Tape and Signal do -- its own panels (the rail, the
+    // selected pass or station, the Story pane) never share the
+    // generic layout Cost still uses below.
+    if app.screen == oscilloscope_core::screens::Screen::Flow {
+        if let Some(flow_screen) = flow_screen {
+            draw_flow(
+                frame,
+                area,
+                flow_screen,
+                &state.header,
+                app,
+                transcript_view,
+                ctx,
+                icon_frame,
+                now,
+            );
+        }
+        let status_line = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(2),
+            width: area.width,
+            height: 1,
+        };
+        dim_backdrop_for_dialog(frame, area, Some(status_line), app, ctx);
+        draw_dialog_overlay(
+            frame,
+            area,
+            app,
+            details,
+            raw_state,
+            ctx,
+            flow_screen.map(|s| s.unit).unwrap_or(50),
+            state.header.history_same_hash_count,
+        );
+        return;
+    }
+
     // Issue #678's R3: the header band, the Totals row, the status
     // line and the key bar are the outer frame shared by every
     // screen now, not just the Tape -- Flow/Cost keep their own
@@ -5811,8 +5442,11 @@ pub fn draw(
         height: area.height.saturating_sub(4),
     };
     let body = sections[1];
+    let _ = reduced_area;
     match app.screen {
-        oscilloscope_core::screens::Screen::Tape | oscilloscope_core::screens::Screen::Signal => {}
+        oscilloscope_core::screens::Screen::Tape
+        | oscilloscope_core::screens::Screen::Signal
+        | oscilloscope_core::screens::Screen::Flow => {}
         oscilloscope_core::screens::Screen::Cost => {
             if let Some(cost_screen) = cost_screen {
                 draw_cost_screen(
@@ -5823,23 +5457,6 @@ pub fn draw(
                     app,
                     cost_layout,
                     ctx,
-                );
-            }
-        }
-        oscilloscope_core::screens::Screen::Flow => {
-            if let Some(flow_screen) = flow_screen {
-                draw_flow_screen(
-                    frame,
-                    reduced_area,
-                    body,
-                    state,
-                    flow_screen,
-                    log_lines,
-                    log_total,
-                    app,
-                    transcript_view,
-                    ctx,
-                    now,
                 );
             }
         }
@@ -6077,630 +5694,144 @@ fn draw_dialog_overlay(
     }
 }
 
-/// One Flow-pane row's own line(s) (issue #635): the status glyph
-/// and label, the loop-progress/duration/dim-provider fragments every
-/// ordinary row already has, plus the Flow screen's own additions --
-/// a decision's `→ then`/`→ else`, the untaken-branch summary's own
-/// dim styling, and the start/tokens/cost columns, appended after the
-/// label and dropped narrowest-first. `show_condition` is `FLOW_
-/// CONDITION_LINE_MIN_WIDTH` already checked by the caller once for
-/// the whole pane.
-fn flow_row_lines(
-    row: &oscilloscope_core::flow::FlowRow,
-    columns: FlowColumns,
-    show_condition: bool,
-    selected: bool,
-    ctx: &DrawCtx,
-) -> Vec<Line<'static>> {
-    use oscilloscope_core::flow::FlowRowKind;
-    let indent = "  ".repeat(row.depth);
-    let mut main_style = Style::default();
-    let mut spans = Vec::new();
-    match &row.kind {
-        FlowRowKind::Row(_) => {
-            // Issue #643's seventh follow-up: a loop row's own status
-            // glyph is never replaced by `⟲` -- merged (a single
-            // observed pass) or not (`loop_progress` still set, more
-            // than one pass), it always shows both, the same order
-            // the Tape's own loop rows already do.
-            let is_loop_row = row.merged_pass || row.loop_progress.is_some();
-            let prefix = if is_loop_row {
-                format!("{indent}{} ⟲ ", status_glyph(row.status.kind))
-            } else {
-                format!("{indent}{} ", status_glyph(row.status.kind))
-            };
-            spans.push(Span::styled(
-                prefix,
-                status_style(row.status.kind, ctx.theme),
-            ));
-            spans.push(Span::raw(row.label.clone()));
-            if let Some(progress) = &row.loop_progress {
-                let total = progress
-                    .total
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "?".to_string());
-                spans.push(Span::styled(
-                    format!("  {}/{total}", progress.done),
-                    Style::default().fg(ctx.theme.dim),
-                ));
-            }
-        }
-        FlowRowKind::Decision {
-            branch,
-            inferred,
-            nothing_ran,
-            ..
-        } => {
-            spans.push(Span::raw(format!("{indent}◆ {}", row.label)));
-            // The label itself already carries the arrow for the
-            // same-names case (`if → ?`, `unnamed_if_label`'s own
-            // output never otherwise ends this way) -- a second,
-            // separate `…` right after it would just repeat the
-            // same "not yet decided" meaning twice.
-            if !row.label.ends_with("→ ?") {
-                let mut arrow = match branch {
-                    Some(b) => format!("  → {b}"),
-                    None => "  …".to_string(),
-                };
-                if *nothing_ran {
-                    arrow.push_str(" (nothing ran)");
-                }
-                spans.push(Span::styled(arrow, Style::default().fg(ctx.theme.dim)));
-            }
-            if *inferred {
-                spans.push(Span::styled(
-                    "  (inferred)",
-                    Style::default().fg(ctx.theme.dim),
-                ));
-            }
-        }
-        FlowRowKind::UntakenBranch { .. } => {
-            spans.push(Span::styled(
-                format!("{indent}· {}", row.label),
-                Style::default().fg(ctx.theme.dim),
-            ));
-            main_style = main_style.add_modifier(Modifier::DIM);
-        }
-    }
-    let mut right = Vec::new();
-    if columns.start {
-        if let Some(start) = row
-            .start_ts
-            .as_deref()
-            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-        {
-            right.push(start);
-        }
-    }
-    if let Some(duration) = row.duration_s {
-        right.push(oscilloscope_core::format::format_duration(duration));
-    }
-    if columns.tokens {
-        if let Some(tokens) = row.tokens {
-            right.push(oscilloscope_core::format::format_tokens(tokens));
-        }
-    }
-    if columns.cost {
-        if let Some(cost) = row.cost_usd {
-            right.push(format!("${cost:.2}"));
-        }
-    }
-    if !right.is_empty() {
-        spans.push(Span::styled(
-            format!("   {}", right.join("  ")),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    if selected {
-        main_style = main_style.add_modifier(Modifier::REVERSED);
-    }
-    main_style = with_highlight(main_style, ctx.highlight(&format!("row:{}", row.path)));
-    let mut lines = vec![Line::from(spans).style(main_style)];
-    if show_condition {
-        if let Some(condition) = &row.condition {
-            lines.push(Line::styled(
-                format!("{indent}  {}", condition.text),
-                Style::default()
-                    .fg(ctx.theme.dim)
-                    .add_modifier(Modifier::DIM),
-            ));
-        }
-    }
-    lines
-}
-
-/// [`flow_row_lines`]'s own column visibility (issue #635: "narrow
-/// panes drop columns in this order: cost, start, tokens. Duration
-/// always stays"), decided once per redraw from the flow pane's own
-/// interior width.
-#[derive(Debug, Clone, Copy)]
-struct FlowColumns {
-    cost: bool,
-    start: bool,
-    tokens: bool,
-}
-
-fn flow_columns_for_width(width: u16) -> FlowColumns {
-    FlowColumns {
-        cost: width >= thresholds::FLOW_COST_COLUMN_MIN_WIDTH,
-        start: width >= thresholds::FLOW_START_COLUMN_MIN_WIDTH,
-        tokens: width >= thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH,
-    }
-}
-
-#[cfg(test)]
-mod flow_columns_tests {
-    use super::*;
-
-    /// DESIGN.md: "narrow panes drop columns in this order: cost,
-    /// start, tokens. Duration always stays" -- duration itself has
-    /// no threshold of its own at all (`flow_row_lines` always draws
-    /// it), so this only ever needs to check the three that do.
-    #[test]
-    fn narrower_than_every_threshold_drops_cost_start_and_tokens() {
-        let columns = flow_columns_for_width(thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH - 1);
-        assert!(!columns.cost);
-        assert!(!columns.start);
-        assert!(!columns.tokens);
-    }
-
-    #[test]
-    fn wide_enough_for_tokens_alone_keeps_only_tokens() {
-        let columns = flow_columns_for_width(thresholds::FLOW_TOKENS_COLUMN_MIN_WIDTH);
-        assert!(!columns.cost);
-        assert!(!columns.start);
-        assert!(columns.tokens);
-    }
-
-    #[test]
-    fn wide_enough_for_start_keeps_tokens_and_start_but_not_cost() {
-        let columns = flow_columns_for_width(thresholds::FLOW_START_COLUMN_MIN_WIDTH);
-        assert!(!columns.cost);
-        assert!(columns.start);
-        assert!(columns.tokens);
-    }
-
-    #[test]
-    fn wide_enough_for_cost_keeps_every_column() {
-        let columns = flow_columns_for_width(thresholds::FLOW_COST_COLUMN_MIN_WIDTH);
-        assert!(columns.cost);
-        assert!(columns.start);
-        assert!(columns.tokens);
-    }
-}
-
-/// Resolves `app.selected_path` (set by an ordinary move, or by
-/// follow/`⏎`-on-overview picking a real tree path directly) to
-/// the Flow pane's own drawn row (issue #635): a path under a
-/// single-pass loop's own merged pass maps to that loop's row, and a
-/// path hidden entirely under a decision's untaken branch maps to
-/// that branch's own dim summary line -- `rows` is checked for an
-/// exact match first, so an ordinary selection (already a real,
-/// drawn row's own path) never takes either fallback.
-fn flow_selected_row_path(
-    rows: &[&oscilloscope_core::flow::FlowRow],
-    selected: &str,
-) -> Option<String> {
-    if let Some(row) = rows.iter().find(|r| r.path == selected) {
-        return Some(row.path.clone());
-    }
-    if let Some(row) = rows
-        .iter()
-        .find(|r| r.merged_pass && selected.starts_with(&format!("{}.iter_", r.path)))
-    {
-        return Some(row.path.clone());
-    }
-    rows.iter().find_map(|r| match &r.kind {
-        oscilloscope_core::flow::FlowRowKind::UntakenBranch { paths } => {
-            is_under_any_untaken_path(selected, paths).then(|| r.path.clone())
-        }
-        _ => None,
-    })
-}
-
-fn is_under_any_untaken_path(path: &str, roots: &[String]) -> bool {
-    roots
-        .iter()
-        .any(|root| path == root || path.starts_with(&format!("{root}.")))
-}
-
-#[cfg(test)]
-mod flow_selected_row_path_tests {
-    use super::*;
-    use oscilloscope_core::flow::{FlowRow, FlowRowKind};
-    use oscilloscope_core::model::{RowStatus, StatusKind};
-    use oscilloscope_core::render::RowKind;
-
-    fn flow_row(path: &str, kind: FlowRowKind, merged_pass: bool) -> FlowRow {
-        FlowRow {
-            path: path.to_string(),
-            depth: 0,
-            label: path.rsplit('.').next().unwrap().to_string(),
-            kind,
-            status: RowStatus {
-                kind: StatusKind::Running,
-                skip_reason: None,
-                retrying: false,
-            },
-            start_ts: None,
-            duration_s: None,
-            tokens: None,
-            cost_usd: None,
-            condition: None,
-            loop_progress: None,
-            has_children: false,
-            merged_pass,
-        }
-    }
-
-    #[test]
-    fn an_exact_match_is_returned_as_is() {
-        let rows = [flow_row("prime", FlowRowKind::Row(RowKind::Tool), false)];
-        let refs: Vec<&FlowRow> = rows.iter().collect();
-        assert_eq!(
-            flow_selected_row_path(&refs, "prime"),
-            Some("prime".to_string())
-        );
-    }
-
-    #[test]
-    fn a_merged_passs_own_pass_maps_to_its_loop_row() {
-        let rows = [flow_row("prime.fan", FlowRowKind::Row(RowKind::Loop), true)];
-        let refs: Vec<&FlowRow> = rows.iter().collect();
-        assert_eq!(
-            flow_selected_row_path(&refs, "prime.fan.iter_0"),
-            Some("prime.fan".to_string())
-        );
-    }
-
-    #[test]
-    fn a_step_under_an_untaken_branch_maps_to_its_summary_line() {
-        let rows = [flow_row(
-            "prime.gate.__untaken",
-            FlowRowKind::UntakenBranch {
-                paths: vec!["prime.gate.other".to_string()],
-            },
-            false,
-        )];
-        let refs: Vec<&FlowRow> = rows.iter().collect();
-        assert_eq!(
-            flow_selected_row_path(&refs, "prime.gate.other"),
-            Some("prime.gate.__untaken".to_string())
-        );
-    }
-
-    #[test]
-    fn a_path_covered_by_nothing_drawn_resolves_to_none() {
-        let rows = [flow_row("prime", FlowRowKind::Row(RowKind::Tool), false)];
-        let refs: Vec<&FlowRow> = rows.iter().collect();
-        assert_eq!(flow_selected_row_path(&refs, "prime.other"), None);
-    }
-}
-
-/// Issue #643's seventh follow-up: one rule for every loop row's own
-/// glyph, merged or not.
-#[cfg(test)]
-mod flow_row_lines_tests {
-    use super::*;
-    use oscilloscope_core::flow::{FlowRow, FlowRowKind};
-    use oscilloscope_core::model::{RowStatus, StatusKind};
-    use oscilloscope_core::render::{LoopProgress, RowKind};
-
-    fn render_label(row: &FlowRow) -> String {
-        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let tracker = crate::highlight::Tracker::new();
-        let zone = test_zone();
-        let ctx = DrawCtx {
-            theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &zone,
-            no_animation: false,
-        };
-        let columns = FlowColumns {
-            cost: false,
-            start: false,
-            tokens: false,
-        };
-        let lines = flow_row_lines(row, columns, false, false, &ctx);
-        lines[0].to_string()
-    }
-
-    fn base_row(merged_pass: bool, loop_progress: Option<LoopProgress>) -> FlowRow {
-        FlowRow {
-            path: "prime.fan".to_string(),
-            depth: 0,
-            label: "fan".to_string(),
-            kind: FlowRowKind::Row(RowKind::Loop),
-            status: RowStatus {
-                kind: StatusKind::Running,
-                skip_reason: None,
-                retrying: false,
-            },
-            start_ts: None,
-            duration_s: None,
-            tokens: None,
-            cost_usd: None,
-            condition: None,
-            loop_progress,
-            has_children: false,
-            merged_pass,
-        }
-    }
-
-    #[test]
-    fn a_merged_single_pass_loop_row_shows_its_status_glyph_and_the_loop_glyph() {
-        let row = base_row(true, None);
-        let text = render_label(&row);
-        assert!(text.contains("◐ ⟲ fan"), "{text}");
-    }
-
-    #[test]
-    fn a_multi_pass_loop_row_also_shows_both_glyphs() {
-        let row = base_row(
-            false,
-            Some(LoopProgress {
-                done: 1,
-                total: Some(4),
-                eta_s: None,
-            }),
-        );
-        let text = render_label(&row);
-        assert!(text.contains("◐ ⟲ fan"), "{text}");
-    }
-
-    #[test]
-    fn an_ordinary_non_loop_row_gets_no_loop_glyph() {
-        let mut row = base_row(false, None);
-        row.kind = FlowRowKind::Row(RowKind::Tool);
-        let text = render_label(&row);
-        assert!(!text.contains('⟲'), "{text}");
-        assert!(text.contains("◐ fan"), "{text}");
-    }
-}
-
-/// The flow pane (issue #635's left pane): today's orchestration-pane
-/// keys (`↑↓`/`jk`, `PgUp`/`PgDn`, collapse, follow, `z`, `e`, `/`,
-/// `⏎` on a quick-steps row) still act on the real `Row`s
-/// (`App::selected_path`'s own model) -- the Flow screen's own
-/// synthetic decision/untaken-branch rows are display-only here, read
-/// straight from `screen.rows` for exactly the positions the real
-/// rows don't already cover.
-#[allow(clippy::too_many_arguments)]
-fn draw_flow_pane(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::screens::FlowScreen,
-    visible: &[&Row],
-    app: &mut App,
-    header: &oscilloscope_core::render::Header,
-    frame_width: u16,
-    // DESIGN.md: "Below 80×20: one column ... the flow pane shows
-    // duration only" -- the one-column layout's own flow pane often
-    // ends up no narrower than the two-column one's left column (it
-    // gets the whole body width instead of a golden-section share of
-    // it), so this can't be the width thresholds' own call to make.
-    one_column: bool,
-    ctx: &DrawCtx,
-) {
-    let footer_lines = 3u16;
-    let viewport = area.height.saturating_sub(2 + footer_lines) as usize;
-    app.tree_viewport = viewport;
-
-    let columns = if one_column {
-        FlowColumns {
-            cost: false,
-            start: false,
-            tokens: false,
-        }
-    } else {
-        flow_columns_for_width(area.width)
-    };
-    let show_condition = frame_width >= thresholds::FLOW_CONDITION_LINE_MIN_WIDTH;
-    let visible_paths: std::collections::BTreeSet<&str> =
-        visible.iter().map(|r| r.path.as_str()).collect();
-    // Issue #635: the one list of drawn lines, in the exact
-    // order they're drawn -- a real row collapse/filter/errors-only
-    // would hide, by the same rule `visible_paths` already applies
-    // elsewhere; the synthetic rows this module invents (an unnamed
-    // decision, `inferred: true`; an untaken branch's summary line)
-    // carry no real path for that state to hide at all, so they're
-    // always drawn. Scrolling and selection both move over exactly
-    // this list, never the orchestration pane's own `visible` -- that
-    // list still has the untaken branch's own hidden real rows (never
-    // drawn here at all) and the pass a single-pass loop merged away
-    // (drawn as the loop row instead), so clamping or indexing
-    // against it directly could point `j`/`k`/the scrollbar at a
-    // position nothing here actually shows.
-    let drawable: Vec<&oscilloscope_core::flow::FlowRow> = screen
-        .rows
-        .iter()
-        .filter(|row| {
-            !oscilloscope_core::flow::is_real_flow_row(&row.kind)
-                || visible_paths.contains(row.path.as_str())
-        })
-        .collect();
-    let selected_key = app
-        .selected_path
-        .as_deref()
-        .and_then(|p| flow_selected_row_path(&drawable, p));
-    let selected_idx = selected_key
-        .as_deref()
-        .and_then(|key| drawable.iter().position(|r| r.path == key));
-    // A decision row with a condition takes two screen lines, not
-    // one (`flow_row_lines`), so scrolling and the viewport both
-    // have to work over line counts rather than row counts, the
-    // same way `draw_state` already does for a token line.
-    let line_counts: Vec<usize> = drawable
-        .iter()
-        .map(|row| 1 + (show_condition && row.condition.is_some()) as usize)
-        .collect();
-    app.tree_scroll = clamp_state_scroll(app.tree_scroll, selected_idx, &line_counts, viewport);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut end_idx = app.tree_scroll;
-    for row in drawable.iter().skip(app.tree_scroll) {
-        let selected = selected_key.as_deref() == Some(row.path.as_str());
-        let row_lines = flow_row_lines(row, columns, show_condition, selected, ctx);
-        if lines.len() + row_lines.len() > viewport {
-            break;
-        }
-        lines.extend(row_lines);
-        end_idx += 1;
-    }
-
-    let selectable: Vec<&oscilloscope_core::flow::FlowRow> = drawable
-        .iter()
-        .filter(|r| oscilloscope_core::flow::is_selectable_flow_row(&r.kind))
-        .copied()
-        .collect();
-    let selectable_idx = selected_key
-        .as_deref()
-        .and_then(|key| selectable.iter().position(|r| r.path == key));
-    let more_planned = drawable
-        .iter()
-        .skip(end_idx)
-        .filter(|r| r.status.kind == oscilloscope_core::model::StatusKind::Pending)
-        .count() as u64;
-
-    let border_style = if app.pane == Pane::Tree {
-        Style::default().fg(ctx.theme.border_focused)
-    } else {
-        Style::default().fg(ctx.theme.border)
-    };
-    // Issue #626: the effects count sits in this pane's own title
-    // (moved off the header line entirely), `N/M` or `N/M+` once a
-    // loop's own total is still a lower bound (`effects_planned_is_
-    // lower_bound`), or just `N` with no plan at all.
-    let effects = match header.effects_planned {
-        Some(planned) if header.effects_planned_is_lower_bound => {
-            format!("{}/{planned}+", header.effects_done)
-        }
-        Some(planned) => format!("{}/{planned}", header.effects_done),
-        None => header.effects_done.to_string(),
-    };
-    let mut title = format!(
-        " flow ({} · {effects}) ",
-        orchestration_name(&header.document)
-    );
-    if app.follow {
-        title.push_str("(following) ");
-    }
-    title.push_str("◆ decision ⟲ loop ▶ running");
-    let total_lines: usize = line_counts.iter().sum();
-    match scroll_indicator(selectable_idx, selectable.len(), total_lines > viewport) {
-        Some(indicator) => title.push_str(&indicator),
-        None => title.push(' '),
-    }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(border_style);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    // The list is drawn only into the rows above the 3-line footer
-    // (`viewport` is already `inner`'s height minus those 3 lines),
-    // so a row the loop above couldn't fit never lands on the
-    // footer's own lines underneath it.
-    let list_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: viewport as u16,
-    };
-    let list = List::new(lines.into_iter().map(ListItem::new).collect::<Vec<_>>());
-    frame.render_widget(list, list_area);
-
-    draw_flow_footer(frame, area, &screen.footer, more_planned, ctx);
-}
-
-/// The flow pane's own footer, drawn as the bottom two rows inside
-/// its own border (issue #635: "quick steps folded: …", "health: N
-/// failed · N retries · N warnings", "○ N more planned").
-fn draw_flow_footer(
-    frame: &mut Frame,
-    area: Rect,
-    footer: &oscilloscope_core::flow::FlowFooter,
-    more_planned: u64,
-    ctx: &DrawCtx,
-) {
-    if area.height < 5 {
-        return;
-    }
-    let quick = format!(
-        "quick steps folded: {} · {}",
-        footer.quick_steps_folded,
-        oscilloscope_core::format::format_duration(footer.quick_steps_duration_s)
-    );
-    let health = format!(
-        "health: {} failed · {} retries · {} warnings",
-        footer.failed, footer.retries, footer.warnings
-    );
-    let footer_area = Rect {
-        x: area.x + 1,
-        y: area.y + area.height.saturating_sub(4),
-        width: area.width.saturating_sub(2),
-        height: 3,
-    };
-    let mut lines = vec![
-        Line::styled(quick, Style::default().fg(ctx.theme.dim)),
-        Line::styled(health, Style::default().fg(ctx.theme.dim)),
-    ];
-    if more_planned > 0 {
-        lines.push(Line::styled(
-            format!("○ {more_planned} more planned"),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
-}
-
-/// The selected pane (issue #635's right/top pane): an ordinary step
-/// reuses the overview's own `focus_step_lines`, a decision reads its
-/// own condition/branch/answer instead, and `s` swaps the whole pane
-/// for today's state tree (#610).
-#[allow(clippy::too_many_arguments)]
+/// The Flow screen's own pane below the rail (DESIGN.md §2.3, §5):
+/// the selected loop pass (`Pass 1 · cats · Selected`), a plain
+/// selected station (reusing the overview's own `focus_step_lines`),
+/// or a selected decision's own condition/branch/answer -- never more
+/// than one of the three at once ([`oscilloscope_core::screens::
+/// FlowScreen`]'s own doc comment).
 fn draw_flow_selected_pane(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::FlowScreen,
-    state_visible: &[&StateRow],
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     now: &str,
 ) {
-    if app.flow_selected_shows_state {
-        draw_state(frame, area, state_visible, app, ctx);
-        return;
-    }
-    let lines = if let Some(decision) = &screen.selected_decision {
+    let title = if let Some(pass) = &screen.selected_pass {
+        format!("Pass {} · {} · Selected", pass.index, pass.label)
+    } else if let Some(step) = &screen.selected_step {
+        format!("{} · Selected", step.breadcrumb)
+    } else {
+        "Selected".to_string()
+    };
+    let lines = if let Some(pass) = &screen.selected_pass {
+        selected_pass_lines(pass, ctx)
+    } else if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
-    } else if let Some(step) = &screen.selected {
+    } else if let Some(step) = &screen.selected_step {
         flow_selected_step_lines(step, transcript_view, ctx, now)
     } else {
         vec![Line::from("nothing selected")]
     };
-    let border_style = if app.pane == Pane::Details {
-        Style::default().fg(ctx.theme.border_focused)
-    } else {
-        Style::default().fg(ctx.theme.border)
-    };
+    let border_color = ctx.theme.border;
     let viewport = area.height.saturating_sub(2) as usize;
     app.details_viewport = viewport;
     let total = lines.len();
     app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
     let start = app.details_scroll.min(total);
     let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
-    let paragraph = ratatui::widgets::Paragraph::new(visible_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" selected ")
-            .border_style(border_style),
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    fill_border_rows(frame, inner, border_color);
+    let paragraph = ratatui::widgets::Paragraph::new(visible_lines);
+    frame.render_widget(
+        paragraph,
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width.saturating_sub(1),
+            height: inner.height,
+        },
     );
-    frame.render_widget(paragraph, area);
+}
+
+/// `Pass N · label · Selected`'s own body (DESIGN.md §2.3): Status
+/// (the pass's own currently active step, with its elapsed time and
+/// slot), one row per named step the pass ran with its tokens and
+/// deviation, and Produced -- the last such step's own output.
+fn selected_pass_lines(
+    pass: &oscilloscope_core::screens::SelectedPass,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    use oscilloscope_core::render::RowKind;
+    let glyph = tape_glyph(RowKind::Unknown, pass.active_status.kind);
+    let glyph_style = tape_glyph_style(RowKind::Unknown, pass.active_status.kind, ctx.theme);
+    let status_word = tape_status_kind_word(pass.active_status.kind);
+    let mut status_spans = vec![
+        Span::styled("Status  ", Style::default().fg(ctx.theme.fg_muted)),
+        Span::styled(format!("{glyph} "), glyph_style),
+        Span::styled(format!("{status_word}  "), glyph_style),
+    ];
+    let mut detail = pass.active_label.clone();
+    if let Some(elapsed) = pass.active_elapsed_s {
+        detail.push_str(&format!(
+            " · {}",
+            oscilloscope_core::format::format_duration(elapsed)
+        ));
+    }
+    if let Some(slot) = pass.slot {
+        detail.push_str(&format!(" · slot {slot}"));
+    }
+    status_spans.push(Span::styled(detail, Style::default().fg(ctx.theme.text)));
+    lines.push(Line::from(status_spans));
+    for step in &pass.steps {
+        let glyph = tape_glyph(RowKind::Prompt, step.status.kind);
+        let glyph_style = tape_glyph_style(RowKind::Prompt, step.status.kind, ctx.theme);
+        let mut spans = vec![
+            Span::styled(
+                format!("{:<8}", step.label),
+                Style::default().fg(ctx.theme.fg_muted),
+            ),
+            Span::styled(format!("{glyph} "), glyph_style),
+            Span::styled(
+                format!("{}  ", tape_status_kind_word(step.status.kind)),
+                glyph_style,
+            ),
+        ];
+        if let Some(total) = step.tokens {
+            spans.push(Span::styled(
+                format!("{} ", oscilloscope_core::format::format_tokens_t(total)),
+                Style::default()
+                    .fg(ctx.theme.text)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            if let Some(usual) = step.usual {
+                let pct = (total as f64 - usual as f64) / usual.max(1) as f64 * 100.0;
+                spans.push(Span::styled(
+                    format!("{pct:+.0}% "),
+                    tape_deviation_style(pct, ctx.theme),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    if let Some(step) = pass.steps.last() {
+        if let Some(produced) = &step.produced {
+            lines.push(Line::from(vec![
+                Span::styled("Produced ", Style::default().fg(ctx.theme.fg_muted)),
+                Span::styled(produced.clone(), Style::default().fg(ctx.theme.text)),
+            ]));
+        }
+    }
+    lines
+}
+
+fn tape_status_kind_word(kind: StatusKind) -> &'static str {
+    match kind {
+        StatusKind::Done => "Done",
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => "Running",
+        StatusKind::Failed | StatusKind::Cancelled | StatusKind::Aborted => "Failed",
+        StatusKind::FailedHandled => "Failed",
+        StatusKind::Pending | StatusKind::Skipped => "Pending",
+    }
 }
 
 /// The selected pane's own asked/doing/produced sections (issue
@@ -6936,200 +6067,1317 @@ fn decision_detail_lines(
     lines
 }
 
-/// The story pane (issue #635's right/bottom pane): the run's own
-/// notable events, oldest first, following the latest line while
-/// scrolled to the bottom -- `l` swaps it for the full log instead.
+/// The story pane (DESIGN.md §2.3's ‘Story · Decisions and
+/// Failures’): the run's own notable events, oldest first, the
+/// latest line followed while scrolled to the bottom -- each line's
+/// own clock stays faint, its glyph takes the same role colour the
+/// rail's own stations use, and the rest of the line reads as plain
+/// text.
 fn draw_flow_story_pane(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::FlowScreen,
-    log_lines: &[String],
-    log_total: u64,
-    app: &mut App,
     ctx: &DrawCtx,
 ) {
-    if app.flow_story_shows_log {
-        draw_log(frame, area, log_lines, log_total, ctx);
+    let border_color = ctx.theme.border;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(
+            "Story · Decisions and Failures",
+            border_color,
+            ctx,
+        ))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let height = area.height.saturating_sub(2) as usize;
+    fill_border_rows(frame, inner, border_color);
+    let height = inner.height as usize;
     let total = screen.story.len();
-    // Follows the latest line while scrolled to the bottom (DESIGN.md:
-    // "the latest line is followed when the story is scrolled to the
-    // bottom") -- the same bottom-biased default the log pane already
-    // has, just without a selection to keep in view.
-    if app.story_scroll == usize::MAX || app.story_scroll.saturating_add(height) >= total {
-        app.story_scroll = total.saturating_sub(height);
-    }
-    app.story_viewport = height;
-    let start = app.story_scroll.min(total);
-    let end = (start + height).min(total);
-    let items: Vec<ListItem> = screen.story[start..end]
+    let start = total.saturating_sub(height);
+    let lines: Vec<Line<'static>> = screen.story[start..total]
         .iter()
-        .map(|entry| {
-            let style = if is_warning_report_log_line(&entry.text) {
-                Style::default().fg(ctx.theme.warning)
-            } else if entry.inferred {
-                Style::default().fg(ctx.theme.dim)
-            } else {
-                Style::default()
-            };
-            let shown = if is_report_log_line(&entry.text) {
-                truncate_label(&entry.text, area.width.saturating_sub(2) as usize)
-            } else {
-                entry.text.clone()
-            };
-            ListItem::new(Line::from(shown)).style(style)
-        })
+        .map(|entry| story_entry_line(entry, ctx))
         .collect();
-    let border_style = if app.pane == Pane::Story {
-        Style::default().fg(ctx.theme.border_focused)
-    } else {
-        Style::default().fg(ctx.theme.border)
-    };
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" story ")
-            .border_style(border_style),
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width.saturating_sub(1),
+            height: inner.height,
+        },
     );
-    frame.render_widget(list, area);
 }
 
-/// Screen 2 (`Flow`, issue #635): the tree as control flow (left),
-/// the selected step and the run's story (right). `100×30` and
-/// larger splits flow | (selected over story), both 62/38; `80×20`
-/// up to that drops the story (flow | selected, `l` showing the log
-/// in the selected pane's own place); below `80×20`, one column
-/// (selected over flow, today's order), with no story and the flow
-/// pane's own columns dropped to duration alone.
-#[allow(clippy::too_many_arguments)]
-fn draw_flow_screen(
-    frame: &mut Frame,
-    frame_area: Rect,
-    body: Rect,
-    state: &oscilloscope_core::render::RenderState,
-    screen: &oscilloscope_core::screens::FlowScreen,
-    log_lines: &[String],
-    log_total: u64,
+/// One Story line's own three-way split (DESIGN.md §2.3): the clock
+/// (`fg.faint`), the glyph (the rail's own role colour for `■`/`◆`/
+/// `⟳`/`✗`, plain otherwise), and the rest of the line in
+/// `fg.default`.
+fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) -> Line<'static> {
+    let text = &entry.text;
+    let (clock, rest) = match text.split_once(' ') {
+        Some((clock, rest)) if clock.len() == 8 && clock.as_bytes()[2] == b':' => {
+            (Some(clock), rest)
+        }
+        _ => (None, text.as_str()),
+    };
+    let mut chars = rest.chars();
+    let glyph = chars.next();
+    let after_glyph: String = chars.collect();
+    let glyph_style = match glyph {
+        Some('■') => Style::default().fg(ctx.theme.fg_muted),
+        Some('◆') | Some('⟳') => Style::default()
+            .fg(ctx.theme.accent_secondary)
+            .add_modifier(Modifier::BOLD),
+        Some('✗') => Style::default().fg(ctx.theme.status_failed),
+        _ => Style::default().fg(ctx.theme.text),
+    };
+    let mut spans = Vec::new();
+    if let Some(clock) = clock {
+        spans.push(Span::styled(
+            format!("{clock} "),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    if let Some(glyph) = glyph {
+        spans.push(Span::styled(format!("{glyph}"), glyph_style));
+    }
+    spans.push(Span::styled(
+        after_glyph,
+        Style::default().fg(ctx.theme.text),
+    ));
+    Line::from(spans)
+}
+
+// ---------------------------------------------------------------------
+// The Flow rail (screen 2, issue #691, part 3 of #677)
+// ---------------------------------------------------------------------
+
+use oscilloscope_core::rail::{self, EdgeStyle, Fork, ForkKind, RailItem, Station};
+
+fn flow_edge_color(style: EdgeStyle, theme: &Theme) -> Color {
+    match style {
+        EdgeStyle::Past => theme.border,
+        EdgeStyle::Live => theme.accent_primary,
+        EdgeStyle::Ahead => theme.dim,
+    }
+}
+
+/// Whether `fork`'s own lanes draw folded into their own band
+/// (DESIGN.md §2.3: "below 100 columns the lanes start folded",
+/// "a loop four or more wide starts folded") -- a decision's own two
+/// lanes (the taken branch and the untaken ghost) never fold at all.
+fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
+    if fork.kind != ForkKind::Loop {
+        return false;
+    }
+    if let Some(&open) = app.flow_lanes_open.get(&fork.path) {
+        return open == 0;
+    }
+    fork.lanes.len() >= 4 || area_width < 100
+}
+
+fn flow_item_width(item: &RailItem, app: &App, area_width: u16) -> usize {
+    match item {
+        RailItem::Station(_) => rail::STATION_WIDTH,
+        RailItem::Fork(fork) => flow_fork_width(fork, app, area_width),
+    }
+}
+
+fn flow_lane_width(items: &[RailItem], app: &App, area_width: u16) -> usize {
+    if items.is_empty() {
+        return rail::STATION_WIDTH;
+    }
+    items
+        .iter()
+        .map(|it| flow_item_width(it, app, area_width))
+        .sum::<usize>()
+        + rail::NORMAL_CONNECTOR * (items.len() - 1)
+}
+
+fn flow_fork_width(fork: &Fork, app: &App, area_width: u16) -> usize {
+    if flow_fork_folded(fork, app, area_width) {
+        rail::FOLD_BAND_WIDTH
+    } else {
+        let max_lane = fork
+            .lanes
+            .iter()
+            .map(|l| flow_lane_width(&l.items, app, area_width))
+            .max()
+            .unwrap_or(rail::STATION_WIDTH);
+        rail::FORK_LEAD + max_lane + rail::FORK_TAIL
+    }
+}
+
+/// `items`' own `(start, end)` full-coordinate span, in order --
+/// no gap at all around a fork (its own lead-in/lead-out already is
+/// one), DESIGN.md §2.3's own connector rule for every other pair.
+fn flow_layout(items: &[RailItem], app: &App, area_width: u16) -> Vec<(usize, usize)> {
+    let mut out = Vec::with_capacity(items.len());
+    let mut x = 0usize;
+    for (i, item) in items.iter().enumerate() {
+        let w = flow_item_width(item, app, area_width);
+        out.push((x, x + w));
+        x += w;
+        let is_fork = matches!(item, RailItem::Fork(_));
+        let next_is_fork = items
+            .get(i + 1)
+            .map(|n| matches!(n, RailItem::Fork(_)))
+            .unwrap_or(false);
+        if i + 1 < items.len() && !is_fork && !next_is_fork {
+            x += rail::NORMAL_CONNECTOR;
+        }
+    }
+    out
+}
+
+fn flow_total_width(items: &[RailItem], app: &App, area_width: u16) -> usize {
+    flow_layout(items, app, area_width)
+        .last()
+        .map(|&(_, e)| e)
+        .unwrap_or(0)
+}
+
+fn flow_lane_has_live(items: &[RailItem]) -> bool {
+    items.iter().any(|it| match it {
+        RailItem::Station(s) => rail::edge_style(s.status) == EdgeStyle::Live,
+        RailItem::Fork(f) => f.lanes.iter().any(|l| flow_lane_has_live(&l.items)),
+    })
+}
+
+/// The `▾ Now` indicator's own column (DESIGN.md §2.3): the
+/// leftmost currently-running leaf anywhere on the rail -- a
+/// decision or loop station itself never counts (its own fork is
+/// what actually carries the live edge), and a folded fork with a
+/// live lane inside reads at its own band's content start instead of
+/// descending into lanes it isn't drawing.
+fn flow_now_arrow_x(items: &[RailItem], app: &App, area_width: u16) -> Option<usize> {
+    let layout = flow_layout(items, app, area_width);
+    for (item, &(x_start, _)) in items.iter().zip(layout.iter()) {
+        match item {
+            RailItem::Station(s) => {
+                if !matches!(
+                    s.row_kind,
+                    oscilloscope_core::render::RowKind::If
+                        | oscilloscope_core::render::RowKind::Loop
+                ) && rail::edge_style(s.status) == EdgeStyle::Live
+                {
+                    return Some(x_start);
+                }
+            }
+            RailItem::Fork(fork) => {
+                let folded = flow_fork_folded(fork, app, area_width);
+                let has_live = fork.lanes.iter().any(|l| flow_lane_has_live(&l.items));
+                if !has_live {
+                    continue;
+                }
+                if folded {
+                    return Some(x_start + 3);
+                }
+                if let Some(lane0) = fork.lanes.first() {
+                    if let Some(rel) = flow_now_arrow_x(&lane0.items, app, area_width) {
+                        return Some(x_start + rail::FORK_LEAD + rel);
+                    }
+                }
+                return Some(x_start + rail::FORK_LEAD);
+            }
+        }
+    }
+    None
+}
+
+/// The rail's own follow rule (DESIGN.md §2.3, issue #691's R4): never
+/// scrolls while Now is in view; once it would leave, scrolls to the
+/// top-level item boundary closest to putting Now at 60% of the
+/// visible width. A manual scroll (`follow` already off) turns
+/// follow back on the instant it lands Now back in view on its own,
+/// the same rule the Tape's own selection already follows.
+fn flow_resolve_scroll(
+    items: &[RailItem],
     app: &mut App,
-    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    area_width: u16,
+    visible_width: usize,
+) -> usize {
+    let total = flow_total_width(items, app, area_width);
+    let max_scroll = total.saturating_sub(visible_width);
+    let arrow = flow_now_arrow_x(items, app, area_width);
+    let in_view = |scroll: usize, arrow: usize| scroll <= arrow && arrow < scroll + visible_width;
+    if app.follow {
+        if let Some(arrow) = arrow {
+            if !in_view(app.flow_scroll, arrow) {
+                let target = (arrow as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
+                let layout = flow_layout(items, app, area_width);
+                let mut best = 0usize;
+                let mut best_dist = target;
+                for &(start, _) in std::iter::once(&(0, 0)).chain(layout.iter()) {
+                    let dist = start.abs_diff(target);
+                    if dist < best_dist {
+                        best = start;
+                        best_dist = dist;
+                    }
+                }
+                app.flow_scroll = best.min(max_scroll);
+            }
+        }
+    } else if let Some(arrow) = arrow {
+        if in_view(app.flow_scroll, arrow) {
+            app.follow = true;
+        }
+    }
+    app.flow_scroll = app.flow_scroll.min(max_scroll);
+    app.flow_scroll
+}
+
+/// Writes `text` into `buf` at the rail's own full-coordinate `x`,
+/// clipped to whatever part of it actually falls in
+/// `[scroll, scroll + visible_width)` -- the rail's own "runs off the
+/// right edge" rule (DESIGN.md §2.3), one cell at a time so a
+/// station cut in half by the edge still prints its own visible
+/// half.
+#[allow(clippy::too_many_arguments)]
+fn flow_put(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    scroll: usize,
+    visible_width: usize,
+    x_full: usize,
+    y_rel: u16,
+    text: &str,
+    style: Style,
+) {
+    if y_rel >= area.height {
+        return;
+    }
+    for (i, ch) in text.chars().enumerate() {
+        let x_full_i = x_full + i;
+        if x_full_i < scroll || x_full_i >= scroll + visible_width {
+            continue;
+        }
+        let x = area.x + (x_full_i - scroll) as u16;
+        let y = area.y + y_rel;
+        if x >= area.x + area.width {
+            continue;
+        }
+        buf.set_string(x, y, ch.to_string(), style);
+    }
+}
+
+/// Draws `spans` left to right from `x`, padding with the last
+/// span's own style up to `min_width` cells (DESIGN.md §2.3's own
+/// frames: a station's own trailing padding, and the gap before a
+/// plain connector, share whichever span's style was drawn right
+/// before them) -- returns that trailing style, so a caller painting
+/// the connector gap after this row can extend it.
+#[allow(clippy::too_many_arguments)]
+fn flow_paint_row(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    scroll: usize,
+    visible_width: usize,
+    x: usize,
+    y: u16,
+    spans: &[(String, Style)],
+    min_width: usize,
+) -> Style {
+    let mut cursor = x;
+    let mut last_style = Style::default();
+    for (text, style) in spans {
+        flow_put(buf, area, scroll, visible_width, cursor, y, text, *style);
+        cursor += text.chars().count();
+        last_style = *style;
+    }
+    let used = cursor - x;
+    if used < min_width {
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            cursor,
+            y,
+            &" ".repeat(min_width - used),
+            last_style,
+        );
+    }
+    last_style
+}
+
+fn flow_headline_spans(
+    headline: &oscilloscope_core::rail::Headline,
+    status: StatusKind,
+    ctx: &DrawCtx,
+) -> Vec<(String, Style)> {
+    use oscilloscope_core::rail::Headline;
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let faint = Style::default().fg(ctx.theme.dim);
+    let default_text = Style::default().fg(ctx.theme.text);
+    match headline {
+        Headline::Clock(c) => vec![(c.clone(), faint)],
+        Headline::Tokens { total, usual } => {
+            let mut spans = vec![(
+                format!("{} ", oscilloscope_core::format::format_tokens_t(*total)),
+                muted,
+            )];
+            if let Some(usual) = usual {
+                let pct = (*total as f64 - *usual as f64) / (*usual).max(1) as f64 * 100.0;
+                spans.push((format!("{pct:+.0}%"), tape_deviation_style(pct, ctx.theme)));
+            }
+            spans
+        }
+        Headline::PassTokens { label, total } => vec![(
+            format!(
+                "{label} {} t",
+                oscilloscope_core::format::format_tokens_thousands(*total)
+            ),
+            muted,
+        )],
+        Headline::Duration(d) => {
+            let style = if matches!(
+                status,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            ) {
+                default_text
+            } else {
+                muted
+            };
+            vec![(oscilloscope_core::format::format_duration(*d), style)]
+        }
+        Headline::Branch(branch) => {
+            let text = match branch {
+                Some(b) => format!("→ {b}"),
+                None => "→ …".to_string(),
+            };
+            vec![(text, default_text)]
+        }
+        Headline::LoopProgress { done, total } => {
+            let text = match total {
+                Some(t) => format!("{done}/{t} passes"),
+                None => format!("{done} passes"),
+            };
+            vec![(text, default_text.add_modifier(Modifier::BOLD))]
+        }
+        Headline::PassLabel(label) => vec![(label.clone(), faint)],
+        Headline::ToolAhead(cmd) => vec![(format!("tool · {cmd}"), faint)],
+        Headline::UsualTokens(usual) => {
+            let text = match usual {
+                Some(u) => format!("usual {u}"),
+                None => "usual —".to_string(),
+            };
+            vec![(text, faint)]
+        }
+        Headline::NotTaken => vec![("not taken".to_string(), faint)],
+        Headline::Blank => vec![(String::new(), faint)],
+    }
+}
+
+fn flow_detail_spans(
+    detail: &oscilloscope_core::rail::Detail,
+    unit: u64,
+    ctx: &DrawCtx,
+) -> Vec<(String, Style)> {
+    use oscilloscope_core::rail::Detail;
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let faint = Style::default().fg(ctx.theme.dim);
+    match detail {
+        Detail::Engine(e) => vec![(e.clone(), faint)],
+        Detail::Bar { total, unit: u } => {
+            let effective_unit = if *u > 0 { *u } else { unit };
+            let filled = ((*total as f64 / effective_unit.max(1) as f64).round() as usize).min(8);
+            let empty = 8 - filled;
+            vec![
+                (
+                    "▰".repeat(filled),
+                    Style::default().fg(ctx.theme.accent_primary),
+                ),
+                (format!("{}  ", "▱".repeat(empty)), faint),
+            ]
+        }
+        Detail::Command(cmd) => vec![(cmd.clone(), muted)],
+        Detail::Condition(c) => vec![(c.clone(), faint)],
+        Detail::Tokens(t) => vec![(
+            format!(
+                "{} t",
+                oscilloscope_core::format::format_tokens_thousands(*t)
+            ),
+            muted,
+        )],
+        Detail::UsualTokens(u) => {
+            let text = match u {
+                Some(v) => format!("usual {v}"),
+                None => "usual —".to_string(),
+            };
+            vec![(text, faint)]
+        }
+        Detail::Queued => vec![("queued".to_string(), faint)],
+        Detail::Blank => vec![(String::new(), faint)],
+    }
+}
+
+/// One station's own three lines (DESIGN.md §2.3's ten-cell station)
+/// -- returns the headline's and detail's own trailing style, so a
+/// plain connector right after this station can extend it across its
+/// own blank gap on those two rows (name row connectors draw real
+/// dashes instead, never blank).
+#[allow(clippy::too_many_arguments)]
+fn flow_paint_station(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    scroll: usize,
+    visible_width: usize,
+    x: usize,
+    y0: u16,
+    station: &Station,
+    unit: u64,
+    ctx: &DrawCtx,
+) -> (Style, Style) {
+    let (glyph, glyph_style) = if station.is_edge {
+        ('■', Style::default().fg(ctx.theme.fg_muted))
+    } else {
+        (
+            tape_glyph(station.row_kind, station.status),
+            tape_glyph_style(station.row_kind, station.status, ctx.theme),
+        )
+    };
+    let name = truncate_label(&station.name, rail::STATION_WIDTH.saturating_sub(2));
+    flow_paint_row(
+        buf,
+        area,
+        scroll,
+        visible_width,
+        x,
+        y0,
+        &[(format!("{glyph} {name}"), glyph_style)],
+        rail::STATION_WIDTH,
+    );
+    let headline_last = flow_paint_row(
+        buf,
+        area,
+        scroll,
+        visible_width,
+        x,
+        y0 + 1,
+        &flow_headline_spans(&station.headline, station.status, ctx),
+        rail::STATION_WIDTH,
+    );
+    let detail_last = flow_paint_row(
+        buf,
+        area,
+        scroll,
+        visible_width,
+        x,
+        y0 + 2,
+        &flow_detail_spans(&station.detail, unit, ctx),
+        rail::STATION_WIDTH,
+    );
+    (headline_last, detail_last)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flow_paint_ghost(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    scroll: usize,
+    visible_width: usize,
+    x: usize,
+    y0: u16,
+    name: &str,
+    ctx: &DrawCtx,
+) {
+    let style = Style::default().fg(ctx.theme.dim);
+    flow_paint_row(
+        buf,
+        area,
+        scroll,
+        visible_width,
+        x,
+        y0,
+        &[(
+            format!("· {}", truncate_label(name, rail::STATION_WIDTH - 2)),
+            style,
+        )],
+        rail::STATION_WIDTH,
+    );
+    flow_paint_row(
+        buf,
+        area,
+        scroll,
+        visible_width,
+        x,
+        y0 + 1,
+        &[("not taken".to_string(), style)],
+        rail::STATION_WIDTH,
+    );
+    flow_paint_row(
+        buf,
+        area,
+        scroll,
+        visible_width,
+        x,
+        y0 + 2,
+        &[(String::new(), style)],
+        rail::STATION_WIDTH,
+    );
+}
+
+/// A flat run of stations and forks, drawn left to right from `x`
+/// along the three rows starting at `y0` -- used both for the rail's
+/// own top-level sequence and, recursively, for one lane's own
+/// content. Returns the ending `x`.
+#[allow(clippy::too_many_arguments)]
+fn flow_paint_sequence(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    scroll: usize,
+    visible_width: usize,
+    items: &[RailItem],
+    x: usize,
+    y0: u16,
+    app: &App,
+    area_width: u16,
+    unit: u64,
+    ctx: &DrawCtx,
+) -> usize {
+    let mut cursor = x;
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            RailItem::Station(station) => {
+                let (h_last, d_last) = flow_paint_station(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    cursor,
+                    y0,
+                    station,
+                    unit,
+                    ctx,
+                );
+                cursor += rail::STATION_WIDTH;
+                if let Some(RailItem::Station(next)) = items.get(i + 1) {
+                    let style = Style::default()
+                        .fg(flow_edge_color(rail::edge_style(next.status), ctx.theme));
+                    flow_put(buf, area, scroll, visible_width, cursor, y0, "── ", style);
+                    flow_put(
+                        buf,
+                        area,
+                        scroll,
+                        visible_width,
+                        cursor,
+                        y0 + 1,
+                        "   ",
+                        h_last,
+                    );
+                    flow_put(
+                        buf,
+                        area,
+                        scroll,
+                        visible_width,
+                        cursor,
+                        y0 + 2,
+                        "   ",
+                        d_last,
+                    );
+                    cursor += rail::NORMAL_CONNECTOR;
+                }
+            }
+            RailItem::Fork(fork) => {
+                let next_is_ahead = items.get(i + 1).is_some_and(flow_item_is_ahead);
+                cursor = flow_paint_fork(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    cursor,
+                    y0,
+                    fork,
+                    app,
+                    area_width,
+                    next_is_ahead,
+                    unit,
+                    ctx,
+                );
+            }
+        }
+    }
+    cursor
+}
+
+fn flow_item_is_ahead(item: &RailItem) -> bool {
+    match item {
+        RailItem::Station(s) => rail::edge_style(s.status) == EdgeStyle::Ahead,
+        RailItem::Fork(f) => rail::edge_style(f.source_status) == EdgeStyle::Ahead,
+    }
+}
+
+/// A fork's own box (DESIGN.md §2.3): the tee/join on the top lane's
+/// own name row, walls down its own two continuation rows, and every
+/// other lane in its own three-row band below with a corner cap on
+/// its name row and (while it isn't the last lane) a wall continuing
+/// through the other two. Folded, the whole thing is one sixteen-
+/// character band instead. Returns the ending `x`.
+#[allow(clippy::too_many_arguments)]
+fn flow_paint_fork(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    scroll: usize,
+    visible_width: usize,
+    x: usize,
+    y0: u16,
+    fork: &Fork,
+    app: &App,
+    area_width: u16,
+    next_is_ahead: bool,
+    unit: u64,
+    ctx: &DrawCtx,
+) -> usize {
+    let tee_color = flow_edge_color(rail::edge_style(fork.source_status), ctx.theme);
+    let tee_style = Style::default().fg(tee_color);
+    let faint = Style::default().fg(ctx.theme.dim);
+    if flow_fork_folded(fork, app, area_width) {
+        flow_put(buf, area, scroll, visible_width, x, y0, "══ ", tee_style);
+        let content = format!("{} lanes + ", fork.lanes.len());
+        flow_paint_row(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x + 3,
+            y0,
+            &[(
+                content,
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .add_modifier(Modifier::BOLD),
+            )],
+            rail::STATION_WIDTH,
+        );
+        let tail_style = if next_is_ahead { faint } else { tee_style };
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x + 13,
+            y0,
+            "══ ",
+            tail_style,
+        );
+        let running = fork.lanes.iter().filter(|l| l.running).count();
+        let waiting = fork.lanes.iter().filter(|l| l.waiting).count();
+        flow_paint_row(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x + 3,
+            y0 + 1,
+            &[(
+                format!("● {running} run"),
+                Style::default()
+                    .fg(ctx.theme.text)
+                    .add_modifier(Modifier::BOLD),
+            )],
+            rail::STATION_WIDTH,
+        );
+        flow_paint_row(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x + 3,
+            y0 + 2,
+            &[(format!("· {waiting} wait"), faint)],
+            rail::STATION_WIDTH,
+        );
+        return x + rail::FOLD_BAND_WIDTH;
+    }
+    flow_put(buf, area, scroll, visible_width, x, y0, "─┬─ ", tee_style);
+    let content_x = x + rail::FORK_LEAD;
+    let max_lane = fork
+        .lanes
+        .iter()
+        .map(|l| flow_lane_width(&l.items, app, area_width))
+        .max()
+        .unwrap_or(rail::STATION_WIDTH);
+    let wall_x = x + 1;
+    let tail_x = content_x + max_lane;
+    let right_wall_x = tail_x + 1;
+    for (k, lane) in fork.lanes.iter().enumerate() {
+        let row_y = y0 + 3 * k as u16;
+        if k == 0 {
+            match &lane.ghost {
+                Some(name) => flow_paint_ghost(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    content_x,
+                    row_y,
+                    name,
+                    ctx,
+                ),
+                None => {
+                    flow_paint_sequence(
+                        buf,
+                        area,
+                        scroll,
+                        visible_width,
+                        &lane.items,
+                        content_x,
+                        row_y,
+                        app,
+                        area_width,
+                        unit,
+                        ctx,
+                    );
+                }
+            }
+            let tail_style = if next_is_ahead { faint } else { tee_style };
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                tail_x,
+                y0,
+                "─┴── ",
+                tail_style,
+            );
+            let left_wall_style = if rail::edge_style(fork.source_status) == EdgeStyle::Live {
+                tee_style
+            } else {
+                faint
+            };
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                wall_x,
+                y0 + 1,
+                "│",
+                left_wall_style,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                wall_x,
+                y0 + 2,
+                "│",
+                left_wall_style,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                right_wall_x,
+                y0 + 1,
+                "│",
+                faint,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                right_wall_x,
+                y0 + 2,
+                "│",
+                faint,
+            );
+            continue;
+        }
+        let is_last = k == fork.lanes.len() - 1;
+        let left_corner = if is_last { '└' } else { '├' };
+        let right_corner = if is_last { '┘' } else { '┤' };
+        let cap_style = if lane.running {
+            Style::default().fg(ctx.theme.accent_primary)
+        } else {
+            faint
+        };
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            x,
+            row_y,
+            &format!(" {left_corner}─ "),
+            cap_style,
+        );
+        match &lane.ghost {
+            Some(name) => flow_paint_ghost(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                content_x,
+                row_y,
+                name,
+                ctx,
+            ),
+            None => {
+                flow_paint_sequence(
+                    buf,
+                    area,
+                    scroll,
+                    visible_width,
+                    &lane.items,
+                    content_x,
+                    row_y,
+                    app,
+                    area_width,
+                    unit,
+                    ctx,
+                );
+            }
+        }
+        flow_put(
+            buf,
+            area,
+            scroll,
+            visible_width,
+            tail_x,
+            row_y,
+            &format!("─{right_corner}"),
+            faint,
+        );
+        if !is_last {
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                wall_x,
+                row_y + 1,
+                "│",
+                faint,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                wall_x,
+                row_y + 2,
+                "│",
+                faint,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                right_wall_x,
+                row_y + 1,
+                "│",
+                faint,
+            );
+            flow_put(
+                buf,
+                area,
+                scroll,
+                visible_width,
+                right_wall_x,
+                row_y + 2,
+                "│",
+                faint,
+            );
+        }
+    }
+    tail_x + rail::NORMAL_CONNECTOR + 2
+}
+
+fn flow_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![
+        ("←→", "Scroll"),
+        ("↑↓", "Lane"),
+        ("+/-", "Lanes"),
+        ("f", "Follow"),
+        ("enter", "Open"),
+    ];
+    if wide {
+        items.push(("0-3", "Screens"));
+    }
+    items.push(("?", "Help"));
+    items.push(("q", "Quit"));
+    items
+}
+
+/// §3.2's status line, shared with the Signal's own.
+fn draw_flow_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
     ctx: &DrawCtx,
     now: &str,
 ) {
-    let visible = visible_rows(&state.rows, app);
-    let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
+    let Some(last) = &screen.last_finished else {
+        frame.render_widget(Paragraph::new(Line::from("")), area);
+        return;
+    };
+    let glyph = tape_glyph(last.kind, last.status);
+    let age = last
+        .ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now));
+    let tokens = last
+        .tokens
+        .map(|(sent, received)| {
+            format!(
+                " · ↑{} ↓{}",
+                oscilloscope_core::format::format_tokens_thousands(sent),
+                oscilloscope_core::format::format_tokens_thousands(received)
+            )
+        })
+        .unwrap_or_default();
+    let age_text = age
+        .map(|a| format!(" · {} ago", oscilloscope_core::format::format_duration(a)))
+        .unwrap_or_default();
+    let dim = Style::default().fg(ctx.theme.dim);
+    let spans = vec![
+        Span::styled(
+            format!(" {glyph} "),
+            tape_glyph_style(last.kind, last.status, ctx.theme),
+        ),
+        Span::styled(
+            format!("{} finished ", last.label),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(format!("{tokens}{age_text}").trim_start().to_string(), dim),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
 
-    let three_pane = frame_area.width >= thresholds::FLOW_THREE_PANE_MIN_WIDTH
-        && frame_area.height >= thresholds::FLOW_THREE_PANE_MIN_HEIGHT;
-    let two_pane = frame_area.width >= thresholds::FLOW_TWO_PANE_MIN_WIDTH
-        && frame_area.height >= thresholds::FLOW_TWO_PANE_MIN_HEIGHT;
+/// The `▾ Now <clock> · <elapsed>` line (DESIGN.md §2.3), right-
+/// aligned above whichever running stations the rail's own content
+/// row below it actually lands under.
+fn flow_now_line(
+    header: &oscilloscope_core::render::Header,
+    now: &str,
+    ctx: &DrawCtx,
+) -> Line<'static> {
+    let clock = oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
+    let text = format!(
+        "▾ Now {clock} · {}",
+        oscilloscope_core::format::format_duration(header.elapsed_s)
+    );
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(ctx.theme.accent_primary)
+            .add_modifier(Modifier::BOLD),
+    ))
+    .alignment(ratatui::layout::Alignment::Right)
+}
 
-    if three_pane {
-        let left_width = oscilloscope_core::layout::left_column_width(body.width);
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(left_width),
-                Constraint::Length(body.width - left_width),
-            ])
-            .split(body);
-        draw_flow_pane(
-            frame,
-            columns[0],
-            screen,
-            &visible,
-            app,
-            &state.header,
-            frame_area.width,
-            false,
-            ctx,
-        );
-        let selected_rows = oscilloscope_core::layout::golden_section(columns[1].height);
-        let right = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(selected_rows),
-                Constraint::Min(columns[1].height - selected_rows),
-            ])
-            .split(columns[1]);
-        draw_flow_selected_pane(
-            frame,
-            right[0],
-            screen,
-            &state_visible,
-            app,
-            transcript_view,
-            ctx,
-            now,
-        );
-        draw_flow_story_pane(frame, right[1], screen, log_lines, log_total, app, ctx);
-    } else if two_pane {
-        app.story_viewport = 0;
-        let left_width = oscilloscope_core::layout::left_column_width(body.width);
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(left_width),
-                Constraint::Length(body.width - left_width),
-            ])
-            .split(body);
-        draw_flow_pane(
-            frame,
-            columns[0],
-            screen,
-            &visible,
-            app,
-            &state.header,
-            frame_area.width,
-            false,
-            ctx,
-        );
-        if app.flow_story_shows_log {
-            draw_log(frame, columns[1], log_lines, log_total, ctx);
-        } else {
-            draw_flow_selected_pane(
-                frame,
-                columns[1],
-                screen,
-                &state_visible,
-                app,
-                transcript_view,
-                ctx,
-                now,
-            );
+/// The indicator line (DESIGN.md §2.3's `◂ Start   ▸ flaky · summary
+/// · End`): every top-level item not fully inside
+/// `[scroll, scroll + visible_width)`, named on whichever side it
+/// falls off of -- `Start`/`End` stand in on their own side when
+/// nothing there is actually cut off, so the line always names where
+/// the run began and will end.
+fn flow_indicator_line(
+    items: &[RailItem],
+    app: &App,
+    area_width: u16,
+    scroll: usize,
+    visible_width: usize,
+    ctx: &DrawCtx,
+) -> Line<'static> {
+    let layout = flow_layout(items, app, area_width);
+    let names = |item: &RailItem| -> Option<String> {
+        match item {
+            RailItem::Station(s) => Some(s.name.clone()),
+            RailItem::Fork(_) => None,
         }
+    };
+    let mut left: Vec<String> = items
+        .iter()
+        .zip(layout.iter())
+        .filter(|&(_, &(start, _))| start < scroll)
+        .filter_map(|(item, _)| names(item))
+        .collect();
+    if left.is_empty() {
+        if let Some(first) = items.first().and_then(names) {
+            left.push(first);
+        }
+    }
+    let mut right: Vec<String> = items
+        .iter()
+        .zip(layout.iter())
+        .filter(|&(_, &(_, end))| end > scroll + visible_width)
+        .filter_map(|(item, _)| names(item))
+        .collect();
+    if right.is_empty() {
+        if let Some(last) = items.last().and_then(names) {
+            right.push(last);
+        }
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    Line::from(vec![
+        Span::styled(format!("◂ {}   ", left.join(" · ")), muted),
+        Span::styled(format!("▸ {}", right.join(" · ")), muted),
+    ])
+}
+
+/// The track line under the indicator (DESIGN.md §2.3): the visible
+/// window's own share of the rail's full extent, drawn as an accent
+/// run over a border-coloured rest.
+fn flow_track_line(
+    items: &[RailItem],
+    app: &App,
+    area_width: u16,
+    scroll: usize,
+    visible_width: usize,
+    track_width: usize,
+    ctx: &DrawCtx,
+) -> Line<'static> {
+    let total = flow_total_width(items, app, area_width).max(1);
+    let filled = ((track_width as f64 * visible_width as f64 / total as f64).round() as usize)
+        .min(track_width);
+    let offset = ((track_width as f64 * scroll as f64 / total as f64).round() as usize)
+        .min(track_width.saturating_sub(filled));
+    let mut spans = Vec::new();
+    if offset > 0 {
+        spans.push(Span::styled(
+            "─".repeat(offset),
+            Style::default().fg(ctx.theme.border),
+        ));
+    }
+    spans.push(Span::styled(
+        "━".repeat(filled),
+        Style::default().fg(ctx.theme.accent_primary),
+    ));
+    let rest = track_width.saturating_sub(offset + filled);
+    if rest > 0 {
+        spans.push(Span::styled(
+            "─".repeat(rest),
+            Style::default().fg(ctx.theme.border),
+        ));
+    }
+    let mut full = vec![Span::raw(" ")];
+    full.extend(spans);
+    Line::from(full)
+}
+
+/// The rail's own bordered pane (DESIGN.md §2.3): the Now line, the
+/// rail itself, the indicator and track lines, a separator and the
+/// Totals row, all inside one block the same way the Signal's own
+/// chart pane is.
+#[allow(clippy::too_many_arguments)]
+fn draw_flow_rail_pane(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
+    header: &oscilloscope_core::render::Header,
+    app: &mut App,
+    frame_width: u16,
+    ctx: &DrawCtx,
+    now: &str,
+) {
+    let border_color = ctx.theme.border_focused;
+    let mut title = format!(
+        "Flow · {}/{} · ▰ = {} t",
+        header.effects_done,
+        header.effects_planned.unwrap_or(header.effects_done),
+        screen.unit
+    );
+    if app.follow {
+        title.push_str(" · Following");
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+
+    let visible_width = inner.width as usize;
+    let scroll = flow_resolve_scroll(&screen.rail.items, app, frame_width, visible_width);
+
+    frame.render_widget(
+        Paragraph::new(flow_now_line(header, now, ctx)),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+
+    let rail_body_rows = inner.height.saturating_sub(5);
+    let rail_area = Rect {
+        x: inner.x,
+        y: inner.y + 1,
+        width: inner.width,
+        height: rail_body_rows,
+    };
+    let buf = frame.buffer_mut();
+    flow_paint_sequence(
+        buf,
+        rail_area,
+        scroll,
+        visible_width,
+        &screen.rail.items,
+        0,
+        0,
+        app,
+        frame_width,
+        screen.unit,
+        ctx,
+    );
+
+    let indicator_y = inner.y + inner.height.saturating_sub(4);
+    frame.render_widget(
+        Paragraph::new(flow_indicator_line(
+            &screen.rail.items,
+            app,
+            frame_width,
+            scroll,
+            visible_width,
+            ctx,
+        )),
+        Rect {
+            x: inner.x + 1,
+            y: indicator_y,
+            width: inner.width.saturating_sub(1),
+            height: 1,
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(flow_track_line(
+            &screen.rail.items,
+            app,
+            frame_width,
+            scroll,
+            visible_width,
+            inner.width.saturating_sub(1) as usize,
+            ctx,
+        )),
+        Rect {
+            x: inner.x,
+            y: indicator_y + 1,
+            width: inner.width,
+            height: 1,
+        },
+    );
+    let sep_y = indicator_y + 2;
+    frame.buffer_mut().set_string(
+        inner.x,
+        sep_y,
+        "─".repeat(inner.width as usize),
+        Style::default().fg(ctx.theme.border),
+    );
+    draw_totals_row(
+        frame,
+        Rect {
+            x: inner.x,
+            y: sep_y + 1,
+            width: inner.width,
+            height: 1,
+        },
+        header,
+        false,
+        None,
+        None,
+        Some(border_color),
+        false,
+        ctx,
+    );
+}
+
+/// Screen 2 (`Flow`, issue #691, part 3 of #677): the rail, the
+/// selected pass or station below it, and the Story pane -- draws
+/// its own header band, status line and key bar, the same self-
+/// contained way the Tape and Signal already do.
+#[allow(clippy::too_many_arguments)]
+fn draw_flow(
+    frame: &mut Frame,
+    full_area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
+    header: &oscilloscope_core::render::Header,
+    app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+    icon_frame: u64,
+    now: &str,
+) {
+    if full_area.width < MIN_WIDTH || full_area.height < MIN_HEIGHT {
+        draw_too_small(frame, full_area, ctx);
+        return;
+    }
+    // §4: below 80 columns only the Tape is offered.
+    if full_area.width < 80 {
+        app.screen = oscilloscope_core::screens::Screen::Tape;
+        return;
+    }
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(full_area);
+    draw_tape_header_band(frame, sections[0], header, "FLOW", now, icon_frame, ctx);
+    draw_flow_status_line(frame, sections[2], screen, ctx, now);
+    draw_key_bar(
+        frame,
+        sections[3],
+        &flow_key_bar_items(full_area.width >= 80),
+        ctx,
+    );
+
+    let body = sections[1];
+    if app.tape_fullscreen_step
+        && (screen.selected_pass.is_some()
+            || screen.selected_step.is_some()
+            || screen.selected_decision.is_some())
+    {
+        draw_flow_selected_pane(frame, body, screen, app, transcript_view, ctx, now);
+        return;
+    }
+    // §5: the Story pane needs 100 columns and 30 rows both -- the
+    // same tier the frames' own `flow--normal--80x24` drops it at.
+    let wide = full_area.width >= 100 && full_area.height >= 30;
+    let panes_height = if wide { 8 } else { 4 };
+    let rows_split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(panes_height)])
+        .split(body);
+    draw_flow_rail_pane(
+        frame,
+        rows_split[0],
+        screen,
+        header,
+        app,
+        full_area.width,
+        ctx,
+        now,
+    );
+    if wide {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+            .split(rows_split[1]);
+        draw_flow_selected_pane(frame, cols[0], screen, app, transcript_view, ctx, now);
+        draw_flow_story_pane(frame, cols[1], screen, ctx);
     } else {
-        app.story_viewport = 0;
-        let selected_rows = oscilloscope_core::layout::golden_section(body.height);
-        let parts = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(selected_rows),
-                Constraint::Min(body.height - selected_rows),
-            ])
-            .split(body);
-        draw_flow_selected_pane(
-            frame,
-            parts[0],
-            screen,
-            &state_visible,
-            app,
-            transcript_view,
-            ctx,
-            now,
-        );
-        draw_flow_pane(
-            frame,
-            parts[1],
-            screen,
-            &visible,
-            app,
-            &state.header,
-            frame_area.width,
-            true,
-            ctx,
-        );
+        draw_flow_selected_pane(frame, rows_split[1], screen, app, transcript_view, ctx, now);
     }
 }
 
@@ -7137,15 +7385,15 @@ fn draw_flow_screen(
 mod golden_tests {
     use super::*;
     use electricity_bytecode::{
-        Condition, EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op,
-        ParamNode, Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
+        EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
+        Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
     };
-    use oscilloscope_core::diff::{LogKind, LogLine};
+
     use oscilloscope_core::model::{ProcessState, RunModel};
     use oscilloscope_core::observe::Event;
     use oscilloscope_core::plan::PlanTree;
     use oscilloscope_core::render;
-    use oscilloscope_core::render::RowKind;
+
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use serde_json::{Value, json};
@@ -7320,212 +7568,15 @@ mod golden_tests {
         PlanTree::from_program(&program)
     }
 
-    /// Every golden snapshot here funnels through this one draw call
-    /// (finding F5/F1): the terminal size is an explicit parameter so
-    /// a test can pick whichever fallback tier it means to exercise,
-    /// rather than every golden defaulting to the same size
-    /// regardless of what it's meant to show.
-    #[allow(clippy::too_many_arguments)]
-    fn snapshot_at(
-        width: u16,
-        height: u16,
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-        engine: &str,
-        selected: &str,
-        log_lines: &[String],
-    ) -> String {
-        let rendered = render::build(
-            "do-thing.yml",
-            engine,
-            plan,
-            model,
-            state,
-            process,
-            5.0,
-            "2026-01-01T00:00:05Z",
-            &[],
-        );
-        let details = render::details_for(selected, plan, model, state);
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(state.unwrap_or(&Value::Null)),
-            plan,
-            model,
-            state,
-            &[],
-            Some(selected),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:00Z",
-        );
-        let mut app = App::new(engine == "watch");
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some(selected.to_string());
-        // A regression: setting `selected_path`
-        // directly (as every golden here does, to pin a specific row's
-        // details) bypasses the key handling that would otherwise have
-        // turned follow off for a manual selection -- left at its
-        // `App::new` default of `true`, the title claimed "(following)"
-        // over whatever row the test happened to pick, even one that
-        // wasn't running at all. A test that means to show follow
-        // actually choosing the running row builds its own `App`
-        // instead of calling this helper.
-        app.follow = false;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    log_lines,
-                    log_lines.len() as u64,
-                    &mut app,
-                    state,
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        terminal.backend().to_string()
-    }
-
-    /// Issue #637: a single top-level `agent` tool step, still
-    /// running, with a realistic `meta.live` (every field the live-
-    /// progress table documents, including a figure Claude Code
-    /// never reports live -- `tokens_received`/`cost_usd` stay
-    /// `null`, never `0`, DESIGN.md).
-    fn agent_running_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": null},
-            "fix": {"value": null, "meta": {
-                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
-                "params_rendered": {"engine": "claude_code", "prompt": "Fix the bug.\nSee the issue for details."},
-                "live": {
-                    "engine": "claude_code", "model": "sonnet", "session_id": "s1",
-                    "transcript": "/tmp/fix-transcript.jsonl",
-                    "attempt": 1, "phase": "turn",
-                    "started_at": "2026-01-01T11:46:43Z", "updated_at": "2026-01-01T11:52:54Z",
-                    "turns": 14, "tool_calls": 31,
-                    "tools": {"bash": {"calls": 20, "ms": 120000}, "read": {"calls": 11, "ms": 5000}},
-                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"},
-                    "tokens_sent": 2100000, "tokens_received": null, "cost_usd": null,
-                    "tokens_cached_in": 1800000, "tokens_cache_write": 50000,
-                    "context_tokens": 142000, "context_window": 200000,
-                    "turn_tokens": [100000, 142000],
-                    "files_changed": 3, "lines_added": 12, "lines_removed": 3
-                }
-            }}
-        }})
-    }
-
-    /// [`agent_running_state`], finished: no `meta.live` left at all
-    /// (removed once the attempt ends), the same generic
-    /// `tokens_sent`/`tokens_received`/`cost_usd`/`value` fields
-    /// every other finished tool step carries.
-    fn agent_finished_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:52:55Z"},
-            "fix": {"value": "Done. All tests pass.", "meta": {
-                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:52:55Z", "provider": "agent",
-                "params_rendered": {"engine": "claude_code", "prompt": "Fix the bug.\nSee the issue for details."},
-                "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10,
-                "raw": {"engine": "claude_code", "turns": 14, "tool_calls": 31, "transcript": "/tmp/fix-transcript.jsonl",
-                    "files_changed": 3, "lines_added": 12, "lines_removed": 3}
-            }}
-        }})
-    }
-
-    /// Issue #637's acceptance item 2: the whole run has ended --
-    /// SIGINT lands mid the agent's first tool call, same shape
-    /// `oscilloscope/tests/fixtures/agent_live_pi_cancelled` recorded
-    /// from a real `cof` run (`cancel_state.py`) -- `prime` itself
-    /// carries DESIGN.md §2.1 rule 7's own "Interrupted" error, but
-    /// `fix`'s own `meta.live` is still there, with no `completed_at`
-    /// of its own: `NowFocus::Ended` with no step of its own to focus
-    /// on otherwise.
-    fn agent_cancelled_state() -> Value {
-        json!({
-            "runtime": {"last_run": {"completed_at": "2026-01-01T11:46:54Z"}},
-            "prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
-                "error": "Interrupted (Ctrl-C/SIGINT)"
-            },
-                "fix": {"value": null, "meta": {
-                    "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
-                    "params_rendered": {"engine": "pi", "prompt": "Fix the bug.\nSee the issue for details."},
-                    "live": {
-                        "engine": "pi", "model": null, "session_id": "s1",
-                        "transcript": "/tmp/fix-transcript.jsonl",
-                        "attempt": 1, "phase": "turn",
-                        "started_at": "2026-01-01T11:46:43Z", "updated_at": "2026-01-01T11:46:50Z",
-                        "turns": 1, "tool_calls": 1,
-                        "tools": {"bash": {"calls": 1, "ms": 0}},
-                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"},
-                        "tokens_sent": 2100, "tokens_received": 40, "cost_usd": 0.012,
-                        "tokens_cached_in": 800, "tokens_cache_write": 100,
-                        "context_tokens": 2100, "context_window": null,
-                        "turn_tokens": [2100],
-                        "files_changed": null, "lines_added": null, "lines_removed": null
-                    }
-                }}
-            }
-        })
-    }
-
-    /// The transcript lines `agent_running_state`'s own `fix` step
-    /// would have written by the time it reached `meta.live.turns ==
-    /// 14` -- enough for the now pane / selected pane's own `doing:`
-    /// lines and `tests` word to have something real to read.
-    fn agent_running_transcript() -> oscilloscope_core::transcript::TranscriptView {
-        let lines = vec![
-            json!({"t": "2026-01-01T11:47:05Z", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}),
-            json!({"t": "2026-01-01T11:47:06Z", "type": "tool_end", "id": 1, "ok": true, "ms": 20}),
-            json!({"t": "2026-01-01T11:49:30Z", "type": "tool_start", "id": 2, "tool": "bash", "target": "pytest -k timeout"}),
-            json!({"t": "2026-01-01T11:49:41Z", "type": "tool_end", "id": 2, "ok": false, "ms": 11000}),
-            json!({"t": "2026-01-01T11:51:15Z", "type": "tool_start", "id": 3, "tool": "edit", "target": "src/adapters/ollama.rs"}),
-            json!({"t": "2026-01-01T11:51:16Z", "type": "tool_end", "id": 3, "ok": true, "ms": 10, "lines_added": 12, "lines_removed": 3}),
-            json!({"t": "2026-01-01T11:51:40Z", "type": "tool_start", "id": 4, "tool": "bash", "target": "pytest -k timeout"}),
-            json!({"t": "2026-01-01T11:52:21Z", "type": "tool_end", "id": 4, "ok": true, "ms": 41000}),
-            json!({"t": "2026-01-01T11:52:30Z", "type": "tool_start", "id": 5, "tool": "bash", "target": "pytest -q tests/adapters"}),
-        ];
-        oscilloscope_core::transcript::build_transcript_view(&lines, false)
-    }
-
     /// Issue #647: with no transcript tailed yet, a running tool's
     /// own elapsed shows right next to `running:`, from `meta.live.
     /// current_tool.started_at` -- not just the session's own total.
     #[test]
     fn agent_live_lines_shows_the_running_tools_own_elapsed() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let tracker = crate::highlight::Tracker::new();
         let zone = test_zone();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: false,
@@ -7558,13 +7609,9 @@ mod golden_tests {
     #[test]
     fn agent_live_lines_labels_a_stale_current_tool_as_last_not_running() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let tracker = crate::highlight::Tracker::new();
         let zone = test_zone();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: false,
@@ -7593,13 +7640,9 @@ mod golden_tests {
     #[test]
     fn agent_live_lines_shows_each_running_calls_own_elapsed_in_a_transcript() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let tracker = crate::highlight::Tracker::new();
         let zone = test_zone();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: false,
@@ -7627,246 +7670,6 @@ mod golden_tests {
             .join("\n");
         assert!(text.contains("pytest -k a running 2m00s"), "{text}");
         assert!(text.contains("pytest -k b running 1m00s"), "{text}");
-    }
-
-    /// [`snapshot_at`], with a specific transcript view attached --
-    /// issue #637's own Flow selected-pane goldens for a running
-    /// agent.
-    fn flow_agent_snapshot_at(
-        width: u16,
-        height: u16,
-        state: &Value,
-        transcript: Option<&oscilloscope_core::transcript::TranscriptView>,
-        process: ProcessState,
-    ) -> String {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let rendered = render::build(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(state),
-            process,
-            372.0,
-            "2026-01-01T11:52:55Z",
-            &[],
-        );
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(state),
-            &plan,
-            &model,
-            Some(state),
-            &[],
-            Some("prime.fix"),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T11:52:55Z",
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some("prime.fix".to_string());
-        app.follow = false;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T11:52:55Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    transcript,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        terminal.backend().to_string()
-    }
-
-    #[test]
-    fn flow_selected_pane_running_agent_at_120x40() {
-        let state = agent_running_state();
-        let transcript = agent_running_transcript();
-        let text =
-            flow_agent_snapshot_at(120, 40, &state, Some(&transcript), ProcessState::Running);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_selected_pane_shows_an_interrupted_agents_leftover_as_stopped() {
-        let mut state = agent_running_state();
-        state["prime"]["fix"]["meta"]["live"]["updated_at"] =
-            Value::String("2026-01-01T11:46:50Z".to_string());
-        let text = flow_agent_snapshot_at(120, 40, &state, None, ProcessState::Running);
-        assert!(text.contains("stopped"), "{text}");
-    }
-
-    #[test]
-    fn flow_selected_pane_running_agent_at_80x24() {
-        let state = agent_running_state();
-        let transcript = agent_running_transcript();
-        let text = flow_agent_snapshot_at(80, 24, &state, Some(&transcript), ProcessState::Running);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_selected_pane_finished_agent_at_120x40() {
-        let state = agent_finished_state();
-        let process = ProcessState::exited(false);
-        let text = flow_agent_snapshot_at(120, 40, &state, None, process);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_selected_pane_finished_agent_at_80x24() {
-        let state = agent_finished_state();
-        let process = ProcessState::exited(false);
-        let text = flow_agent_snapshot_at(80, 24, &state, None, process);
-        insta::assert_snapshot!(text);
-    }
-
-    /// Issue #637's acceptance item 2: the run has ended, but `fix`
-    /// is still selected -- its own `FocusedStep` never came from
-    /// `NowFocus` at all here (Flow's own selection, issue #635), so
-    /// this exercises `flow_selected_step_lines`'s own guard
-    /// directly: `fix`'s `RowStatus::kind` reads `Cancelled`, never
-    /// `Running`, and must still show `stopped` with its last-known
-    /// figures rather than nothing at all.
-    #[test]
-    fn flow_selected_pane_cancelled_agent_at_120x40() {
-        let state = agent_cancelled_state();
-        let process = ProcessState::exited(true);
-        let text = flow_agent_snapshot_at(120, 40, &state, None, process);
-        assert!(text.contains("stopped"), "{text}");
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_selected_pane_cancelled_agent_at_80x24() {
-        let state = agent_cancelled_state();
-        let process = ProcessState::exited(true);
-        let text = flow_agent_snapshot_at(80, 24, &state, None, process);
-        insta::assert_snapshot!(text);
-    }
-
-    /// Issue #647: a stopped agent's transcript can end in a
-    /// `tool_start` with no later `tool_end` or lower-id
-    /// `tool_start` to ever flag it `stopped` -- that last call must
-    /// still read "stopped", never "running", once the session
-    /// itself has stopped.
-    #[test]
-    fn flow_selected_pane_cancelled_agent_with_transcript_at_80x24() {
-        let state = agent_cancelled_state();
-        let process = ProcessState::exited(true);
-        let lines = vec![
-            json!({"t": "2026-01-01T11:46:50Z", "type": "tool_start", "id": 1, "tool": "bash", "target": "pytest -q"}),
-        ];
-        let transcript = oscilloscope_core::transcript::build_transcript_view(&lines, false);
-        let text = flow_agent_snapshot_at(80, 24, &state, Some(&transcript), process);
-        assert!(text.contains("stopped"), "{text}");
-        assert!(!text.contains("running"), "{text}");
-        insta::assert_snapshot!(text);
-    }
-
-    /// A two-column size, under [`thresholds::STATE_PANE_MIN_WIDTH`]/
-    /// `_MIN_HEIGHT`, so the right column is the log pane alone, no
-    /// state pane — most goldens here want this, since a one-column
-    /// layout at 70×20 drops the error display, the loop pass rows
-    /// and everything but `path` from the details pane, which left
-    /// these goldens checking far less than they look like they do.
-    /// [`snapshot_one_column`] keeps a couple of them at the smaller
-    /// size deliberately, as the
-    /// one-column fallback's own coverage.
-    #[allow(clippy::too_many_arguments)]
-    fn snapshot(
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-        engine: &str,
-        selected: &str,
-    ) -> String {
-        snapshot_at(100, 24, plan, model, state, process, engine, selected, &[])
-    }
-
-    /// [`snapshot`], at 70×20 — below
-    /// [`thresholds::TWO_COLUMN_MIN_WIDTH`], so the one-column
-    /// fallback (issue #535: details/orchestration/log stacked, in
-    /// that order) is what gets exercised.
-    #[allow(clippy::too_many_arguments)]
-    fn snapshot_one_column(
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-        engine: &str,
-        selected: &str,
-    ) -> String {
-        snapshot_at(70, 20, plan, model, state, process, engine, selected, &[])
-    }
-
-    /// [`snapshot`], with the log pane given real lines (review
-    /// finding 3 on #458's comment 3: every golden here left it
-    /// empty) -- `snapshot` itself is just this with none. `log_lines`
-    /// is the plain, already-formatted `HH:MM:SS text` strings `draw`
-    /// itself takes (`do_run`'s own `log_lines: Vec<String>`), not
-    /// `render::build`'s own `log: &[LogLine]` -- the TUI's log pane
-    /// never reads the latter.
-    #[allow(clippy::too_many_arguments)]
-    fn snapshot_with_log(
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-        engine: &str,
-        selected: &str,
-        log_lines: &[String],
-    ) -> String {
-        snapshot_at(
-            100, 24, plan, model, state, process, engine, selected, log_lines,
-        )
-    }
-
-    /// [`snapshot_with_log`], at a terminal big enough for every pane
-    /// (issue #527's own layout, "on a 120×40 terminal every pane
-    /// shows useful content").
-    #[allow(clippy::too_many_arguments)]
-    fn snapshot_full_layout(
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-        engine: &str,
-        selected: &str,
-        log_lines: &[String],
-    ) -> String {
-        snapshot_at(
-            120, 40, plan, model, state, process, engine, selected, log_lines,
-        )
     }
 
     /// [`snapshot_at`], for screen 3 (the Cost screen, issue #632):
@@ -7922,12 +7725,8 @@ mod golden_tests {
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Cost;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -7942,7 +7741,6 @@ mod golden_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     state,
                     &test_ctx,
@@ -8300,12 +8098,8 @@ mod golden_tests {
         app.cost_zoom = vec!["prime.fan".to_string()];
         app.cost_selected = Some("prime.fan.iter_0.nap".to_string());
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -8320,7 +8114,6 @@ mod golden_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -8399,104 +8192,6 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Issue #613's folding, drawn end to end through `render::
-    /// build_folded`: `fix` and its one child `agent` are both still
-    /// `Running`, so they fold into one breadcrumb row with the
-    /// running `agent`'s own path (so its `6.8s` elapsed and
-    /// `Running` status are the breadcrumb's own); `review`, already
-    /// `Done`, does not fold with its still-running child `fix` --
-    /// their statuses differ -- so both rows stay. Three
-    /// sub-second finished tool steps fold into one `3 quick steps`
-    /// row.
-    #[test]
-    fn folding_breadcrumbs_and_quick_steps() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "review": {"value": null, "meta": {"created_at": "2026-01-01T11:39:26Z", "completed_at": "2026-01-01T11:46:39Z", "error": null},
-                "fix": {"value": null, "meta": {"created_at": "2026-01-01T11:46:40Z", "completed_at": null},
-                    "agent": {"value": null, "meta": {"created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent"}}
-                }
-            },
-            "q1": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.000Z", "completed_at": "2026-01-01T11:46:49.300Z", "error": null, "provider": "shell"}},
-            "q2": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.300Z", "completed_at": "2026-01-01T11:46:49.800Z", "error": null, "provider": "shell"}},
-            "q3": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.800Z", "completed_at": "2026-01-01T11:46:50.000Z", "error": null, "provider": "shell"}}
-        }});
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            390.0,
-            "2026-01-01T11:46:49.800Z",
-            &[],
-            true,
-            &std::collections::BTreeSet::new(),
-        );
-        let details = render::details_for(
-            "prime.review.fix.agent",
-            &plan,
-            &RunModel::new(),
-            Some(&state),
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some("prime.review.fix.agent".to_string());
-        app.follow = false;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(&state),
-            &plan,
-            &model,
-            Some(&state),
-            &[],
-            app.selected_path.as_deref(),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:00Z",
-        );
-        let backend = TestBackend::new(100, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        insta::assert_snapshot!(text);
-    }
-
     #[test]
     fn the_full_value_overlay_opens_the_node_the_details_pane_shows() {
         let plan = PlanTree::empty();
@@ -8530,12 +8225,8 @@ mod golden_tests {
         app.follow = false;
         app.dialog = Dialog::FullValue(oscilloscope_core::render::FullValueField::Value);
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -8548,7 +8239,6 @@ mod golden_tests {
                     &rendered,
                     Some(&details),
                     &[],
-                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -8597,12 +8287,8 @@ mod golden_tests {
         let mut app = App::new(false);
         app.dialog = Dialog::Help;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -8615,7 +8301,6 @@ mod golden_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &test_ctx,
@@ -8634,92 +8319,6 @@ mod golden_tests {
         assert!(text.contains("esc") && text.contains("close"), "{text}");
     }
 
-    #[test]
-    fn a_selected_quick_steps_row_reads_quick_steps_in_the_details_pane() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "q1": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.000Z", "completed_at": "2026-01-01T11:46:49.300Z", "error": null, "provider": "shell"}},
-            "q2": {"value": "", "meta": {"created_at": "2026-01-01T11:46:49.300Z", "completed_at": "2026-01-01T11:46:49.800Z", "error": null, "provider": "shell"}}
-        }});
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            1.0,
-            "2026-01-01T11:46:50.000Z",
-            &[],
-            true,
-            &std::collections::BTreeSet::new(),
-        );
-        assert!(
-            rendered
-                .rows
-                .iter()
-                .any(|r| r.path == "prime.q1" && r.kind == RowKind::QuickSteps),
-            "the two quick steps fold into one row keyed on the first step"
-        );
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(&state),
-            &plan,
-            &RunModel::new(),
-            Some(&state),
-            &[],
-            Some("prime.q1"),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T11:46:50.000Z",
-        );
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some("prime.q1".to_string());
-        app.follow = false;
-        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        // Issue #635: the selected pane reuses the overview's own
-        // `FocusedStep::kind_label`, not the old details pane's
-        // `type   X` line -- selecting the folded quick-steps row
-        // still shows its own kind there.
-        assert!(text.contains("quick steps"), "{text}");
-    }
     #[test]
     fn running_tree_loop_with_max_concurrency() {
         let plan = sample_plan();
@@ -8917,12 +8516,8 @@ mod golden_tests {
             &[],
         );
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
-        let tracker = Tracker::new();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -8938,12 +8533,12 @@ mod golden_tests {
             kind: oscilloscope_core::diff::LogKind::Report,
             path: Some("prime".to_string()),
         }];
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
+        let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.rows,
-            &rendered.unfolded_rows,
             &oscilloscope_core::model::flatten_state(&state),
             &plan,
             &model,
+            &rendered.header,
             Some(&state),
             &story_lines,
             Some("prime.a"),
@@ -8965,7 +8560,6 @@ mod golden_tests {
                     &rendered,
                     None,
                     &log_lines,
-                    log_lines.len() as u64,
                     &mut app,
                     Some(&state),
                     &ctx,
@@ -9231,33 +8825,147 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Issue #527's own full layout (now, post-#632, the state pane
-    /// over the log pane — the `tokens by key` treemap and the token
-    /// bar moved to the Cost screen), on a terminal big enough for
-    /// both: the state pane's own nested loop pass (`fan`'s own
-    /// container row holding `iter_0`), together with the
-    /// orchestration pane's `(following)` title.
-    #[test]
-    fn full_layout_with_state_pane_following() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "tokens_sent_total": 120, "tokens_received_total": 340}},
-            "b": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}},
-            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 4}},
-                "iter_0": {"value": "the first pass reply", "meta": {"created_at": "t2", "completed_at": null, "adapter": "scripted", "prompt_sent": "summarize the first pass", "waiting_for": null, "tokens_sent_total": 50, "tokens_received_total": 70}}
-            }
-        }});
-        let text = snapshot_full_layout(
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            "cof",
-            "prime.a",
+    /// Every golden in this module that selects a plain station
+    /// funnels through this one draw call (issue #691: the Flow
+    /// screen replaces the old tree, but every other screen's own
+    /// selected-pane/log-pane behaviour this module checks is
+    /// unrelated to that and still needs a real selection to pin a
+    /// row's own details against).
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_at(
+        width: u16,
+        height: u16,
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+        log_lines: &[String],
+    ) -> String {
+        let rendered = render::build(
+            "do-thing.yml",
+            engine,
+            plan,
+            model,
+            state,
+            process,
+            5.0,
+            "2026-01-01T00:00:05Z",
             &[],
         );
-        insta::assert_snapshot!(text);
+        let flow_screen = oscilloscope_core::screens::build_flow(
+            &rendered.rows,
+            &oscilloscope_core::model::flatten_state(state.unwrap_or(&Value::Null)),
+            plan,
+            model,
+            &rendered.header,
+            state,
+            &[],
+            Some(selected),
+            &test_zone(),
+            rendered.header.run_end_ts.as_deref(),
+            "2026-01-01T00:00:00Z",
+        );
+        let mut app = App::new(engine == "watch");
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.selected_path = Some(selected.to_string());
+        app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    log_lines,
+                    &mut app,
+                    state,
+                    &test_ctx,
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    None,
+                    None,
+                    Some(&flow_screen),
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// [`snapshot_at`], at 100x24 -- the two-column size, under
+    /// `thresholds::TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`'s own
+    /// opposite, big enough for the Flow rail's own Story pane too.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+    ) -> String {
+        snapshot_at(100, 24, plan, model, state, process, engine, selected, &[])
+    }
+
+    /// [`snapshot`], at 70x20 -- below 80 columns, so the Flow
+    /// screen's own fallback to the Tape is what gets exercised for
+    /// any golden here that selects screen 2.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_one_column(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+    ) -> String {
+        snapshot_at(70, 20, plan, model, state, process, engine, selected, &[])
+    }
+
+    /// [`snapshot`], with the log pane given real lines (review
+    /// finding 3 on #458's comment 3: every golden here left it
+    /// empty) -- `snapshot` itself is just this with none.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_with_log(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+        log_lines: &[String],
+    ) -> String {
+        snapshot_at(
+            100, 24, plan, model, state, process, engine, selected, log_lines,
+        )
+    }
+
+    /// [`snapshot_at`], at a terminal big enough for every pane.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_full_layout(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+        log_lines: &[String],
+    ) -> String {
+        snapshot_at(
+            120, 40, plan, model, state, process, engine, selected, log_lines,
+        )
     }
 
     /// [`sample_plan`]'s own `a` is a tool, not a prompt -- selecting
@@ -9350,761 +9058,6 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Finding F1: the two boundary sizes between the full layout and
-    /// the one-column fallback, each exercising a different tier
-    /// [`thresholds`] documents -- read alongside
-    /// [`full_layout_with_state_pane_following`] (120×40) and
-    /// [`pending_plan`]/[`aborted_no_final_state`] (70×20, below
-    /// `TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`). Issue #632 removed
-    /// `TREEMAP_MIN_WIDTH`/`_HEIGHT` from screen 2 entirely, so 100×30
-    /// no longer sits on a tier boundary of its own — it still pins
-    /// a comfortably-sized two-column layout with the state pane
-    /// shown, same as any size at or above `STATE_PANE_MIN_WIDTH`/
-    /// `_HEIGHT`.
-    #[test]
-    fn two_column_layout_at_100x30_shows_the_state_pane() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
-            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 4}},
-                "iter_0": {"value": "the reply", "meta": {"created_at": "t1", "completed_at": null, "adapter": "scripted", "prompt_sent": "ask", "waiting_for": null, "tokens_sent_total": 10, "tokens_received_total": 15}}
-            }
-        }});
-        let text = snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            "cof",
-            "prime.a",
-            &[],
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// At 80×24: two-column (both `TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`
-    /// are met), but below `STATE_PANE_MIN_WIDTH` (90) -- the right
-    /// column is the log pane alone.
-    #[test]
-    fn fallback_at_80x24_drops_the_state_pane() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
-        }});
-        let text = snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            "cof",
-            "prime.a",
-            &[],
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// A regression: the existing goldens above
-    /// all hard-code `selected_path` directly, which (correctly, see
-    /// `snapshot_at`'s own comment) now also turns follow off, so none
-    /// of them actually show follow choosing anything. This one builds
-    /// its own `App` instead of using the `snapshot*` helpers, the
-    /// same way `main.rs`'s own redraw loop updates the selection: via
-    /// `App::follow_target`, never a hard-coded path -- with `fan`'s
-    /// own pass still running, follow must land on `fan.iter_0`, not
-    /// on `a` (already done), and the details pane must show whatever
-    /// follow actually picked.
-    #[test]
-    fn follow_picks_the_running_row_not_a_hard_coded_one() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
-            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 0, "total": 1}},
-                "iter_0": {"value": null, "meta": {"created_at": "t1", "completed_at": null, "provider": "shell"}}
-            }
-        }});
-        let rendered = render::build(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            5.0,
-            "2026-01-01T00:00:05Z",
-            &[],
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        assert!(app.follow, "issue #527: follow is on when the TUI starts");
-        if let Some(target) = App::follow_target(&rendered.rows) {
-            app.select_tree_path(Some(target.to_string()));
-        }
-        assert_eq!(
-            app.selected_path.as_deref(),
-            Some("prime.fan.iter_0"),
-            "follow must choose the actually-running leaf, not the done one"
-        );
-        let details = render::details_for(
-            app.selected_path.as_deref().unwrap(),
-            &plan,
-            &RunModel::new(),
-            Some(&state),
-        );
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(&state),
-            &plan,
-            &model,
-            Some(&state),
-            &[],
-            app.selected_path.as_deref(),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:00Z",
-        );
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            flow_screen
-                .selected
-                .as_ref()
-                .is_some_and(|s| s.path == "prime.fan.iter_0"),
-            "the selected pane must show the row follow actually picked: {:?}",
-            flow_screen.selected
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// A chain plan 48 rows deep (the root plus 48 leaves), with the
-    /// 45th leaf running and everything before it done -- the
-    /// acceptance list's own "a plan taller than the pane, a followed
-    /// effect below the fold is visible" (issue #527), tested the same
-    /// way `follow_picks_the_running_row_not_a_hard_coded_one` is: via
-    /// `App::follow_target`, at a terminal shorter than the plan.
-    #[test]
-    fn a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible() {
-        const N: usize = 48;
-        const RUNNING: usize = 44;
-
-        let root_path = EffectPath::root();
-        let ops: Vec<Op> = (0..N)
-            .map(|i| {
-                tool(
-                    root_path.clone().push_name(format!("step_{i}")),
-                    "step",
-                    OnError::Fail,
-                )
-            })
-            .collect();
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops,
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        let program = Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        };
-        let plan = PlanTree::from_program(&program);
-
-        let mut prime = serde_json::Map::new();
-        prime.insert("value".to_string(), Value::Null);
-        let mut prime_meta = serde_json::Map::new();
-        prime_meta.insert("completed_at".to_string(), Value::Null);
-        prime.insert("meta".to_string(), Value::Object(prime_meta));
-        for i in 0..=RUNNING {
-            let mut meta = serde_json::Map::new();
-            meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
-            meta.insert(
-                "completed_at".to_string(),
-                if i < RUNNING {
-                    Value::String(format!("t{}", i + 1))
-                } else {
-                    Value::Null
-                },
-            );
-            meta.insert("provider".to_string(), Value::String("shell".to_string()));
-            let mut node = serde_json::Map::new();
-            node.insert(
-                "value".to_string(),
-                if i < RUNNING {
-                    Value::String(format!("ok{i}\n"))
-                } else {
-                    Value::Null
-                },
-            );
-            node.insert("meta".to_string(), Value::Object(meta));
-            prime.insert(format!("step_{i}"), Value::Object(node));
-        }
-        let mut root_value = serde_json::Map::new();
-        root_value.insert("prime".to_string(), Value::Object(prime));
-        let state = Value::Object(root_value);
-
-        let mut model = RunModel::new();
-        let rendered = render::build(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            44.0,
-            "t45",
-            &[],
-        );
-        assert_eq!(rendered.rows.len(), N + 1, "the root row plus every leaf");
-
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        if let Some(target) = App::follow_target(&rendered.rows) {
-            app.select_tree_path(Some(target.to_string()));
-        }
-        assert_eq!(app.selected_path.as_deref(), Some("prime.step_44"));
-
-        let details = render::details_for(
-            app.selected_path.as_deref().unwrap(),
-            &plan,
-            &RunModel::new(),
-            Some(&state),
-        );
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(&state),
-            &plan,
-            &model,
-            Some(&state),
-            &[],
-            app.selected_path.as_deref(),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:00Z",
-        );
-        let backend = TestBackend::new(70, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains("step_44"),
-            "the followed row, below the fold, must still be drawn:\n{text}"
-        );
-        assert!(
-            !text.contains("step_0 ") && !text.contains("step_0\n"),
-            "the first row must have scrolled out of view:\n{text}"
-        );
-        assert!(
-            text.contains(&format!("/{}", N + 1)),
-            "the border must show a scroll position once rows are hidden:\n{text}"
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// Finding F11: the existing 2,000-node measurement
-    /// (`render::tests::redraw_from_a_2000_node_state_stays_well_
-    /// under_the_redraw_interval`) times `render::build` alone --
-    /// this times one `TestBackend` draw of its own output too, since
-    /// the treemap layout and the ratatui draw itself are not part of
-    /// that measurement.
-    #[test]
-    fn drawing_a_2000_node_state_stays_well_under_the_redraw_interval() {
-        // Issue #637: `n0` is a running agent whose transcript is a
-        // real file on disk, so the Flow pane's own selection below
-        // exercises transcript tailing too, not only the 2,000-node
-        // redraw itself -- the one other thing this same budget must
-        // still cover.
-        let transcript_dir = tempfile::tempdir().unwrap();
-        let transcript_path = transcript_dir.path().join("transcript.jsonl");
-        std::fs::write(
-            &transcript_path,
-            concat!(
-                r#"{"t": "t0", "type": "turn", "label": "turn", "session_id": "s1"}"#, "\n",
-                r#"{"t": "t0", "type": "tool_start", "id": 1, "tool": "read", "target": "PLAN.md"}"#, "\n",
-                r#"{"t": "t0", "type": "tool_end", "id": 1, "ok": true, "ms": 5}"#, "\n",
-            ),
-        )
-        .unwrap();
-
-        let mut prime = serde_json::Map::new();
-        prime.insert("value".to_string(), Value::Null);
-        let mut prime_meta = serde_json::Map::new();
-        prime_meta.insert("completed_at".to_string(), Value::Null);
-        prime.insert("meta".to_string(), Value::Object(prime_meta));
-        for i in 0..2000 {
-            let mut meta = serde_json::Map::new();
-            meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
-            if i == 0 {
-                meta.insert("completed_at".to_string(), Value::Null);
-                meta.insert("provider".to_string(), Value::String("agent".to_string()));
-                meta.insert(
-                    "live".to_string(),
-                    serde_json::json!({
-                        "engine": "pi", "model": "sonnet", "turns": 1, "tool_calls": 1,
-                        "transcript": transcript_path.to_string_lossy(),
-                        "started_at": "t0", "updated_at": "t2001",
-                        "tokens_sent": 100
-                    }),
-                );
-            } else {
-                meta.insert(
-                    "completed_at".to_string(),
-                    Value::String(format!("t{}", i + 1)),
-                );
-                meta.insert("provider".to_string(), Value::String("shell".to_string()));
-            }
-            // Issue #632: also token-bearing by the Cost screen's own
-            // rule (`adapter` present), so this same 2,000-node state
-            // doubles as that screen's own timing coverage below --
-            // every node here is a real store for it to build.
-            meta.insert("adapter".to_string(), Value::String("scripted".to_string()));
-            meta.insert("tokens_sent_total".to_string(), Value::from(1));
-            meta.insert("tokens_received_total".to_string(), Value::from(2));
-            let mut node = serde_json::Map::new();
-            node.insert("value".to_string(), Value::String(format!("ok{i}\n")));
-            node.insert("meta".to_string(), Value::Object(meta));
-            prime.insert(format!("n{i}"), Value::Object(node));
-        }
-        let mut root = serde_json::Map::new();
-        root.insert("prime".to_string(), Value::Object(prime));
-        let state = Value::Object(root);
-
-        // Issue #635: a real plan with an unnamed `if` of its own
-        // (never `PlanTree::empty()`, which skips `build_flow_rows`'
-        // own decision-inference work entirely, timing nothing of it
-        // at all) -- its own `then`/`else` paths don't need to match
-        // any of the 2,000 `n{i}` nodes below for the timing to be
-        // real, only for `unnamed_if_decisions` to have something in
-        // it for `resolve_unnamed_decisions`/`push_unnamed_decision`
-        // to actually walk.
-        let plan = {
-            let root_path = EffectPath::root();
-            let if_path = root_path.clone();
-            let foo_path = if_path.clone().push_name("foo");
-            let root = Op {
-                path: root_path,
-                name: Some("prime".to_string()),
-                kind: NodeKind::Control(Region::Block {
-                    ops: vec![Op {
-                        path: if_path,
-                        name: None,
-                        kind: NodeKind::Control(Region::If {
-                            cond: Condition::Cel {
-                                expr: "true".to_string(),
-                                strict: false,
-                            },
-                            then_: Box::new(Region::Block {
-                                ops: vec![tool(foo_path, "foo", OnError::Fail)],
-                                overlay: true,
-                            }),
-                            else_: None,
-                            threshold: 0.5,
-                        }),
-                        on_error: OnError::Fail,
-                        labels: None,
-                        enabled: true,
-                    }],
-                    overlay: false,
-                }),
-                on_error: OnError::Fail,
-                labels: None,
-                enabled: true,
-            };
-            PlanTree::from_program(&Program {
-                root,
-                prompts: Default::default(),
-                effect_names: Default::default(),
-                document: None,
-                runtime_block: None,
-                interface: None,
-                adapter: None,
-                model: None,
-            })
-        };
-        // Issue #635: a real 2,000-line story -- `build_story`'s own
-        // sort (`build_flow_rows` is timed together with it below) is
-        // the other thing an empty story timed nothing of at all.
-        let story_2000: Vec<oscilloscope_core::diff::LogLine> = (0..2000)
-            .map(|i| oscilloscope_core::diff::LogLine {
-                ts: Some(format!("2026-01-01T00:00:{:02}Z", i % 60)),
-                text: format!("▸ report {i}"),
-                kind: oscilloscope_core::diff::LogKind::Report,
-                path: None,
-            })
-            .collect();
-        let mut model = RunModel::new();
-        let rendered = render::build(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            10.0,
-            "t2001",
-            &[],
-        );
-        let details = render::details_for("n0", &plan, &RunModel::new(), Some(&state));
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some("n0".to_string());
-
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        // Issue #635: the Flow screen's own model (decisions, loops,
-        // quick steps, the story) is built only while it's actually
-        // on display, same performance rule as the overview's and the
-        // Cost screen's below -- timed together with the draw itself,
-        // on the same 2,000-node state.
-        let start = std::time::Instant::now();
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(&state),
-            &plan,
-            &model,
-            Some(&state),
-            &story_2000,
-            Some("prime.n0"),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "t2001",
-        );
-        // Issue #637: the step on screen (`n0`, Flow's own selection
-        // here) gets its transcript tailed every frame -- timed
-        // together with everything else above, so a real 64 KiB-
-        // bounded read is part of this same budget, not a cost the
-        // 2,000-node measurement never actually pays.
-        let mut transcript_cache = crate::TranscriptTailCache::default();
-        let transcript_view = crate::tail_focused_transcript(
-            &app,
-            None,
-            Some(&flow_screen),
-            None,
-            &mut transcript_cache,
-        );
-        assert!(
-            transcript_view
-                .as_ref()
-                .is_some_and(|v| !v.calls.is_empty()),
-            "n0's own transcript must actually have been tailed"
-        );
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    transcript_view.as_ref(),
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_millis(500),
-            "building and drawing the Flow screen for a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
-        );
-
-        // The Tape's own model is built (and drawn) only while it's
-        // actually on display -- so the same budget applies to it,
-        // on the same 2000-node state, not just to screen 2's.
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let tape_start = std::time::Instant::now();
-        let tape_screen = oscilloscope_core::screens::build_tape(
-            &rendered.rows,
-            &rendered.header,
-            &flat,
-            &plan,
-            &model,
-            Some(&state),
-            Some("n0"),
-            true,
-            "t2001",
-        );
-        let mut tape_app = App::new(false);
-        tape_app.screen = oscilloscope_core::screens::Screen::Tape;
-        let tape_backend = TestBackend::new(120, 40);
-        let mut tape_terminal = Terminal::new(tape_backend).unwrap();
-        tape_terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut tape_app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    Some(&tape_screen),
-                    None,
-                    None,
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let tape_elapsed = tape_start.elapsed();
-        assert!(
-            tape_elapsed < std::time::Duration::from_millis(500),
-            "building and drawing the Tape for a 2000-node state took {tape_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
-        );
-
-        // Issue #632: the Cost screen's own by-store tree is built (and
-        // laid out) only while it is actually on display, same
-        // performance rule as the overview's above -- on the same
-        // 2,000-node state (every node a real store, see the loop
-        // above), not a smaller one of its own.
-        let statuses: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.status.clone()))
-            .collect();
-        let kinds: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.kind))
-            .collect();
-        let cost_start = std::time::Instant::now();
-        let cost_screen = oscilloscope_core::screens::build_cost_screen(
-            &rendered.rows,
-            &rendered.header,
-            &flat,
-            &statuses,
-            &kinds,
-            Some(&state),
-            Measure::Total,
-            &model,
-            "t2001",
-            PHASE_GLYPHS.len(),
-        );
-        let mut cost_app = App::new(false);
-        cost_app.screen = oscilloscope_core::screens::Screen::Cost;
-        let cost_backend = TestBackend::new(120, 40);
-        let mut cost_terminal = Terminal::new(cost_backend).unwrap();
-        let mut cost_layout = CostLayoutCache::default();
-        cost_terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut cost_app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    Some(&cost_screen),
-                    None,
-                    None,
-                    None,
-                    &mut cost_layout,
-                )
-            })
-            .unwrap();
-        let cost_elapsed = cost_start.elapsed();
-        assert!(
-            cost_elapsed < std::time::Duration::from_millis(500),
-            "building and drawing the Cost screen for a 2000-node state took {cost_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
-        );
-
-        // Re-laying out the identical tree at the identical area must
-        // be effectively free -- `CostLayoutCache` skips `squarify`
-        // entirely when neither has changed (DESIGN.md's performance
-        // rule: "laid out again only when the tree or the area
-        // changes").
-        let cached_start = std::time::Instant::now();
-        cost_terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut cost_app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    Some(&cost_screen),
-                    None,
-                    None,
-                    None,
-                    &mut cost_layout,
-                )
-            })
-            .unwrap();
-        let cached_elapsed = cached_start.elapsed();
-        assert!(
-            cached_elapsed < std::time::Duration::from_millis(100),
-            "redrawing the Cost screen with nothing changed took {cached_elapsed:?} -- the layout cache should have skipped squarify entirely"
-        );
-
-        // Issue #688: Signal's own model and drawing are built
-        // only while screen 1 is actually on display, same
-        // performance rule as every other screen above -- on the
-        // same 2,000-node state.
-        let signal_start = std::time::Instant::now();
-        let signal_screen = oscilloscope_core::screens::build_signal(
-            &rendered.rows,
-            &rendered.header,
-            &flat,
-            &plan,
-            &model,
-            Some(&state),
-            100,
-            None,
-            "t2001",
-        );
-        let mut signal_app = App::new(false);
-        signal_app.screen = oscilloscope_core::screens::Screen::Signal;
-        signal_app.selected_path = Some("n0".to_string());
-        let signal_backend = TestBackend::new(120, 40);
-        let mut signal_terminal = Terminal::new(signal_backend).unwrap();
-        signal_terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut signal_app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    None,
-                    Some(&signal_screen),
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let signal_elapsed = signal_start.elapsed();
-        assert!(
-            signal_elapsed < std::time::Duration::from_millis(500),
-            "building and drawing Signal for a 2000-node state took {signal_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
-        );
-    }
-
     /// A leaf that never got `completed_at` because the run itself
     /// ended first (aborted or cancelled) is in the exact same data
     /// shape as a still-running one -- only its own status tells the
@@ -10144,12 +9097,8 @@ mod golden_tests {
         };
         let mut app = App::new(false);
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -10201,12 +9150,8 @@ mod golden_tests {
     ) -> String {
         let mut app = App::new(false);
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -10336,12 +9281,8 @@ mod golden_tests {
         };
         let mut app = App::new(false);
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -10409,12 +9350,8 @@ mod golden_tests {
         app.screen = oscilloscope_core::screens::Screen::Cost;
         app.cost_zoom = vec!["prime.fan".to_string()];
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -10429,7 +9366,6 @@ mod golden_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -10464,662 +9400,6 @@ mod golden_tests {
             "zoomed into fan, no table row may still carry fan's own name as a prefix: {text}"
         );
     }
-    /// One plan exercising every acceptance-list glyph at once
-    /// (issue #635): two quick tool steps (`a`/`b`) that fold into
-    /// one row, a named `if` (`gate`, taken `then` into `chosen`), an
-    /// unnamed `if` (inferred from its own `u_then`/`u_else`
-    /// branches), and a named loop (`fan`) whose single observed
-    /// pass merges into one row.
-    fn flow_matrix_plan() -> PlanTree {
-        let root_path = EffectPath::root();
-        let a_path = root_path.clone().push_name("a");
-        let b_path = root_path.clone().push_name("b");
-        let gate_path = root_path.clone().push_name("gate");
-        let chosen_path = gate_path.clone().push_name("chosen");
-        let other_path = gate_path.clone().push_name("other");
-        let u_then_path = root_path.clone().push_name("u_then");
-        let u_else_path = root_path.clone().push_name("u_else");
-        let fan_path = root_path.clone().push_name("fan");
-        let pass_path = fan_path.clone().push_pass(LoopId(0));
-        let nap_path = pass_path.push_name("nap");
-        // A transparent (unnamed) `if`'s own `PlanEntry` is recorded
-        // at its *enclosing* scope's own path, never a fresh one of
-        // its own (`PlanTree::unnamed_if_decisions`' own doc comment)
-        // -- here, that's the top-level chain's own path, `prime`
-        // itself, same as `flow.rs`'s own `unnamed_if_plan` test
-        // fixture.
-        let unnamed_if_path = root_path.clone();
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops: vec![
-                    tool(a_path, "a", OnError::Fail),
-                    tool(b_path, "b", OnError::Fail),
-                    Op {
-                        path: gate_path,
-                        name: Some("gate".to_string()),
-                        kind: NodeKind::Control(Region::If {
-                            cond: Condition::Cel {
-                                expr: "x > 1".to_string(),
-                                strict: false,
-                            },
-                            then_: Box::new(Region::Block {
-                                ops: vec![tool(chosen_path, "chosen", OnError::Fail)],
-                                overlay: true,
-                            }),
-                            else_: Some(Box::new(Region::Block {
-                                ops: vec![tool(other_path, "other", OnError::Fail)],
-                                overlay: true,
-                            })),
-                            threshold: 0.5,
-                        }),
-                        on_error: OnError::Fail,
-                        labels: None,
-                        enabled: true,
-                    },
-                    Op {
-                        path: unnamed_if_path,
-                        name: None,
-                        kind: NodeKind::Control(Region::If {
-                            cond: Condition::Cel {
-                                expr: "y > 1".to_string(),
-                                strict: false,
-                            },
-                            then_: Box::new(Region::Block {
-                                ops: vec![tool(u_then_path, "u_then", OnError::Fail)],
-                                overlay: true,
-                            }),
-                            else_: Some(Box::new(Region::Block {
-                                ops: vec![tool(u_else_path, "u_else", OnError::Fail)],
-                                overlay: true,
-                            })),
-                            threshold: 0.5,
-                        }),
-                        on_error: OnError::Fail,
-                        labels: None,
-                        enabled: true,
-                    },
-                    Op {
-                        path: fan_path,
-                        name: Some("fan".to_string()),
-                        kind: NodeKind::Control(Region::Loop {
-                            name: Some("fan".to_string()),
-                            spec: LoopSpec::Each {
-                                in_path: "prime.items".to_string(),
-                                as_name: "item".to_string(),
-                                truncate: false,
-                            },
-                            body: Box::new(Region::Block {
-                                ops: vec![tool(nap_path, "nap", OnError::Fail)],
-                                overlay: true,
-                            }),
-                            flow: LoopFlow::Tree,
-                            max_concurrency: Some(2),
-                            max_iterations: None,
-                            min_iterations: 0,
-                            collect: None,
-                        }),
-                        on_error: OnError::Fail,
-                        labels: None,
-                        enabled: true,
-                    },
-                ],
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        let program = Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        };
-        PlanTree::from_program(&program)
-    }
-
-    /// [`flow_matrix_plan`]'s own state, running (`finished: false`)
-    /// or finished (`finished: true`): `gate` has taken `then`, the
-    /// unnamed `if`'s own `u_then` branch has started (inferred), and
-    /// `fan`'s single pass is either still running or done.
-    fn flow_matrix_state(finished: bool) -> Value {
-        let nap = if finished {
-            json!({"value": "ok\n", "meta": {
-                "created_at": "2026-01-01T00:00:01Z", "completed_at": "2026-01-01T00:00:01.400Z",
-                "provider": "shell"
-            }})
-        } else {
-            json!({"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "shell"
-            }})
-        };
-        let fan_completed = if finished {
-            json!("2026-01-01T00:00:01.400Z")
-        } else {
-            Value::Null
-        };
-        let prime_completed = if finished {
-            json!("2026-01-01T00:00:02Z")
-        } else {
-            Value::Null
-        };
-        let prime_error = if finished { json!(null) } else { Value::Null };
-        let runtime = if finished {
-            json!({"last_run": {"completed_at": "2026-01-01T00:00:02Z"}})
-        } else {
-            Value::Null
-        };
-        json!({"runtime": runtime, "prime": {
-            "value": null,
-            "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": prime_completed,
-                "error": prime_error
-            },
-            "a": {"value": "ok\n", "meta": {
-                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.200Z",
-                "provider": "shell"
-            }},
-            "b": {"value": "ok\n", "meta": {
-                "created_at": "2026-01-01T00:00:00.200Z", "completed_at": "2026-01-01T00:00:00.400Z",
-                "provider": "shell"
-            }},
-            "gate": {"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:00.400Z", "completed_at": "2026-01-01T00:00:00.400Z",
-                "branch": "then"
-            },
-                "chosen": {"value": "ok\n", "meta": {
-                    "created_at": "2026-01-01T00:00:00.400Z", "completed_at": "2026-01-01T00:00:00.700Z",
-                    "provider": "shell"
-                }}
-            },
-            "u_then": {"value": "ok\n", "meta": {
-                "created_at": "2026-01-01T00:00:00.700Z", "completed_at": "2026-01-01T00:00:00.900Z",
-                "provider": "shell"
-            }},
-            "fan": {"value": null, "meta": {
-                "completed_at": fan_completed,
-                "progress": {"done": if finished { 1 } else { 0 }, "total": 1}
-            },
-                "iter_0": nap
-            }
-        }})
-    }
-
-    fn flow_matrix_story() -> Vec<LogLine> {
-        vec![
-            LogLine {
-                ts: Some("2026-01-01T00:00:00Z".to_string()),
-                text: "■ run started  abc".to_string(),
-                kind: LogKind::RunStart,
-                path: None,
-            },
-            LogLine {
-                ts: Some("2026-01-01T00:00:00.400Z".to_string()),
-                text: "◆ prime.gate → then".to_string(),
-                kind: LogKind::Decision,
-                path: Some("prime.gate".to_string()),
-            },
-        ]
-    }
-
-    /// [`snapshot_at`], with a non-empty story (DESIGN.md's own
-    /// right/bottom pane) -- every other golden here passes `&[]`
-    /// for it, since none needed one until this matrix did.
-    #[allow(clippy::too_many_arguments)]
-    fn flow_matrix_snapshot_at(
-        width: u16,
-        height: u16,
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: &Value,
-        process: ProcessState,
-        selected: &str,
-        story: &[LogLine],
-    ) -> String {
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            plan,
-            model,
-            Some(state),
-            process,
-            2.0,
-            "2026-01-01T00:00:02Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let details = render::details_for(selected, plan, model, Some(state));
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(state),
-            plan,
-            model,
-            Some(state),
-            story,
-            Some(selected),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:02Z",
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some(selected.to_string());
-        app.follow = false;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    &[],
-                    0,
-                    &mut app,
-                    Some(state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:02Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        terminal.backend().to_string()
-    }
-
-    #[test]
-    fn flow_matrix_running_at_120x40() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(false);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::Running,
-            "prime.fan.iter_0",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_finished_at_120x40() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(true);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::exited(false),
-            "prime.gate.chosen",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_running_at_100x30() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(false);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::Running,
-            "prime.fan.iter_0",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_finished_at_100x30() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(true);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::exited(false),
-            "prime.gate.chosen",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_running_at_80x24() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(false);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::Running,
-            "prime.fan.iter_0",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_finished_at_80x24() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(true);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::exited(false),
-            "prime.gate.chosen",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_running_at_70x20() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(false);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            70,
-            20,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::Running,
-            "prime.fan.iter_0",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn flow_matrix_finished_at_70x20() {
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(true);
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            70,
-            20,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::exited(false),
-            "prime.gate.chosen",
-            &flow_matrix_story(),
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// `End`/`G` sets `story_scroll` to `usize::MAX` (`keys::jump`),
-    /// and used to add `height` to it before checking for that
-    /// sentinel at all, which panics on overflow in a debug build.
-    #[test]
-    fn end_in_the_story_pane_draws_without_overflowing() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-
-        let plan = flow_matrix_plan();
-        let state = flow_matrix_state(false);
-        let mut model = RunModel::new();
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            2.0,
-            "2026-01-01T00:00:02Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let details = render::details_for("prime.fan.iter_0", &plan, &model, Some(&state));
-        let story = flow_matrix_story();
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.unfolded_rows,
-            &oscilloscope_core::model::flatten_state(&state),
-            &plan,
-            &model,
-            Some(&state),
-            &story,
-            Some("prime.fan.iter_0"),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:02Z",
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some("prime.fan.iter_0".to_string());
-        app.follow = false;
-        app.pane = Pane::Story;
-        app.handle_key(
-            KeyEvent {
-                code: KeyCode::End,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            },
-            &[],
-            &[],
-            true,
-            false,
-            &[],
-        );
-        assert_eq!(app.story_scroll, usize::MAX);
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    Some(&details),
-                    &[],
-                    0,
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:00:02Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-    }
-
-    /// Eight named `if`s in a row, each with a condition (shown at
-    /// 100 columns and wider, so each takes two screen lines), then
-    /// one more step -- enough two-line rows ahead of the selected
-    /// one to overflow a 100x30 viewport if scrolling still counted
-    /// rows instead of screen lines.
-    fn flow_overflow_plan() -> PlanTree {
-        let root_path = EffectPath::root();
-        let mut ops = Vec::new();
-        for i in 1..=8 {
-            let gate_path = root_path.clone().push_name(format!("g{i}"));
-            let then_path = gate_path.clone().push_name("then_step");
-            let else_path = gate_path.clone().push_name("else_step");
-            ops.push(Op {
-                path: gate_path,
-                name: Some(format!("g{i}")),
-                kind: NodeKind::Control(Region::If {
-                    cond: Condition::Cel {
-                        expr: format!("x{i} > 1"),
-                        strict: false,
-                    },
-                    then_: Box::new(Region::Block {
-                        ops: vec![tool(then_path, "then_step", OnError::Fail)],
-                        overlay: true,
-                    }),
-                    else_: Some(Box::new(Region::Block {
-                        ops: vec![tool(else_path, "else_step", OnError::Fail)],
-                        overlay: true,
-                    })),
-                    threshold: 0.5,
-                }),
-                on_error: OnError::Fail,
-                labels: None,
-                enabled: true,
-            });
-        }
-        ops.push(tool(
-            root_path.clone().push_name("tail"),
-            "tail",
-            OnError::Fail,
-        ));
-        let root = Op {
-            path: root_path,
-            name: Some("prime".to_string()),
-            kind: NodeKind::Control(Region::Block {
-                ops,
-                overlay: false,
-            }),
-            on_error: OnError::Fail,
-            labels: None,
-            enabled: true,
-        };
-        let program = Program {
-            root,
-            prompts: Default::default(),
-            effect_names: Default::default(),
-            document: None,
-            runtime_block: None,
-            interface: None,
-            adapter: None,
-            model: None,
-        };
-        PlanTree::from_program(&program)
-    }
-
-    /// [`flow_overflow_plan`]'s own state: every gate has taken
-    /// `then`, and `tail` (the selected row, below all eight) is
-    /// still running.
-    fn flow_overflow_state() -> Value {
-        let mut prime = serde_json::Map::new();
-        prime.insert("value".to_string(), Value::Null);
-        prime.insert(
-            "meta".to_string(),
-            json!({"created_at": "2026-01-01T00:00:00Z", "completed_at": null}),
-        );
-        for i in 1..=8 {
-            prime.insert(
-                format!("g{i}"),
-                json!({"value": null, "meta": {
-                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:00.100Z",
-                    "branch": "then"
-                },
-                    "then_step": {"value": "ok\n", "meta": {
-                        "created_at": "2026-01-01T00:00:00.100Z", "completed_at": "2026-01-01T00:00:00.200Z",
-                        "provider": "shell"
-                    }}
-                }),
-            );
-        }
-        prime.insert(
-            "tail".to_string(),
-            json!({"value": null, "meta": {
-                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "shell"
-            }}),
-        );
-        json!({"runtime": Value::Null, "prime": Value::Object(prime)})
-    }
-
-    /// At 100x30, eight named `if`s each take two lines (their own
-    /// condition shown underneath), overflowing the viewport, so
-    /// `tail` -- selected, below all eight -- must still be drawn
-    /// above the footer, not cut off by it or drawn into it, which a
-    /// by-row (rather than by-line) scroll clamp used to do.
-    #[test]
-    fn flow_matrix_overflow_at_100x30_keeps_the_selected_row_above_the_footer() {
-        let plan = flow_overflow_plan();
-        let state = flow_overflow_state();
-        let mut model = RunModel::new();
-        let text = flow_matrix_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            &state,
-            ProcessState::Running,
-            "prime.tail",
-            &[],
-        );
-        let tail_idx = text
-            .lines()
-            .position(|l| l.contains("◐ tail"))
-            .unwrap_or_else(|| panic!("the selected flow-pane row must be drawn at all: {text}"));
-        let footer_idx = text
-            .lines()
-            .position(|l| l.contains("quick steps folded"))
-            .unwrap_or_else(|| panic!("the footer must be drawn: {text}"));
-        assert!(
-            tail_idx < footer_idx,
-            "the selected row must be drawn above the footer, not under or inside it: {text}"
-        );
-        insta::assert_snapshot!(text);
-    }
 }
 
 /// Issue #535's own "buffer test" acceptance item: pins a highlighted
@@ -11134,10 +9414,8 @@ mod highlight_tests {
     use oscilloscope_core::render::{Header, RenderState, Row, RowKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use std::time::Duration;
 
-    use crate::highlight::{FADE_DURATION, Tracker};
-    use crate::theme::{ColorMode, Theme, ThemeName};
+    use crate::theme::{Theme, ThemeName};
 
     fn minimal_render_state() -> RenderState {
         RenderState {
@@ -11194,177 +9472,19 @@ mod highlight_tests {
         }
     }
 
-    /// Pins a highlighted row's own background at the instant it was
-    /// marked (`t = 0`), and that nothing overrides it any more once
-    /// the fade has fully ended -- both read from the real `Buffer`
-    /// the orchestration pane's row actually lands in, at its own
-    /// known position (one row below the header/body top border, one
-    /// column in from the pane's own left border).
-    #[test]
-    fn a_highlighted_row_pins_its_cell_background_at_t0_and_has_none_after_the_fade() {
-        let rendered = minimal_render_state();
-        let theme = Theme::for_name(ThemeName::Dracula);
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
-        app.selected_path = Some("prime.a".to_string());
-        app.follow = false;
-
-        // The orchestration pane sits below the header (3 rows) and
-        // the details pane (golden_section of the body's own height);
-        // its first row, "a", is the pane's own first interior line.
-        // Finding the exact cell by scanning for the row's own label
-        // keeps this test correct even if an unrelated layout tweak
-        // shifts it by a row or column -- the point under test is the
-        // *style* once found, not the coordinates themselves.
-        // Searches for the exact sequence `"✓ a"` -- the status glyph,
-        // a space, then the row's own label -- rather than a bare
-        // `"a"`, which also occurs inside the orchestration pane's own
-        // title ("orchestration"), found first since titles sit on an
-        // earlier row than the content below them. Returns the `a`
-        // cell itself, two columns past the match's own start.
-        fn find_row_cell(buffer: &ratatui::buffer::Buffer) -> (u16, u16) {
-            let needle: Vec<char> = "✓ a".chars().collect();
-            for y in 0..buffer.area.height {
-                for x in 0..buffer.area.width {
-                    let matches = needle.iter().enumerate().all(|(i, &c)| {
-                        x + (i as u16) < buffer.area.width
-                            && buffer[(x + i as u16, y)].symbol() == c.to_string()
-                    });
-                    if matches {
-                        return (x + needle.len() as u16 - 1, y);
-                    }
-                }
-            }
-            panic!("row \"a\" not found in the buffer");
-        }
-
-        let mut tracker = Tracker::new();
-        let now = std::time::Instant::now();
-        tracker.mark("row:prime.a", now);
-
-        let empty_plan = oscilloscope_core::plan::PlanTree::empty();
-        let empty_model = oscilloscope_core::model::RunModel::new();
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
-            &rendered.rows,
-            &std::collections::BTreeMap::new(),
-            &empty_plan,
-            &empty_model,
-            None,
-            &[],
-            app.selected_path.as_deref(),
-            &test_zone(),
-            rendered.header.run_end_ts.as_deref(),
-            "2026-01-01T00:00:00Z",
-        );
-
-        let ctx_t0 = DrawCtx {
-            theme: &theme,
-            highlights: &tracker,
-            now,
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let mut app_t0 = app.clone();
-        let backend = TestBackend::new(100, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app_t0,
-                    None,
-                    &ctx_t0,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let buffer_t0 = terminal.backend().buffer().clone();
-        let (x, y) = find_row_cell(&buffer_t0);
-        assert_eq!(
-            buffer_t0[(x, y)].bg,
-            Color::Rgb(0x44, 0x47, 0x5a),
-            "t=0 must show the theme's own highlight tint"
-        );
-
-        let ctx_after = DrawCtx {
-            theme: &theme,
-            highlights: &tracker,
-            now: now + FADE_DURATION + Duration::from_millis(1),
-            color_mode: ColorMode::TrueColor,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let mut app_after = app.clone();
-        let backend2 = TestBackend::new(100, 24);
-        let mut terminal2 = Terminal::new(backend2).unwrap();
-        terminal2
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    0,
-                    &mut app_after,
-                    None,
-                    &ctx_after,
-                    0,
-                    "2026-01-01T00:00:00Z",
-                    None,
-                    None,
-                    Some(&flow_screen),
-                    None,
-                    None,
-                    &mut CostLayoutCache::default(),
-                )
-            })
-            .unwrap();
-        let buffer_after = terminal2.backend().buffer().clone();
-        assert_eq!(
-            buffer_after[(x, y)].bg,
-            theme.background.unwrap(),
-            "once the fade has ended, the cell reads the painted background, not the tint"
-        );
-    }
-
-    /// Issue #626/#678: the scope icon's own trace takes the header
-    /// band's own `osi` word while animating, drawn at every width --
-    /// there is no longer a narrow-terminal threshold below which it
-    /// hides (the old three-row bezel icon had one; the inline trace
-    /// does not). Cell 0 is the band's own leading space (§3.1's
-    /// ` osi  <where>`), so the trace itself is read from cell 1.
     #[test]
     fn the_icon_draws_at_every_width() {
         let rendered = minimal_render_state();
         let theme = Theme::for_name(ThemeName::Terminal);
-        let tracker = Tracker::new();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
         };
         let first_cell_is_blank = |width: u16| -> bool {
             let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Flow;
+            app.screen = oscilloscope_core::screens::Screen::Cost;
             let backend = TestBackend::new(width, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
@@ -11374,7 +9494,6 @@ mod highlight_tests {
                         &rendered,
                         None,
                         &[],
-                        0,
                         &mut app,
                         None,
                         &ctx,
@@ -11416,18 +9535,14 @@ mod highlight_tests {
     fn a_named_theme_paints_the_background_of_an_empty_cell() {
         let rendered = minimal_render_state();
         let theme = Theme::for_name(ThemeName::Nord);
-        let tracker = Tracker::new();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
         };
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.screen = oscilloscope_core::screens::Screen::Cost;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -11437,7 +9552,6 @@ mod highlight_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,
@@ -11468,18 +9582,14 @@ mod highlight_tests {
     fn a_named_theme_paints_the_default_text_colour_of_an_empty_cell() {
         let rendered = minimal_render_state();
         let theme = Theme::for_name(ThemeName::SolarizedLight);
-        let tracker = Tracker::new();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
         };
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.screen = oscilloscope_core::screens::Screen::Cost;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -11489,7 +9599,6 @@ mod highlight_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,
@@ -11513,18 +9622,14 @@ mod highlight_tests {
     fn the_terminal_theme_paints_no_background_at_all() {
         let rendered = minimal_render_state();
         let theme = Theme::for_name(ThemeName::Terminal);
-        let tracker = Tracker::new();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
         };
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.screen = oscilloscope_core::screens::Screen::Cost;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -11534,7 +9639,6 @@ mod highlight_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,
@@ -11565,7 +9669,6 @@ mod tape_live_tests {
     use serde_json::{Value, json};
 
     use crate::keys::App;
-    use crate::theme::ColorMode;
 
     // -------------------------------------------------------------
     // A running prompt's live token figures (issue #675)
@@ -11600,12 +9703,8 @@ mod tape_live_tests {
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Tape;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -11619,7 +9718,6 @@ mod tape_live_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     Some(state),
                     &test_ctx,
@@ -11860,12 +9958,8 @@ mod tape_live_tests {
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Tape;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_tracker = crate::highlight::Tracker::new();
         let test_ctx = DrawCtx {
             theme: &test_theme,
-            highlights: &test_tracker,
-            now: Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &test_zone(),
             no_animation: false,
@@ -11879,7 +9973,6 @@ mod tape_live_tests {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &test_ctx,
@@ -11914,7 +10007,7 @@ mod tape_frame_goldens {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use crate::theme::{ColorMode, Theme, ThemeName};
+    use crate::theme::{Theme, ThemeName};
 
     /// The Normal/Usual goldens' own status-line row (y=28 at
     /// 120x30): `gate.reply` finishes 2 ms before two loop passes
@@ -12449,13 +10542,9 @@ mod tape_frame_goldens {
     fn tape_toosmall_60x16_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
         let mock = parse_mock("tape--toosmall--60x16", &theme);
-        let tracker = crate::highlight::Tracker::new();
         let zone = frame_zone();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &tracker,
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: true,
@@ -12526,7 +10615,6 @@ mod tape_frame_goldens {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,
@@ -12624,9 +10712,6 @@ mod tape_frame_goldens {
         app.selected_path = Some("prime.tests".to_string());
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: true,
@@ -12640,7 +10725,6 @@ mod tape_frame_goldens {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     Some(&state),
                     &ctx,
@@ -12733,9 +10817,6 @@ mod tape_frame_goldens {
         app_setup(&mut app);
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: true,
@@ -12749,7 +10830,6 @@ mod tape_frame_goldens {
                     rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,
@@ -13213,9 +11293,6 @@ mod tape_frame_goldens {
         app.follow = false;
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: true,
@@ -13405,9 +11482,6 @@ mod tape_frame_goldens {
         app.screen = oscilloscope_core::screens::Screen::Signal;
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: true,
@@ -13421,7 +11495,6 @@ mod tape_frame_goldens {
                     rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,
@@ -13522,9 +11595,6 @@ mod tape_frame_goldens {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &frame_zone(),
             no_animation: true,
@@ -13712,9 +11782,6 @@ mod tape_frame_goldens {
         let zone = frame_zone();
         let ctx = DrawCtx {
             theme: &theme,
-            highlights: &crate::highlight::Tracker::new(),
-            now: std::time::Instant::now(),
-            color_mode: ColorMode::TrueColor,
             theme_banner: None,
             zone: &zone,
             no_animation: true,
@@ -13727,7 +11794,6 @@ mod tape_frame_goldens {
                     &rendered,
                     None,
                     &[],
-                    0,
                     &mut app,
                     None,
                     &ctx,

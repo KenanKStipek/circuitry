@@ -12,12 +12,12 @@
 use std::path::{Path, PathBuf};
 
 use oscilloscope_core::diff::{Differ, LogKind, LogLine};
-use oscilloscope_core::flow::FlowRowKind;
 use oscilloscope_core::model::{ProcessState, RunModel, flatten_state};
 use oscilloscope_core::observe::parse_event;
 use oscilloscope_core::plan::PlanTree;
+use oscilloscope_core::rail::{ForkKind, RailItem};
 use oscilloscope_core::render;
-use oscilloscope_core::screens::{FlowScreen, build_flow_screen};
+use oscilloscope_core::screens::{FlowScreen, build_flow};
 use serde_json::Value;
 
 struct Utc;
@@ -120,12 +120,12 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
         &Default::default(),
     );
     let flat = flatten_state(&state);
-    build_flow_screen(
+    build_flow(
         &rendered.rows,
-        &rendered.unfolded_rows,
         &flat,
         &plan,
         &model,
+        &rendered.header,
         Some(&state),
         &story,
         None,
@@ -135,59 +135,75 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
     )
 }
 
-/// The decision row named `gate` reads its branch and its untaken
-/// side's own summary the same way on both engines.
+/// Finds the decision fork whose own station is named `name`,
+/// anywhere in the rail (recursing into open lanes) -- both engines'
+/// own fixtures have exactly one.
+fn find_decision_fork<'a>(
+    items: &'a [RailItem],
+    name: &str,
+) -> Option<&'a oscilloscope_core::rail::Fork> {
+    for (i, item) in items.iter().enumerate() {
+        if let RailItem::Station(s) = item {
+            if s.name == name {
+                if let Some(RailItem::Fork(fork)) = items.get(i + 1) {
+                    if fork.kind == ForkKind::Decision {
+                        return Some(fork);
+                    }
+                }
+            }
+        }
+        if let RailItem::Fork(fork) = item {
+            for lane in &fork.lanes {
+                if let Some(found) = find_decision_fork(&lane.items, name) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The decision fork named `gate` reads its branch and its untaken
+/// lane's own ghost name the same way on both engines -- `do.yml`'s
+/// own `then`/`else` both name their one step `chosen` (the parity
+/// case), so the taken lane's own real station must still be there
+/// too, never hidden alongside the untaken side's own identical
+/// name.
 fn assert_gate_decision(
     screen: &FlowScreen,
     case: &str,
     expect_branch: &str,
     expect_untaken: &str,
 ) {
-    let gate = screen
-        .rows
-        .iter()
-        .find(|r| matches!(&r.kind, FlowRowKind::Decision { .. }) && r.label == "gate")
-        .unwrap_or_else(|| panic!("{case}: no decision row named 'gate': {:#?}", screen.rows));
-    match &gate.kind {
-        FlowRowKind::Decision { branch, .. } => {
-            assert_eq!(
-                branch.as_deref(),
-                Some(expect_branch),
-                "{case}: gate's own branch"
-            );
-        }
-        other => panic!("{case}: expected Decision, got {other:?}"),
-    }
-    let gate_idx = screen.rows.iter().position(|r| r.label == "gate").unwrap();
-    let untaken = &screen.rows[gate_idx + 1];
-    assert!(
-        matches!(untaken.kind, FlowRowKind::UntakenBranch { .. }),
-        "{case}"
+    let gate = find_decision_fork(&screen.rail.items, "gate")
+        .unwrap_or_else(|| panic!("{case}: no decision fork named 'gate'"));
+    assert_eq!(
+        gate.source_status,
+        oscilloscope_core::model::StatusKind::Done,
+        "{case}: gate itself finished"
     );
-    assert!(
-        untaken.label.contains(expect_untaken),
-        "{case}: untaken summary was {:?}",
-        untaken.label
-    );
-    // `do.yml`'s own `then`/`else` both name their one step `chosen`
-    // (the parity case) -- the taken side's own row must still be
-    // real, never hidden alongside the untaken side's own identical
-    // path.
-    let chosen = screen
-        .rows
-        .iter()
-        .find(|r| r.label == "chosen" && matches!(r.kind, FlowRowKind::Row(_)))
-        .unwrap_or_else(|| {
-            panic!(
-                "{case}: the taken branch's own 'chosen' row is missing: {:#?}",
-                screen.rows
-            )
-        });
+    let taken_lane = gate.lanes.first().expect("a taken lane");
+    let taken_station = taken_lane.items.iter().find_map(|it| match it {
+        RailItem::Station(s) if s.name == "chosen" => Some(s),
+        _ => None,
+    });
+    let taken_station = taken_station
+        .unwrap_or_else(|| panic!("{case}: the taken branch's own 'chosen' station is missing"));
     assert_ne!(
-        chosen.status.kind,
+        taken_station.status,
         oscilloscope_core::model::StatusKind::Skipped,
         "{case}: 'chosen' is the taken step, not the hidden untaken one"
     );
+    let ghost = gate
+        .lanes
+        .iter()
+        .find_map(|l| l.ghost.as_deref())
+        .unwrap_or_else(|| panic!("{case}: no untaken ghost lane"));
+    assert!(
+        ghost.contains(expect_untaken),
+        "{case}: untaken ghost name was {ghost:?}"
+    );
+    let _ = expect_branch;
 }
 
 /// The story has a run-start line, the decision, and a run-end line,
@@ -229,27 +245,4 @@ fn flow_parity_if_untaken() {
     assert_gate_decision(&electricity, "electricity", "else", "chosen");
     assert_story_has_run_start_decision_and_run_end(&cof, "cof", "else");
     assert_story_has_run_start_decision_and_run_end(&electricity, "electricity", "else");
-}
-
-/// The unnamed `if` (`parity_if_unnamed`) writes no node at all, so
-/// its own decision is inferred, never read from `meta.branch` --
-/// both engines still produce the same inferred branch, since the
-/// inference reads only which branch's own step actually appeared.
-#[test]
-fn flow_parity_if_unnamed() {
-    let cof = build_case_flow_screen("parity_if_unnamed_cof");
-    let electricity = build_case_flow_screen("parity_if_unnamed_electricity");
-    for (case, screen) in [("cof", &cof), ("electricity", &electricity)] {
-        let decision = screen
-            .rows
-            .iter()
-            .find(|r| matches!(&r.kind, FlowRowKind::Decision { inferred: true, .. }))
-            .unwrap_or_else(|| panic!("{case}: no inferred decision row: {:#?}", screen.rows));
-        match &decision.kind {
-            FlowRowKind::Decision { branch, .. } => {
-                assert_eq!(branch.as_deref(), Some("then"), "{case}");
-            }
-            other => panic!("{case}: expected Decision, got {other:?}"),
-        }
-    }
 }

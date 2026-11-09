@@ -18,10 +18,6 @@ pub enum Pane {
     Tree,
     Details,
     State,
-    /// The Flow screen's own story pane (issue #635) -- scrollable,
-    /// reached from `Details` by `tab` only while `screen == Flow`;
-    /// every other screen's own cycle never visits it at all.
-    Story,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,18 +149,21 @@ pub struct App {
     /// `state_selected_path`, same reasoning as those two staying
     /// independent of each other.
     pub cost_selected: Option<String>,
-    /// The Flow screen's own story pane scroll position and interior
-    /// height (issue #635), the same pairing `tree_scroll`/
-    /// `tree_viewport` already are for the orchestration pane.
-    pub story_scroll: usize,
-    pub story_viewport: usize,
-    /// `s` (issue #635): the Flow screen's selected pane shows today's
-    /// state tree instead of the focused step's own detail, so a
-    /// named report stays selectable (#610). `s` again swaps back.
-    pub flow_selected_shows_state: bool,
-    /// `l` (issue #635): the Flow screen's story pane shows the full
-    /// log instead. `l` again swaps back.
-    pub flow_story_shows_log: bool,
+    /// The rail's own horizontal scroll (issue #691, DESIGN.md
+    /// §2.3's follow rule): a character offset from the run's own
+    /// start, clamped to the rail's real width only at draw time
+    /// (`tui::draw_flow`), the only place that knows it. `←→` move
+    /// it and turn `follow` off; `tui::draw_flow` turns `follow` back
+    /// on once a manual scroll lands Now back in view, the same way
+    /// the Tape's own selection rule already does for a row.
+    pub flow_scroll: usize,
+    /// Per-fork lane-open overrides (issue #691's `+`/`-`), keyed by
+    /// the fork's own path: `0` folds it into its own band, the
+    /// fork's own lane count fully opens it, anything in between is
+    /// only reachable on a loop four lanes wide or more (`+` opens
+    /// three at a time). Absent means the default rule applies
+    /// (folded below 100 columns, or with four lanes or more).
+    pub flow_lanes_open: std::collections::BTreeMap<String, usize>,
     /// The Signal screen's own scrub cursor (issue #688, §4: `←→`),
     /// a column index from the trace's own start -- `None` means
     /// following Now, the default; any scrub turns follow off, `n`
@@ -223,10 +222,8 @@ impl App {
             cost_measure: oscilloscope_core::treemap::Measure::Total,
             cost_zoom: Vec::new(),
             cost_selected: None,
-            story_scroll: 0,
-            story_viewport: 0,
-            flow_selected_shows_state: false,
-            flow_story_shows_log: false,
+            flow_scroll: 0,
+            flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_column_ms: 100,
             signal_now_col: None,
@@ -282,6 +279,77 @@ impl App {
     /// `n` (§4): the cursor returns to Now.
     pub fn signal_now(&mut self) {
         self.signal_cursor_col = None;
+    }
+
+    /// ←→'s own step on the Flow rail (issue #691): one station's
+    /// worth of characters -- `tui::draw_flow` clamps the real value
+    /// against the rail's own width, the only place that knows it.
+    const FLOW_SCROLL_STEP: usize = 10;
+
+    /// ↑↓ on the Flow screen (issue #691, §4): moves the selected
+    /// lane over every loop pass the run has, in plan order -- the
+    /// rail's own lane concept, never the tree's row list.
+    pub fn flow_select_lane(&mut self, rows: &[&Row], delta: i32) {
+        let paths: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.kind == oscilloscope_core::render::RowKind::Pass)
+            .map(|r| r.path.as_str())
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let idx = self
+            .selected_path
+            .as_deref()
+            .and_then(|p| paths.iter().position(|q| *q == p));
+        let next = match idx {
+            Some(i) => (i as i32 + delta).clamp(0, paths.len() as i32 - 1) as usize,
+            None if delta >= 0 => 0,
+            None => paths.len() - 1,
+        };
+        self.select_tree_path(Some(paths[next].to_string()));
+    }
+
+    /// `+` (issue #691, §2.3): opens every loop's own lanes three at
+    /// a time, up to its own real lane count (the loop's own known
+    /// total, or however many passes are observed so far without
+    /// one) -- scoped to every loop on the rail at once, since the
+    /// rail draws at most one loop's own lanes open simultaneously
+    /// in every fixture this screen has today.
+    pub fn flow_open_lanes(&mut self, rows: &[&Row]) {
+        for loop_row in rows
+            .iter()
+            .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
+        {
+            let observed = rows
+                .iter()
+                .filter(|r| {
+                    r.kind == oscilloscope_core::render::RowKind::Pass
+                        && r.path.starts_with(&format!("{}.iter_", loop_row.path))
+                })
+                .count() as u64;
+            let lane_count = loop_row
+                .loop_progress
+                .and_then(|p| p.total)
+                .unwrap_or(observed)
+                .max(observed);
+            let entry = self
+                .flow_lanes_open
+                .entry(loop_row.path.clone())
+                .or_insert(0);
+            *entry = ((*entry as u64 + 3).min(lane_count)) as usize;
+        }
+    }
+
+    /// `-` (issue #691): folds every loop's own lanes back into its
+    /// own band.
+    pub fn flow_fold_lanes(&mut self, rows: &[&Row]) {
+        for loop_row in rows
+            .iter()
+            .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
+        {
+            self.flow_lanes_open.insert(loop_row.path.clone(), 0);
+        }
     }
 
     /// The orchestration pane's own selection, resetting the details
@@ -439,6 +507,13 @@ impl App {
             // state pane's own, independent selection when
             // `Pane::State`; the details pane's own scroll position
             // when `Pane::Details`.
+            // Issue #691 (design v1 part 3, §4): ↑↓ select a lane
+            // (a loop's own pass) on the Flow screen, over every
+            // `RowKind::Pass` the run has, in plan order -- never
+            // `move_or_scroll`'s own tree-shaped walk, which the
+            // rail replaces entirely.
+            KeyCode::Up if self.screen == Screen::Flow => self.flow_select_lane(rows, -1),
+            KeyCode::Down if self.screen == Screen::Flow => self.flow_select_lane(rows, 1),
             KeyCode::Up | KeyCode::Char('k') => self.move_or_scroll(rows, state_rows, -1),
             KeyCode::Down | KeyCode::Char('j') => self.move_or_scroll(rows, state_rows, 1),
             KeyCode::PageUp => {
@@ -457,7 +532,8 @@ impl App {
             KeyCode::Left
                 if self.pane == Pane::Tree
                     && self.screen != Screen::Tape
-                    && self.screen != Screen::Signal =>
+                    && self.screen != Screen::Signal
+                    && self.screen != Screen::Flow =>
             {
                 if let Some(path) = self.selected_path.clone() {
                     self.collapsed.insert(path.clone());
@@ -491,7 +567,8 @@ impl App {
             KeyCode::Right
                 if self.pane == Pane::Tree
                     && self.screen != Screen::Tape
-                    && self.screen != Screen::Signal =>
+                    && self.screen != Screen::Signal
+                    && self.screen != Screen::Flow =>
             {
                 if let Some(path) = &self.selected_path {
                     self.collapsed.remove(path);
@@ -505,6 +582,31 @@ impl App {
             KeyCode::Char('n') if self.screen == Screen::Signal => self.signal_now(),
             KeyCode::Char('+') if self.screen == Screen::Signal => self.signal_zoom_in(),
             KeyCode::Char('-') if self.screen == Screen::Signal => self.signal_zoom_out(),
+            // Issue #691 (design v1 part 3, §4): ←→ scroll the rail,
+            // turning follow off -- `tui::draw_flow` is the only
+            // thing that knows the rail's own real width, so it (not
+            // this key handler) turns follow back on once a manual
+            // scroll lands Now back in view, the same way the Tape's
+            // own selection rule already does.
+            KeyCode::Left if self.screen == Screen::Flow => {
+                self.flow_scroll = self.flow_scroll.saturating_sub(Self::FLOW_SCROLL_STEP);
+                self.follow = false;
+            }
+            KeyCode::Right if self.screen == Screen::Flow => {
+                self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
+                self.follow = false;
+            }
+            // Issue #691: `+` opens the selected fork's own lanes
+            // (three at a time, DESIGN.md §2.3's folded loop), `-`
+            // folds them back into the band.
+            KeyCode::Char('+') if self.screen == Screen::Flow => self.flow_open_lanes(rows),
+            KeyCode::Char('-') if self.screen == Screen::Flow => self.flow_fold_lanes(rows),
+            // Issue #691: ⏎ opens the selected station or pass
+            // full-screen, the same toggle the Tape and Signal
+            // already share.
+            KeyCode::Enter if self.screen == Screen::Flow => {
+                self.tape_fullscreen_step = !self.tape_fullscreen_step;
+            }
             // Issue #678 (design v1 §4): ⏎ on the Tape, or on Signal,
             // opens the selected row's own step full-screen -- `esc`
             // or ⏎ again returns to the list. Signal only toggles
@@ -552,39 +654,22 @@ impl App {
             // with, and overloading it here only let `↑↓` silently
             // scroll the detail pane instead of moving the selection.
             // Still live on the unported screens below.
-            KeyCode::Tab if self.screen != Screen::Tape && self.screen != Screen::Signal => {
-                // Issue #635: the Flow screen's own cycle is flow →
-                // selected → story → flow. `s` swaps the selected
-                // pane's own *content* between the focused step and
-                // today's state tree, but the selected slot in this
-                // cycle must follow that swap too (#610) -- otherwise
-                // a state-tree report `s` just swapped in can never
-                // actually get focus, or its own `←`/`→`/`v`.
-                self.pane = if self.screen == Screen::Flow {
-                    match self.pane {
-                        Pane::Tree => {
-                            if self.flow_selected_shows_state {
-                                Pane::State
-                            } else {
-                                Pane::Details
-                            }
-                        }
-                        // The story pane isn't drawn at all below
-                        // the three-pane layout, so `tab` must not
-                        // land on it with nothing to show or scroll.
-                        Pane::Details | Pane::State if self.story_viewport > 0 => Pane::Story,
-                        _ => Pane::Tree,
-                    }
-                } else {
-                    // On a small terminal the state pane isn't drawn
-                    // at all (`tui::draw` zeroes `state_viewport` the
-                    // same frame) — `tab` must not focus a pane with
-                    // nothing to show or scroll.
-                    match self.pane {
-                        Pane::Tree => Pane::Details,
-                        Pane::Details if self.state_viewport > 0 => Pane::State,
-                        _ => Pane::Tree,
-                    }
+            // Gone from the Flow screen (issue #691, §4): each
+            // screen now has one list with a cursor, nothing to tab
+            // between -- still live on Cost until its own redesign.
+            KeyCode::Tab
+                if self.screen != Screen::Tape
+                    && self.screen != Screen::Signal
+                    && self.screen != Screen::Flow =>
+            {
+                // On a small terminal the state pane isn't drawn
+                // at all (`tui::draw` zeroes `state_viewport` the
+                // same frame) — `tab` must not focus a pane with
+                // nothing to show or scroll.
+                self.pane = match self.pane {
+                    Pane::Tree => Pane::Details,
+                    Pane::Details if self.state_viewport > 0 => Pane::State,
+                    _ => Pane::Tree,
                 };
             }
             // Issue #626, #632, #650: `0`-`3` all switch screens now.
@@ -613,36 +698,17 @@ impl App {
             KeyCode::Char('p') if self.screen == Screen::Tape => {
                 self.tape_previews_on = !self.tape_previews_on;
             }
-            // Issue #635: the Flow screen's own content swaps -- `s`
-            // for the selected pane (the focused step's own detail vs
-            // today's state tree, so a named report stays
-            // selectable), `l` for the story pane (the story vs the
-            // full log). Both no-ops on any other screen.
-            KeyCode::Char('s') if self.screen == Screen::Flow => {
-                self.flow_selected_shows_state = !self.flow_selected_shows_state;
-                // Toggling back to the step view must not leave the
-                // selected pane still showing (or focused on) the
-                // state tree `s` had swapped in: `details_source`
-                // stays whatever the state pane's own navigation last
-                // set it to, and `pane` itself can still be `State`,
-                // which is no longer drawn at all once this flips.
-                if !self.flow_selected_shows_state {
-                    self.details_source = Pane::Tree;
-                    if self.pane == Pane::State {
-                        self.pane = Pane::Details;
-                    }
-                }
-            }
-            KeyCode::Char('l') if self.screen == Screen::Flow => {
-                self.flow_story_shows_log = !self.flow_story_shows_log;
-            }
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #613: `z` turns folding off to show the full,
-            // unfolded tree, and back on again -- gone from the Tape
-            // and Signal (§4 has no fold key on either; both screens'
-            // own rows are already flat), still live on Flow/Cost
-            // until their own redesign.
-            KeyCode::Char('z') if self.screen != Screen::Tape && self.screen != Screen::Signal => {
+            // unfolded tree, and back on again -- gone from the Tape,
+            // Signal and Flow (§4 has no fold key on any of the
+            // three; the rail's own `+`/`-` is a different thing),
+            // still live on Cost until its own redesign.
+            KeyCode::Char('z')
+                if self.screen != Screen::Tape
+                    && self.screen != Screen::Signal
+                    && self.screen != Screen::Flow =>
+            {
                 self.fold_enabled = !self.fold_enabled;
             }
             KeyCode::Char('e') => self.errors_only = !self.errors_only,
@@ -650,8 +716,10 @@ impl App {
                 self.dialog = Dialog::FilterInput(self.filter.clone().unwrap_or_default());
             }
             // Gone from the Tape the same way `z` is above -- its own
-            // detail pane already shows the prompt and reply in full.
-            KeyCode::Char('v') if self.screen != Screen::Tape => {
+            // detail pane already shows the prompt and reply in full
+            // -- and from the Flow screen, whose own selected pane
+            // does too.
+            KeyCode::Char('v') if self.screen != Screen::Tape && self.screen != Screen::Flow => {
                 self.dialog = Dialog::FullValue(if has_prompt_sent {
                     FullValueField::PromptSent
                 } else {
@@ -685,7 +753,6 @@ impl App {
             Pane::Tree => self.tree_viewport.max(1),
             Pane::State => self.state_viewport.max(1),
             Pane::Details => self.details_viewport.max(1),
-            Pane::Story => self.story_viewport.max(1),
         }
     }
 
@@ -826,20 +893,6 @@ impl App {
             }
             Pane::State => self.move_state_selection(state_rows, delta),
             Pane::Details => self.scroll_details(delta),
-            Pane::Story => self.scroll_story(delta),
-        }
-    }
-
-    /// The story pane's own scroll (issue #635: "the selected pane
-    /// and the story scroll with ↑↓ when they have focus") -- clamped
-    /// by `tui::draw`'s own render the same way `scroll_details`'s
-    /// `details_scroll` already is, since only it knows the story's
-    /// real line count this frame.
-    fn scroll_story(&mut self, delta: i32) {
-        if delta < 0 {
-            self.story_scroll = self.story_scroll.saturating_sub((-delta) as usize);
-        } else {
-            self.story_scroll = self.story_scroll.saturating_add(delta as usize);
         }
     }
 
@@ -868,9 +921,6 @@ impl App {
             }
             Pane::Details => {
                 self.details_scroll = if to_first { 0 } else { usize::MAX };
-            }
-            Pane::Story => {
-                self.story_scroll = if to_first { 0 } else { usize::MAX };
             }
         }
     }
@@ -1108,90 +1158,6 @@ pub fn visible_rows_for_tape(
             _ => None,
         })
         .collect()
-}
-
-/// `visible_rows`, further narrowed to exactly what the Flow screen's
-/// own pane draws (issue #635), in the exact order it draws them
-/// (`flow_rows`' own order, the same list `tui::draw_flow_pane`'s own
-/// `drawable` builds) -- a path the Flow screen hides entirely (the
-/// untaken branch's own real steps) or merges away (a single-pass
-/// loop's own pass) is simply never one of `flow_rows`' own
-/// selectable entries, so `j`/`k`/PgUp/PgDn/Home/End never land on
-/// it. An unnamed `if`'s own synthesised decision (issue #643's first
-/// follow-up) has no real path of its own to look up in `rows` at
-/// all, so it gets a synthetic `Row` instead, always kept -- it has
-/// no collapse state of its own either, same as the Flow pane's own
-/// drawing.
-pub fn visible_rows_for_flow(
-    rows: &[Row],
-    flow_rows: &[oscilloscope_core::flow::FlowRow],
-    app: &App,
-) -> Vec<Row> {
-    use oscilloscope_core::flow::{FlowRowKind, is_selectable_flow_row};
-    let visible_real_paths: std::collections::BTreeSet<&str> = visible_rows(rows, app)
-        .into_iter()
-        .map(|r| r.path.as_str())
-        .collect();
-    let by_path: std::collections::BTreeMap<&str, &Row> =
-        rows.iter().map(|r| (r.path.as_str(), r)).collect();
-    let mut out: Vec<Row> = flow_rows
-        .iter()
-        .filter(|fr| is_selectable_flow_row(&fr.kind))
-        .filter_map(|fr| {
-            if matches!(fr.kind, FlowRowKind::Decision { inferred: true, .. }) {
-                return Some(synthetic_row_for_flow_row(fr));
-            }
-            if visible_real_paths.contains(fr.path.as_str()) {
-                by_path.get(fr.path.as_str()).map(|r| (*r).clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-    // A merged pass's own path (`prime.fan.iter_0`) has no `flow_rows`
-    // entry of its own at all -- it is folded into its loop row's --
-    // but it can still be `selected_path` (the Flow pane maps it to
-    // the loop row instead of hiding the selection outright). Leaving
-    // it out here too would leave `move_tree_selection` with no
-    // `current` at all, so `j`/`k` would jump to the first or last
-    // row instead of moving one step from where the pane shows the
-    // selection to be -- spliced back in right after its own loop
-    // row (the closest already-kept ancestor path), the same
-    // position `rows`' own order already puts it in.
-    if let Some(selected) = app.selected_path.as_deref() {
-        if !out.iter().any(|r| r.path == selected) {
-            if let Some(real) = by_path.get(selected) {
-                let insert_at = out
-                    .iter()
-                    .rposition(|r| selected.starts_with(&format!("{}.", r.path)))
-                    .map(|idx| idx + 1)
-                    .unwrap_or(out.len());
-                out.insert(insert_at, (*real).clone());
-            }
-        }
-    }
-    out
-}
-
-/// A placeholder `Row` for an unnamed `if`'s own synthesised decision
-/// (issue #643): just enough for movement (`path`/`depth`) and the
-/// handful of real-`Row` fields [`App::handle_key_normal`] also
-/// reads for other rows' sake (none of which ever matches a
-/// synthetic path -- it is never a quick-steps summary, the
-/// document root, or anything with real children of its own to
-/// collapse).
-fn synthetic_row_for_flow_row(fr: &oscilloscope_core::flow::FlowRow) -> Row {
-    Row {
-        path: fr.path.clone(),
-        depth: fr.depth,
-        label: fr.label.clone(),
-        kind: oscilloscope_core::render::RowKind::If,
-        status: fr.status.clone(),
-        duration_s: fr.duration_s,
-        loop_progress: None,
-        dim: None,
-        has_children: false,
-    }
 }
 
 fn matches_or_has_match(rows: &[Row], row: &Row, pred: &dyn Fn(&Row) -> bool) -> bool {
@@ -1780,7 +1746,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
     }
@@ -1790,7 +1756,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Flow;
+        app.screen = Screen::Cost;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
@@ -1803,87 +1769,65 @@ mod tests {
     }
 
     #[test]
-    fn the_flow_screens_tab_cycle_visits_the_story_pane_not_the_state_pane() {
-        let rows = [row("prime.a", 1, StatusKind::Done)];
+    fn flow_up_down_select_lanes_over_every_pass_in_plan_order() {
+        let mut loop_row = row("prime.drafts", 1, StatusKind::Running);
+        loop_row.kind = RowKind::Loop;
+        let mut pass0 = row("prime.drafts.iter_0", 2, StatusKind::Running);
+        pass0.kind = RowKind::Pass;
+        let mut pass1 = row("prime.drafts.iter_1", 2, StatusKind::Running);
+        pass1.kind = RowKind::Pass;
+        let rows = [loop_row, pass0, pass1];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.screen = Screen::Flow;
-        app.state_viewport = 8;
-        app.story_viewport = 8;
-        assert_eq!(app.pane, Pane::Tree);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Details);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Story);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_1"));
+        app.handle_key(key(KeyCode::Up), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
     }
 
     #[test]
-    fn after_s_tab_reaches_the_state_pane_and_arrow_keys_move_its_selection() {
-        let rows = [row("prime.a", 1, StatusKind::Done)];
+    fn flow_left_right_scroll_and_turn_follow_off() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        assert!(app.follow);
+        app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
+        assert!(!app.follow);
+        assert_eq!(app.flow_scroll, 10);
+        app.handle_key(key(KeyCode::Left), &[], &[], true, false, &[]);
+        assert_eq!(app.flow_scroll, 0);
+    }
+
+    #[test]
+    fn flow_plus_minus_open_and_fold_a_loops_own_lanes() {
+        let mut loop_row = row("prime.drafts", 1, StatusKind::Running);
+        loop_row.kind = RowKind::Loop;
+        loop_row.loop_progress = Some(oscilloscope_core::render::LoopProgress {
+            done: 0,
+            total: Some(5),
+            eta_s: None,
+        });
+        let rows = [loop_row];
         let visible: Vec<&Row> = rows.iter().collect();
-        let state_rows = [state_row("a"), state_row("b")];
-        let state_visible: Vec<&StateRow> = state_rows.iter().collect();
         let mut app = App::new(false);
         app.screen = Screen::Flow;
-        app.state_viewport = 8;
-        app.story_viewport = 8;
-        app.handle_key(
-            key(KeyCode::Char('s')),
-            &visible,
-            &state_visible,
-            false,
-            false,
-            &[],
-        );
-        assert!(app.flow_selected_shows_state);
-        app.handle_key(
-            key(KeyCode::Tab),
-            &visible,
-            &state_visible,
-            false,
-            false,
-            &[],
-        );
-        assert_eq!(app.pane, Pane::State);
-        app.handle_key(
-            key(KeyCode::Down),
-            &visible,
-            &state_visible,
-            false,
-            false,
-            &[],
-        );
-        assert_eq!(app.state_selected_path.as_deref(), Some("a"));
-        assert_eq!(app.details_source, Pane::State);
+        app.handle_key(key(KeyCode::Char('+')), &visible, &[], true, false, &[]);
+        assert_eq!(app.flow_lanes_open.get("prime.drafts"), Some(&3));
+        app.handle_key(key(KeyCode::Char('+')), &visible, &[], true, false, &[]);
+        assert_eq!(app.flow_lanes_open.get("prime.drafts"), Some(&5));
+        app.handle_key(key(KeyCode::Char('-')), &visible, &[], true, false, &[]);
+        assert_eq!(app.flow_lanes_open.get("prime.drafts"), Some(&0));
     }
 
     #[test]
-    fn s_and_l_toggle_the_flow_screens_own_content_swaps_only_on_the_flow_screen() {
-        let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
-        assert!(!app.flow_selected_shows_state, "not the Flow screen yet");
-        app.screen = Screen::Flow;
-        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
-        assert!(app.flow_selected_shows_state);
-        app.handle_key(key(KeyCode::Char('s')), &[], &[], false, false, &[]);
-        assert!(!app.flow_selected_shows_state);
-        app.handle_key(key(KeyCode::Char('l')), &[], &[], false, false, &[]);
-        assert!(app.flow_story_shows_log);
-        app.handle_key(key(KeyCode::Char('l')), &[], &[], false, false, &[]);
-        assert!(!app.flow_story_shows_log);
-    }
-
-    #[test]
-    fn up_down_scroll_the_story_pane_when_it_has_focus() {
+    fn flow_enter_toggles_fullscreen_the_same_as_tape_and_signal() {
         let mut app = App::new(false);
         app.screen = Screen::Flow;
-        app.pane = Pane::Story;
-        app.handle_key(key(KeyCode::Down), &[], &[], false, false, &[]);
-        assert_eq!(app.story_scroll, 1);
-        app.handle_key(key(KeyCode::Up), &[], &[], false, false, &[]);
-        assert_eq!(app.story_scroll, 0);
+        assert!(!app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(app.tape_fullscreen_step);
     }
 
     #[test]
@@ -2247,161 +2191,6 @@ mod tests {
         assert_eq!(app.cost_measure, Measure::Total);
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
         assert_eq!(app.cost_selected, None);
-    }
-
-    fn flow_row(path: &str, merged_pass: bool) -> oscilloscope_core::flow::FlowRow {
-        oscilloscope_core::flow::FlowRow {
-            path: path.to_string(),
-            depth: 0,
-            label: path.rsplit('.').next().unwrap().to_string(),
-            kind: oscilloscope_core::flow::FlowRowKind::Row(RowKind::Tool),
-            status: RowStatus {
-                kind: StatusKind::Running,
-                skip_reason: None,
-                retrying: false,
-            },
-            start_ts: None,
-            duration_s: None,
-            tokens: None,
-            cost_usd: None,
-            condition: None,
-            loop_progress: None,
-            has_children: false,
-            merged_pass,
-        }
-    }
-
-    /// A single-pass loop's own pass (`prime.fan.iter_0`) is merged
-    /// into its loop row in the Flow screen's own `flow_rows`, so it
-    /// has no path of its own there at all -- but it can still be
-    /// `App::selected_path` (the loop row is drawn in its place).
-    /// `visible_rows_for_flow` must keep it anyway, or `j`/`k` have
-    /// no current position to move from at all.
-    #[test]
-    fn visible_rows_for_flow_keeps_a_selected_path_the_flow_screen_merged_away() {
-        let rows = [
-            row("prime", 0, StatusKind::Running),
-            row("prime.fan", 1, StatusKind::Running),
-            row("prime.fan.iter_0", 2, StatusKind::Running),
-        ];
-        let flow_rows = [flow_row("prime", false), flow_row("prime.fan", true)];
-        let mut app = App::new(false);
-        app.selected_path = Some("prime.fan.iter_0".to_string());
-        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
-        assert_eq!(
-            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
-            vec!["prime", "prime.fan", "prime.fan.iter_0"],
-            "the merged-away pass must stay in the list while it's selected"
-        );
-    }
-
-    /// Issue #643's first follow-up: an unnamed `if`'s own
-    /// synthesised decision has no real path in `rows` at all, but
-    /// `j`/`k` must still be able to reach it, and `move_tree_
-    /// selection` must advance to the row right after it.
-    #[test]
-    fn visible_rows_for_flow_includes_an_inferred_decision_and_j_reaches_it() {
-        let rows = [
-            row("prime", 0, StatusKind::Running),
-            row("prime.a", 1, StatusKind::Running),
-            row("prime.b", 1, StatusKind::Running),
-        ];
-        let mut inferred = flow_row("prime.__if", false);
-        inferred.kind = oscilloscope_core::flow::FlowRowKind::Decision {
-            branch: Some("then".to_string()),
-            inferred: true,
-            nothing_ran: false,
-            answer: None,
-        };
-        let flow_rows = [
-            flow_row("prime", false),
-            inferred,
-            flow_row("prime.a", false),
-        ];
-        let app = App::new(false);
-        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
-        assert_eq!(
-            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
-            vec!["prime", "prime.__if", "prime.a"],
-            "the inferred decision must be selectable, in its own drawn position"
-        );
-
-        let mut app = App::new(false);
-        app.screen = Screen::Flow;
-        app.selected_path = Some("prime".to_string());
-        let visible_refs: Vec<&Row> = visible.iter().collect();
-        app.handle_key(
-            key(KeyCode::Char('j')),
-            &visible_refs,
-            &[],
-            false,
-            false,
-            &[],
-        );
-        assert_eq!(app.selected_path.as_deref(), Some("prime.__if"));
-        app.handle_key(
-            key(KeyCode::Char('j')),
-            &visible_refs,
-            &[],
-            false,
-            false,
-            &[],
-        );
-        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
-    }
-
-    #[test]
-    fn visible_rows_for_flow_drops_an_unselected_merged_pass() {
-        let rows = [
-            row("prime", 0, StatusKind::Running),
-            row("prime.fan", 1, StatusKind::Running),
-            row("prime.fan.iter_0", 2, StatusKind::Running),
-        ];
-        let flow_rows = [flow_row("prime", false), flow_row("prime.fan", true)];
-        let app = App::new(false);
-        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
-        assert_eq!(
-            visible.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
-            vec!["prime", "prime.fan"],
-            "a merged pass that isn't selected is still hidden, same as before"
-        );
-    }
-
-    /// The regression itself: watching a single-pass loop (selection
-    /// on its merged pass) and pressing `j` must move to the next row
-    /// the Flow pane actually draws, not jump to the first row
-    /// because `move_tree_selection` can't find a current position.
-    #[test]
-    fn j_from_a_merged_pass_moves_to_the_row_after_its_loop_not_to_the_top() {
-        let rows = [
-            row("prime", 0, StatusKind::Running),
-            row("prime.fan", 1, StatusKind::Running),
-            row("prime.fan.iter_0", 2, StatusKind::Running),
-            row("prime.next", 1, StatusKind::Pending),
-        ];
-        let flow_rows = [
-            flow_row("prime", false),
-            flow_row("prime.fan", true),
-            flow_row("prime.next", false),
-        ];
-        let mut app = App::new(false);
-        app.screen = Screen::Flow;
-        app.selected_path = Some("prime.fan.iter_0".to_string());
-        let visible = visible_rows_for_flow(&rows, &flow_rows, &app);
-        let visible_refs: Vec<&Row> = visible.iter().collect();
-        app.handle_key(
-            key(KeyCode::Char('j')),
-            &visible_refs,
-            &[],
-            false,
-            false,
-            &[],
-        );
-        assert_eq!(
-            app.selected_path.as_deref(),
-            Some("prime.next"),
-            "must move one row past the loop, not jump to prime"
-        );
     }
 
     // -------------------------------------------------------------

@@ -17,7 +17,7 @@ use crate::format::{ClockZone, format_clock_time};
 use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind};
 use crate::observe::duration_seconds;
 use crate::plan::{LeafEffectKind, PlanEntryKind, PlanTree};
-use crate::render::{Row, RowKind, TokenBlock, details_for};
+use crate::render::{Header, Row, RowKind, TokenBlock, details_for};
 
 /// Which of the four screens is on display (issue #650: all four
 /// now have a screen to show).
@@ -1006,7 +1006,7 @@ pub struct TapeFailedDetail {
 /// (`tape_token_bar`'s round-half-up, capped at eight) -- 402 at a
 /// 50-token unit rounds to a full 8-cell bar, not 9, so the unit
 /// stays 50 for it.
-fn tape_unit(largest_usual: Option<u64>) -> u64 {
+pub(crate) fn tape_unit(largest_usual: Option<u64>) -> u64 {
     const STEPS: [u64; 6] = [10, 20, 50, 100, 200, 500];
     let Some(largest) = largest_usual else {
         return 50;
@@ -1191,7 +1191,7 @@ fn first_words(text: &str, max_chars: usize) -> String {
 /// through this, not only the ones ahead, so a finished or running
 /// row's `+47%` deviation has the same figure behind it as a queued
 /// one's `usually 155 t`.
-fn tape_row_usual_tokens(
+pub(crate) fn tape_row_usual_tokens(
     path: &str,
     plan: &PlanTree,
     header: &crate::render::Header,
@@ -2644,6 +2644,42 @@ fn signal_loop_pass_tokens(loop_path: &str, flat: &BTreeMap<String, NodeMeta>) -
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The newest finished (or handled-failed) row, by its own finish
+/// time (DESIGN.md §3.2: "the newest finished step") -- shared by
+/// the Signal's and the Flow's own status lines.
+pub(crate) fn last_finished_row(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    run_start: Option<&str>,
+) -> Option<SignalLastFinished> {
+    let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
+    let finish_ts = |r: &&Row| -> Option<&str> {
+        let node = flat.get(&r.path)?;
+        if r.kind == RowKind::If {
+            node.created_at.as_deref()
+        } else {
+            node.completed_at.as_deref()
+        }
+    };
+    rows.iter()
+        .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
+        .filter_map(|r| Some((r, elapsed_offset(finish_ts(&r)?)?)))
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(row, _)| {
+            let node = flat.get(&row.path);
+            let tokens = node.map(|n| crate::model::node_tokens(&n.meta));
+            SignalLastFinished {
+                label: tape_row_label(row, flat, plan),
+                kind: row.kind,
+                status: row.status.kind,
+                tokens: tokens.filter(|(s, r)| s + r > 0),
+                ts: finish_ts(&row).map(str::to_string),
+            }
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_signal(
     rows: &[Row],
     header: &crate::render::Header,
@@ -3261,31 +3297,7 @@ pub fn build_signal(
                 .sum();
             (sum > 0).then_some(sum)
         },
-        last_finished: {
-            let finish_ts = |r: &&Row| -> Option<&str> {
-                let node = flat.get(&r.path)?;
-                if r.kind == RowKind::If {
-                    node.created_at.as_deref()
-                } else {
-                    node.completed_at.as_deref()
-                }
-            };
-            rows.iter()
-                .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
-                .filter_map(|r| Some((r, elapsed_offset(finish_ts(&r)?)?)))
-                .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                .map(|(row, _)| {
-                    let node = flat.get(&row.path);
-                    let tokens = node.map(|n| crate::model::node_tokens(&n.meta));
-                    SignalLastFinished {
-                        label: tape_row_label(row, flat, plan),
-                        kind: row.kind,
-                        status: row.status.kind,
-                        tokens: tokens.filter(|(s, r)| s + r > 0),
-                        ts: finish_ts(&row).map(str::to_string),
-                    }
-                })
-        },
+        last_finished: last_finished_row(rows, flat, plan, run_start),
     }
 }
 
@@ -3382,6 +3394,9 @@ pub fn build_cost_screen(
 /// an ordinary step (issue #635: "a decision row shows its condition,
 /// its mode, the branch it took, and the model's answer for a
 /// model-mode condition").
+/// A selected decision station's own detail (DESIGN.md §2.3): its
+/// condition, the branch it took, and the model's own answer for a
+/// model-mode condition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectedDecision {
     pub label: String,
@@ -3392,30 +3407,176 @@ pub struct SelectedDecision {
     pub answer: Option<String>,
 }
 
-/// Screen 2's own model (issue #635, part of #612) -- built only
+/// One named step inside the selected pass (DESIGN.md §2.3's
+/// `Pass 1 · cats · Selected` pane): `Draft` -- a capitalised step
+/// name, its own status, tokens and deviation, and (once done) what
+/// it produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedPassStep {
+    pub label: String,
+    pub status: RowStatus,
+    pub tokens: Option<u64>,
+    pub usual: Option<u64>,
+    pub produced: Option<String>,
+}
+
+/// The selected loop pass (DESIGN.md §2.3, §5's "the selected pass
+/// or station pane"): `index`/`label` name it (`Pass 1 · cats`),
+/// `active_*`/`slot` describe whichever of its own steps is
+/// currently live (or, once the pass has finished, its own last
+/// step) for the Status line, and `steps` is every prompt the pass
+/// ran, for its own named row and the Produced text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedPass {
+    pub index: usize,
+    pub label: String,
+    pub active_label: String,
+    pub active_status: RowStatus,
+    pub active_elapsed_s: Option<f64>,
+    pub slot: Option<usize>,
+    pub steps: Vec<SelectedPassStep>,
+}
+
+/// Screen 2's own model (issue #691, part 3 of #677) -- built only
 /// while the Flow screen is actually on display, the same
 /// performance rule `build_cost_screen` already follows for screen
-/// 3. `rows`/`footer`/`story` are `crate::flow::build_flow_rows`'s
-/// and `build_story`'s own outputs; `selected`/`selected_decision`
-/// pick whichever of the two the current selection actually is --
-/// never both, since a flow-pane selection is always exactly one
-/// kind of row at a time.
+/// 3. `rail` is [`crate::rail::build_rail`]'s own output; `story` is
+/// `crate::flow::build_story`'s; `selected_pass`/`selected_step` pick
+/// whichever of the two the current selection actually is -- never
+/// both, a loop pass and a plain station are never the same
+/// selection at once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlowScreen {
-    pub rows: Vec<crate::flow::FlowRow>,
-    pub footer: crate::flow::FlowFooter,
+    pub rail: crate::rail::Rail,
+    pub unit: u64,
     pub story: Vec<crate::flow::StoryEntry>,
-    pub selected: Option<FocusedStep>,
+    pub selected_pass: Option<SelectedPass>,
     pub selected_decision: Option<SelectedDecision>,
+    pub selected_step: Option<FocusedStep>,
+    /// §3.2's status line: the newest finished step, shared with
+    /// the Signal's own.
+    pub last_finished: Option<SignalLastFinished>,
+}
+
+/// The first pass of the first loop that is either running or, with
+/// nothing running, simply first in plan order -- the rail's own
+/// default selection (DESIGN.md's own frames: `Pass 1 · cats` is
+/// selected with no explicit selection at all).
+fn default_pass_path(rows: &[Row]) -> Option<&str> {
+    let running = rows
+        .iter()
+        .find(|r| r.kind == RowKind::Pass && r.status.kind == StatusKind::Running);
+    running
+        .or_else(|| rows.iter().find(|r| r.kind == RowKind::Pass))
+        .map(|r| r.path.as_str())
+}
+
+fn capitalize(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_flow_screen(
+fn build_selected_pass(
+    pass_path: &str,
     rows: &[Row],
-    unfolded_rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    header: &Header,
+    state: Option<&Value>,
+) -> Option<SelectedPass> {
+    let pass_row = rows.iter().find(|r| r.path == pass_path)?;
+    let loop_path = pass_path.rsplit_once('.').map(|(p, _)| p)?;
+    let index_str = pass_path.rsplit('.').next()?.strip_prefix("iter_")?;
+    let pass_index: u64 = index_str.parse().ok()?;
+    let label = crate::rail::pass_each_value(loop_path, pass_index, plan, state)
+        .unwrap_or_else(|| format!("pass {}", pass_index + 1));
+    let children: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.depth == pass_row.depth + 1 && r.path.starts_with(&format!("{pass_path}.")))
+        .collect();
+    let active = children
+        .iter()
+        .find(|r| {
+            matches!(
+                r.status.kind,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            )
+        })
+        .or_else(|| children.last())
+        .copied();
+    let slot = active.and_then(|active| {
+        if active.status.kind != StatusKind::Running {
+            return None;
+        }
+        let siblings: Vec<&Row> = rows
+            .iter()
+            .filter(|r| {
+                r.kind == RowKind::Pass
+                    && r.path.starts_with(&format!("{loop_path}."))
+                    && r.status.kind == StatusKind::Running
+            })
+            .collect();
+        let mut ordered: Vec<(&str, Option<String>)> = siblings
+            .iter()
+            .map(|r| {
+                (
+                    r.path.as_str(),
+                    flat.get(&r.path).and_then(|n| n.created_at.clone()),
+                )
+            })
+            .collect();
+        ordered.sort_by(|a, b| a.1.cmp(&b.1));
+        ordered
+            .iter()
+            .position(|(p, _)| *p == pass_path)
+            .map(|i| i + 1)
+    });
+    let steps = children
+        .iter()
+        .filter(|r| r.kind == RowKind::Prompt)
+        .map(|r| {
+            let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
+            let tokens = (sent + received > 0).then_some(sent + received);
+            let usual = tape_row_usual_tokens(&r.path, plan, header);
+            let produced = flat
+                .get(&r.path)
+                .and_then(|n| n.value.as_str())
+                .map(str::to_string);
+            SelectedPassStep {
+                label: capitalize(&r.label),
+                status: r.status.clone(),
+                tokens,
+                usual,
+                produced,
+            }
+        })
+        .collect();
+    Some(SelectedPass {
+        index: (pass_index + 1) as usize,
+        label,
+        active_label: active.map(|r| r.label.clone()).unwrap_or_default(),
+        active_status: active.map(|r| r.status.clone()).unwrap_or(RowStatus {
+            kind: StatusKind::Pending,
+            skip_reason: None,
+            retrying: false,
+        }),
+        active_elapsed_s: active.and_then(|r| r.duration_s),
+        slot,
+        steps,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_flow(
+    rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
+    header: &Header,
     state: Option<&Value>,
     story_lines: &[crate::diff::LogLine],
     selected_path: Option<&str>,
@@ -3423,54 +3584,69 @@ pub fn build_flow_screen(
     run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
-    let (flow_rows, footer) =
-        crate::flow::build_flow_rows(rows, unfolded_rows, flat, plan, story_lines);
-    let story = crate::flow::build_story(story_lines, &flow_rows, zone);
-    let mut selected = None;
+    let rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
+    let largest_usual_step = header
+        .history_step_usual
+        .values()
+        .filter_map(|s| s.tokens_p50)
+        .max();
+    let unit = tape_unit(largest_usual_step);
+    let story = crate::flow::build_story(story_lines, &[], zone);
+    let pass_path = selected_path
+        .filter(|p| rows.iter().any(|r| r.path == *p && r.kind == RowKind::Pass))
+        .map(str::to_string)
+        .or_else(|| default_pass_path(rows).map(str::to_string));
+    let selected_pass =
+        pass_path.and_then(|p| build_selected_pass(&p, rows, flat, plan, header, state));
     let mut selected_decision = None;
-    if let Some(path) = selected_path {
-        // A named `if`'s own decision row shares its real `Row`'s own
-        // path, so `flow_rows` is checked first -- `rows` is only the
-        // fallback for an ordinary step, which never has a `Decision`
-        // entry of its own in `flow_rows` at all.
-        let flow_row = flow_rows.iter().find(|r| r.path == path);
-        match flow_row.map(|r| &r.kind) {
-            Some(crate::flow::FlowRowKind::Decision {
-                branch,
-                inferred,
-                nothing_ran,
-                answer,
-            }) => {
-                selected_decision = Some(SelectedDecision {
-                    label: flow_row.unwrap().label.clone(),
-                    condition: flow_row.unwrap().condition.clone(),
-                    branch: branch.clone(),
-                    inferred: *inferred,
-                    nothing_ran: *nothing_ran,
-                    answer: answer.clone(),
+    let mut selected_step = None;
+    if selected_pass.is_none() {
+        if let Some(row) = selected_path.and_then(|path| rows.iter().find(|r| r.path == path)) {
+            if row.kind == RowKind::If {
+                let node = flat.get(&row.path);
+                let branch = node.and_then(|n| n.branch.clone());
+                let answer = node.and_then(|n| n.meta.get("answer")).map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 });
-            }
-            _ => {
-                if let Some(row) = rows.iter().find(|r| r.path == path) {
-                    selected = Some(build_focused_step(
-                        row,
-                        flat,
-                        plan,
-                        model,
-                        state,
-                        now,
-                        run_ended_at,
-                    ));
-                }
+                let condition = plan.match_path(&row.path).and_then(|m| {
+                    m.entries.iter().find_map(|e| match &e.kind {
+                        PlanEntryKind::If {
+                            condition: Some(c), ..
+                        } => Some(c.clone()),
+                        _ => None,
+                    })
+                });
+                selected_decision = Some(SelectedDecision {
+                    label: row.label.clone(),
+                    condition,
+                    branch,
+                    inferred: false,
+                    nothing_ran: false,
+                    answer,
+                });
+            } else {
+                selected_step = Some(build_focused_step(
+                    row,
+                    flat,
+                    plan,
+                    model,
+                    state,
+                    now,
+                    run_ended_at,
+                ));
             }
         }
     }
+    let last_finished = last_finished_row(rows, flat, plan, header.run_start_ts.as_deref());
     FlowScreen {
-        rows: flow_rows,
-        footer,
+        rail,
+        unit,
         story,
-        selected,
+        selected_pass,
         selected_decision,
+        selected_step,
+        last_finished,
     }
 }
 
@@ -4272,48 +4448,6 @@ mod tests {
         program
     }
 
-    /// [`program_with_ifs`], with its `if` unnamed -- the decision it
-    /// produces is inferred (issue #643's first follow-up), not read
-    /// straight from a real node's own `meta.branch`.
-    fn program_with_an_unnamed_if() -> electricity_bytecode::Program {
-        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = std::env::temp_dir().join(format!(
-            "osi-screens-test-unnamed-if-{}-{call}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let path = tmp.join("doc.yml");
-        std::fs::write(
-            &path,
-            r#"effects:
-  - type: if
-    if:
-      mode: cel
-      expr: "true"
-    then:
-      - name: taken
-        type: tool
-        provider: shell
-        params:
-          command: echo
-          args: ["ok"]
-    else:
-      - name: untaken
-        type: tool
-        provider: shell
-        params:
-          command: echo
-          args: ["no"]
-"#,
-        )
-        .unwrap();
-        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
-            .expect("document compiles");
-        std::fs::remove_dir_all(&tmp).ok();
-        program
-    }
-
     fn flat_from(json: Value) -> BTreeMap<String, NodeMeta> {
         crate::model::flatten_state(&json)
     }
@@ -4449,12 +4583,12 @@ mod tests {
         );
 
         let elapsed_at = |now: &str| {
-            let screen = build_flow_screen(
-                &rows,
+            let screen = build_flow(
                 &rows,
                 &flat,
                 &plan,
                 &model,
+                &base_header(),
                 Some(&state),
                 &[],
                 Some("prime.fix"),
@@ -4463,7 +4597,7 @@ mod tests {
                 now,
             );
             screen
-                .selected
+                .selected_step
                 .expect("prime.fix is selectable")
                 .elapsed_s
                 .expect("since_ts is known")
@@ -4625,13 +4759,12 @@ mod tests {
             &model,
             None,
         );
-        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
-        let screen = build_flow_screen(
-            &folded,
+        let screen = build_flow(
             &rows,
             &flat,
             &plan,
             &model,
+            &base_header(),
             Some(&state),
             &[],
             Some("prime.check"),
@@ -4639,77 +4772,10 @@ mod tests {
             None,
             "2026-10-08T11:00:10Z",
         );
-        assert!(screen.selected.is_none());
+        assert!(screen.selected_step.is_none());
         let decision = screen.selected_decision.expect("a decision selection");
         assert_eq!(decision.branch.as_deref(), Some("then"));
         assert!(!decision.inferred);
-        assert_eq!(
-            decision.condition,
-            Some(crate::plan::ConditionInfo {
-                mode: crate::plan::ConditionMode::Cel,
-                text: "true".to_string()
-            })
-        );
-    }
-
-    /// Issue #643's first follow-up: selecting an unnamed `if`'s own
-    /// inferred decision row (no real path of its own) gives the
-    /// selected pane the same condition/branch detail a named one's
-    /// does, not an ordinary `FocusedStep`.
-    #[test]
-    fn build_flow_screen_selected_inferred_decision_reads_the_condition_and_branch() {
-        let plan = PlanTree::from_program(&program_with_an_unnamed_if());
-        let state = json!({
-            "prime": {
-                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
-                "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:05Z"}}
-            }
-        });
-        let flat = flat_from(state.clone());
-        let mut model = RunModel::new();
-        let statuses = model.observe(&state, &plan, ProcessState::Running);
-        let all_paths: BTreeMap<String, ()> = statuses
-            .keys()
-            .chain(flat.keys())
-            .map(|k| (k.clone(), ()))
-            .collect();
-        let rows = crate::render::build_rows(
-            &plan,
-            &flat,
-            &statuses,
-            &all_paths,
-            "2026-10-08T11:00:10Z",
-            &model,
-            None,
-        );
-        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
-        let (flow_rows, _) = crate::flow::build_flow_rows(&folded, &rows, &flat, &plan, &[]);
-        let inferred = flow_rows
-            .iter()
-            .find(|r| {
-                matches!(
-                    r.kind,
-                    crate::flow::FlowRowKind::Decision { inferred: true, .. }
-                )
-            })
-            .expect("an inferred decision row");
-        let screen = build_flow_screen(
-            &folded,
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            Some(&state),
-            &[],
-            Some(inferred.path.as_str()),
-            &utc(),
-            None,
-            "2026-10-08T11:00:10Z",
-        );
-        assert!(screen.selected.is_none());
-        let decision = screen.selected_decision.expect("a decision selection");
-        assert_eq!(decision.branch.as_deref(), Some("then"));
-        assert!(decision.inferred);
         assert_eq!(
             decision.condition,
             Some(crate::plan::ConditionInfo {
