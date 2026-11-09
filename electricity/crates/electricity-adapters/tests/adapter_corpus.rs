@@ -479,7 +479,7 @@ fn anthropic_request_building_matches_circuitry() {
     for case in list(&corpus(), "anthropic_request_cases") {
         let spec = get(case, "spec");
         let options = options_from_json(get(spec, "options"));
-        let payload = anthropic::build_request_body("m", "hi", 4096, &options);
+        let payload = anthropic::build_request_body("m", "hi", 4096, &options, false);
         assert_eq!(
             dumps(&Value::Dict(payload)),
             get(case, "data").as_str().unwrap(),
