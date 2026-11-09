@@ -278,6 +278,33 @@ class RetryPolicyDef:
 
 
 @dataclass(frozen=True)
+class SplitMergeDef:
+    """``split.merge`` — a reduce prompt's own template (see
+    :mod:`circuitry.core.decompose`'s size trigger)."""
+
+    template: str
+
+
+@dataclass(frozen=True)
+class SplitDef:
+    """``split`` on a ``prompt`` effect — the size trigger's per-effect overlay.
+
+    Every field is optional and, when unset, defers to
+    ``runtime.complexity.splitting``: ``enabled: False`` always opts the
+    effect out regardless of the runtime switch; ``enabled`` left unset (the
+    common case) means "follow the runtime switch"; ``budget_tokens`` set
+    (with ``enabled`` unset or ``True``) splits even when the runtime switch
+    is off.
+    """
+
+    enabled: bool | None = None
+    budget_tokens: int | None = None
+    max_parts: int | None = None
+    separator: str | None = None
+    merge: SplitMergeDef | None = None
+
+
+@dataclass(frozen=True)
 class PromptDefinition:
     """
     A Prompt is the atomic execution unit in Circuitry.
@@ -345,6 +372,11 @@ class PromptDefinition:
     # configured. A prompt effect is a leaf, so this is where a slot is
     # actually held; see #274.
     group: str | None = None
+
+    # The size trigger's per-effect overlay (#672). None (the default): the
+    # runtime's own runtime.complexity.splitting switch and defaults apply
+    # unmodified.
+    split: SplitDef | None = None
 
 
 class PromptRuntime:
@@ -661,6 +693,7 @@ class PromptRuntime:
                 ctx=effective_ctx,
                 complexity=complexity,
                 prompt_sent=prompt_sent,
+                resolved_model=resolved_model,
             )
             if decomposition is not None:
                 meta["decomposition"] = decomposition.meta
@@ -1084,22 +1117,21 @@ class PromptRuntime:
         ctx: dict[str, Any],
         complexity: dict[str, Any] | None,
         prompt_sent: str,
+        resolved_model: str,
     ) -> Any:
         """Attempt runtime decomposition, or ``None`` when it does not apply.
 
-        Decomposition reads the score already recorded in the pre-dispatch
-        meta block — no score (scoring off, or scoring failed) means nothing
-        to compare against the threshold, so the effect runs untouched. The
-        heavy lifting, and every failure-semantics decision, lives in
-        :mod:`circuitry.core.decompose`; the returned result only tells this
-        runtime which of its three postures to take (write the merged value,
-        raise, or dispatch — possibly on a fallback model).
+        The size trigger runs first, measuring *prompt_sent* against a token
+        budget — it needs no score at all. The (pre-existing) score trigger
+        reads the score already recorded in the pre-dispatch meta block — no
+        score (scoring off, or scoring failed) means nothing to compare
+        against the threshold, so that trigger never fires. The heavy
+        lifting, and every failure-semantics decision for both triggers,
+        lives in :mod:`circuitry.core.decompose`; the returned result only
+        tells this runtime which of its three postures to take (write the
+        merged value, raise, or dispatch — possibly on a fallback model).
         """
-        if complexity is None:
-            return None
-        score = complexity.get("score")
-        if not isinstance(score, (int, float)):
-            return None
+        score = complexity.get("score") if complexity is not None else None
 
         from .decompose import maybe_decompose
 
@@ -1108,14 +1140,22 @@ class PromptRuntime:
             store=store,
             node=node,
             ctx=ctx,
-            score=float(score),
+            score=float(score) if isinstance(score, (int, float)) else None,
             # The raw template keeps its {{...}} references so the emitted
             # document can re-declare them as inputs; a messages-based prompt
             # has no single template, so the materialized (already-rendered,
             # self-contained) prompt stands in.
             source_template=self.defn.template or prompt_sent,
+            prompt_sent=prompt_sent,
             adapter=self.adapter,
+            # The run's default model, unchanged from before #672 — what an
+            # isolated child/planner dispatches on when a chunk/part names no
+            # model of its own. `resolved_model` (this effect's own already-
+            # resolved model, router included) is passed separately, read
+            # only by the size trigger's budget lookup
+            # (`runtime.complexity.splitting.models.<resolved model>`).
             model=self.model,
+            resolved_model=resolved_model,
             runtime_config=self.runtime_config,
             timeout_seconds=self.timeout_seconds,
             verbose=self.verbose,

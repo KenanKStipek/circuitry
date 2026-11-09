@@ -378,6 +378,43 @@
         "group": {
           "type": "string",
           "description": "Named concurrency-group slot (runtime.concurrency_groups.<name>) this effect waits for a free slot in before dispatching, in addition to runtime.max_concurrency's run-wide cap. Leaf effects only — cof check rejects it elsewhere. The group must be defined in runtime.concurrency_groups or cof check rejects the reference."
+        },
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The size trigger for decomposition: split this effect's rendered input into parts and run them in parallel when it exceeds a token budget. See runtime.complexity.splitting for the run-wide switch and defaults.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "false always opts this effect out, even with runtime.complexity.splitting.enabled: true. Unset follows the runtime switch, except budget_tokens below still splits even when it is off."
+            },
+            "budget_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "This effect's own token budget, outranking runtime.complexity.splitting.models/max_input_tokens. Splits even when runtime.complexity.splitting.enabled is false."
+            },
+            "max_parts": {
+              "type": "integer",
+              "minimum": 2,
+              "description": "Widest fan-out for this effect, overriding runtime.complexity.splitting.max_parts."
+            },
+            "separator": {
+              "type": "string",
+              "description": "Joiner for a text prompt_type's native merge. Default a blank line."
+            },
+            "merge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["template"],
+              "description": "A reduce prompt that merges the parts' values, required for any prompt_type the native join/concat rule does not cover.",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "description": "Mustache template rendered with 'parts' bound to the list of part values in order, e.g. {{#parts}}...{{/parts}}."
+                }
+              }
+            }
+          }
         }
       },
       "oneOf": [
