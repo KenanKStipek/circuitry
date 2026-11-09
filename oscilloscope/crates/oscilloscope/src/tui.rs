@@ -6527,11 +6527,18 @@ fn flow_resolve_scroll(
                 app.flow_scroll = best.min(max_scroll);
             }
         }
-    } else if let Some(arrow) = arrow {
-        if in_view(app.flow_scroll, arrow) {
-            app.follow = true;
+    } else if app.flow_manual_scroll {
+        if let Some(arrow) = arrow {
+            if in_view(app.flow_scroll, arrow) {
+                app.follow = true;
+            }
         }
     }
+    // One-shot: only the draw right after a ←→ key press may land
+    // follow back on (the key handler sets this); any other redraw
+    // (a clock tick, ↑↓, `f` turning follow off) must never flip it
+    // back on just because Now happens to already be in view.
+    app.flow_manual_scroll = false;
     app.flow_scroll = app.flow_scroll.min(max_scroll);
     app.flow_scroll
 }
@@ -7726,9 +7733,57 @@ mod flow_layout_tests {
         let mut app = App::new(false);
         app.follow = false;
         app.flow_scroll = 0;
+        // The ←→ key handlers set this alongside turning follow off;
+        // `flow_resolve_scroll` only re-arms follow on the one draw
+        // that flag covers.
+        app.flow_manual_scroll = true;
         let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
         assert_eq!(scroll, 0);
-        assert!(app.follow, "Now was already in view: follow resumes");
+        assert!(
+            app.follow,
+            "a manual scroll landed Now back in view: follow resumes"
+        );
+    }
+
+    /// Issue: a redraw with no `←→` key in between (a clock tick, or
+    /// the very next frame after `↑↓`/`f` turned follow off) must
+    /// never flip follow back on just because Now happens to already
+    /// sit in the current view -- only a manual scroll's own next
+    /// draw may do that.
+    #[test]
+    fn flow_resolve_scroll_never_resumes_follow_without_a_manual_scroll_first() {
+        let items = vec![station("a", StatusKind::Running)];
+        let mut app = App::new(false);
+        app.follow = false;
+        app.flow_scroll = 0;
+        assert!(!app.flow_manual_scroll);
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        assert_eq!(scroll, 0);
+        assert!(
+            !app.follow,
+            "Now being in view on an ordinary redraw must not resume follow on its own"
+        );
+        // A second ordinary redraw, same as the first: still no resume.
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        assert_eq!(scroll, 0);
+        assert!(!app.follow);
+    }
+
+    /// The manual-scroll flag is one-shot: consumed by the very next
+    /// `flow_resolve_scroll` call regardless of outcome, so a later
+    /// redraw with no new ←→ press can't ride on a stale flag.
+    #[test]
+    fn flow_resolve_scrolls_manual_scroll_flag_is_consumed_after_one_draw() {
+        let items = vec![station("a", StatusKind::Running)];
+        let mut app = App::new(false);
+        app.follow = false;
+        app.flow_scroll = 0;
+        app.flow_manual_scroll = true;
+        flow_resolve_scroll(&items, &mut app, 200, 100);
+        assert!(
+            !app.flow_manual_scroll,
+            "the flag is consumed by the draw it armed"
+        );
     }
 
     #[test]

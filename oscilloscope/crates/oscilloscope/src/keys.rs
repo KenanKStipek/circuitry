@@ -157,6 +157,14 @@ pub struct App {
     /// on once a manual scroll lands Now back in view, the same way
     /// the Tape's own selection rule already does for a row.
     pub flow_scroll: usize,
+    /// Set by the `←→` Flow key handlers alongside turning `follow`
+    /// off, consumed by `tui::flow_resolve_scroll` on the very next
+    /// draw: that draw may land `follow` back on if it finds Now back
+    /// in view, but only that one -- a later redraw with no new `←→`
+    /// press (a clock tick, `↑↓` or `f` turning follow off again)
+    /// must never flip it back on just because Now already happens to
+    /// sit in the current view.
+    pub flow_manual_scroll: bool,
     /// Per-fork lane-open overrides (issue #691's `+`/`-`), keyed by
     /// the fork's own path: `0` folds it into its own band, the
     /// fork's own lane count fully opens it, anything in between is
@@ -229,6 +237,7 @@ impl App {
             cost_zoom: Vec::new(),
             cost_selected: None,
             flow_scroll: 0,
+            flow_manual_scroll: false,
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_column_ms: 100,
@@ -604,10 +613,12 @@ impl App {
             KeyCode::Left if self.screen == Screen::Flow => {
                 self.flow_scroll = self.flow_scroll.saturating_sub(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
+                self.flow_manual_scroll = true;
             }
             KeyCode::Right if self.screen == Screen::Flow => {
                 self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
+                self.flow_manual_scroll = true;
             }
             // Not on the Tape's own key bar (§4) -- its rows are
             // already flat, with no collapsed state of their own to
