@@ -3501,19 +3501,24 @@ fn loop_story_lines(
         .filter(|r| r.kind == RowKind::Loop)
         .filter_map(|r| {
             let total = r.loop_progress.and_then(|p| p.total)?;
-            let wide = plan.match_path(&r.path).and_then(|m| {
+            let max_concurrency = plan.match_path(&r.path).and_then(|m| {
                 m.entries.iter().find_map(|e| match &e.kind {
                     PlanEntryKind::Loop {
                         max_concurrency, ..
                     } => *max_concurrency,
                     _ => None,
                 })
-            })?;
+            });
+            // An unbounded loop's own width is its pass count itself
+            // (DESIGN.md §2.3: "max_concurrency or the pass count when
+            // unbounded") -- never skipped just because it has no
+            // `max_concurrency` of its own to report instead.
+            let wide = max_concurrency.unwrap_or(total as u32);
             let ts = flat.get(&r.path).and_then(|n| n.created_at.clone());
             Some(crate::diff::LogLine {
                 ts,
                 text: format!("⟳ {} · {total} passes · {wide} wide", r.label),
-                kind: crate::diff::LogKind::Report,
+                kind: crate::diff::LogKind::Progress,
                 path: Some(r.path.clone()),
             })
         })
@@ -3654,7 +3659,8 @@ pub fn build_flow(
     let unit = tape_unit(largest_usual_step);
     let mut story_lines_with_loops = story_lines.to_vec();
     story_lines_with_loops.extend(loop_story_lines(rows, flat, plan));
-    let story = crate::flow::build_story(&story_lines_with_loops, &[], zone);
+    let inferred_decisions = crate::rail::inferred_decisions(&rail.items, flat);
+    let story = crate::flow::build_story(&story_lines_with_loops, &inferred_decisions, zone);
     // The default pass only stands in for the selection when there
     // is none at all, or when the selection already names one of a
     // loop's own passes -- never for a selection that lands on some

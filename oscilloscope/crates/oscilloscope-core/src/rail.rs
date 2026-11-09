@@ -623,41 +623,85 @@ fn build_unnamed_decision(
     } else {
         (Vec::new(), false, 0)
     };
-    let mut lanes = vec![Lane {
-        items: taken_items,
-        ghost: None,
-        running: taken_running,
-        waiting: false,
-    }];
-    let untaken_paths = match branch.as_deref() {
-        Some("then") => Some(&decision.else_paths),
-        Some("else") if !nothing_ran => Some(&decision.then_paths),
-        _ => None,
-    };
-    // The untaken side's own paths still get a real row each (an
-    // unnamed `if` has no `meta.branch` to suppress them with
-    // ahead of time, unlike a named one) -- hidden from the rest of
-    // this level's own walk rather than drawn a second time, as a
-    // redundant plain sibling, once the ghost lane above already
-    // stands in for the whole branch. Never a path the taken side
-    // also claims (the parity case: `then`/`else` reusing one step
-    // name), or the branch that actually ran would vanish too.
     let mut hide = Vec::new();
-    if let Some(untaken) = untaken_paths {
-        if let Some(first) = untaken.first() {
-            lanes.push(Lane {
+    let lanes = if consumed > 0 {
+        // The decision resolved and its taken branch actually ran:
+        // the taken side draws its own real stations, the untaken
+        // side (an unnamed `if` has no `meta.branch` to suppress it
+        // with ahead of time, unlike a named one) a single ghost
+        // lane standing in for every one of its own steps, hidden
+        // from the rest of this level's own walk rather than drawn a
+        // second time as a redundant plain sibling. Never a path the
+        // taken side also claims (the parity case: `then`/`else`
+        // reusing one step name), or the branch that actually ran
+        // would vanish too.
+        let mut lanes = vec![Lane {
+            items: taken_items,
+            ghost: None,
+            running: taken_running,
+            waiting: false,
+        }];
+        let untaken_paths = match branch.as_deref() {
+            Some("then") => Some(&decision.else_paths),
+            Some("else") => Some(&decision.then_paths),
+            _ => None,
+        };
+        if let Some(untaken) = untaken_paths {
+            if let Some(first) = untaken.first() {
+                lanes.push(Lane {
+                    items: Vec::new(),
+                    ghost: Some(step_label(first)),
+                    running: false,
+                    waiting: false,
+                });
+            }
+            hide.extend(untaken.iter().filter(|p| !taken_paths.contains(p)).cloned());
+        }
+        lanes
+    } else if nothing_ran {
+        // Settled, but neither branch ever actually ran (no `else`
+        // at all, and the `then` branch's own scope is over) --
+        // every real path either branch has is hidden the same way
+        // an untaken branch's own is, and both sides draw as ghosts
+        // reading "not taken", the same ghost form a named `if`'s
+        // own untaken branch already uses.
+        let mut lanes = Vec::new();
+        for side in [&decision.then_paths, &decision.else_paths] {
+            if let Some(first) = side.first() {
+                lanes.push(Lane {
+                    items: Vec::new(),
+                    ghost: Some(step_label(first)),
+                    running: false,
+                    waiting: false,
+                });
+                hide.extend(side.iter().cloned());
+            }
+        }
+        lanes
+    } else {
+        // Still pending: both branches draw as ahead ghosts, never
+        // hidden from the rest of this level's own walk, since
+        // either one might still turn out to be the one that ran.
+        [&decision.then_paths, &decision.else_paths]
+            .into_iter()
+            .filter_map(|side| side.first())
+            .map(|first| Lane {
                 items: Vec::new(),
                 ghost: Some(step_label(first)),
                 running: false,
                 waiting: false,
-            });
-        }
-        hide.extend(untaken.iter().filter(|p| !taken_paths.contains(p)).cloned());
-    }
+            })
+            .collect()
+    };
     let status = if branch.is_some() {
         StatusKind::Done
     } else {
         StatusKind::Pending
+    };
+    let headline_branch = if nothing_ran {
+        Some("none".to_string())
+    } else {
+        branch.clone()
     };
     let name = if same_names {
         "if \u{2192} ?".to_string()
@@ -679,7 +723,7 @@ fn build_unnamed_decision(
         row_kind: RowKind::If,
         status,
         name,
-        headline: Headline::Branch(branch),
+        headline: Headline::Branch(headline_branch),
         detail: Detail::Condition(condition),
     };
     let fork = Fork {
@@ -1228,6 +1272,54 @@ pub fn find_station<'a>(items: &'a [RailItem], path: &str) -> Option<&'a Station
         }
     }
     None
+}
+
+/// Every unnamed `if`'s own inferred decision anywhere on the rail
+/// (recursing into every fork's own lanes), ready for the Story pane
+/// (`crate::flow::build_story`'s own `inferred` parameter): the
+/// taken branch's own first station gives the clock the decision
+/// itself has none of its own (an unnamed `if` writes no node, and
+/// so no `created_at`, of its own at all).
+pub fn inferred_decisions(
+    items: &[RailItem],
+    flat: &BTreeMap<String, NodeMeta>,
+) -> Vec<crate::flow::InferredDecision> {
+    let mut out = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        if let RailItem::Station(s) = item {
+            if s.row_kind == RowKind::If
+                && s.path
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|seg| seg.starts_with("__if"))
+            {
+                if let Headline::Branch(branch) = &s.headline {
+                    let start_ts = match items.get(i + 1) {
+                        Some(RailItem::Fork(fork)) => fork.lanes.first().and_then(|lane| {
+                            lane.items.iter().find_map(|it| match it {
+                                RailItem::Station(station) => {
+                                    flat.get(&station.path).and_then(|n| n.created_at.clone())
+                                }
+                                _ => None,
+                            })
+                        }),
+                        _ => None,
+                    };
+                    out.push(crate::flow::InferredDecision {
+                        label: s.name.clone(),
+                        branch: branch.clone(),
+                        start_ts,
+                    });
+                }
+            }
+        }
+        if let RailItem::Fork(fork) = item {
+            for lane in &fork.lanes {
+                out.extend(inferred_decisions(&lane.items, flat));
+            }
+        }
+    }
+    out
 }
 
 pub fn item_width(item: &RailItem) -> usize {
