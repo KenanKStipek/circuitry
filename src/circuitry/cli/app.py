@@ -898,12 +898,13 @@ orchestration > environment (CIRCUITRY_ADAPTER/CIRCUITRY_MODEL) > config file
 > defaults. Env vars overlay the config layer, so a flag or profile beats them.
 
 [bold]Complexity switches:[/bold] --scoring/--no-scoring, --routing/--no-routing,
-and --decompose/--no-decompose each override one runtime.complexity.<switch>.enabled
-for this run only, ranking above the orchestration and config the same way
---adapter/--model do. --routing/--decompose still need scoring on (from
---scoring or config) — turning either on without it is the same prerequisite
-error the config path raises. --no-routing also overrides any --profile
-per-effect routing pin, since routing is off for the whole run either way.
+--decompose/--no-decompose, and --split/--no-split each override one
+runtime.complexity.<switch>.enabled for this run only, ranking above the
+orchestration and config the same way --adapter/--model do. --routing/
+--decompose still need scoring on (from --scoring or config) — turning either
+on without it is the same prerequisite error the config path raises; --split
+needs no scoring. --no-routing also overrides any --profile per-effect
+routing pin, since routing is off for the whole run either way.
 Run [bold]cof list[/bold] to see available bundled orchestrations.
 
 [yellow]Note:[/yellow] do not pass secrets via -e KEY=VALUE; use environment
@@ -1072,6 +1073,15 @@ def run_cmd(
             "(from this flag or config) when turned on."
         ),
     ),
+    split: bool | None = typer.Option(
+        None, "--split/--no-split",
+        help=(
+            "Force runtime.complexity.splitting on/off for this run. Beats "
+            "--profile and the orchestration/config. Needs no scoring: an "
+            "effect's own split.budget_tokens still splits with this off, "
+            "and splitting.enabled: false here always opts a run out."
+        ),
+    ),
 ):
     if resume and last:
         console.print("[red]Error:[/red] --resume and --last are mutually exclusive.")
@@ -1128,6 +1138,7 @@ def run_cmd(
         scoring = stashed.get("scoring")
         routing = stashed.get("routing")
         decompose = stashed.get("decompose")
+        split = stashed.get("split")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -1273,7 +1284,10 @@ def run_cmd(
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
             console.print(f"[bold]Model (override):[/bold] {model}")
-        for label, value in (("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose)):
+        for label, value in (
+            ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
+            ("Splitting", split),
+        ):
             if value is not None:
                 console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
@@ -1346,6 +1360,7 @@ def run_cmd(
         scoring_override=scoring,
         routing_override=routing,
         decompose_override=decompose,
+        split_override=split,
         effect_start_observer=effect_start_observer,
         report_observer=report_observer,
         decompose_out=decompose_out,
@@ -1426,6 +1441,7 @@ def run_cmd(
             "scoring": scoring,
             "routing": routing,
             "decompose": decompose,
+            "split": split,
             "trust_document": trust_document,
             "remote_library_source": remote_library_source,
         })
@@ -1657,6 +1673,15 @@ def run_library_cmd(
             "(from this flag or config) when turned on."
         ),
     ),
+    split: bool | None = typer.Option(
+        None, "--split/--no-split",
+        help=(
+            "Force runtime.complexity.splitting on/off for this run. Beats "
+            "--profile and the orchestration/config. Needs no scoring: an "
+            "effect's own split.budget_tokens still splits with this off, "
+            "and splitting.enabled: false here always opts a run out."
+        ),
+    ),
 ):
     configure_cli_logging(verbose=verbose)
 
@@ -1714,6 +1739,7 @@ def run_library_cmd(
             console.print(f"[bold]Model (override):[/bold] {model}")
         for label, value in (
             ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
+            ("Splitting", split),
         ):
             if value is not None:
                 console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
@@ -1768,6 +1794,7 @@ def run_library_cmd(
         scoring_override=scoring,
         routing_override=routing,
         decompose_override=decompose,
+        split_override=split,
         effect_start_observer=effect_start_observer,
         report_observer=report_observer,
         allow_capabilities=_parse_allow_capabilities(allow_capabilities),
@@ -1864,6 +1891,7 @@ def run_library_cmd(
         "scoring": scoring,
         "routing": routing,
         "decompose": decompose,
+        "split": split,
         "trust_document": False,
         # So `cof run --last` can reapply the same adapter/model/runtime/
         # plugin overrides this run used — otherwise a replayed run-library
@@ -2192,6 +2220,32 @@ def _complexity_info_dict(
                 sources.get("complexity.decomposition.on_failure", "default"),
             ),
         },
+        "splitting": {
+            "enabled": _complexity_field(
+                complexity.splitting.enabled,
+                sources.get("complexity.splitting", "default"),
+            ),
+            "max_input_tokens": _complexity_field(
+                complexity.splitting.max_input_tokens,
+                sources.get("complexity.splitting.max_input_tokens", "default"),
+            ),
+            "models": _complexity_field(
+                dict(complexity.splitting.models),
+                sources.get("complexity.splitting.models", "default"),
+            ),
+            "max_parts": _complexity_field(
+                complexity.splitting.max_parts,
+                sources.get("complexity.splitting.max_parts", "default"),
+            ),
+            "max_depth": _complexity_field(
+                complexity.splitting.max_depth,
+                sources.get("complexity.splitting.max_depth", "default"),
+            ),
+            "on_failure": _complexity_field(
+                complexity.splitting.on_failure,
+                sources.get("complexity.splitting.on_failure", "default"),
+            ),
+        },
     }
 
 
@@ -2210,6 +2264,7 @@ def _render_complexity_info(
         ("Scoring", "complexity.scoring", complexity.scoring.enabled),
         ("Routing", "complexity.routing", complexity.routing.enabled),
         ("Decomposition", "complexity.decomposition", complexity.decomposition.enabled),
+        ("Splitting", "complexity.splitting", complexity.splitting.enabled),
     ):
         state = "[green]on[/green]" if enabled else "[dim]off[/dim]"
         switch_table.add_row(label, state, sources.get(key, "default"))
@@ -2257,6 +2312,43 @@ def _render_complexity_info(
         decomp_table.add_row(label, value, sources.get(key, "default"))
     console.print(decomp_table)
 
+    console.print()
+    split_table = Table(title="Splitting", show_header=True, header_style="bold cyan")
+    split_table.add_column("Setting", style="bold")
+    split_table.add_column("Value")
+    split_table.add_column("Source")
+    for label, key, value in (
+        (
+            "Max input tokens",
+            "complexity.splitting.max_input_tokens",
+            str(complexity.splitting.max_input_tokens)
+            if complexity.splitting.max_input_tokens is not None
+            else "—",
+        ),
+        (
+            "Models",
+            "complexity.splitting.models",
+            ", ".join(f"{k}={v}" for k, v in complexity.splitting.models.items()) or "—",
+        ),
+        (
+            "Max parts",
+            "complexity.splitting.max_parts",
+            str(complexity.splitting.max_parts),
+        ),
+        (
+            "Max depth",
+            "complexity.splitting.max_depth",
+            str(complexity.splitting.max_depth),
+        ),
+        (
+            "On failure",
+            "complexity.splitting.on_failure",
+            complexity.splitting.on_failure,
+        ),
+    ):
+        split_table.add_row(label, value, sources.get(key, "default"))
+    console.print(split_table)
+
 
 @app.command("info", help="Show details for a bundled orchestration.")
 def info_cmd(
@@ -2283,6 +2375,10 @@ def info_cmd(
     decompose: bool | None = typer.Option(
         None, "--decompose/--no-decompose",
         help="Preview runtime.complexity.decomposition forced on/off, as `cof run --decompose` would resolve it.",
+    ),
+    split: bool | None = typer.Option(
+        None, "--split/--no-split",
+        help="Preview runtime.complexity.splitting forced on/off, as `cof run --split` would resolve it.",
     ),
 ):
     registry = _library_registry(config)
@@ -2316,6 +2412,7 @@ def info_cmd(
             cli_scoring=scoring,
             cli_routing=routing,
             cli_decompose=decompose,
+            cli_split=split,
             profile=profile_settings,
         )
     except (ProfileError, ValueError) as exc:

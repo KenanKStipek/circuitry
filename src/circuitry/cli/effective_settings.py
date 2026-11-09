@@ -419,6 +419,7 @@ def resolve_effective_settings(
     cli_scoring: bool | None = None,
     cli_routing: bool | None = None,
     cli_decompose: bool | None = None,
+    cli_split: bool | None = None,
     profile: ProfileSettings | None = None,
     trust_document: bool = False,
     document_name: str | None = None,
@@ -628,6 +629,7 @@ def resolve_effective_settings(
         cli_scoring=cli_scoring,
         cli_routing=cli_routing,
         cli_decompose=cli_decompose,
+        cli_split=cli_split,
     )
     complexity = resolve_complexity_settings(runtime)
     # `runtime.state.prompt_sent` (#577) and `runtime.state.parsed_stdout`
@@ -644,6 +646,7 @@ def resolve_effective_settings(
         cli_scoring=cli_scoring,
         cli_routing=cli_routing,
         cli_decompose=cli_decompose,
+        cli_split=cli_split,
     )
 
     # Resolved after the complexity block because that is what decides it: the
@@ -714,8 +717,9 @@ def _apply_cli_complexity_overrides(
     cli_scoring: bool | None,
     cli_routing: bool | None,
     cli_decompose: bool | None,
+    cli_split: bool | None,
 ) -> dict[str, Any]:
-    """Layer `--scoring`/`--routing`/`--decompose` onto the merged runtime.
+    """Layer `--scoring`/`--routing`/`--decompose`/`--split` onto the merged runtime.
 
     Each flag flips only its switch's `enabled` field, leaving the rest of
     that sub-block (weights, bands, threshold, ...) exactly as the
@@ -727,7 +731,12 @@ def _apply_cli_complexity_overrides(
     named-path "must be an object" error for it, and that error is more
     useful than one about an override this function invented.
     """
-    if cli_scoring is None and cli_routing is None and cli_decompose is None:
+    if (
+        cli_scoring is None
+        and cli_routing is None
+        and cli_decompose is None
+        and cli_split is None
+    ):
         return runtime
 
     complexity_raw = runtime.get("complexity")
@@ -748,6 +757,7 @@ def _apply_cli_complexity_overrides(
     _set_enabled("scoring", cli_scoring)
     _set_enabled("routing", cli_routing)
     _set_enabled("decomposition", cli_decompose)
+    _set_enabled("splitting", cli_split)
 
     runtime = dict(runtime)
     runtime["complexity"] = complexity
@@ -762,6 +772,7 @@ def _record_complexity_sources(
     cli_scoring: bool | None = None,
     cli_routing: bool | None = None,
     cli_decompose: bool | None = None,
+    cli_split: bool | None = None,
 ) -> None:
     """Record which layer supplied the complexity block and each sub-block.
 
@@ -789,8 +800,9 @@ def _record_complexity_sources(
         "scoring": cli_scoring,
         "routing": cli_routing,
         "decomposition": cli_decompose,
+        "splitting": cli_split,
     }
-    for key in ("scoring", "routing", "decomposition"):
+    for key in ("scoring", "routing", "decomposition", "splitting"):
         if cli_flags[key] is not None:
             sources[f"complexity.{key}"] = "cli"
         else:
@@ -818,4 +830,17 @@ def _record_complexity_sources(
     )
     sources["complexity.decomposition.on_failure"] = _field_source(
         "decomposition", "on_failure"
+    )
+    sources["complexity.splitting.max_input_tokens"] = _field_source(
+        "splitting", "max_input_tokens"
+    )
+    sources["complexity.splitting.models"] = _field_source("splitting", "models")
+    sources["complexity.splitting.max_parts"] = _field_source(
+        "splitting", "max_parts"
+    )
+    sources["complexity.splitting.max_depth"] = _field_source(
+        "splitting", "max_depth"
+    )
+    sources["complexity.splitting.on_failure"] = _field_source(
+        "splitting", "on_failure"
     )

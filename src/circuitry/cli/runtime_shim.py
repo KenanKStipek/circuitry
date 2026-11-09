@@ -181,6 +181,7 @@ class RunRequest:
     scoring_override: bool | None = None
     routing_override: bool | None = None
     decompose_override: bool | None = None
+    split_override: bool | None = None
     profile_name: str | None = None
     # A recorded `runtime.effective_settings.profile` mapping ({name, content})
     # to reconstruct and apply instead of discovering a profile file by name.
@@ -538,6 +539,7 @@ def run(req: RunRequest) -> RunResult:
             cli_scoring=req.scoring_override,
             cli_routing=req.routing_override,
             cli_decompose=req.decompose_override,
+            cli_split=req.split_override,
             profile=profile,
             trust_document=document_trust_document,
             document_name=req.orchestration_path.name,
