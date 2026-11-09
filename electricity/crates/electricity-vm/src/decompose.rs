@@ -3670,4 +3670,120 @@ mod tests {
             ]]
         );
     }
+
+    #[test]
+    fn prepare_split_picks_the_reference_and_cuts_it_matching_a_cof_recorded_split() {
+        let prompt = template_op("Summarize: {{input.doc}}");
+        let doc = "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg \
+                   hhhhhhhhhh";
+        let mut input = Dict::new();
+        input.insert(key("doc"), Value::Str(doc.to_string()));
+        let mut ctx_dict = Dict::new();
+        ctx_dict.insert(key("input"), Value::Dict(input));
+        let ctx = Value::Dict(ctx_dict);
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = std::collections::BTreeSet::new();
+        // `tests/conformance/cases/split-text-join/expected.json`'s own
+        // `meta.decomposition`: budget 20, estimated_tokens 25, split
+        // into 2 parts of size 11 each.
+        let prep =
+            prepare_split(&prompt, "big", &ctx, &declared_prompts, &effect_names, 20).unwrap();
+        assert_eq!(prep.ref_path, "input.doc");
+        assert_eq!(prep.kind, "string");
+        assert_eq!(prep.sizes, vec![11, 11]);
+        assert_eq!(
+            prep.parts,
+            vec![
+                Value::Str("aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd ".to_string()),
+                Value::Str("eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn generate_split_plan_matches_a_cof_recorded_plan_byte_for_byte_and_never_embeds_a_part() {
+        let prompt = template_op("Summarize: {{input.doc}}");
+        let prep = SplitPrep {
+            ref_path: "input.doc".to_string(),
+            kind: "string",
+            parts: vec![
+                Value::Str("part0 text".to_string()),
+                Value::Str("part1 text".to_string()),
+            ],
+            sizes: vec![3, 3],
+            template_text: Some("Summarize: {{input.doc}}".to_string()),
+            message_texts: None,
+            extra_state: indexmap::IndexMap::new(),
+        };
+        let ctx = Value::Dict(Dict::new());
+        let (parts_key, plan_dict, result_path) =
+            generate_split_plan(&prompt, &prep, "join", 2, None, &ctx).unwrap();
+        assert_eq!(parts_key, "split_parts");
+        assert_eq!(result_path, "prime.parts.collected.value");
+        let yaml = electricity_yaml::dump(&plan_dict, &DumpOptions { sort_keys: false }).unwrap();
+        // `tests/conformance/cases/split-text-join/expected.json`'s own
+        // `meta.decomposition.yaml`, cof-recorded, for this exact source
+        // (`Summarize: {{input.doc}}`, 2 parts, no merge template --
+        // `join`, text's own native merge, needs no reduce prompt).
+        assert_eq!(
+            yaml,
+            "interface:\n  inputs:\n    split_parts:\n      type: array\n      required: \
+             true\neffects:\n- type: loop\n  name: parts\n  flow: tree\n  each:\n    in: \
+             input.split_parts\n    as: part\n  max_iterations: 2\n  collect: map\n  \
+             on_error: fail\n  body:\n  - type: prompt\n    name: map\n    prompt_type: \
+             text\n    deterministic: false\n    template: 'Summarize: {{part}}'\n    \
+             on_error: fail\n"
+        );
+        // The parts' own real values never appear in the plan at all --
+        // they are seeded only into the child's own `input` namespace at
+        // run time (`_execute_split_plan`'s own doc comment).
+        assert!(!yaml.contains("part0 text"));
+        assert!(!yaml.contains("part1 text"));
+    }
+
+    #[test]
+    fn generate_split_plan_names_the_loop_and_merge_collision_free() {
+        let prompt = {
+            let mut p = template_op("Summarize: {{input.doc}}");
+            p.split_merge_template = Some("Combine: {{#parts}}<{{.}}>{{/parts}}".to_string());
+            p
+        };
+        let prep = SplitPrep {
+            ref_path: "input.doc".to_string(),
+            kind: "string",
+            parts: vec![Value::Str("a".to_string()), Value::Str("b".to_string())],
+            sizes: vec![1, 1],
+            template_text: Some("Summarize: {{input.doc}}".to_string()),
+            message_texts: None,
+            extra_state: indexmap::IndexMap::new(),
+        };
+        // The parent already wrote effects named `parts`/`merge` of its
+        // own (not the split reference) -- the generated loop/merge
+        // prompt must pick different names rather than silently
+        // colliding with them.
+        let mut prime = Dict::new();
+        prime.insert(key("parts"), Value::Bool(true));
+        prime.insert(key("merge"), Value::Bool(true));
+        let mut ctx_dict = Dict::new();
+        ctx_dict.insert(key("prime"), Value::Dict(prime));
+        let ctx = Value::Dict(ctx_dict);
+        let (_, plan_dict, result_path) =
+            generate_split_plan(&prompt, &prep, "reduce", 2, None, &ctx).unwrap();
+        assert_eq!(result_path, "prime.merge_.value");
+        let effects = plan_dict
+            .as_dict()
+            .unwrap()
+            .get(&key("effects"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(
+            effects[0].as_dict().unwrap().get(&key("name")).unwrap(),
+            &Value::Str("parts_".to_string())
+        );
+        assert_eq!(
+            effects[1].as_dict().unwrap().get(&key("name")).unwrap(),
+            &Value::Str("merge_".to_string())
+        );
+    }
 }
