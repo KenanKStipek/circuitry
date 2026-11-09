@@ -1486,6 +1486,144 @@ mod tests {
     }
 
     #[test]
+    fn splitting_enabled_refuses_even_an_otherwise_empty_document() {
+        // Issue #672: electricity only parses `runtime.complexity.
+        // splitting`, it never runs the size trigger -- *splitting_enabled*
+        // is `first_unsupported`'s own argument (the caller's resolved
+        // effective config), not something read off `program`, so this
+        // refuses even a program with no prompt effects in it at all.
+        let program = program_with_root(root_block(vec![]));
+        let refusal = first_unsupported(&program, false, true, &m0()).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::SplittingEnabled);
+        assert_eq!(refusal.path, EffectPath::root());
+    }
+
+    #[test]
+    fn splitting_enabled_is_accepted_once_its_own_flag_is_set() {
+        let program = program_with_root(root_block(vec![]));
+        let supported = Supported {
+            splitting: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, true, &supported).is_none());
+    }
+
+    #[test]
+    fn splitting_disabled_is_fine_even_under_m0() {
+        let program = program_with_root(root_block(vec![]));
+        assert!(first_unsupported(&program, false, false, &m0()).is_none());
+    }
+
+    #[test]
+    fn a_prompts_own_split_budget_tokens_refuses_regardless_of_splitting_enabled() {
+        // `RefusalReason::SplitBudget`: a prompt effect's own `split.
+        // budget_tokens` splits even with the runtime switch off
+        // (`core/decompose.py::_resolve_split_budget`'s own precedence), so
+        // this refuses discovered on the compiled program itself --
+        // unlike `SplittingEnabled` above, *splitting_enabled* being
+        // `false` here changes nothing.
+        let prompt = leaf_op(
+            EffectPath::root().push_name("ask"),
+            LeafKind::Prompt(PromptOp {
+                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
+                prompt_type: PromptType::Text,
+                schema: None,
+                model: None,
+                provider: None,
+                provider_fallbacks: Vec::new(),
+                routing_override: None,
+                model_params: None,
+                timeout_ms: None,
+                deterministic: false,
+                inputs: None,
+                assets: Vec::new(),
+                retries: None,
+                description: None,
+                group: None,
+                split_budget_tokens: Some(1000),
+            }),
+        );
+        let program = program_with_root(root_block(vec![prompt]));
+        let supported = Supported {
+            prompt: true,
+            ..m0()
+        };
+        let refusal = first_unsupported(&program, false, false, &supported).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::SplitBudget);
+    }
+
+    #[test]
+    fn a_prompt_with_split_budget_tokens_is_accepted_once_splitting_is_supported() {
+        let prompt = leaf_op(
+            EffectPath::root().push_name("ask"),
+            LeafKind::Prompt(PromptOp {
+                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
+                prompt_type: PromptType::Text,
+                schema: None,
+                model: None,
+                provider: None,
+                provider_fallbacks: Vec::new(),
+                routing_override: None,
+                model_params: None,
+                timeout_ms: None,
+                deterministic: false,
+                inputs: None,
+                assets: Vec::new(),
+                retries: None,
+                description: None,
+                group: None,
+                split_budget_tokens: Some(1000),
+            }),
+        );
+        let program = program_with_root(root_block(vec![prompt]));
+        let supported = Supported {
+            prompt: true,
+            splitting: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, false, &supported).is_none());
+    }
+
+    #[test]
+    fn a_prompt_with_split_enabled_false_alone_is_never_refused() {
+        // `split: {enabled: false}` compiles to `split_budget_tokens: None`
+        // (the compiler only ever retains `budget_tokens`, #672's own
+        // scope) -- so a prompt that only opts itself *out* of splitting
+        // is indistinguishable, at this walker, from one with no `split:`
+        // block at all, and is never refused on that account.
+        let prompt = leaf_op(
+            EffectPath::root().push_name("ask"),
+            LeafKind::Prompt(PromptOp {
+                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
+                prompt_type: PromptType::Text,
+                schema: None,
+                model: None,
+                provider: None,
+                provider_fallbacks: Vec::new(),
+                routing_override: None,
+                model_params: None,
+                timeout_ms: None,
+                deterministic: false,
+                inputs: None,
+                assets: Vec::new(),
+                retries: None,
+                description: None,
+                group: None,
+                split_budget_tokens: None,
+            }),
+        );
+        let program = program_with_root(root_block(vec![prompt]));
+        let supported = Supported {
+            prompt: true,
+            ..m0()
+        };
+        // Neither trigger-level flag is on here (document-level
+        // splitting stays off), isolating this to the per-prompt check
+        // `walk_leaf` makes on `split_budget_tokens` alone.
+        assert!(first_unsupported(&program, false, false, &supported).is_none());
+    }
+
+    #[test]
     fn a_document_level_adapter_refuses_even_with_an_otherwise_supported_tree() {
         let tool_path = EffectPath::root().push_name("parse");
         let tool = leaf_op(
