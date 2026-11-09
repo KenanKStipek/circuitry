@@ -2395,12 +2395,25 @@ fn run_tui(
         } else {
             Vec::new()
         };
+        let tape_owned: Vec<oscilloscope_core::render::Row> = if app.screen
+            == oscilloscope_core::screens::Screen::Tape
+        {
+            tape_screen
+                .as_ref()
+                .map(keys::visible_rows_for_tape)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let visible = match (&flow_screen, &time_screen) {
             (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
+            }
+            _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
+                tape_owned.iter().collect()
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };
@@ -3677,12 +3690,25 @@ fn run_tui_watch(
         } else {
             Vec::new()
         };
+        let tape_owned: Vec<oscilloscope_core::render::Row> = if app.screen
+            == oscilloscope_core::screens::Screen::Tape
+        {
+            tape_screen
+                .as_ref()
+                .map(keys::visible_rows_for_tape)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let visible = match (&flow_screen, &time_screen) {
             (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
                 flow_owned.iter().collect()
             }
             (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
                 keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
+            }
+            _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
+                tape_owned.iter().collect()
             }
             _ => keys::visible_rows(&render_state.rows, &app),
         };

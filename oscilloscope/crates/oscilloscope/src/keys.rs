@@ -435,7 +435,10 @@ impl App {
             }
             KeyCode::Home | KeyCode::Char('g') => self.jump(rows, state_rows, true),
             KeyCode::End | KeyCode::Char('G') => self.jump(rows, state_rows, false),
-            KeyCode::Left if self.pane == Pane::Tree => {
+            // Not on the Tape's own key bar (§4) -- its rows are
+            // already flat, with no collapsed state of their own to
+            // toggle; still live on Flow/Time/Cost.
+            KeyCode::Left if self.pane == Pane::Tree && self.screen != Screen::Tape => {
                 if let Some(path) = self.selected_path.clone() {
                     self.collapsed.insert(path.clone());
                     // Issue #613: the same key re-folds a quick-steps
@@ -465,7 +468,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Right if self.pane == Pane::Tree => {
+            KeyCode::Right if self.pane == Pane::Tree && self.screen != Screen::Tape => {
                 if let Some(path) = &self.selected_path {
                     self.collapsed.remove(path);
                 }
@@ -522,7 +525,12 @@ impl App {
                     self.state_collapsed.remove(path);
                 }
             }
-            KeyCode::Tab => {
+            // Issue #678: `Tab` goes from the Tape -- its own pane
+            // focus (list vs detail) has no key of its own to begin
+            // with, and overloading it here only let `↑↓` silently
+            // scroll the detail pane instead of moving the selection.
+            // Still live on the unported screens below.
+            KeyCode::Tab if self.screen != Screen::Tape => {
                 // Issue #635: the Flow screen's own cycle is flow →
                 // selected → story → flow. `s` swaps the selected
                 // pane's own *content* between the focused step and
@@ -615,13 +623,20 @@ impl App {
             }
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #613: `z` turns folding off to show the full,
-            // unfolded tree, and back on again.
-            KeyCode::Char('z') => self.fold_enabled = !self.fold_enabled,
+            // unfolded tree, and back on again -- gone from the Tape
+            // (§4 has no fold key there; the design's own rows are
+            // already flat), still live on Flow/Time/Cost until their
+            // own redesign.
+            KeyCode::Char('z') if self.screen != Screen::Tape => {
+                self.fold_enabled = !self.fold_enabled;
+            }
             KeyCode::Char('e') => self.errors_only = !self.errors_only,
             KeyCode::Char('/') => {
                 self.dialog = Dialog::FilterInput(self.filter.clone().unwrap_or_default());
             }
-            KeyCode::Char('v') => {
+            // Gone from the Tape the same way `z` is above -- its own
+            // detail pane already shows the prompt and reply in full.
+            KeyCode::Char('v') if self.screen != Screen::Tape => {
                 self.dialog = Dialog::FullValue(if has_prompt_sent {
                     FullValueField::PromptSent
                 } else {
@@ -1043,6 +1058,38 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
     out
 }
 
+/// The Tape's own movement list (issue #678): one [`Row`] per
+/// [`oscilloscope_core::screens::TapeItem::Row`], in the screen's own
+/// draw order (finish order, then running, then rows ahead) -- never
+/// `rows`' own plan/depth-first order, which puts a loop's later
+/// passes and the plan's own root in places the Tape never draws
+/// them at all. `depth`/`duration_s`/`loop_progress`/`dim`/
+/// `has_children` carry no weight for movement (`move_tree_selection`/
+/// `jump` read only `path`), so each synthetic `Row` here is a
+/// placeholder beyond `path`/`label`/`kind`/`status`.
+pub fn visible_rows_for_tape(
+    screen: &oscilloscope_core::screens::TapeScreen,
+) -> Vec<oscilloscope_core::render::Row> {
+    screen
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            oscilloscope_core::screens::TapeItem::Row(row) => Some(oscilloscope_core::render::Row {
+                path: row.path.clone(),
+                depth: 0,
+                label: row.label.clone(),
+                kind: row.kind,
+                status: row.status.clone(),
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// `visible_rows`, further narrowed to exactly what the Flow screen's
 /// own pane draws (issue #635), in the exact order it draws them
 /// (`flow_rows`' own order, the same list `tui::draw_flow_pane`'s own
@@ -1292,6 +1339,7 @@ mod tests {
         let rows = [row("prime.loop", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.selected_path = Some("prime.loop".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(app.collapsed.contains("prime.loop"));
@@ -1414,6 +1462,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         assert!(app.fold_enabled, "issue #613: fold is on by default");
         app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
         assert!(!app.fold_enabled);
@@ -1490,6 +1539,7 @@ mod tests {
         let rows = [quick("prime.a"), quick("prime.b"), quick("prime.c")];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.expanded_quick_steps.insert("prime.a".to_string());
         app.selected_path = Some("prime.b".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
@@ -1512,6 +1562,7 @@ mod tests {
         ];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.expanded_quick_steps.insert("prime.q1".to_string());
         app.selected_path = Some("prime.box".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
@@ -1724,6 +1775,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert!(matches!(app.dialog, Dialog::FullValue(_)));
         app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
@@ -1735,6 +1787,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
     }
@@ -1746,6 +1799,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
     }
@@ -1755,6 +1809,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Flow;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
@@ -1855,6 +1910,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Cost;
         app.state_viewport = 8;
         assert_eq!(app.pane, Pane::Tree);
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
@@ -1873,6 +1929,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.screen = Screen::Cost;
         app.state_viewport = 0;
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Details);
