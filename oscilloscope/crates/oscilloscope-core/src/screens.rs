@@ -861,6 +861,11 @@ pub struct TapeScreen {
     pub ahead: u64,
     pub head: TapeHead,
     pub selected: Option<FocusedStep>,
+    /// The selected row's own tape-style breadcrumb (`gate › reply`,
+    /// not [`FocusedStep::breadcrumb`]'s plain `reply`) -- the detail
+    /// pane's own title while something's selected (§2.1: "gate ›
+    /// reply · Selected").
+    pub selected_breadcrumb: Option<String>,
     /// The selected row's own usual tokens and the run count behind
     /// it (§2.1's detail pane: "265 t +47% · median of 3 runs") --
     /// `None` below the 3-run threshold.
@@ -1123,11 +1128,13 @@ fn tape_row_usual_tokens(
     usual.filter(|&t| t > 0)
 }
 
-/// Whether `path` (an ahead row) is a loop pass waiting for a free
-/// concurrency slot (§3.4's " · queued"): its own last path segment
-/// is `iter_N`, same shape every pass placeholder resolves to.
-fn tape_row_is_queued_pass(path: &str) -> bool {
-    path.rsplit('.').next().is_some_and(|seg| {
+/// Whether `path` (an ahead row, or one of its own leaves) is a
+/// loop pass waiting for a free concurrency slot (§3.4's " ·
+/// queued"): some path segment, the pass's own or any of its
+/// steps', is `iter_N`, same shape every pass placeholder resolves
+/// to.
+fn tape_row_is_under_a_queued_pass(path: &str) -> bool {
+    path.split('.').any(|seg| {
         seg.strip_prefix("iter_")
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
     })
@@ -1197,7 +1204,18 @@ const TAPE_PREVIEW_CHARS: usize = 120;
 
 fn tape_preview_line(text: &str) -> String {
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!("› {}", first_words(&collapsed, TAPE_PREVIEW_CHARS))
+    // A plain character budget, never `first_words`'s own "stop at
+    // the first sentence" rule -- a prompt template routinely has
+    // an embedded period well before its own end (a value like
+    // "kind: Bug." ends mid-phrase), which would cut a preview
+    // there instead of near this budget's own, much wider edge.
+    let truncated: String = collapsed.chars().take(TAPE_PREVIEW_CHARS).collect();
+    let body = if truncated.chars().count() < collapsed.chars().count() {
+        format!("{truncated}⋯")
+    } else {
+        truncated
+    };
+    format!("› {body}")
 }
 
 /// Builds one row's own `(what, preview, tokens)` (§3.4/§3.5).
@@ -1799,10 +1817,26 @@ pub fn build_tape(
     let run_start = header.run_start_ts.as_deref();
     let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
 
+    // Each synthetic row lands right after its own loop's last real
+    // row in `rows`'s own already-correct DFS order (`walk_rows`'s
+    // own, same order bucket1's "ended" sort relies on), not simply
+    // appended after every real row regardless of path -- otherwise
+    // an un-dispatched pass would read after `flaky`/`summary`
+    // instead of where its own loop actually sits.
+    let extra_rows = crate::render::missing_loop_pass_rows(rows, flat, plan, state);
+    let mut all_rows: Vec<&Row> = rows.iter().collect();
+    for (loop_path, extra) in &extra_rows {
+        let insert_at = all_rows
+            .iter()
+            .rposition(|r| r.path.starts_with(&format!("{loop_path}.")))
+            .map_or(all_rows.len(), |i| i + 1);
+        all_rows.insert(insert_at, extra);
+    }
+
     let mut bucket1: Vec<&Row> = Vec::new();
     let mut bucket2: Vec<&Row> = Vec::new();
     let mut bucket3: Vec<&Row> = Vec::new();
-    for row in rows {
+    for row in all_rows {
         // `RowKind::Pass` is a loop pass's own container row (`fold`'s
         // "pass N of 3"), not a step of its own -- the Tape already
         // shows that pass's children with their own `iter_N › ...`
@@ -1858,9 +1892,20 @@ pub fn build_tape(
             return *row_order.get(row.path.as_str()).unwrap_or(&usize::MAX) as f64;
         }
         let node = flat.get(&row.path);
-        let ts = node
-            .and_then(|n| n.completed_at.as_deref())
-            .or_else(|| node.and_then(|n| n.created_at.as_deref()));
+        // An `if`'s own `completed_at` is just the engine's own
+        // bookkeeping once its branch is chosen -- not infrequently
+        // a touch *after* that branch's own first effect has
+        // already finished (both inside the very same millisecond,
+        // issue #678's own `gate`/`gate.reply` golden). What a
+        // reader actually watched finish first was the decision
+        // itself, at `created_at`, always strictly before anything
+        // either branch goes on to do.
+        let ts = if row.kind == RowKind::If {
+            node.and_then(|n| n.created_at.as_deref())
+        } else {
+            node.and_then(|n| n.completed_at.as_deref())
+                .or_else(|| node.and_then(|n| n.created_at.as_deref()))
+        };
         ts.and_then(elapsed_offset).unwrap_or(f64::INFINITY)
     };
     bucket1.sort_by(|a, b| sort_key(a).total_cmp(&sort_key(b)));
@@ -2019,7 +2064,7 @@ pub fn build_tape(
     }
 
     for row in &bucket3 {
-        let queued = tape_row_is_queued_pass(&row.path)
+        let queued = tape_row_is_under_a_queued_pass(&row.path)
             && running_loops
                 .iter()
                 .any(|l| row.path.starts_with(&format!("{}.", l.path)));
@@ -2114,11 +2159,11 @@ pub fn build_tape(
         let (sent, received) = crate::model::node_tokens(&node.meta);
         let total = sent + received;
         let run_total = header.tokens_sent + header.tokens_received;
-        (run_total > 0).then(|| (total * 100) / run_total)
+        (run_total > 0).then(|| ((total as f64 * 100.0) / run_total as f64).round() as u64)
     });
-    let selected_detail = selected_path
-        .and_then(|p| rows.iter().find(|r| r.path == p))
-        .map(|row| build_tape_selected_detail(row, flat));
+    let selected_row = selected_path.and_then(|p| rows.iter().find(|r| r.path == p));
+    let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
+    let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat));
 
     let starting_detail = matches!(head, TapeHead::Starting)
         .then(|| build_tape_starting_detail(rows, flat, plan, header, state));
@@ -2162,6 +2207,7 @@ pub fn build_tape(
         ahead,
         head,
         selected,
+        selected_breadcrumb,
         selected_usual,
         selected_share_pct,
         selected_detail,
@@ -3089,11 +3135,11 @@ mod tests {
     }
 
     #[test]
-    fn tape_row_is_queued_pass_only_matches_a_literal_pass_segment() {
-        assert!(tape_row_is_queued_pass("prime.drafts.iter_2"));
-        assert!(!tape_row_is_queued_pass("prime.drafts.iter_2.draft"));
-        assert!(!tape_row_is_queued_pass("prime.drafts"));
-        assert!(!tape_row_is_queued_pass("prime.summary"));
+    fn tape_row_is_under_a_queued_pass_matches_a_pass_or_its_own_leaf() {
+        assert!(tape_row_is_under_a_queued_pass("prime.drafts.iter_2"));
+        assert!(tape_row_is_under_a_queued_pass("prime.drafts.iter_2.draft"));
+        assert!(!tape_row_is_under_a_queued_pass("prime.drafts"));
+        assert!(!tape_row_is_under_a_queued_pass("prime.summary"));
     }
 
     /// A queued ahead prompt's own preview line (§2.1) reads the

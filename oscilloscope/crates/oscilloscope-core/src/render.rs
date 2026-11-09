@@ -6,7 +6,7 @@
 //! `ratatui`; a future GUI front end can lay out a `RenderState` of
 //! its own just as well.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -1716,6 +1716,85 @@ pub(crate) fn leaf_pass_count(
         }
     }
     (multiplier, lower_bound)
+}
+
+/// A Tape-only addition to a build's own `rows` (issue #678's
+/// Normal state, a loop frozen partway through its own passes): the
+/// shared `rows`/`statuses` pipeline only ever seeds a loop's own
+/// un-dispatched passes *before its first one dispatches at all*
+/// (`RunModel::observe`'s own rule, which every screen shares) --
+/// the Flow/Time/Cost state pane's own tree deliberately shows
+/// nothing past a loop's already-real passes once it's under way,
+/// so that rule can't simply grow to cover every still-missing index
+/// without changing what those screens already draw. The Tape's own
+/// "ahead" rows need exactly that, so it's synthesized here instead,
+/// once a loop has *some* real passes but not yet every one its own
+/// resolved total calls for.
+pub(crate) fn missing_loop_pass_rows(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    state: Option<&Value>,
+) -> Vec<(String, Row)> {
+    let mut out = Vec::new();
+    if !plan.has_plan() {
+        return out;
+    }
+    let empty = Value::Null;
+    for path in plan.all_paths() {
+        let Some((loop_path, suffix)) = path.split_once(".iter_*.") else {
+            continue;
+        };
+        let prefix = format!("{loop_path}.");
+        let real_pass_indices: BTreeSet<u64> = rows
+            .iter()
+            .filter_map(|r| {
+                r.path
+                    .strip_prefix(prefix.as_str())
+                    .and_then(|rest| rest.split('.').next())
+                    .and_then(|seg| seg.strip_prefix("iter_"))
+                    .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|n| n.parse().ok())
+            })
+            .collect();
+        if real_pass_indices.is_empty() {
+            // No real pass yet at all -- the shared pipeline's own
+            // rule already covers this case for every screen.
+            continue;
+        }
+        let total = flat
+            .get(loop_path)
+            .and_then(|n| n.progress_total)
+            .or_else(|| plan.resolve_each_len(loop_path, state.unwrap_or(&empty)));
+        let Some(total) = total else {
+            continue;
+        };
+        for i in 0..total {
+            if real_pass_indices.contains(&i) {
+                continue;
+            }
+            let concrete = format!("{loop_path}.iter_{i}.{suffix}");
+            out.push((
+                loop_path.to_string(),
+                Row {
+                    path: concrete.clone(),
+                    depth: 0,
+                    label: suffix.to_string(),
+                    kind: row_kind_for(&concrete, plan, flat),
+                    status: RowStatus {
+                        kind: StatusKind::Pending,
+                        skip_reason: None,
+                        retrying: false,
+                    },
+                    duration_s: None,
+                    loop_progress: None,
+                    dim: None,
+                    has_children: false,
+                },
+            ));
+        }
+    }
+    out
 }
 
 fn row_kind_for(path: &str, plan: &PlanTree, flat: &BTreeMap<String, NodeMeta>) -> RowKind {

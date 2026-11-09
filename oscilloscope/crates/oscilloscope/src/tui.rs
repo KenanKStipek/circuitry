@@ -565,12 +565,21 @@ fn draw_tape_status_line(
         }
         TapeHead::Normal => {}
     }
+    // §3.2's "the newest finished step" skips a loop pass's own
+    // leaf (`iter_N`'s own `draft`/`pause`, say) even when it's
+    // genuinely the most recent thing to finish by the clock --
+    // every design frame's own worked example (`gate › reply`,
+    // issue #678) reads a repeated pass's own step as secondary to
+    // whichever uniquely-named step actually finished last.
     let last = screen.items.iter().rev().find_map(|item| match item {
         TapeItem::Row(row)
             if matches!(
                 row.status.kind,
                 StatusKind::Done | StatusKind::FailedHandled
-            ) =>
+            ) && !row.path.split('.').any(|seg| {
+                seg.strip_prefix("iter_")
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            }) =>
         {
             Some(row)
         }
@@ -610,11 +619,11 @@ fn draw_tape_status_line(
             tape_glyph_style(row.kind, row.status.kind, ctx.theme),
         ),
         Span::styled(
-            format!("{} finished", row.label),
+            format!("{} finished ", row.label),
             Style::default().fg(ctx.theme.text),
         ),
         Span::styled(
-            format!("{tokens}{age_text}"),
+            format!("{tokens}{age_text}").trim_start().to_string(),
             Style::default().fg(ctx.theme.dim),
         ),
     ];
@@ -1249,17 +1258,34 @@ fn draw_tape_list(
                         } else {
                             Style::default().fg(ctx.theme.dim)
                         };
-                        let text = format!("             {preview}");
-                        let padded = if selected {
-                            let width = inner.width as usize;
-                            format!("{text:<width$}")
+                        // The preview's own text stays clear of
+                        // where a real row's token column would
+                        // sit (plus one more gap cell), so it never
+                        // reads as if it were trying to line up
+                        // under the bar/count instead of the name/
+                        // what text above it.
+                        let content_zone = (inner.width as usize).saturating_sub(13);
+                        let text_width = content_zone.saturating_sub(token_width).saturating_sub(1);
+                        let preview_text = truncate_text(preview, text_width);
+                        let gutter_style = if selected {
+                            preview_style
                         } else {
-                            text
+                            Style::default().fg(border_color)
                         };
-                        lines.push((
-                            Some(row.path.clone()),
-                            Line::from(Span::styled(padded, preview_style)),
-                        ));
+                        let mut spans = vec![
+                            Span::styled("             ", gutter_style),
+                            Span::styled(preview_text.clone(), preview_style),
+                        ];
+                        {
+                            let used = preview_text.chars().count();
+                            if used < content_zone {
+                                spans.push(Span::styled(
+                                    " ".repeat(content_zone - used),
+                                    preview_style,
+                                ));
+                            }
+                        }
+                        lines.push((Some(row.path.clone()), Line::from(spans)));
                     }
                 }
             }
@@ -2338,8 +2364,8 @@ fn draw_tape_detail(
         TapeHead::Starting => "Run · Starting".to_string(),
         TapeHead::Ended { .. } => "Run · Ended".to_string(),
         TapeHead::Failed { .. } => "Run · Failed".to_string(),
-        TapeHead::Normal => match &screen.selected {
-            Some(step) => format!("{} · Selected", step.breadcrumb),
+        TapeHead::Normal => match &screen.selected_breadcrumb {
+            Some(breadcrumb) => format!("{breadcrumb} · Selected"),
             None => "Tape".to_string(),
         },
     };
@@ -13721,6 +13747,101 @@ mod tape_frame_goldens {
         .unwrap_or_else(|e| panic!("{path:?}: invalid JSON: {e}"))
     }
 
+    /// Prunes a loaded `state.live.json` (a *finished* run's own
+    /// document) down to what the real engine would actually have
+    /// written to disk by `cutoff` -- a node the real run hadn't
+    /// reached by then has no entry at all (not even a `null`
+    /// placeholder), and a loop container not yet finished as a
+    /// whole has no `value` of its own and no `completed_at`, its
+    /// own `progress.done`/`completed_passes` recomputed from
+    /// whichever of its own passes actually finished by `cutoff`.
+    /// `rows`/the model get the mid-run truth for everything a real
+    /// document never persists (what's running right now) from
+    /// events alone, same as a real attached run would.
+    fn at_or_before(ts: &str, cutoff: &str) -> bool {
+        match (
+            chrono::DateTime::parse_from_rfc3339(ts),
+            chrono::DateTime::parse_from_rfc3339(cutoff),
+        ) {
+            (Ok(ts), Ok(cutoff)) => ts <= cutoff,
+            _ => false,
+        }
+    }
+
+    fn truncate_document(value: &mut serde_json::Value, cutoff: &str) -> bool {
+        let Some(obj) = value.as_object_mut() else {
+            return true;
+        };
+        if !obj.contains_key("meta") {
+            // A bare container (a loop's own `iter_N`, or a wrapper
+            // key like `prime` itself's non-node children): no
+            // `created_at` of its own to check, only its children's.
+            let keys: Vec<String> = obj.keys().cloned().collect();
+            for key in keys {
+                let keep = truncate_document(obj.get_mut(&key).unwrap(), cutoff);
+                if !keep {
+                    obj.remove(&key);
+                }
+            }
+            return !obj.is_empty();
+        }
+        let created_at = obj
+            .get("meta")
+            .and_then(|m| m.get("created_at"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        if !created_at.is_some_and(|c| at_or_before(&c, cutoff)) {
+            return false;
+        }
+        let completed_at = obj
+            .get("meta")
+            .and_then(|m| m.get("completed_at"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let own_done = completed_at.is_some_and(|c| at_or_before(&c, cutoff));
+        let keys: Vec<String> = obj
+            .keys()
+            .filter(|k| k.as_str() != "value" && k.as_str() != "meta")
+            .cloned()
+            .collect();
+        for key in &keys {
+            let keep = truncate_document(obj.get_mut(key).unwrap(), cutoff);
+            if !keep {
+                obj.remove(key);
+            }
+        }
+        if !own_done {
+            let has_progress = obj.get("meta").is_some_and(|m| m.get("progress").is_some());
+            let done = keys
+                .iter()
+                .filter(|k| k.starts_with("iter_"))
+                .filter(|k| {
+                    let pass = obj.get(k.as_str()).and_then(serde_json::Value::as_object);
+                    pass.is_some_and(|p| {
+                        p.values().all(|leaf| {
+                            leaf.get("meta")
+                                .and_then(|m| m.get("completed_at"))
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|c| at_or_before(c, cutoff))
+                        })
+                    })
+                })
+                .count();
+            // `Null`, never removed outright: `flatten_state`'s own
+            // `walk` only registers a path that has both `value`
+            // and `meta` present at all, and a loop container not
+            // yet finished still needs its own `meta.progress` seen.
+            obj.insert("value".to_string(), serde_json::Value::Null);
+            let meta = obj.get_mut("meta").unwrap().as_object_mut().unwrap();
+            meta.remove("completed_at");
+            if has_progress {
+                meta["progress"]["done"] = serde_json::json!(done);
+                meta.remove("completed_passes");
+            }
+        }
+        true
+    }
+
     fn demo_plan() -> oscilloscope_core::plan::PlanTree {
         let doc = fixtures_dir().join("demo.yml");
         let config = fixtures_dir().join("config.json");
@@ -13865,7 +13986,20 @@ mod tape_frame_goldens {
             let text: &[char] = &chars[text_start..i];
             i += 3;
             let style = parse_tag(&tag, base_bg, theme);
-            out.extend(text.iter().map(|&c| (c, style)));
+            // A literal brace in the body (`{{topic}}`'s own
+            // syntax, inside a preview line) is doubled so it can't
+            // be mistaken for a tag's own `{`/`{/}`; collapse each
+            // doubled pair back to one before painting the cell.
+            let mut j = 0;
+            while j < text.len() {
+                if (text[j] == '{' || text[j] == '}') && text.get(j + 1) == Some(&text[j]) {
+                    out.push((text[j], style));
+                    j += 2;
+                } else {
+                    out.push((text[j], style));
+                    j += 1;
+                }
+            }
         }
         out
     }
@@ -14400,6 +14534,73 @@ mod tape_frame_goldens {
             |_| {},
             &now,
             &[(103, 4)],
+        );
+    }
+
+    #[test]
+    fn tape_normal_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let run_dir = fixtures_dir().join("run2");
+        let mut state = load_json(&run_dir.join("state.live.json"));
+        let now = "2026-11-08T20:50:50.923Z";
+        truncate_document(state.get_mut("prime").unwrap(), now);
+        // `runtime.last_run.totals`/`completed_at` are themselves
+        // only ever written as the run goes/ends; `build_header`'s
+        // own token/effects-run figures read `totals` first when
+        // present (DESIGN.md's own `_total`-first rule), so a frozen
+        // fixture built from the run's own *final* document needs
+        // them at the cutoff's own values, not the final ones --
+        // `document_hash`/`orchestration_path`/`started_at` stay
+        // (a live write has those from the very first one).
+        let last_run = state
+            .pointer_mut("/runtime/last_run")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        last_run.remove("completed_at");
+        last_run["totals"] = serde_json::json!({
+            "wall_time_s": 3.62,
+            "effects_run": 6,
+            "tokens_sent": 796,
+            "tokens_received": 69,
+            "cost_usd": null,
+        });
+        let events: Vec<serde_json::Value> = load_events(&run_dir.join("events.jsonl"))
+            .into_iter()
+            .filter(|e| {
+                e.get("ts")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|ts| at_or_before(ts, now))
+            })
+            .collect();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        // One cell allow-listed, the same rounding discrepancy as
+        // the Starting/Ended goldens' own: the design's
+        // `hist/run-h1..3` give a real median wall time of
+        // ~5.0565s, which rounds to `5.1s` under this renderer's own
+        // round-half-up `format_duration`; the frame itself reads
+        // `5.0s` in the Run End row's own usual figure.
+        assert_tape_frame(
+            "tape--normal--120x30",
+            120,
+            30,
+            &rendered,
+            &tape_screen,
+            Some("prime.gate.reply"),
+            |_| {},
+            now,
+            &[(51, 24)],
         );
     }
 }
