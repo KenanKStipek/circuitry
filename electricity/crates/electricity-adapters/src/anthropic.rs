@@ -7,7 +7,7 @@ use crate::curl_text::{classify_curl_outcome, curl_error_code, curl_failure_mess
 use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
-use electricity_value::pycompat::{py_int, py_strip};
+use electricity_value::pycompat::{py_int, py_splitlines, py_strip};
 use electricity_value::{Dict, Value};
 use electricity_vm::adapter::{
     Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateProgress,
@@ -220,10 +220,6 @@ pub fn build_request_body(
     body
 }
 
-/// The pure half of [`Adapter::generate`] -- everything after
-/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
-/// own scripted `(returncode, stdout, stderr)` triples
-/// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 /// Shared by the streamed and non-streamed failure paths -- on the
 /// streaming path, a non-22 failure leaves whatever Anthropic had
 /// already answered in *outcome*'s own stdout -- only a complete HTTP
@@ -259,6 +255,10 @@ fn curl_failure_error(
     }
 }
 
+/// The pure half of [`Adapter::generate`] -- everything after
+/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
+/// own scripted `(returncode, stdout, stderr)` triples
+/// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 pub fn interpret_outcome(
     outcome: &crate::transport::CurlOutcome,
     model: &str,
@@ -479,12 +479,12 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
     let mut saw_event = false;
     let mut error_message: Option<String> = None;
     let mut error_type: Option<String> = None;
-    for raw_line in stdout.lines() {
-        let line = raw_line.trim();
+    for raw_line in py_splitlines(stdout) {
+        let line = py_strip(&raw_line);
         let Some(rest) = line.strip_prefix("data:") else {
             continue;
         };
-        let payload = rest.trim();
+        let payload = py_strip(rest);
         if payload.is_empty() {
             continue;
         }
@@ -497,16 +497,22 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
         saw_event = true;
         match event_type(dict) {
             "error" if error_message.is_none() => {
-                let error = dict.get(&Value::Str("error".to_string()));
-                let error_dict = error.and_then(Value::as_dict);
+                // `anthropic.py`'s own `error = event.get("error") or {}` --
+                // a missing or Python-falsy `error` (`null`, `false`, `0`,
+                // `""`, `{}`, `[]`) reads as an empty dict, same as its own
+                // fallback below, so a body with no message of its own gets
+                // `"{}"`, never an empty string.
+                let error = match dict.get(&Value::Str("error".to_string())) {
+                    Some(v) if crate::config::value_is_truthy(v) => v.clone(),
+                    _ => Value::Dict(Dict::new()),
+                };
+                let error_dict = error.as_dict();
                 error_message = Some(
                     match error_dict.and_then(|d| d.get(&Value::Str("message".to_string()))) {
                         Some(Value::Str(s)) => s.clone(),
-                        _ => error
-                            .map(|e| {
-                                electricity_json::dumps(e, WriteMode::COMPACT).unwrap_or_default()
-                            })
-                            .unwrap_or_default(),
+                        _ => {
+                            electricity_json::dumps(&error, WriteMode::COMPACT).unwrap_or_default()
+                        }
                     },
                 );
                 error_type = match error_dict.and_then(|d| d.get(&Value::Str("type".to_string()))) {
@@ -1121,6 +1127,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_anthropic_stream_reports_an_empty_object_message_for_a_missing_error_value() {
+        let body = "data: {\"type\":\"error\"}\n";
+        let parsed = parse_anthropic_stream(body);
+        assert_eq!(parsed.error_message, Some("{}".to_string()));
+        assert_eq!(parsed.error_type, None);
+    }
+
+    #[test]
+    fn parse_anthropic_stream_reports_an_empty_object_message_for_a_null_error_value() {
+        let body = "data: {\"type\":\"error\",\"error\":null}\n";
+        let parsed = parse_anthropic_stream(body);
+        assert_eq!(parsed.error_message, Some("{}".to_string()));
+        assert_eq!(parsed.error_type, None);
+    }
+
+    #[test]
     fn stream_on_line_progress_carries_tokens_sent_onto_later_deltas() {
         let tokens_sent = Cell::new(None);
         let seen = std::cell::RefCell::new(Vec::new());
@@ -1225,5 +1247,148 @@ mod tests {
         }
         assert!(err.retry.retryable);
         assert!(err.message.contains("curl exit 18"));
+    }
+
+    /// Like [`spawn_sse_server`], but the response's own `Content-Length`
+    /// claims more bytes than *body* actually has, so the connection
+    /// looks closed mid-body to the client -- a mid-stream disconnect
+    /// after whatever deltas *body* already carries.
+    fn spawn_truncated_sse_server(body: &'static str) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len() + 64
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        addr
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_a_mid_stream_error_event() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+        }
+        let addr = spawn_sse_server(concat!(
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",",
+            "\"message\":\"overloaded\"}}\n",
+        ));
+        let adapter = AnthropicAdapter {
+            name: "anthropic".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "claude-sonnet-5".to_string(),
+            max_tokens: 4096,
+            streams: true,
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("m", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+        assert_eq!(err.retry.error_code, Some("overloaded_error".to_string()));
+        assert!(err.retry.retryable);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_disconnect_after_two_deltas() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+        }
+        let addr = spawn_truncated_sse_server(concat!(
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi \"}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"there\"}}\n",
+        ));
+        let adapter = AnthropicAdapter {
+            name: "anthropic".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "claude-sonnet-5".to_string(),
+            max_tokens: 4096,
+            streams: true,
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("m", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+        assert!(err.retry.retryable);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_a_4xx_http_error_body() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+        }
+        let body = r#"{"error":{"type":"invalid_request_error","message":"bad model"}}"#;
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let adapter = AnthropicAdapter {
+            name: "anthropic".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "claude-sonnet-5".to_string(),
+            max_tokens: 4096,
+            streams: true,
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("m", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+        assert!(!err.retry.retryable);
+        assert!(err.message.contains("bad model"));
     }
 }

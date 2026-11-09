@@ -122,10 +122,6 @@ fn coerce_token_count(value: Option<&Value>) -> Result<Option<i64>, AdapterError
     }
 }
 
-/// The pure half of [`Adapter::generate`] -- everything after
-/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
-/// own scripted `(returncode, stdout, stderr)` triples
-/// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 /// Shared by the streamed and non-streamed failure paths -- on the
 /// streaming path, a non-22 failure leaves whatever OpenAI had
 /// already answered in *outcome*'s own stdout -- only a complete HTTP
@@ -161,6 +157,10 @@ fn curl_failure_error(
     }
 }
 
+/// The pure half of [`Adapter::generate`] -- everything after
+/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
+/// own scripted `(returncode, stdout, stderr)` triples
+/// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 pub fn interpret_outcome(
     outcome: &crate::transport::CurlOutcome,
     model: &str,
@@ -269,9 +269,11 @@ pub fn interpret_streaming_outcome(
             "",
             &[api_key],
         );
+        let mut retry = stream_error_retry_info(&error);
+        retry.error_code = curl_error_code(&error_body, &[api_key]);
         return Err(AdapterError {
             message,
-            retry: stream_error_retry_info(&error),
+            retry,
             py_class: PyExc::AdapterCallError,
         });
     }
@@ -576,6 +578,28 @@ mod tests {
         addr
     }
 
+    /// Like [`spawn_sse_server`], but the response's own `Content-Length`
+    /// claims more bytes than *body* actually has, so the connection
+    /// looks closed mid-body to the client -- a mid-stream disconnect
+    /// after whatever deltas *body* already carries.
+    fn spawn_truncated_sse_server(body: &'static str) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len() + 64
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        addr
+    }
+
     #[test]
     fn build_request_adds_stream_fields_only_when_streaming() {
         let payload = build_request("m", "hi", &GenerateOptions::default(), true);
@@ -630,5 +654,94 @@ mod tests {
         assert_eq!(result.tokens_received, Some(2));
         assert_eq!(result.finish_reason, Some("stop".to_string()));
         assert_eq!(*seen.borrow(), vec![3, 5]);
+    }
+
+    #[test]
+    fn interpret_streaming_outcome_carries_the_provider_error_code_from_a_mid_stream_error() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+                "data: {\"error\":{\"type\":\"BadRequestError\",\"code\":400}}\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let err = interpret_streaming_outcome(&outcome, "m", "http://x", "sk-test").unwrap_err();
+        assert_eq!(err.retry.error_code, Some("BadRequestError".to_string()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_a_mid_stream_error_payload() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+            "data: {\"error\":{\"type\":\"BadRequestError\",\"code\":400}}\n",
+        );
+        let addr = spawn_sse_server(body);
+        let adapter = OpenAiAdapter {
+            name: "openai".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "gpt-4o-mini".to_string(),
+            streams: true,
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert_eq!(err.retry.error_code, Some("BadRequestError".to_string()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_disconnect_after_two_deltas() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"there\"}}]}\n",
+        );
+        let addr = spawn_truncated_sse_server(body);
+        let adapter = OpenAiAdapter {
+            name: "openai".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "gpt-4o-mini".to_string(),
+            streams: true,
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert!(err.retry.retryable);
     }
 }

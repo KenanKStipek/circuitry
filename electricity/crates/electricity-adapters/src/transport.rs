@@ -687,15 +687,26 @@ pub async fn run_curl_streaming(
         buffer.extend_from_slice(chunk);
         drain_lines(&mut buffer, on_line);
     };
-    match http_client::send_streaming(
+    let result = http_client::send_streaming(
         &client,
         &connect_target,
         &raw_request,
         timeout,
         &mut on_chunk,
     )
-    .await
-    {
+    .await;
+    // `curl_support._read_lines_promptly` iterates `stdout` with a plain
+    // `for raw_line in stdout:`, whose last item is a final line with no
+    // trailing newline when the stream didn't end in one -- delivered to
+    // `on_line` exactly like every other line, regardless of whether the
+    // call that produced it went on to succeed or fail. `drain_lines` only
+    // ever hands over a `\n`-terminated line, so whatever is left once the
+    // stream has actually ended (success or failure) is this call's own
+    // analogue of that last, unterminated item.
+    if !buffer.is_empty() {
+        on_line(&String::from_utf8_lossy(&buffer));
+    }
+    match result {
         Err(err) => Ok(send_error_outcome(err)),
         Ok(response) => response_outcome(response),
     }
@@ -987,6 +998,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_curl_streaming_times_out_like_run_curl() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(2));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n");
+        });
+        let url = format!("http://{addr}/x");
+        let mut on_line = |_: &str| {};
+        let outcome = run_curl_streaming(&url, &[], None, 1, &mut on_line)
+            .await
+            .unwrap();
+        assert_eq!(outcome.returncode, 28);
+        assert!(is_retryable_exit(28));
+    }
+
+    #[tokio::test]
     async fn a_4xx_status_maps_to_exit_22_with_the_body_as_stdout() {
         let addr = spawn_server(
             "HTTP/1.1 404 Not Found\r\nContent-Length: 20\r\nConnection: close\r\n\r\n\
@@ -1273,6 +1304,34 @@ mod tests {
             request_text
                 .to_ascii_lowercase()
                 .contains("authorization: basic dxnlcjpwyxnz")
+        );
+    }
+
+    #[test]
+    fn drain_lines_leaves_an_unterminated_line_in_the_buffer() {
+        let mut buffer = b"complete\npartial".to_vec();
+        let mut seen = Vec::new();
+        drain_lines(&mut buffer, &mut |line| seen.push(line.to_string()));
+        assert_eq!(seen, vec!["complete".to_string()]);
+        assert_eq!(buffer, b"partial");
+    }
+
+    #[tokio::test]
+    async fn run_curl_streaming_delivers_a_final_line_with_no_trailing_newline() {
+        let addr = spawn_server(
+            "HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\nfirst\nunterminated",
+        );
+        let url = format!("http://{addr}/path");
+        let seen = std::cell::RefCell::new(Vec::new());
+        let mut on_line = |line: &str| seen.borrow_mut().push(line.to_string());
+        let outcome = run_curl_streaming(&url, &[], None, 5, &mut on_line)
+            .await
+            .unwrap();
+        assert_eq!(outcome.returncode, 0);
+        assert_eq!(outcome.stdout, "first\nunterminated");
+        assert_eq!(
+            *seen.borrow(),
+            vec!["first".to_string(), "unterminated".to_string()]
         );
     }
 }

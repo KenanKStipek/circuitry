@@ -378,8 +378,8 @@ fn parse_ndjson_stream(stdout: &str) -> NdjsonStream {
     let mut text = String::new();
     let mut saw_done = false;
     let mut error: Option<Value> = None;
-    for raw_line in stdout.lines() {
-        let line = raw_line.trim();
+    for raw_line in electricity_value::pycompat::py_splitlines(stdout) {
+        let line = electricity_value::pycompat::py_strip(&raw_line);
         if line.is_empty() {
             continue;
         }
@@ -1210,6 +1210,20 @@ mod tests {
             .unwrap_err();
         assert!(!err.retry.retryable);
         assert!(err.message.contains("model crashed"));
+    }
+
+    #[test]
+    fn parse_ndjson_stream_splits_on_a_unicode_line_separator_inside_a_json_string_like_python() {
+        // A delta whose own text happens to contain U+2028 -- Python's
+        // `str.splitlines()` treats it as a line boundary, breaking this
+        // one NDJSON line into two lines neither of which parses as JSON
+        // on its own, so the delta is silently dropped; Rust's `str::
+        // lines()` alone would not split here, keeping it instead, a
+        // divergence this parses the same, Python way.
+        let body = "{\"message\": {\"content\": \"hi\u{2028}there\"}, \"done\": true}\n";
+        let parsed = parse_ndjson_stream(body);
+        assert_eq!(parsed.text, "");
+        assert!(!parsed.saw_done);
     }
 
     #[tokio::test]

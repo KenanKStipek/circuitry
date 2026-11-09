@@ -487,20 +487,20 @@ pub fn parse_sse_stream(stdout: &str) -> SseStream {
     let mut saw_done = false;
     let mut saw_data_line = false;
     let mut error: Option<Value> = None;
-    for raw_line in stdout.lines() {
-        let line = raw_line.trim();
+    for raw_line in electricity_value::pycompat::py_splitlines(stdout) {
+        let line = electricity_value::pycompat::py_strip(&raw_line);
         let Some(rest) = line.strip_prefix("data:") else {
             continue;
         };
-        let payload = rest.trim();
+        let payload = electricity_value::pycompat::py_strip(rest);
         if payload.is_empty() {
             continue;
         }
-        saw_data_line = true;
         if payload == "[DONE]" {
             saw_done = true;
             continue;
         }
+        saw_data_line = true;
         let Ok(event) = electricity_json::loads(payload) else {
             continue;
         };
@@ -646,9 +646,11 @@ pub fn interpret_streaming_outcome(
             .unwrap_or_default();
         let message =
             curl_failure_message(source, Some(model), url, 22, &error_body, "", "", secrets);
+        let mut retry = stream_error_retry_info(&error);
+        retry.error_code = curl_error_code(&error_body, secrets);
         return Err(AdapterError {
             message,
-            retry: stream_error_retry_info(&error),
+            retry,
             py_class: PyExc::AdapterCallError,
         });
     }
@@ -709,10 +711,6 @@ pub fn interpret_streaming_outcome(
     })
 }
 
-/// The pure half of [`chat_completion`] -- everything after
-/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
-/// own scripted `(returncode, stdout, stderr)` triples
-/// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 /// `_openai_compat.py`'s own shared curl-failure branch, both
 /// streamed and non-streamed. On the streaming path, a non-22
 /// failure leaves whatever the provider had already answered in
@@ -750,6 +748,10 @@ fn curl_failure_error(
     }
 }
 
+/// The pure half of [`chat_completion`] -- everything after
+/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
+/// own scripted `(returncode, stdout, stderr)` triples
+/// (`tests/adapter_corpus.rs`). `pub` for the same reason.
 pub fn interpret_outcome(
     source: &str,
     outcome: &crate::transport::CurlOutcome,
@@ -1730,6 +1732,42 @@ mod tests {
     }
 
     #[test]
+    fn parse_sse_stream_treats_a_done_only_body_as_no_data_line_seen() {
+        let parsed = parse_sse_stream("data: [DONE]\n");
+        assert!(parsed.saw_done);
+        assert!(!parsed.saw_data_line);
+    }
+
+    fn streaming_outcome(stdout: &str) -> crate::transport::CurlOutcome {
+        crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn interpret_streaming_outcome_carries_the_provider_error_code_from_a_mid_stream_error() {
+        let outcome = streaming_outcome(concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+            "data: {\"error\":{\"type\":\"BadRequestError\",\"code\":400}}\n",
+        ));
+        let err =
+            interpret_streaming_outcome("lmstudio", &outcome, "m", "http://x", &[]).unwrap_err();
+        assert_eq!(err.retry.error_code, Some("BadRequestError".to_string()));
+    }
+
+    #[test]
+    fn interpret_streaming_outcome_treats_a_done_only_body_as_non_json() {
+        let outcome = streaming_outcome("data: [DONE]\n");
+        let err =
+            interpret_streaming_outcome("lmstudio", &outcome, "m", "http://x", &[]).unwrap_err();
+        assert!(err.message.contains("non-JSON response"));
+    }
+
+    #[test]
     fn stream_on_line_progress_fires_once_per_delta_and_skips_errors_and_dones() {
         let seen = std::cell::RefCell::new(Vec::new());
         let on_progress = |p: GenerateProgress| seen.borrow_mut().push(p.delta_chars);
@@ -1751,6 +1789,28 @@ mod tests {
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        addr
+    }
+
+    /// Like [`spawn_sse_server`], but the response's own `Content-Length`
+    /// claims more bytes than *body* actually has, so the connection
+    /// looks closed mid-body to the client -- a mid-stream disconnect
+    /// after whatever deltas *body* already carries.
+    fn spawn_truncated_sse_server(body: &'static str) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len() + 64
         );
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1813,5 +1873,49 @@ mod tests {
         .unwrap_err();
         assert!(err.retry.retryable);
         assert!(err.message.contains("curl exit 18"));
+    }
+
+    #[tokio::test]
+    async fn generate_streaming_fails_on_a_mid_stream_error_payload() {
+        let addr = spawn_sse_server(concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+            "data: {\"error\":{\"type\":\"BadRequestError\",\"code\":400}}\n",
+        ));
+        let cfg = OpenAiCompatibleConfig::new(format!("http://{addr}"), "", "m");
+        let err = chat_completion(
+            "test",
+            &cfg,
+            "m",
+            "hi",
+            5,
+            &[],
+            &GenerateOptions::default(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.retry.error_code, Some("BadRequestError".to_string()));
+    }
+
+    #[tokio::test]
+    async fn generate_streaming_fails_on_disconnect_after_two_deltas() {
+        let addr = spawn_truncated_sse_server(concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"there\"}}]}\n",
+        ));
+        let cfg = OpenAiCompatibleConfig::new(format!("http://{addr}"), "", "m");
+        let err = chat_completion(
+            "test",
+            &cfg,
+            "m",
+            "hi",
+            5,
+            &[],
+            &GenerateOptions::default(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.retry.retryable);
     }
 }
