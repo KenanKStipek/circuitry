@@ -7,15 +7,16 @@
 //! `together`, `vllm`, `xai`) shares, over [`crate::transport`].
 
 use crate::config::{cfg_get, cfg_str_or, cfg_value_or, rstrip_base_url, value_is_truthy};
-use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
-use crate::transport::{TransportFailure, run_curl};
+use crate::curl_text::{classify_curl_outcome, curl_error_code, curl_failure_message};
+use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
 use electricity_value::{Dict, Value};
 use electricity_vm::adapter::{
-    Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateResult, PyExc,
+    Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateProgress,
+    GenerateResult, PyExc,
 };
-use electricity_vm::retry::RetryInfo;
+use electricity_vm::retry::{RetryInfo, status_is_retryable};
 
 fn dict_insert(dict: &mut Dict, key: &str, value: Value) {
     dict.insert(Value::Str(key.to_string()), value);
@@ -300,6 +301,10 @@ pub struct OpenAiCompatibleConfig {
     pub api_key_env: String,
     pub default_model: String,
     pub chat_completions_path: String,
+    /// Whether this adapter sends `stream: true` by default; an
+    /// instance can build this `false` from
+    /// `runtime.adapters.<name>.stream`.
+    pub streams: bool,
 }
 
 impl OpenAiCompatibleConfig {
@@ -313,6 +318,7 @@ impl OpenAiCompatibleConfig {
             api_key_env: api_key_env.into(),
             default_model: default_model.into(),
             chat_completions_path: "/chat/completions".to_string(),
+            streams: true,
         }
     }
 
@@ -323,6 +329,7 @@ impl OpenAiCompatibleConfig {
 }
 
 /// `_openai_compat.py::chat_completion`.
+#[allow(clippy::too_many_arguments)]
 pub async fn chat_completion(
     source: &str,
     cfg: &OpenAiCompatibleConfig,
@@ -331,6 +338,7 @@ pub async fn chat_completion(
     timeout_seconds: u32,
     extra_headers: &[(String, String)],
     options: &GenerateOptions,
+    on_progress: Option<&dyn Fn(GenerateProgress)>,
 ) -> Result<GenerateResult, AdapterError> {
     let model = if model.is_empty() {
         cfg.default_model.as_str()
@@ -356,7 +364,13 @@ pub async fn chat_completion(
     let path = cfg.chat_completions_path.replace("{model}", model);
     let url = format!("{}{path}", rstrip_base_url(&cfg.base_url)?);
 
-    let payload = build_request(model, prompt, options);
+    let mut payload = build_request(model, prompt, options);
+    if cfg.streams {
+        dict_insert(&mut payload, "stream", Value::Bool(true));
+        let mut stream_options = Dict::new();
+        dict_insert(&mut stream_options, "include_usage", Value::Bool(true));
+        dict_insert(&mut payload, "stream_options", Value::Dict(stream_options));
+    }
     // `json.dumps(payload)` raises Python's own `TypeError` for a value it
     // can't serialize, uncaught -- never `RuntimeError`.
     let body = electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {
@@ -368,10 +382,6 @@ pub async fn chat_completion(
     })?;
 
     let headers = request_headers(&api_key, extra_headers);
-
-    let outcome = run_curl(&url, &headers, Some(&body), timeout_seconds)
-        .await
-        .map_err(transport_failure_error)?;
     let mut secrets: Vec<&str> = Vec::new();
     if !api_key.is_empty() {
         secrets.push(&api_key);
@@ -381,13 +391,357 @@ pub async fn chat_completion(
             secrets.push(value);
         }
     }
-    interpret_outcome(source, &outcome, model, &url, &secrets)
+
+    if cfg.streams {
+        let mut on_line = |line: &str| stream_on_line_progress(line, on_progress);
+        let outcome =
+            run_curl_streaming(&url, &headers, Some(&body), timeout_seconds, &mut on_line)
+                .await
+                .map_err(transport_failure_error)?;
+        interpret_streaming_outcome(source, &outcome, model, &url, &secrets)
+    } else {
+        let outcome = run_curl(&url, &headers, Some(&body), timeout_seconds)
+            .await
+            .map_err(transport_failure_error)?;
+        interpret_outcome(source, &outcome, model, &url, &secrets)
+    }
+}
+
+/// `_openai_compat.py::StreamAssembly.on_line` -- drives *on_progress*
+/// from each SSE delta as it arrives; never the source of the final
+/// result, which is parsed from the complete body once the call
+/// finishes ([`parse_sse_stream`]).
+pub fn stream_on_line_progress(line: &str, on_progress: Option<&dyn Fn(GenerateProgress)>) {
+    let Some(on_progress) = on_progress else {
+        return;
+    };
+    let line = line.trim();
+    let Some(rest) = line.strip_prefix("data:") else {
+        return;
+    };
+    let payload = rest.trim();
+    if payload.is_empty() || payload == "[DONE]" {
+        return;
+    }
+    let Ok(event) = electricity_json::loads(payload) else {
+        return;
+    };
+    let Some(dict) = event.as_dict() else {
+        return;
+    };
+    let has_error = dict
+        .get(&Value::Str("error".to_string()))
+        .is_some_and(|v| !matches!(v, Value::None));
+    if has_error {
+        return;
+    }
+    let Some(choices) = dict
+        .get(&Value::Str("choices".to_string()))
+        .and_then(Value::as_list)
+    else {
+        return;
+    };
+    if choices.is_empty() {
+        return;
+    }
+    let Some(choice) = choices[0].as_dict() else {
+        return;
+    };
+    let Some(Value::Str(content)) = choice
+        .get(&Value::Str("delta".to_string()))
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&Value::Str("content".to_string())))
+    else {
+        return;
+    };
+    if !content.is_empty() {
+        on_progress(GenerateProgress {
+            delta_chars: content.chars().count(),
+            delta_count: 1,
+            tokens_sent: None,
+            tokens_received: None,
+        });
+    }
+}
+
+/// `_openai_compat.py::parse_sse_stream` -- `(text, finish_reason,
+/// usage, saw_done, saw_data_line, error)` from a completed SSE Chat
+/// Completions stream, parsed in full -- the authoritative result for
+/// a streamed call, built the same way the non-streamed path builds
+/// its one JSON object's. `saw_data_line` tells
+/// [`interpret_streaming_outcome`] whether the server answered with
+/// SSE at all, or one plain JSON body instead.
+pub struct SseStream {
+    pub text: String,
+    pub finish_reason: Option<String>,
+    pub usage: Option<Value>,
+    pub saw_done: bool,
+    pub saw_data_line: bool,
+    pub error: Option<Value>,
+}
+
+pub fn parse_sse_stream(stdout: &str) -> SseStream {
+    let mut text = String::new();
+    let mut finish_reason: Option<String> = None;
+    let mut usage: Option<Value> = None;
+    let mut saw_done = false;
+    let mut saw_data_line = false;
+    let mut error: Option<Value> = None;
+    for raw_line in stdout.lines() {
+        let line = raw_line.trim();
+        let Some(rest) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = rest.trim();
+        if payload.is_empty() {
+            continue;
+        }
+        saw_data_line = true;
+        if payload == "[DONE]" {
+            saw_done = true;
+            continue;
+        }
+        let Ok(event) = electricity_json::loads(payload) else {
+            continue;
+        };
+        let Some(dict) = event.as_dict() else {
+            continue;
+        };
+        let line_error = dict
+            .get(&Value::Str("error".to_string()))
+            .filter(|v| !matches!(v, Value::None));
+        if line_error.is_some() && error.is_none() {
+            error = line_error.cloned();
+            continue;
+        }
+        if let Some(line_usage) = dict.get(&Value::Str("usage".to_string())) {
+            if !matches!(line_usage, Value::None) {
+                usage = Some(line_usage.clone());
+            }
+        }
+        let Some(choices) = dict
+            .get(&Value::Str("choices".to_string()))
+            .and_then(Value::as_list)
+        else {
+            continue;
+        };
+        if choices.is_empty() {
+            continue;
+        }
+        let Some(choice) = choices[0].as_dict() else {
+            continue;
+        };
+        if let Some(Value::Str(reason)) = choice.get(&Value::Str("finish_reason".to_string())) {
+            finish_reason = Some(reason.clone());
+        }
+        if let Some(Value::Str(content)) = choice
+            .get(&Value::Str("delta".to_string()))
+            .and_then(Value::as_dict)
+            .and_then(|d| d.get(&Value::Str("content".to_string())))
+        {
+            if !content.is_empty() {
+                text.push_str(content);
+            }
+        }
+    }
+    SseStream {
+        text,
+        finish_reason,
+        usage,
+        saw_done,
+        saw_data_line,
+        error,
+    }
+}
+
+/// `_openai_compat.py::usage_tokens`.
+pub fn usage_tokens(usage: Option<&Value>) -> (Option<i64>, Option<i64>) {
+    let Some(dict) = usage.and_then(Value::as_dict) else {
+        return (None, None);
+    };
+    (
+        int_if_pyint(dict.get(&Value::Str("prompt_tokens".to_string()))),
+        int_if_pyint(dict.get(&Value::Str("completion_tokens".to_string()))),
+    )
+}
+
+/// `_openai_compat.py::stream_error_retry_info` -- a numeric, non-bool
+/// `code` is read as the status it stands in for; anything else is
+/// not retryable.
+pub fn stream_error_retry_info(error: &Value) -> RetryInfo {
+    if let Some(Value::Int(_)) = error.as_dict().and_then(|d| d.get(&Value::Str("code".to_string())))
+    {
+        let code = error
+            .as_dict()
+            .and_then(|d| d.get(&Value::Str("code".to_string())))
+            .unwrap();
+        if let Ok(status_i64) = electricity_value::pycompat::py_int(code) {
+            if let Ok(status) = u16::try_from(status_i64) {
+                return RetryInfo {
+                    retryable: status_is_retryable(status),
+                    status: Some(status),
+                    retry_after: None,
+                    error_code: None,
+                };
+            }
+        }
+    }
+    RetryInfo::not_retryable()
+}
+
+/// The pure half of [`chat_completion`]'s streaming path -- everything
+/// after [`run_curl_streaming`] returns.
+pub fn interpret_streaming_outcome(
+    source: &str,
+    outcome: &crate::transport::CurlOutcome,
+    model: &str,
+    url: &str,
+    secrets: &[&str],
+) -> Result<GenerateResult, AdapterError> {
+    if outcome.returncode != 0 {
+        return Err(curl_failure_error(source, outcome, model, url, secrets, true));
+    }
+
+    let parsed = parse_sse_stream(&outcome.stdout);
+    if !parsed.saw_data_line {
+        // Either streaming was off, or the server answered a streaming
+        // request with one plain JSON body instead of SSE -- parse the
+        // whole body the non-streamed way either way, so the two paths
+        // can never drift apart.
+        let raw = electricity_json::loads(&outcome.stdout)
+            .map_err(|_| non_json_error("Provider", &outcome.stdout))?;
+        let (text, finish_reason) = parse_chat_response(&raw)?;
+        let usage = raw
+            .as_dict()
+            .and_then(|d| d.get(&Value::Str("usage".to_string())));
+        let usage_dict = match usage {
+            Some(Value::Dict(d)) => Some(d),
+            Some(other) if !crate::config::value_is_truthy(other) => None,
+            Some(other) => return Err(attribute_error(other, "get")),
+            None => None,
+        };
+        let tokens_sent = usage_dict
+            .and_then(|d| int_if_pyint(d.get(&Value::Str("prompt_tokens".to_string()))));
+        let tokens_received = usage_dict
+            .and_then(|d| int_if_pyint(d.get(&Value::Str("completion_tokens".to_string()))));
+        return Ok(GenerateResult {
+            text,
+            raw,
+            tokens_sent,
+            tokens_received,
+            finish_reason,
+            warnings: Vec::new(),
+            cost_usd: None,
+        });
+    }
+
+    if let Some(error) = parsed.error {
+        let mut error_dict = Dict::new();
+        dict_insert(&mut error_dict, "error", error.clone());
+        let error_body =
+            electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT).unwrap_or_default();
+        let message = curl_failure_message(
+            source,
+            Some(model),
+            url,
+            22,
+            &error_body,
+            "",
+            "",
+            secrets,
+        );
+        return Err(AdapterError {
+            message,
+            retry: stream_error_retry_info(&error),
+            py_class: PyExc::AdapterCallError,
+        });
+    }
+
+    if !parsed.saw_done {
+        // The stream ended (exit 0) without a `[DONE]` sentinel --
+        // classified the same way an actual mid-stream disconnect is.
+        let message = curl_failure_message(
+            source,
+            Some(model),
+            url,
+            18,
+            "",
+            "curl: (18) transfer closed with outstanding read data remaining",
+            "",
+            secrets,
+        );
+        return Err(AdapterError {
+            message,
+            retry: RetryInfo::retryable(),
+            py_class: PyExc::AdapterCallError,
+        });
+    }
+
+    let (tokens_sent, tokens_received) = usage_tokens(parsed.usage.as_ref());
+    let mut raw = Dict::new();
+    let mut message_dict = Dict::new();
+    dict_insert(&mut message_dict, "content", Value::Str(parsed.text.clone()));
+    let mut choice = Dict::new();
+    dict_insert(&mut choice, "message", Value::Dict(message_dict));
+    dict_insert(
+        &mut choice,
+        "finish_reason",
+        parsed.finish_reason.clone().map(Value::Str).unwrap_or(Value::None),
+    );
+    dict_insert(&mut raw, "choices", Value::List(vec![Value::Dict(choice)]));
+    dict_insert(&mut raw, "usage", parsed.usage.clone().unwrap_or(Value::None));
+    Ok(GenerateResult {
+        text: electricity_value::pycompat::py_strip(&parsed.text).to_string(),
+        raw: Value::Dict(raw),
+        tokens_sent,
+        tokens_received,
+        finish_reason: parsed.finish_reason,
+        warnings: Vec::new(),
+        cost_usd: None,
+    })
 }
 
 /// The pure half of [`chat_completion`] -- everything after
 /// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
 /// own scripted `(returncode, stdout, stderr)` triples
 /// (`tests/adapter_corpus.rs`). `pub` for the same reason.
+/// `_openai_compat.py`'s own shared curl-failure branch, both
+/// streamed and non-streamed. On the streaming path, a non-22
+/// failure leaves whatever the provider had already answered in
+/// *outcome*'s own stdout -- only a complete HTTP response (22) has
+/// a body worth reporting.
+fn curl_failure_error(
+    source: &str,
+    outcome: &crate::transport::CurlOutcome,
+    model: &str,
+    url: &str,
+    secrets: &[&str],
+    streaming: bool,
+) -> AdapterError {
+    let stdout_for_message: &str = if outcome.returncode == 22 || !streaming {
+        &outcome.stdout
+    } else {
+        ""
+    };
+    let message = curl_failure_message(
+        source,
+        Some(model),
+        url,
+        outcome.returncode,
+        stdout_for_message,
+        &outcome.stderr,
+        "",
+        secrets,
+    );
+    let mut retry = classify_curl_outcome(outcome);
+    retry.error_code = curl_error_code(stdout_for_message, secrets);
+    AdapterError {
+        message,
+        retry,
+        py_class: PyExc::AdapterCallError,
+    }
+}
+
 pub fn interpret_outcome(
     source: &str,
     outcome: &crate::transport::CurlOutcome,
@@ -396,21 +750,7 @@ pub fn interpret_outcome(
     secrets: &[&str],
 ) -> Result<GenerateResult, AdapterError> {
     if outcome.returncode != 0 {
-        let message = curl_failure_message(
-            source,
-            Some(model),
-            url,
-            outcome.returncode,
-            &outcome.stdout,
-            &outcome.stderr,
-            "",
-            secrets,
-        );
-        return Err(AdapterError {
-            message,
-            retry: classify_curl_outcome_with_error_code(outcome, secrets),
-            py_class: PyExc::AdapterCallError,
-        });
+        return Err(curl_failure_error(source, outcome, model, url, secrets, false));
     }
 
     let raw = electricity_json::loads(&outcome.stdout)
@@ -504,6 +844,7 @@ impl Adapter for OpenAiCompatibleAdapter {
             call.timeout_seconds,
             &extra_headers,
             options,
+            call.on_progress,
         )
         .await
     }
@@ -515,18 +856,27 @@ impl Adapter for OpenAiCompatibleAdapter {
         }
     }
 
+    fn streams(&self) -> bool {
+        self.cfg.streams
+    }
+
     fn accepts_images(&self) -> bool {
         true
     }
 }
 
-fn simple_adapter(provider_name: &str, cfg: OpenAiCompatibleConfig) -> Box<dyn Adapter> {
-    Box::new(OpenAiCompatibleAdapter {
+fn simple_adapter(
+    provider_name: &str,
+    mut cfg: OpenAiCompatibleConfig,
+    raw_cfg: &Value,
+) -> Result<Box<dyn Adapter>, AdapterError> {
+    cfg.streams = crate::config::stream_flag(raw_cfg, provider_name)?;
+    Ok(Box::new(OpenAiCompatibleAdapter {
         provider_name: provider_name.to_string(),
         cfg,
         precheck: None,
         check_override: None,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------
@@ -534,18 +884,19 @@ fn simple_adapter(provider_name: &str, cfg: OpenAiCompatibleConfig) -> Box<dyn A
 // ---------------------------------------------------------------------
 
 pub fn build_ai21(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.ai21.com/studio/v1"),
             "AI21_API_KEY",
             cfg_str_or(cfg, "default_model", "jamba-large"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_cohere(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.cohere.com"),
@@ -553,22 +904,24 @@ pub fn build_cohere(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
             cfg_str_or(cfg, "default_model", "command-r-plus"),
         )
         .with_path("/compatibility/v1/chat/completions"),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_deepseek(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.deepseek.com/v1"),
             "DEEPSEEK_API_KEY",
             cfg_str_or(cfg, "default_model", "deepseek-chat"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_fireworks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.fireworks.ai/inference/v1"),
@@ -579,11 +932,12 @@ pub fn build_fireworks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
                 "accounts/fireworks/models/llama-v3p3-70b-instruct",
             ),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_gemini(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(
@@ -594,65 +948,71 @@ pub fn build_gemini(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
             "GOOGLE_API_KEY",
             cfg_str_or(cfg, "default_model", "gemini-2.5-flash"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_groq(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.groq.com/openai/v1"),
             "GROQ_API_KEY",
             cfg_str_or(cfg, "default_model", "llama-3.3-70b-versatile"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_huggingface_inference(
     name: &str,
     cfg: &Value,
 ) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://router.huggingface.co/v1"),
             "HF_TOKEN",
             cfg_str_or(cfg, "default_model", "meta-llama/Llama-3.3-70B-Instruct"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_llamacpp(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:8080/v1"),
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_lmstudio(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:1234/v1"),
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_mistral(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.mistral.ai/v1"),
             "MISTRAL_API_KEY",
             cfg_str_or(cfg, "default_model", "mistral-large-latest"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_nvidia_nim(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
@@ -661,40 +1021,43 @@ pub fn build_nvidia_nim(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Ada
         Some(Value::Str(s)) => s.clone(),
         Some(_) => "NIM_API_KEY".to_string(),
     };
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://integrate.api.nvidia.com/v1"),
             api_key_env,
             cfg_str_or(cfg, "default_model", "meta/llama-3.3-70b-instruct"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_openrouter(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://openrouter.ai/api/v1"),
             "OPENROUTER_API_KEY",
             cfg_str_or(cfg, "default_model", "openai/gpt-4o-mini"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_perplexity(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.perplexity.ai"),
             "PERPLEXITY_API_KEY",
             cfg_str_or(cfg, "default_model", "sonar"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_qwen_dashscope(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(
@@ -705,7 +1068,8 @@ pub fn build_qwen_dashscope(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>,
             "DASHSCOPE_API_KEY",
             cfg_str_or(cfg, "default_model", "qwen-max"),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_tgi(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
@@ -714,18 +1078,19 @@ pub fn build_tgi(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterErr
         Some(Value::Str(s)) => s.clone(),
         Some(_) => String::new(),
     };
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:3000/v1"),
             api_key_env,
             cfg_str_or(cfg, "default_model", ""),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_together(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.together.xyz/v1"),
@@ -736,29 +1101,32 @@ pub fn build_together(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapt
                 "meta-llama/Llama-3.3-70B-Instruct-Turbo",
             ),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_vllm(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:8000/v1"),
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
-    ))
+        cfg,
+    )
 }
 
 pub fn build_xai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(simple_adapter(
+    simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.x.ai/v1"),
             "XAI_API_KEY",
             cfg_str_or(cfg, "default_model", "grok-2-latest"),
         ),
-    ))
+        cfg,
+    )
 }
 
 // -- Members needing a pre-check or a `check()` override. --
@@ -853,11 +1221,12 @@ pub fn build_azure_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, A
         .cloned()
         .unwrap_or_else(|| Value::Str(String::new()));
     let api_version = cfg_str_or(cfg, "api_version", "2024-10-21");
-    let openai_cfg =
+    let mut openai_cfg =
         OpenAiCompatibleConfig::new(raw_endpoint, "", cfg_str_or(cfg, "default_model", ""))
             .with_path(format!(
                 "/openai/deployments/{{model}}/chat/completions?api-version={api_version}"
             ));
+    openai_cfg.streams = crate::config::stream_flag(cfg, name)?;
     Ok(Box::new(OpenAiCompatibleAdapter {
         provider_name: name.to_string(),
         cfg: openai_cfg,
@@ -923,7 +1292,7 @@ pub fn build_cloudflare_workers_ai(
         }
     };
     let base_url = cloudflare_resolve_base_url(&explicit_base_url, &account_id);
-    let openai_cfg = OpenAiCompatibleConfig::new(
+    let mut openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
         "CF_API_TOKEN",
         cfg_str_or(
@@ -932,6 +1301,7 @@ pub fn build_cloudflare_workers_ai(
             "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         ),
     );
+    openai_cfg.streams = crate::config::stream_flag(cfg, name)?;
     Ok(Box::new(OpenAiCompatibleAdapter {
         provider_name: name.to_string(),
         cfg: openai_cfg,
@@ -990,7 +1360,7 @@ fn databricks_check(_name: &str, cfg: &OpenAiCompatibleConfig) -> CheckResult {
 
 pub fn build_databricks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     let base_url = databricks_resolve_base_url(&cfg_value_or(cfg, "base_url", ""));
-    let openai_cfg = OpenAiCompatibleConfig::new(
+    let mut openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
         "DATABRICKS_TOKEN",
         cfg_str_or(
@@ -999,6 +1369,7 @@ pub fn build_databricks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Ada
             "databricks-meta-llama-3-3-70b-instruct",
         ),
     );
+    openai_cfg.streams = crate::config::stream_flag(cfg, name)?;
     Ok(Box::new(OpenAiCompatibleAdapter {
         provider_name: name.to_string(),
         cfg: openai_cfg,
@@ -1298,5 +1669,139 @@ mod tests {
         }
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    // -- streaming (#676) --
+
+    #[test]
+    fn parse_sse_stream_assembles_text_usage_and_finish_reason() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"there\"},\"finish_reason\":\"stop\"}],",
+            "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n",
+            "data: [DONE]\n",
+        );
+        let parsed = parse_sse_stream(body);
+        assert_eq!(parsed.text, "hi there");
+        assert_eq!(parsed.finish_reason, Some("stop".to_string()));
+        assert!(parsed.saw_done);
+        assert!(parsed.saw_data_line);
+        assert!(parsed.error.is_none());
+        let (sent, received) = usage_tokens(parsed.usage.as_ref());
+        assert_eq!(sent, Some(3));
+        assert_eq!(received, Some(2));
+    }
+
+    #[test]
+    fn parse_sse_stream_reports_a_mid_stream_error_and_stops_collecting_text() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+            "data: {\"error\":{\"message\":\"boom\",\"code\":500}}\n",
+        );
+        let parsed = parse_sse_stream(body);
+        assert!(parsed.error.is_some());
+        let retry = stream_error_retry_info(parsed.error.as_ref().unwrap());
+        assert!(retry.retryable);
+        assert_eq!(retry.status, Some(500));
+    }
+
+    #[test]
+    fn parse_sse_stream_without_a_done_sentinel_reports_saw_done_false() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n";
+        let parsed = parse_sse_stream(body);
+        assert!(!parsed.saw_done);
+        assert!(parsed.saw_data_line);
+    }
+
+    #[test]
+    fn parse_sse_stream_with_no_data_lines_reports_saw_data_line_false() {
+        let parsed = parse_sse_stream("not sse at all");
+        assert!(!parsed.saw_data_line);
+    }
+
+    #[test]
+    fn stream_on_line_progress_fires_once_per_delta_and_skips_errors_and_dones() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let on_progress = |p: GenerateProgress| seen.borrow_mut().push(p.delta_chars);
+        stream_on_line_progress(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}",
+            Some(&on_progress),
+        );
+        stream_on_line_progress("data: [DONE]", Some(&on_progress));
+        stream_on_line_progress(
+            "data: {\"error\":{\"message\":\"boom\"}}",
+            Some(&on_progress),
+        );
+        assert_eq!(*seen.borrow(), vec![2]);
+    }
+
+    fn spawn_sse_server(body: &'static str) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn generate_streams_and_matches_the_non_streamed_shape() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"there\"},\"finish_reason\":\"stop\"}],",
+            "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n",
+            "data: [DONE]\n",
+        );
+        let addr = spawn_sse_server(body);
+        let cfg = OpenAiCompatibleConfig::new(format!("http://{addr}"), "", "m");
+        assert!(cfg.streams);
+        let seen = std::cell::RefCell::new(Vec::new());
+        let on_progress = |p: GenerateProgress| seen.borrow_mut().push(p.delta_chars);
+        let result = chat_completion(
+            "test",
+            &cfg,
+            "m",
+            "hi",
+            5,
+            &[],
+            &GenerateOptions::default(),
+            Some(&on_progress),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.text, "hi there");
+        assert_eq!(result.tokens_sent, Some(3));
+        assert_eq!(result.tokens_received, Some(2));
+        assert_eq!(result.finish_reason, Some("stop".to_string()));
+        assert_eq!(*seen.borrow(), vec![3, 5]);
+    }
+
+    #[tokio::test]
+    async fn generate_streaming_fails_without_a_done_sentinel() {
+        let addr = spawn_sse_server("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n");
+        let cfg = OpenAiCompatibleConfig::new(format!("http://{addr}"), "", "m");
+        let err = chat_completion(
+            "test",
+            &cfg,
+            "m",
+            "hi",
+            5,
+            &[],
+            &GenerateOptions::default(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.retry.retryable);
+        assert!(err.message.contains("curl exit 18"));
     }
 }
