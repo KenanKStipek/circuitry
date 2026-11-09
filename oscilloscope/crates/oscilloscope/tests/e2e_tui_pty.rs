@@ -2127,3 +2127,377 @@ fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
 
     assert_no_leftover_process(work.path());
 }
+
+/// Resizes an already-open pty's own window (issue #678's four size
+/// classes): `TIOCSWINSZ` on a freshly opened slave fd, the same way
+/// `open_pty` sets the initial size -- the kernel delivers `SIGWINCH`
+/// to the pty's own foreground process group on its own, which is
+/// what tells crossterm's `event::read()` (osi's own event loop) a
+/// resize happened at all, with no signal of this test's own to send.
+fn resize_pty(slave_path: &Path, cols: u16, rows: u16) {
+    let slave = File::options()
+        .read(true)
+        .write(true)
+        .open(slave_path)
+        .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
+        panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
+    }
+}
+
+fn spawn_scripted_run_on_tape(
+    home: &TestHome,
+    work: &Path,
+    out_dir: &Path,
+) -> (File, PathBuf, std::process::Child, Arc<Mutex<Vec<u8>>>) {
+    let doc = write_doc(
+        work,
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work, "config.json", SCRIPTED_CONFIG);
+    let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.as_os_str();
+    let child = spawn_osi_on_pty(
+        home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+    (master, slave_path, child, captured_buf)
+}
+
+/// Issue #678's own key map: `p` toggles the Tape's prompt previews
+/// off and back on -- a finished prompt's own preview line (`›`)
+/// disappears, then reappears.
+#[test]
+fn pressing_p_on_the_tape_toggles_previews() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains('\u{203a}'),
+            "expected a preview line (\u{203a}) with previews on by default; got:\n{rendered:?}"
+        );
+    }
+
+    let before_p = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"p");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_p..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            !rendered.contains('\u{203a}'),
+            "expected no preview line after turning previews off; got:\n{rendered:?}"
+        );
+    }
+
+    let before_p2 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"p");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_p2..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains('\u{203a}'),
+            "expected the preview line back after pressing p again; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own key map: `t` on the Tape swaps the token column
+/// for the deviation-from-usual view -- a finished row's own bar
+/// (`\u{25b0}`) gives way to a `\u{2014}` (no history yet), and `t` again
+/// brings the bar back.
+#[test]
+fn pressing_t_on_the_tape_toggles_the_tokens_view() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains('\u{25b0}'),
+            "expected the fixed-scale bar by default; got:\n{rendered:?}"
+        );
+    }
+
+    let before_t = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"t");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_t..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("vs Usual") || rendered.contains('\u{2014}'),
+            "expected the deviation view's own title or dash after pressing t; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own `?`: the Help overlay opens over the Tape,
+/// listing its own key bar's keys and the glyph legend. Closing it
+/// (any key, `esc` included) is checked directly against `keys::
+/// App::handle_key`, with no pty involved, by `keys::tests::esc_
+/// closes_the_help_overlay` -- this run's own list is only two rows
+/// (`Run Started`, the running `slow` tool), both above the 72×18
+/// overlay's own vertical range at 120×30, so nothing in it is ever
+/// actually covered for a pty capture to prove got redrawn once the
+/// overlay closes.
+#[test]
+fn the_help_overlay_lists_the_tapes_own_keys() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, _slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_help = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"?");
+    wait_for_pattern_since(&captured_buf, before_help, b"Help", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_help..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Help") && rendered.contains("Tape"),
+            "expected the Help overlay's own title; got:\n{rendered:?}"
+        );
+        // Words checked separately, never as one contiguous
+        // phrase: ratatui's own differential redraw gives each
+        // word on a styled line its own escape-positioned span,
+        // so two words a real line genuinely holds side by side
+        // can still land with a cursor-move escape between them
+        // in this buffer.
+        assert!(
+            rendered.contains("tokens:") && rendered.contains("usual"),
+            "expected the Tape's own t key listed; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("Tokens") && rendered.contains("Glyphs"),
+            "expected the Tokens/Glyphs legend; got:\n{rendered:?}"
+        );
+    }
+
+    // Closed with `?` again, back to a plain key bar's own exit
+    // path below -- not asserted on here, for the reason this
+    // function's own doc comment gives.
+    send_bytes(&mut master, b"?");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own size classes: 120×30 (list beside its detail
+/// pane) → 80×24 (list alone, no detail pane) → 60×24 (glyph, name
+/// and the token column only) → 60×16 (too small) and back up again
+/// -- each resize picked up on the TUI's own next redraw, with no key
+/// of its own needed.
+#[test]
+fn resizing_through_the_tapes_four_size_classes_and_back() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("Selected"),
+            "expected the detail pane's own title at 120x30; got:\n{rendered:?}"
+        );
+    }
+
+    let before_80 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        let after = captured_buf.lock().unwrap()[before_80..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            !rendered.contains("Selected"),
+            "expected the detail pane gone at 80x24; got:\n{rendered:?}"
+        );
+    }
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        let after = captured_buf.lock().unwrap()[before_60..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("slow"),
+            "expected the running row's own name at 60x24; got:\n{rendered:?}"
+        );
+    }
+
+    let before_too_small = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 16);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_too_small,
+        b"needs",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_too_small..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("needs") && rendered.contains("log"),
+            "expected the too-small notice naming the minimum and --log; got:\n{rendered:?}"
+        );
+    }
+
+    let before_back = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 120, 30);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_back,
+        b"Selected",
+        Duration::from_secs(10),
+    );
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}

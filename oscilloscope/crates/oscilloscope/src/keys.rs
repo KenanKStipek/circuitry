@@ -1994,6 +1994,14 @@ mod tests {
     }
 
     #[test]
+    fn esc_closes_the_help_overlay() {
+        let mut app = App::new(false);
+        app.dialog = Dialog::Help;
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert_eq!(app.dialog, Dialog::None);
+    }
+
+    #[test]
     fn t_on_the_tape_toggles_the_tokens_view_instead_of_the_theme() {
         let mut app = App::new(false);
         app.screen = Screen::Tape;

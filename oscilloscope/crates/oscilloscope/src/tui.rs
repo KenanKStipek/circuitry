@@ -1082,7 +1082,7 @@ fn draw_tape(
     ctx: &DrawCtx,
     now: &str,
 ) {
-    if full_area.width < 60 || full_area.height < 16 {
+    if full_area.width < 60 || full_area.height < 24 {
         draw_tape_too_small(frame, full_area, ctx);
         return;
     }
