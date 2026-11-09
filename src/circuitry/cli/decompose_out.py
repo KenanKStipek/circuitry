@@ -79,6 +79,7 @@ def _header(*, run_id: str, effect_path: str, decomposition: dict[str, Any]) -> 
         f"# run_id: {_line(run_id)}",
         f"# effect: {_line(effect_path)}",
         f"# status: {status}",
+        f"# trigger: {_line(decomposition.get('trigger') or 'score')}",
         f"# reason: {_line(decomposition.get('reason') or 'none')}",
         f"# result_path: {_line(decomposition.get('result_path') or '')}",
         f"# chunk_count: {_line(decomposition.get('chunk_count'))}",
