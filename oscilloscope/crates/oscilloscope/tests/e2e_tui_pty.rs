@@ -751,10 +751,15 @@ fn pressing_1_during_a_live_run_opens_the_signal_screen() {
         );
     }
 
-    // Scrub left, then zoom in and out, then back to Now -- a live
-    // run's own spinner redraws regardless, so this only checks none
-    // of these keys breaks the screen.
-    for key in [&b"\x1b[D"[..], b"+", b"-", b"n"] {
+    // Scrub left, then right, then zoom in and out, then back to
+    // Now -- this fixture's own single, always-running step gives
+    // no second step for a scrub to change the selection to, and a
+    // live run's own spinner redraws regardless of any key here, so
+    // this only checks that none of these keys breaks the screen;
+    // the cursor's own distinct rendering, separate from the Now
+    // sweep, is a buffer-level unit test (`tui.rs`'s own
+    // `a_scrubbed_cursor_is_drawn_distinctly_from_the_now_sweep`).
+    for key in [&b"\x1b[D"[..], b"\x1b[C", b"+", b"-", b"n"] {
         send_bytes(&mut master, key);
         std::thread::sleep(Duration::from_millis(300));
     }
@@ -806,10 +811,10 @@ fn pressing_1_during_a_live_run_opens_the_signal_screen() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #688's own R6: 120×30 shows the Now pane with Readings
-/// beside it; 80–99 drops Readings and keeps the Now pane's own
-/// running rows alone -- picked up on the TUI's own next redraw,
-/// with no key of its own needed.
+/// 120×30 and up shows the Now pane with Readings beside it;
+/// 80-119 drops Readings and keeps the Now pane's own running rows
+/// alone -- picked up on the TUI's own next redraw, with no key of
+/// its own needed.
 #[test]
 fn resizing_the_signal_screen_drops_readings_at_80_columns() {
     if !e2e_enabled() {
@@ -838,6 +843,57 @@ fn resizing_the_signal_screen_drops_readings_at_80_columns() {
         assert!(
             rendered.contains("slow"),
             "expected the running row's own name still shown at 80x24; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// §4: below 80 columns only the Tape is offered -- shrinking the
+/// terminal while Signal is on screen bounces straight back to the
+/// Tape, picked up on the TUI's own next redraw with no key needed.
+#[test]
+fn resizing_below_80_columns_bounces_signal_back_to_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"SIGNAL", Duration::from_secs(10));
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    // The header band's own chip is past the right edge at 60
+    // columns and never drawn at all -- true of the Tape's own too,
+    // not something this resize changes -- so the Tape's own panel
+    // title is the one piece of chrome at this width that still
+    // says which screen is on.
+    wait_for_pattern_since(&captured_buf, before_60, b"Tape", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_60..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Tape"),
+            "expected the Tape's own panel title once the terminal is too narrow for Signal; got:\n{rendered:?}"
+        );
+        assert!(
+            !rendered.contains("Signal"),
+            "Signal must not still be offered below 80 columns; got:\n{rendered:?}"
         );
     }
 
