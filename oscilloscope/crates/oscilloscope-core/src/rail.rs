@@ -1067,49 +1067,117 @@ fn loop_body_template(loop_path: &str, ctx: &Ctx<'_>) -> Vec<RailItem> {
 /// doesn't have yet) and every tool reading its own usual command,
 /// both still queued.
 fn ahead_pass_lane(template: &[RailItem], loop_path: &str, index: u64, ctx: &Ctx<'_>) -> Lane {
-    let label = pass_each_value(loop_path, index, ctx.plan, ctx.state)
-        .unwrap_or_else(|| format!("pass {}", index + 1));
     let items = template
         .iter()
-        .map(|item| match item {
-            RailItem::Station(s) => {
-                // A loop usually has more passes than slots, so the
-                // template's own path is always the first real
-                // pass's own (`iter_0`) -- but the history this own
-                // slot actually keeps is per *position*, not per
-                // pass, so an ahead lane further along reads its own
-                // slot's own history, not `iter_0`'s.
-                let slot_path = with_iter_index(&s.path, index);
-                let (headline, detail) = match s.row_kind {
-                    RowKind::Prompt => (
-                        Headline::PassLabel(label.clone()),
-                        Detail::UsualTokens(usual_tokens(&slot_path, ctx)),
-                    ),
-                    RowKind::Tool => (
-                        Headline::QueuedCommand(command_text(&s.path, ctx)),
-                        Detail::Queued,
-                    ),
-                    _ => (Headline::Blank, Detail::Blank),
-                };
-                RailItem::Station(Station {
-                    path: format!("{loop_path}.iter_ahead_{index}.{}", step_label(&s.path)),
-                    selectable: false,
-                    is_edge: false,
-                    row_kind: s.row_kind,
-                    status: StatusKind::Pending,
-                    name: step_label(&s.path),
-                    headline,
-                    detail,
-                })
-            }
-            RailItem::Fork(_) => item.clone(),
-        })
+        .map(|item| ahead_template_item(item, loop_path, index, ctx))
         .collect();
     Lane {
         items,
         ghost: None,
         running: false,
         waiting: true,
+    }
+}
+
+/// A template item's own ahead counterpart: a station reads pending
+/// with no tokens yet, its prompt/tool headline standing in for one
+/// it doesn't have (the same shape `ahead_pass_lane` always drew for
+/// a plain station); a nested fork (an unnamed `if` inside the
+/// loop's own body, a nested loop, a parallel `dynamic` inside a
+/// pass) keeps its own shape -- kind and lane count -- but maps
+/// every one of its own lanes through this same function, rather
+/// than keeping pass 0's real, already-finished fork verbatim: an
+/// ahead pass that has not run yet must never show a real ✓ Done
+/// status or real tokens copied from the pass this lane is only
+/// templated on.
+fn ahead_template_item(item: &RailItem, loop_path: &str, index: u64, ctx: &Ctx<'_>) -> RailItem {
+    match item {
+        RailItem::Station(s) => {
+            // A loop usually has more passes than slots, so the
+            // template's own path is always the first real pass's
+            // own (`iter_0`) -- but the history this own slot
+            // actually keeps is per *position*, not per pass, so an
+            // ahead lane further along reads its own slot's own
+            // history, not `iter_0`'s.
+            let slot_path = with_iter_index(&s.path, index);
+            let (headline, detail) = match s.row_kind {
+                RowKind::Prompt => (
+                    Headline::PassLabel(
+                        pass_each_value(loop_path, index, ctx.plan, ctx.state)
+                            .unwrap_or_else(|| format!("pass {}", index + 1)),
+                    ),
+                    Detail::UsualTokens(usual_tokens(&slot_path, ctx)),
+                ),
+                RowKind::Tool => (
+                    Headline::QueuedCommand(command_text(&s.path, ctx)),
+                    Detail::Queued,
+                ),
+                _ => (Headline::Blank, Detail::Blank),
+            };
+            RailItem::Station(Station {
+                path: format!("{loop_path}.iter_ahead_{index}.{}", step_label(&s.path)),
+                selectable: false,
+                is_edge: false,
+                row_kind: s.row_kind,
+                status: StatusKind::Pending,
+                name: step_label(&s.path),
+                headline,
+                detail,
+            })
+        }
+        RailItem::Fork(f) => {
+            let lanes = f
+                .lanes
+                .iter()
+                .map(|lane| Lane {
+                    items: lane
+                        .items
+                        .iter()
+                        .map(|it| ahead_template_item(it, loop_path, index, ctx))
+                        .collect(),
+                    ghost: lane.ghost.clone(),
+                    running: false,
+                    waiting: true,
+                })
+                .collect();
+            RailItem::Fork(Fork {
+                path: ahead_fork_path(&f.path, index),
+                kind: f.kind,
+                source_status: StatusKind::Pending,
+                lanes,
+            })
+        }
+    }
+}
+
+/// Rewrites a template fork's own path the same way a template
+/// station's is (`ahead_template_item`'s own `iter_ahead_{index}`),
+/// so two ahead passes' own forks never collide on the same
+/// `app.flow_lanes_open` fold state or `find_station` lookup --
+/// falls back to a trailing suffix on the rare path with no
+/// `iter_<N>` segment of its own to replace at all.
+fn ahead_fork_path(fork_path: &str, index: u64) -> String {
+    let mut replaced = false;
+    let rewritten: String = fork_path
+        .split('.')
+        .map(|part| {
+            if !replaced
+                && part
+                    .strip_prefix("iter_")
+                    .is_some_and(|n| n.parse::<u64>().is_ok())
+            {
+                replaced = true;
+                format!("iter_ahead_{index}")
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    if replaced {
+        rewritten
+    } else {
+        format!("{rewritten}.iter_ahead_{index}")
     }
 }
 
@@ -1829,5 +1897,79 @@ mod tests {
         assert!(deep_shown, "{inner_fork:?}");
         assert_eq!(inner_fork.lanes[1].ghost.as_deref(), Some("shallow"));
         assert_eq!(outer_fork.lanes[1].ghost.as_deref(), Some("bail"));
+    }
+
+    fn every_station(items: &[RailItem]) -> Vec<&Station> {
+        let mut out = Vec::new();
+        for item in items {
+            match item {
+                RailItem::Station(s) => out.push(s),
+                RailItem::Fork(f) => {
+                    for lane in &f.lanes {
+                        out.extend(every_station(&lane.items));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// A 3-pass loop whose body holds an unnamed `if`: pass 0 is
+    /// done (its own `then` branch really ran), passes 1 and 2
+    /// haven't started -- their own ahead lanes must preview pass
+    /// 0's shape (an inner decision fork, not a flattened station),
+    /// but never pass 0's real ✓ Done status, since neither of them
+    /// has run at all yet.
+    #[test]
+    fn an_ahead_passes_own_nested_if_never_shows_pass_0s_real_done_status() {
+        let yaml = "effects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n      as: item\n    body:\n      - type: if\n        if: {mode: cel, expr: \"true\"}\n        then:\n          - name: nap\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"x\\\"\"}\n        else:\n          - name: snooze\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"y\\\"\"}\n";
+        let plan = compile_doc(yaml);
+        let state = serde_json::json!({
+            "input": {"items": ["cats", "dogs", "birds"]},
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 3}},
+                    "iter_0": {
+                        "nap": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+                    }
+                }
+            }
+        });
+        let rail = build_rail_for(&plan, &state);
+        let fork = find_fork_after(&rail.items, "fan").expect("a fork after fan");
+        assert_eq!(fork.lanes.len(), 3, "{fork:?}");
+        // Pass 0's own lane keeps its real inner decision, resolved
+        // to `then` -- a real station, really done.
+        let pass0_inner = fork.lanes[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                RailItem::Fork(f) => Some(f),
+                _ => None,
+            })
+            .expect("pass 0's own lane keeps its real inner decision fork");
+        let pass0_done = every_station(&pass0_inner.lanes[0].items)
+            .iter()
+            .any(|s| s.status == StatusKind::Done);
+        assert!(pass0_done, "pass 0 really ran: {pass0_inner:?}");
+        // Passes 1 and 2's own ahead lanes must hold the same inner
+        // decision *shape* -- a fork, not a flattened station list
+        // -- but no station inside either one may read Done.
+        for ahead in &fork.lanes[1..] {
+            let inner = ahead.items.iter().find_map(|it| match it {
+                RailItem::Fork(f) => Some(f),
+                _ => None,
+            });
+            let inner = inner.unwrap_or_else(|| {
+                panic!("an ahead pass must preview the inner fork too: {ahead:?}")
+            });
+            assert_eq!(inner.kind, ForkKind::Decision, "{inner:?}");
+            for station in every_station(&ahead.items) {
+                assert_ne!(
+                    station.status,
+                    StatusKind::Done,
+                    "an ahead pass must never show a real ✓: {ahead:?}"
+                );
+            }
+        }
     }
 }
