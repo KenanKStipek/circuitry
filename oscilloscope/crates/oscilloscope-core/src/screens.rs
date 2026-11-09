@@ -989,9 +989,13 @@ pub struct TapeFailedDetail {
     pub not_reached: Vec<String>,
 }
 
-/// §3.5's unit rule: the smallest of these that keeps `largest`
-/// inside eight cells, `50` with no `largest` to go on at all (no
-/// history, or nothing finished yet).
+/// §3.5's unit rule: the smallest of these that keeps `largest`'s
+/// own drawn bar inside eight cells, `50` with no `largest` to go on
+/// at all (no history, or nothing finished yet). "Inside eight
+/// cells" means by the same rounding the bar itself draws with
+/// (`tape_token_bar`'s round-half-up, capped at eight) -- 402 at a
+/// 50-token unit rounds to a full 8-cell bar, not 9, so the unit
+/// stays 50 for it.
 fn tape_unit(largest_usual: Option<u64>) -> u64 {
     const STEPS: [u64; 6] = [10, 20, 50, 100, 200, 500];
     let Some(largest) = largest_usual else {
@@ -999,7 +1003,7 @@ fn tape_unit(largest_usual: Option<u64>) -> u64 {
     };
     STEPS
         .into_iter()
-        .find(|&unit| largest <= unit * 8)
+        .find(|&unit| (largest as f64 / unit as f64).round() <= 8.0)
         .unwrap_or(500)
 }
 
@@ -1102,10 +1106,15 @@ fn first_words(text: &str, max_chars: usize) -> String {
 /// A row's own "usually" tokens (§3.5), tried first by its exact
 /// loop pass (`drafts.iter_2.draft`'s own three recorded figures,
 /// never summed with its sibling passes) and, failing that, by the
-/// pass-stripped key every other step already uses -- every row on
-/// the Tape goes through this, not only the ones ahead, so a
-/// finished or running row's `+47%` deviation has the same figure
-/// behind it as a queued one's `usually 155 t`.
+/// pass-stripped key every other step already uses -- that key's own
+/// `tokens_p50` is already a single typical pass's figure, not the
+/// whole loop's (`history::compute_stats` divides each run's own sum
+/// by that run's own pass count before taking the median across
+/// runs), so the fallback never over-counts for a loop pass still
+/// missing its own literal history. Every row on the Tape goes
+/// through this, not only the ones ahead, so a finished or running
+/// row's `+47%` deviation has the same figure behind it as a queued
+/// one's `usually 155 t`.
 fn tape_row_usual_tokens(
     path: &str,
     plan: &PlanTree,
@@ -2108,13 +2117,19 @@ pub fn build_tape(
         }
     }
 
-    // §9's own §2 is still an open decision ("keep ▰ = 50 t for every
-    // document, or derive the unit from the usual largest step") --
-    // every frame in `design/frames/` keeps the fixed 50-token unit,
-    // so `tape_unit` -- otherwise ready for the historical derivation
-    // once that's settled -- is never given a real `largest_usual`
-    // yet.
-    let unit = tape_unit(None);
+    // §9's own §2, settled: the unit is derived from the usual
+    // largest step across every plan-known step history has a
+    // figure for, `50` with none -- the design's own `hist/run-h1..3`
+    // give `prime.summary` a usual 402 t, which still draws (and so
+    // fits) an 8-cell bar at 50 t, so every frame's own fixed-looking
+    // `▰ = 50 t` title already matches this derivation, not a
+    // separate fixed default.
+    let largest_usual_step = header
+        .history_step_usual
+        .values()
+        .filter_map(|s| s.tokens_p50)
+        .max();
+    let unit = tape_unit(largest_usual_step);
 
     // §2.1's Tape title counts a finished decision too (`gate →
     // then`), not leaves alone -- only a loop container's own row is
@@ -2965,12 +2980,26 @@ mod tests {
         assert_eq!(tape_unit(None), 50);
         assert_eq!(tape_unit(Some(0)), 10);
         assert_eq!(tape_unit(Some(80)), 10);
-        assert_eq!(tape_unit(Some(81)), 20);
-        assert_eq!(tape_unit(Some(400)), 50);
-        assert_eq!(tape_unit(Some(401)), 100);
+        // The design's own fixture history: `prime.summary`'s usual
+        // 402 t rounds to an 8-cell bar at 50 t/cell (`round(402.0 /
+        // 50.0) == 8.0`), same as the bar itself draws, so the unit
+        // stays 50 for it -- every `tape--*` frame with history
+        // keeps its own fixed-looking `▰ = 50 t` title because of
+        // this, not in spite of it.
+        assert_eq!(tape_unit(Some(402)), 50);
         assert_eq!(tape_unit(Some(1600)), 200);
         assert_eq!(tape_unit(Some(4000)), 500);
         assert_eq!(tape_unit(Some(100_000)), 500);
+    }
+
+    /// Past the point a 50-token unit's own bar would round up to a
+    /// *ninth* cell (`round(425.0 / 50.0) == 9.0`, half rounding away
+    /// from zero same as every other `.round()` here), the next
+    /// scale takes over.
+    #[test]
+    fn tape_unit_moves_to_the_next_scale_once_50_would_overflow_the_bar() {
+        assert_eq!(tape_unit(Some(424)), 50);
+        assert_eq!(tape_unit(Some(425)), 100);
     }
 
     fn tape_row(path: &str, depth: usize, label: &str, kind: RowKind, status: StatusKind) -> Row {
