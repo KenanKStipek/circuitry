@@ -1472,6 +1472,7 @@ mod tests {
             history_eta_high_ts: None,
             history_vs_usual_s: None,
             history_usual_total_s: None,
+            history_usual_total_tokens: None,
             history_same_hash_count: None,
             history_step_usual: Default::default(),
             latest_report: None,

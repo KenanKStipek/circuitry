@@ -948,6 +948,24 @@ fn first_words(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// A row's own "usually" tokens (§3.5), tried first by its exact
+/// loop pass (`drafts.iter_2.draft`'s own three recorded figures,
+/// never summed with its sibling passes) and, failing that, by the
+/// pass-stripped key every other step already uses -- every row on
+/// the Tape goes through this, not only the ones ahead, so a
+/// finished or running row's `+47%` deviation has the same figure
+/// behind it as a queued one's `usually 155 t`.
+fn tape_row_usual_tokens(path: &str, plan: &PlanTree, header: &crate::render::Header) -> Option<u64> {
+    let literal = crate::history::display_key_literal(path, plan)
+        .and_then(|key| header.history_step_usual.get(&key))
+        .and_then(|s| s.tokens_p50);
+    literal.or_else(|| {
+        crate::history::display_key(path, plan)
+            .and_then(|key| header.history_step_usual.get(&key))
+            .and_then(|s| s.tokens_p50)
+    })
+}
+
 /// Whether `path` (an ahead row) is a loop pass waiting for a free
 /// concurrency slot (§3.4's " · queued"): its own last path segment
 /// is `iter_N`, same shape every pass placeholder resolves to.
@@ -965,10 +983,19 @@ fn tape_condition_text(plan: &PlanTree, path: &str) -> Option<String> {
     let entry = plan.match_path(path)?.entries.first()?;
     match &entry.kind {
         crate::plan::PlanEntryKind::If { condition, .. } => {
-            condition.as_ref().map(|c| c.text.clone())
+            condition.as_ref().map(|c| shorten_condition_text(&c.text))
         }
         _ => None,
     }
+}
+
+/// A CEL condition's own `state.<path>.value` noise, dropped for the
+/// Tape's row (§2.1: `gate → then` reads `kind != ""`, never
+/// `state.prime.kind.value != ""`) -- the Flow screen still shows the
+/// expression verbatim, so this is the Tape's own transform, not a
+/// change to `ConditionInfo::text` itself.
+fn shorten_condition_text(text: &str) -> String {
+    text.replace("state.prime.", "").replace(".value", "")
 }
 
 /// A prompt row's own preview line (§2.1: the faint `› …` line under
@@ -1124,13 +1151,34 @@ fn tape_row_content(
 /// `render::Row::label` as-is (already relative to its parent, and
 /// a loop pass's own direct child is already named `iter_0 ›
 /// draft` by `fold`/`render`, never repeating the loop's own name).
-fn tape_row_label(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> String {
+fn tape_row_label(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> String {
     if row.kind == RowKind::If {
         if let Some(branch) = flat.get(&row.path).and_then(|n| n.branch.clone()) {
             return format!("{} → {branch}", row.label);
         }
     }
-    row.label.clone()
+    // §3.4: "a loop pass's own direct child" (`iter_0 › draft`) and an
+    // `if`'s own taken-branch child (`gate › reply`) carry their own
+    // parent's name -- generic depth-based folding only joins a
+    // container with its *one* child, which a loop pass with more
+    // than one body effect (`draft` then `pause`) never is, so this
+    // reads the parent straight off the row's own path instead.
+    let Some((parent_path, own_name)) = row.path.rsplit_once('.') else {
+        return row.label.clone();
+    };
+    let parent_name = parent_path.rsplit('.').next().unwrap_or(parent_path);
+    let is_pass = parent_name.len() > 5
+        && parent_name.starts_with("iter_")
+        && parent_name[5..].bytes().all(|b| b.is_ascii_digit());
+    let parent_is_if = plan
+        .match_path(parent_path)
+        .and_then(|m| m.entries.first())
+        .is_some_and(|entry| matches!(entry.kind, crate::plan::PlanEntryKind::If { .. }));
+    if is_pass || parent_is_if {
+        format!("{parent_name} › {own_name}")
+    } else {
+        row.label.clone()
+    }
 }
 
 /// §3.5's unit rule applied to the run's own largest *actual* step
@@ -1165,7 +1213,17 @@ pub fn build_tape(
     let mut bucket2: Vec<&Row> = Vec::new();
     let mut bucket3: Vec<&Row> = Vec::new();
     for row in rows {
-        if row.kind == RowKind::Root {
+        // `RowKind::Pass` is a loop pass's own container row (`fold`'s
+        // "pass N of 3"), not a step of its own -- the Tape already
+        // shows that pass's children with their own `iter_N › ...`
+        // breadcrumb (`tape_row_label`), so keeping the container too
+        // would draw the same pass twice. `QuickSteps`/`Report`/
+        // `Unknown` carry no row text of their own either (§3.4 has no
+        // anatomy for them).
+        if matches!(
+            row.kind,
+            RowKind::Root | RowKind::Pass | RowKind::QuickSteps | RowKind::Report | RowKind::Unknown
+        ) {
             continue;
         }
         let is_active_leaf = row.kind.is_leaf()
@@ -1204,14 +1262,23 @@ pub fn build_tape(
     items.push(TapeItem::RunStarted {
         ts: run_start.map(str::to_string),
         document: header.document.clone(),
-        engine: header.engine.clone(),
+        // `--events`' own `run_start.engine` carries the version
+        // (`cof 0.1.0`), unlike `header.engine` (the bare adapter
+        // name every other screen's chip uses) -- §2.1's own Run
+        // Started row wants the version.
+        engine: model
+            .run_start_engine()
+            .map(str::to_string)
+            .unwrap_or_else(|| header.engine.clone()),
     });
 
     for row in &bucket1 {
-        let (what, preview, tokens) = tape_row_content(row, flat, plan, model, previews_on, false);
+        let (what, preview, mut tokens) =
+            tape_row_content(row, flat, plan, model, previews_on, false);
+        tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         items.push(TapeItem::Row(TapeRow {
             path: row.path.clone(),
-            label: tape_row_label(row, flat),
+            label: tape_row_label(row, flat, plan),
             kind: row.kind,
             status: row.status.clone(),
             ts: flat
@@ -1232,10 +1299,12 @@ pub fn build_tape(
     }
 
     for row in &bucket2 {
-        let (what, preview, tokens) = tape_row_content(row, flat, plan, model, previews_on, false);
+        let (what, preview, mut tokens) =
+            tape_row_content(row, flat, plan, model, previews_on, false);
+        tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         items.push(TapeItem::Row(TapeRow {
             path: row.path.clone(),
-            label: tape_row_label(row, flat),
+            label: tape_row_label(row, flat, plan),
             kind: row.kind,
             status: row.status.clone(),
             ts: flat.get(&row.path).and_then(|n| n.created_at.clone()),
@@ -1274,15 +1343,10 @@ pub fn build_tape(
                 .any(|l| row.path.starts_with(&format!("{}.", l.path)));
         let (what, preview, mut tokens) =
             tape_row_content(row, flat, plan, model, previews_on, queued);
-        if let Some(key) = crate::history::display_key(&row.path, plan) {
-            tokens.usual = header
-                .history_step_usual
-                .get(&key)
-                .and_then(|s| s.tokens_p50);
-        }
+        tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         items.push(TapeItem::Row(TapeRow {
             path: row.path.clone(),
-            label: tape_row_label(row, flat),
+            label: tape_row_label(row, flat, plan),
             kind: row.kind,
             status: row.status.clone(),
             ts: None,
@@ -1293,13 +1357,9 @@ pub fn build_tape(
         }));
     }
 
-    let usual_total_tokens = header
-        .history_step_usual
-        .get("_total")
-        .and_then(|s| s.tokens_p50);
     items.push(TapeItem::RunEnd {
-        usual_total_tokens,
-        usual_wall_s: None,
+        usual_total_tokens: header.history_usual_total_tokens,
+        usual_wall_s: header.history_usual_total_s,
         duration_s: header.run_end_ts.as_deref().and_then(elapsed_offset),
         eta_ts: header.history_eta_ts.clone(),
     });
@@ -2125,6 +2185,7 @@ mod tests {
             history_eta_high_ts: None,
             history_vs_usual_s: None,
             history_usual_total_s: None,
+            history_usual_total_tokens: None,
             history_same_hash_count: None,
             history_step_usual: Default::default(),
             latest_report: None,

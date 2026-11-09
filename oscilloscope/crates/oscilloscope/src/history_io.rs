@@ -308,6 +308,7 @@ pub fn apply_history_eta(
     header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
     header.history_vs_usual_s = eta.vs_usual_s;
     header.history_usual_total_s = eta.usual_total_s;
+    header.history_usual_total_tokens = stats.whole_run.and_then(|r| r.tokens_p50);
     // Issue #649's "history: N of 3 runs": `stats.same_hash_ok_count`
     // is the real count at any count, including the very first ok
     // run (`0`) -- `eta` itself only carries a whole-run ETA once

@@ -149,6 +149,25 @@ fn normalize_iter_segments(path: &str) -> String {
         .join(".")
 }
 
+/// [`display_key`]'s own path, with a loop pass's real index kept
+/// instead of written `iter_*` -- the Tape's own "usually" needs a
+/// specific pass's own median (`drafts.iter_2.draft`'s own three
+/// recorded figures), never that pass summed in with its siblings'
+/// the way the stripped key already is for the Time screen's ghost
+/// bars. `None`/`OTHER_STEP` exactly where `display_key` is.
+pub(crate) fn display_key_literal(path: &str, plan: &PlanTree) -> Option<String> {
+    let relative = path.strip_prefix("prime.")?;
+    if !plan.has_plan() {
+        let top = relative.split('.').next().unwrap_or(relative);
+        return Some(top.to_string());
+    }
+    if plan.match_path(path).is_some() {
+        Some(relative.to_string())
+    } else {
+        Some(OTHER_STEP.to_string())
+    }
+}
+
 /// Merges a set of `[start_s, end_s]` ranges into their own union,
 /// returning the total covered length -- issue #649's "time actually
 /// running, with overlapping tree passes counted once".
@@ -187,12 +206,11 @@ struct ResolvedInterval {
     cost_usd: Option<f64>,
 }
 
-fn resolve_interval(
+fn resolve_interval_with_key(
     interval: &StepInterval,
-    plan: &PlanTree,
+    key: String,
     run_start_ts: &str,
 ) -> Option<ResolvedInterval> {
-    let key = display_key(&interval.path, plan)?;
     let start_s = duration_seconds(run_start_ts, &interval.start_ts)?;
     let end_s = duration_seconds(run_start_ts, &interval.end_ts)?;
     Some(ResolvedInterval {
@@ -213,11 +231,30 @@ fn build_steps(
 ) -> BTreeMap<String, StepRecord> {
     let mut by_key: BTreeMap<String, Vec<ResolvedInterval>> = BTreeMap::new();
     for interval in model.step_intervals() {
-        if let Some(resolved) = resolve_interval(interval, plan, run_start_ts) {
-            by_key
-                .entry(resolved.key.clone())
-                .or_default()
-                .push(resolved);
+        let stripped_key = display_key(&interval.path, plan);
+        if let Some(key) = stripped_key.clone() {
+            if let Some(resolved) = resolve_interval_with_key(interval, key, run_start_ts) {
+                by_key
+                    .entry(resolved.key.clone())
+                    .or_default()
+                    .push(resolved);
+            }
+        }
+        // A loop pass's own literal key (`drafts.iter_2.draft`),
+        // kept alongside the stripped one above whenever the two
+        // differ -- the stripped key still sums every pass of the
+        // run together for the Time screen's own ghost bars, but
+        // the Tape needs this exact pass's own figure, unsummed.
+        let literal_key = display_key_literal(&interval.path, plan);
+        if literal_key.is_some() && literal_key != stripped_key {
+            if let Some(resolved) =
+                resolve_interval_with_key(interval, literal_key.unwrap(), run_start_ts)
+            {
+                by_key
+                    .entry(resolved.key.clone())
+                    .or_default()
+                    .push(resolved);
+            }
         }
     }
 
@@ -2144,20 +2181,14 @@ mod tests {
     /// with the existing recorder (`build_record`, unmodified) and
     /// checks the resulting medians against that summary directly.
     ///
-    /// A tree loop's own pass (`drafts.iter_0.draft`) is pass-
-    /// stripped and summed across every pass *within one run*
-    /// already, by the recorder's own existing `display_key`
-    /// (`drafts.iter_*.draft`, `passes: 3`) -- the same key the Time
-    /// screen's ghost bars already rely on. `history.json` instead
-    /// keeps each pass index's own figure separate
-    /// (`prime.drafts.iter_0.draft` vs `.iter_1.` vs `.iter_2.`), a
-    /// distinction the recorder has never drawn (it predates this
-    /// issue) and this change does not add, since doing so would
-    /// also reshape every existing per-run figure the Time screen's
-    /// own tests already pin. The non-loop steps below (`kind`,
-    /// `gate.reply`, `summary`) and the whole run's own total all
-    /// match `history.json` exactly; this is noted rather than
-    /// asserted for `drafts`.
+    /// A tree loop's own pass (`drafts.iter_0.draft`) is also kept
+    /// by its literal, un-stripped key (`display_key_literal`),
+    /// alongside the stripped `drafts.iter_*.draft` key the Time
+    /// screen's ghost bars already rely on (unsummed, since that one
+    /// sums every pass of the run together): `history.json` keeps
+    /// each pass index's own figure separate
+    /// (`prime.drafts.iter_0.draft` vs `.iter_1.` vs `.iter_2.`), and
+    /// the literal key now matches it exactly.
     #[test]
     fn design_fixture_history_medians_match_the_builders_own_summary() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../design/fixtures");
@@ -2197,6 +2228,18 @@ mod tests {
         assert_eq!(
             stats.per_step.get("summary").and_then(|s| s.tokens_p50),
             Some(402)
+        );
+        assert_eq!(
+            stats.per_step.get("drafts.iter_0.draft").and_then(|s| s.tokens_p50),
+            Some(154)
+        );
+        assert_eq!(
+            stats.per_step.get("drafts.iter_1.draft").and_then(|s| s.tokens_p50),
+            Some(153)
+        );
+        assert_eq!(
+            stats.per_step.get("drafts.iter_2.draft").and_then(|s| s.tokens_p50),
+            Some(155)
         );
         assert_eq!(stats.whole_run.and_then(|r| r.tokens_p50), Some(1324));
     }

@@ -278,6 +278,11 @@ pub struct Header {
     /// The usual (p50) whole-run time behind `history_vs_usual_s` —
     /// the overview's own `(p50 45m)`.
     pub history_usual_total_s: Option<f64>,
+    /// The usual (p50) whole-run tokens, over the same pool
+    /// `history_usual_total_s` comes from (issue #678's Totals row
+    /// `+12% Usual` and the Tape's own Run End `usually 1,324 t`).
+    /// `None` below the same threshold.
+    pub history_usual_total_tokens: Option<u64>,
     /// How many ok runs of the current document hash history has,
     /// whatever their count — the overview's own `history: N of 3
     /// runs` while below the threshold a whole-run ETA itself needs,
@@ -1623,6 +1628,7 @@ fn build_header(
         history_eta_high_ts: None,
         history_vs_usual_s: None,
         history_usual_total_s: None,
+        history_usual_total_tokens: None,
         history_same_hash_count: None,
         history_step_usual: Default::default(),
         latest_report,
