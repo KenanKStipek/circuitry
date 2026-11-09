@@ -5,18 +5,19 @@
 //! follows for screen `3`). Replaces the indented tree
 //! [`crate::flow`] used to build.
 //!
-//! `rows` (`render::build`'s own depth-first list) already nests a
-//! named `if`'s taken branch and a loop's own passes properly by
-//! depth -- this module reads that shape straight off `rows` for a
-//! named `if`. An *unnamed* one writes no state node of its own, so
-//! it has no row at all to read a shape off of: its own decision is
-//! spliced in here instead, from `PlanTree::unnamed_if_decisions`,
-//! the same way the tree screen this replaces used to
-//! (`unnamed_branch_state`). What `rows` does not carry either way
-//! is the untaken branch (nothing ran there, so it has no row at
-//! all) or a loop pass that has not started yet (same reason) --
-//! both are synthesised here, from the plan and, for a pass, from
-//! the run's own `each.in` input.
+//! `rows` (`render::build`'s own depth-first list) nests a named
+//! `if`'s own children by depth -- but carries *both* branches, the
+//! untaken one as faint ahead rows sorted after the taken one's real
+//! ones (`render::child_segments`'s own tie-break), so this module
+//! bounds its own walk of a named `if`'s children to the taken
+//! branch's plan paths before reading that shape off `rows`
+//! (`build_decision_fork`). An *unnamed* `if` writes no state node
+//! of its own, so it has no row at all to read a shape off of: its
+//! own decision is spliced in here instead, from
+//! `PlanTree::unnamed_if_decisions`, the same way the tree screen
+//! this replaces used to (`unnamed_branch_state`). A loop pass that
+//! has not started yet has no row either -- synthesised here, from
+//! the plan and, for a pass, from the run's own `each.in` input.
 
 use std::collections::BTreeMap;
 
@@ -802,7 +803,7 @@ fn unnamed_branch_state(decision: &UnnamedIfDecision, rows: &[Row]) -> (Option<S
     }
 }
 
-fn untaken_branch_paths(path: &str, taken: Option<&str>, ctx: &Ctx<'_>) -> Option<Vec<String>> {
+fn named_if_branch_paths(path: &str, ctx: &Ctx<'_>) -> Option<(Vec<String>, Vec<String>)> {
     let m = ctx.plan.match_path(path)?;
     for e in m.entries {
         if let PlanEntryKind::If {
@@ -812,31 +813,74 @@ fn untaken_branch_paths(path: &str, taken: Option<&str>, ctx: &Ctx<'_>) -> Optio
             ..
         } = &e.kind
         {
-            return match taken {
-                Some("then") => Some(else_paths.clone()),
-                Some("else") => Some(then_paths.clone()),
-                _ => None,
-            };
+            return Some((then_paths.clone(), else_paths.clone()));
         }
     }
     None
+}
+
+fn untaken_branch_paths(path: &str, taken: Option<&str>, ctx: &Ctx<'_>) -> Option<Vec<String>> {
+    let (then_paths, else_paths) = named_if_branch_paths(path, ctx)?;
+    match taken {
+        Some("then") => Some(else_paths),
+        Some("else") => Some(then_paths),
+        _ => None,
+    }
+}
+
+/// The branch that actually ran's own top-level child paths --
+/// `None` while still pending (neither side has a `meta.branch`
+/// yet to pick one), the same `None` meaning `build_decision_fork`
+/// falls back to its old unfiltered walk for.
+fn taken_branch_paths(path: &str, taken: Option<&str>, ctx: &Ctx<'_>) -> Option<Vec<String>> {
+    let (then_paths, else_paths) = named_if_branch_paths(path, ctx)?;
+    match taken {
+        Some("then") => Some(then_paths),
+        Some("else") => Some(else_paths),
+        _ => None,
+    }
 }
 
 fn step_label(path: &str) -> String {
     path.rsplit('.').next().unwrap_or(path).to_string()
 }
 
+/// A named `if`'s taken lane must hold only the branch that ran:
+/// `rows` carries the untaken branch's own steps too, as faint ahead
+/// stations sorted after the taken ones (`render::child_segments`'s
+/// own tie-break: a row with a real `created_at` always sorts before
+/// one with none), so an unbounded walk of every row at this if's
+/// own child depth draws them as if they belonged to the taken lane
+/// as well. Bounded by the taken branch's own plan paths
+/// (`branch_subtree_end`, the same bound an unnamed `if`'s own
+/// decision already uses) once the branch has resolved; still
+/// pending, nothing has a row yet, so the old unbounded walk is a
+/// no-op.
 fn build_decision_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     let row = &rows[i];
     let depth = row.depth;
-    let (taken_items, next) = build_level(rows, i + 1, depth + 1, &row.path, ctx);
     let branch = ctx.flat.get(&row.path).and_then(|n| n.branch.clone());
+    let taken_paths = taken_branch_paths(&row.path, branch.as_deref(), ctx);
+    let (taken_items, taken_end) = match &taken_paths {
+        Some(paths) => {
+            let end = branch_subtree_end(rows, i + 1, depth + 1, paths);
+            let (items, _) = build_level(&rows[..end], i + 1, depth + 1, &row.path, ctx);
+            (items, end)
+        }
+        None => build_level(rows, i + 1, depth + 1, &row.path, ctx),
+    };
     let mut lanes = vec![Lane {
         items: taken_items,
         ghost: None,
         running: edge_style(row.status.kind) == EdgeStyle::Live,
         waiting: false,
     }];
+    // The untaken branch's own rows are siblings of the taken
+    // branch's at the same depth, never drawn of their own accord
+    // (the ghost lane stands in for all of them) -- `next` must
+    // still skip past them, or the level above reprocesses them as
+    // orphan plain stations.
+    let mut next = taken_end;
     if let Some(untaken) = untaken_branch_paths(&row.path, branch.as_deref(), ctx) {
         if let Some(first) = untaken.first() {
             lanes.push(Lane {
@@ -845,6 +889,9 @@ fn build_decision_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
                 running: false,
                 waiting: false,
             });
+        }
+        while next < rows.len() && rows[next].depth > depth {
+            next += 1;
         }
     }
     (
@@ -1684,5 +1731,103 @@ mod tests {
                 "an ahead lane must preview the plan body: {fork:?}"
             );
         }
+    }
+
+    fn named_if_yaml(then_name: &str, else_name: &str) -> String {
+        format!(
+            "effects:\n  - name: pick\n    type: if\n    if: {{mode: cel, expr: \"true\"}}\n    then:\n      - name: {then_name}\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n    else:\n      - name: {else_name}\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"y\\\"\"}}\n"
+        )
+    }
+
+    /// A named `if` whose `else` branch ran must draw only the
+    /// `else` step on the taken lane -- the `then` step (an ahead
+    /// row, sorted after the taken one since it has no `created_at`
+    /// of its own) must appear nowhere but the untaken ghost lane.
+    #[test]
+    fn a_named_ifs_taken_lane_holds_only_the_else_branch_that_ran() {
+        let plan = compile_doc(&named_if_yaml("many", "few"));
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "pick": {
+                "value": {"branch": "else", "result": false},
+                "meta": {"branch": "else", "created_at": "t0", "completed_at": "t1"},
+                "few": {"value": "y", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+            }
+        }});
+        let rail = build_rail_for(&plan, &state);
+        let fork = find_fork_after(&rail.items, "pick").expect("a fork after pick");
+        assert_eq!(fork.lanes.len(), 2, "{fork:?}");
+        let taken_names: Vec<&str> = fork.lanes[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                RailItem::Station(s) => Some(s.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(taken_names, vec!["few"], "{fork:?}");
+        assert_eq!(fork.lanes[1].ghost.as_deref(), Some("many"));
+        assert!(fork.lanes[1].items.is_empty(), "{fork:?}");
+    }
+
+    /// The symmetric case: `then` taken, `else`'s own step must not
+    /// leak onto the taken lane either.
+    #[test]
+    fn a_named_ifs_taken_lane_holds_only_the_then_branch_that_ran() {
+        let plan = compile_doc(&named_if_yaml("many", "few"));
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "pick": {
+                "value": {"branch": "then", "result": true},
+                "meta": {"branch": "then", "created_at": "t0", "completed_at": "t1"},
+                "many": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+            }
+        }});
+        let rail = build_rail_for(&plan, &state);
+        let fork = find_fork_after(&rail.items, "pick").expect("a fork after pick");
+        assert_eq!(fork.lanes.len(), 2, "{fork:?}");
+        let taken_names: Vec<&str> = fork.lanes[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                RailItem::Station(s) => Some(s.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(taken_names, vec!["many"], "{fork:?}");
+        assert_eq!(fork.lanes[1].ghost.as_deref(), Some("few"));
+        assert!(fork.lanes[1].items.is_empty(), "{fork:?}");
+    }
+
+    /// A nested named `if` inside the taken branch of an outer named
+    /// `if` still resolves once the outer fork's own walk is bounded
+    /// to its own taken branch -- the inner decision is simply one
+    /// more item inside that bound.
+    #[test]
+    fn a_nested_named_if_inside_a_taken_branch_still_resolves() {
+        let yaml = "effects:\n  - name: outer\n    type: if\n    if: {mode: cel, expr: \"true\"}\n    then:\n      - name: inner\n        type: if\n        if: {mode: cel, expr: \"true\"}\n        then:\n          - name: deep\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"x\\\"\"}\n        else:\n          - name: shallow\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"y\\\"\"}\n    else:\n      - name: bail\n        type: tool\n        provider: json\n        params: {mode: parse, input: \"\\\"z\\\"\"}\n";
+        let plan = compile_doc(yaml);
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "outer": {
+                "value": {"branch": "then", "result": true},
+                "meta": {"branch": "then", "created_at": "t0", "completed_at": "t1"},
+                "inner": {
+                    "value": {"branch": "then", "result": true},
+                    "meta": {"branch": "then", "created_at": "t0", "completed_at": "t1"},
+                    "deep": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+                }
+            }
+        }});
+        let rail = build_rail_for(&plan, &state);
+        let outer_fork = find_fork_after(&rail.items, "outer").expect("a fork after outer");
+        assert_eq!(outer_fork.lanes.len(), 2, "{outer_fork:?}");
+        let inner_fork = find_fork_after(&outer_fork.lanes[0].items, "inner")
+            .expect("a fork after inner, inside outer's own taken lane");
+        assert_eq!(inner_fork.lanes.len(), 2, "{inner_fork:?}");
+        let deep_shown = inner_fork.lanes[0]
+            .items
+            .iter()
+            .any(|it| matches!(it, RailItem::Station(s) if s.name == "deep"));
+        assert!(deep_shown, "{inner_fork:?}");
+        assert_eq!(inner_fork.lanes[1].ghost.as_deref(), Some("shallow"));
+        assert_eq!(outer_fork.lanes[1].ghost.as_deref(), Some("bail"));
     }
 }
