@@ -543,7 +543,11 @@ fn parse_reply(
 /// only ever folds them into `text` (above).
 fn parse_chunks(dict: &Dict, prefix: &str) -> Result<Option<Vec<String>>, AdapterError> {
     match dict.get(&key("chunks")) {
-        None => Ok(None),
+        // `entry.get("chunks")` in the Python original treats an absent
+        // key and an explicit `chunks: null` identically (`if raw_chunks
+        // is not None:` in `adapters/scripted.py`) -- shared with every
+        // other optional field in this reply.
+        None | Some(Value::None) => Ok(None),
         Some(Value::List(items)) if !items.is_empty() => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
@@ -1406,6 +1410,35 @@ mod tests {
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of \
              ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
         );
+    }
+
+    #[test]
+    fn a_null_chunks_is_treated_as_absent_like_python() {
+        let mut entry = Dict::new();
+        entry.insert(key("text"), Value::Str("x".to_string()));
+        entry.insert(key("chunks"), Value::None);
+        let reply = parse_reply(&Value::Dict(entry), "prime.x", 0, "<replies>").unwrap();
+        match reply {
+            Reply::Text { text, .. } => assert_eq!(text, "x"),
+            Reply::Error { .. } => panic!("expected a text reply"),
+        }
+    }
+
+    #[test]
+    fn chunks_folds_into_text_when_text_is_absent() {
+        let mut entry = Dict::new();
+        entry.insert(
+            key("chunks"),
+            Value::List(vec![
+                Value::Str("a".to_string()),
+                Value::Str("b".to_string()),
+            ]),
+        );
+        let reply = parse_reply(&Value::Dict(entry), "prime.x", 0, "<replies>").unwrap();
+        match reply {
+            Reply::Text { text, .. } => assert_eq!(text, "ab"),
+            Reply::Error { .. } => panic!("expected a text reply"),
+        }
     }
 
     #[test]

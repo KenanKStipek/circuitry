@@ -113,8 +113,12 @@ there, with a message Python has no equivalent of, rather than a silent truncati
 one delta through the calling prompt's `on_progress` before the reply completes, so
 `meta.live`/`--events`' own `progress` line have something deterministic to show. `text`,
 when also given, must equal the concatenation of `chunks`; omitted, it defaults to that
-concatenation. electricity's own scripted adapter does not implement `chunks` yet — a
-conformance case that uses it runs on the Python engine only, not both.
+concatenation. electricity's own scripted adapter accepts `chunks` and folds it into `text`
+the same way (`chunks: null` is absent, exactly as it is for Python) -- it just never
+delivers the pieces as deltas, since this engine doesn't stream at all (issue #676). A
+conformance case that relies on the deltas themselves (the resulting `progress` line, or a
+case pinning more than one HTTP response chunk) therefore still runs on the Python engine
+only, not because `chunks` itself is refused.
 
 ### 4.2 An error reply
 
