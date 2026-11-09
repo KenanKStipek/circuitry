@@ -390,6 +390,63 @@ pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
                     'B' => row += nums.first().copied().unwrap_or(1),
                     'C' => col += nums.first().copied().unwrap_or(1),
                     'D' => col = col.saturating_sub(nums.first().copied().unwrap_or(1)),
+                    // Erase in display/line (`\x1b[2J`, `\x1b[K`, ...)
+                    // -- a real terminal drops the erased cells for
+                    // good; a resize mid-stream (ratatui clears and
+                    // redraws from scratch at the new size) leaves a
+                    // wider frame's own stale cells bleeding through
+                    // underneath a narrower one otherwise, since this
+                    // replay buffer never actually shrinks.
+                    'J' => {
+                        let mode = nums.first().copied().unwrap_or(0);
+                        match mode {
+                            0 => {
+                                if row < rows {
+                                    for c in grid[row].iter_mut().skip(col) {
+                                        *c = ' ';
+                                    }
+                                    for line in grid.iter_mut().skip(row + 1) {
+                                        line.iter_mut().for_each(|c| *c = ' ');
+                                    }
+                                }
+                            }
+                            1 => {
+                                for line in grid.iter_mut().take(row) {
+                                    line.iter_mut().for_each(|c| *c = ' ');
+                                }
+                                if row < rows {
+                                    for c in grid[row].iter_mut().take(col.min(cols)) {
+                                        *c = ' ';
+                                    }
+                                }
+                            }
+                            _ => {
+                                for line in grid.iter_mut() {
+                                    line.iter_mut().for_each(|c| *c = ' ');
+                                }
+                            }
+                        }
+                    }
+                    'K' => {
+                        let mode = nums.first().copied().unwrap_or(0);
+                        if row < rows {
+                            match mode {
+                                0 => {
+                                    for c in grid[row].iter_mut().skip(col) {
+                                        *c = ' ';
+                                    }
+                                }
+                                1 => {
+                                    for c in grid[row].iter_mut().take(col.min(cols)) {
+                                        *c = ' ';
+                                    }
+                                }
+                                _ => {
+                                    grid[row].iter_mut().for_each(|c| *c = ' ');
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             } else if i < chars.len() {

@@ -506,6 +506,14 @@ geometry, computed in `oscilloscope-core` and only ever drawn, never
 computed, by `tui.rs`) only while that screen is actually on display,
 not on every redraw regardless of which screen is showing.
 
+**The tree screen that used to be here (issue #635) is superseded.**
+The four paragraphs below describe screen 2 as it shipped under that
+issue -- an indented tree read as control flow. Issue #691 (design v1
+part 3, §6.3e below) replaces it with a left-to-right rail; nothing
+in these four paragraphs, including the module paths they name
+(`crate::flow::build_flow_rows`, the per-pane `s`/`l` swaps), ships
+any more.
+
 **Layout** (screen 2, `Flow`, issue #635 — §6.3a below covers the
 screens this language switches between and the one-line header every
 one of them shares). Below the header line: the flow pane on the left
@@ -2352,60 +2360,97 @@ existed to switch to at all.
 draw_flow`, issue #691, design v1 part 3) replaces the tree as
 screen `2`: a left-to-right rail of stations and forks
 (`rail::RailItem`), built once per redraw straight off `render::
-Row`s rather than keeping any tree shape of its own. A `Station`
-holds §2.3's own three lines (name, headline, detail); a decision
-is a two-lane `Fork` (the taken branch, then the untaken one's own
-ghost lane -- `· <else-name>`/`not taken`) -- a named `if` reads
-its own branch from `meta.branch`, straight off its own row the
-same way `rows` already nests it; an *unnamed* one writes no state
-node, and so no row, of its own, so its own decision is spliced in
-here instead (`build_unnamed_decision`, ported from the removed
-tree screen's own `unnamed_branch_state`/`push_unnamed_decision`):
-inferred from which branch's own paths actually started
-(`PlanTree::unnamed_if_decisions`), vacuously `else` with nothing
-shown once an `if` with no `else` is settled its own `then` never
-will be (its host stopped, or a later chain step already started),
-and still a real, pending fork -- placed right after its own host,
-the same `by_host_after` fallback the tree screen used -- the
-moment neither side has started yet; two unnamed `if`s sharing one
-host still get their own distinct `.__if`/`.__if_1` paths. A loop
-is one lane per slot, the observed real passes first,
-then an `ahead_pass_lane` per slot the loop has not reached yet,
-reading its own position's history for a label, a usual token
-figure and a queued tool's own command (`cats`/`usual 155`/`sleep
-1`, §2.3's own folded-loop frame) -- never `iter_0`'s, the ahead
-lane's own template, whose history is a different slot's. Selecting
-a pass (`screens::build_selected_pass`) or a plain station/decision
-(`build_focused_step`/`SelectedDecision`) drives the Selected pane
-the same way the Tape's own full-screen view already does; the
-Story pane (`flow::build_story`, reused verbatim) adds one
-synthesized line per loop start (`⏳ drafts · 3 passes · 2 wide`,
-`--log` writes no event for a loop merely starting) since nothing
-else ever will.
+Row`s (always the unfolded ones -- the tree screen's own breadcrumb
+and quick-steps folding plays no part here at all) rather than
+keeping any tree shape of its own. A `Station` holds §2.3's own
+three lines (name, headline, detail); a decision is a two-lane
+`Fork` (the taken branch, then the untaken one's own ghost lane --
+`· <else-name>`/`not taken`) -- a named `if` reads its own branch
+from `meta.branch`, straight off its own row the same way `rows`
+already nests it; an *unnamed* one writes no state node, and so no
+row, of its own, so its own decision is spliced in here instead
+(`build_unnamed_decision`, ported from the removed tree screen's
+own `unnamed_branch_state`/`push_unnamed_decision`): inferred from
+which branch's own paths actually started (`PlanTree::
+unnamed_if_decisions`, concretised against the real pass it's
+inside when it is one, since the decision's own host is recorded
+with a named loop's `iter_*` placeholder, shared by every pass), a
+still-pending one draws both sides as ahead ghosts, a settled one
+where neither side ever ran reads `→ none` and ghosts both sides
+`not taken`, and two unnamed `if`s sharing one host still get their
+own distinct `.__if`/`.__if_1` paths; selecting one resolves
+against the rail itself, there being no row for it in `rows`, and
+the Selected pane adds a line saying which side's own steps
+actually started (or that neither one's did). A parallel `dynamic`
+(`flow: tree`) forks into one lane per named child the same way a
+loop does; a sequential one (`use`, a chain-flow `dynamic`, a `try`
+body with its own `finally`) inlines its own children as plain
+stations in plan order instead, each still carrying its own
+container's breadcrumb (`gate › reply`) in the Selected pane and the
+status line; a container with no child known yet is one station
+whose headline is its own type and whose detail is whichever child
+it resolves to, once that's known. A loop is one lane per *pass*,
+never per concurrency slot -- the frames draw it that way
+throughout, and the folded band's own `● n run · m wait` reading
+only makes sense that way (a lane that *waits* is a pass that
+hasn't started; an idle concurrency slot is not a thing the rail
+ever draws) -- the observed real passes first, then an
+`ahead_pass_lane` per further pass the loop's own count promises
+(`progress.total`, or a named `each` loop's own input read before
+any event at all), reading its own position's history for a label,
+a usual token figure and a queued tool's own command (`cats`/`usual
+155`/`sleep 1`, §2.3's own folded-loop frame) -- never `iter_0`'s,
+the ahead lane's own template, whose history is a different slot's;
+with not even one pass observed yet, the template is read straight
+from the plan's own loop body instead. At most three of an open
+loop's own lanes ever draw at once -- the window slides to keep the
+selected lane in view the same way the rail itself slides to keep
+Now in view, defaulting to the first running lane with nothing of
+this fork selected. Selecting a pass (`screens::build_selected_pass`)
+or a plain station/decision (`build_focused_step`/`SelectedDecision`)
+drives the Selected pane the same way the Tape's own full-screen view
+already does, falling back to the default pass only when nothing at
+all is selected, or the selection already names one of that loop's
+own passes -- never for an unrelated station or decision, which
+must show its own pane instead; the Story pane (`flow::build_story`)
+adds one synthesized line per loop start (`⟳ drafts · 3 passes · 2
+wide`, an unbounded loop's own width reading its pass count instead
+of a `max_concurrency` it has none of; `--log` writes no event for a
+loop merely starting) and one per unnamed decision's own branch,
+since nothing else ever will for either.
 
 **Keys.** `←→` (`keys::App`'s own `flow_scroll`) scroll the rail,
 turning follow off -- `tui::draw_flow` itself is the only thing
 that knows the rail's own real width, so it (not the key handler)
 turns follow back on once a manual scroll lands Now's own arrow
 back in view, the same way the Tape's own selection rule already
-does. `↑↓` move the selected pass over the rail's own `Pass` rows;
-`+`/`-` (`flow_open_lanes`/`_fold_lanes`) open or fold a loop's own
-lanes three at a time, the selected fork's if there is one, else the
-first; `f` follow; `⏎` the same full-screen toggle the Tape and
-Signal already share. `z`, `v`, `s`, `l` and `Tab` are gone from the
-Flow, per §4: quick-steps folding and the full-value overlay have
-no Flow-side anatomy to toggle, and there is only ever the rail's
-one list.
+does. `↑↓`/`j`/`k` move the selected pass over the rail's own `Pass`
+rows, turning follow off the same way, resuming it on their own the
+moment the selection lands back on the pass the Selected pane would
+otherwise default to; `PageUp`/`PageDown`/`Home`/`End`/`g`/`G` are
+no-ops on Flow (there is no tree left to page or jump through), and
+never touch follow either. `+`/`-` (`flow_open_lanes`/`_fold_lanes`)
+open or fold the *selected* fork's own lanes three at a time --
+whichever loop a selected pass belongs to, or the selected loop
+station itself, falling back to the first loop on the rail with
+nothing selected at all -- never every loop at once. `f` follow;
+`⏎` the same full-screen toggle the Tape and Signal already share,
+armed only while something is actually selected (the same guard
+Signal's own `signal_has_step` is). `z`, `v`, `s`, `l` and `Tab` are
+gone from the Flow, per §4: quick-steps folding and the full-value
+overlay have no Flow-side anatomy to toggle, and there is only ever
+the rail's one list.
 
 **Sizes.** 100 columns and 30 rows both: three panes, the rail above
 Selected and Story, roughly 31/60 of the lower band's own width
-(scaled from §2.3's own 120-column frame's 62/58 split); 80-99 or
-under 30 rows: every loop's own lanes fold into their own band
-(§2.3's own `══ 3 lanes + ══`) and the Story pane drops, Selected
-taking the whole lower band; below 80, the Tape's own key bar drops
-`0-3` same as every other screen. `↑↓ Lane` itself drops from the
-key bar below the three-pane threshold too, alongside Story, since
-there is no longer a second pane for it to change the selection of.
+(scaled from §2.3's own 120-column frame's 62/58 split); below 100
+columns, or a loop four or more lanes wide, those lanes fold into
+their own band (§2.3's own `══ 3 lanes + ══`) regardless of height;
+under the three-pane threshold the Story pane drops, Selected taking
+the whole lower band; below 80, the Tape's own key bar drops `0-3`
+same as every other screen. `↑↓ Lane` itself drops from the key bar
+below 100 columns too, alongside `Following`, since there is no
+longer room to show either.
 
 **Goldens and allow-listed cells.** Every `tape--*` frame in
 `design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
@@ -2514,7 +2559,15 @@ row's own accent from the first glyph onward, through any gap to the
 next one, not just the glyphs themselves; and the Now pane has no
 deliberate blank row between the active loop's own summary and Last
 Burst, only the one unused row the panel's own height leaves after
-Next Signal.
+Next Signal. For the Flow: a loop forks into one lane per *pass*,
+never per `max_concurrency` slot -- §2.3's own prose reads "one lane
+per slot (`max_concurrency` or the pass count when unbounded)", but
+the frames draw a lane per pass throughout (a loop 3 passes wide, 2
+of them concurrent, still draws 3 lanes, not 2), and the folded
+band's own `● n run · m wait` reading only makes sense that way; and
+`↑↓ Lane` and `Following` both drop from the key bar and the title
+below 100 columns, the design's own prose naming only the Story
+pane's own drop there.
 
 **Not yet shipped.** §2.2's own "the step rows and the Now pane
 follow the cursor's column" (the scrubbed-cursor half of §6.3e's

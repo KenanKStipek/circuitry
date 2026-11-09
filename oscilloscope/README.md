@@ -155,6 +155,17 @@ history has one, effects done of planned, the ETA and the run's own
 cost). `osi watch` names the document from the run's own
 `runtime.last_run.orchestration_path`.
 
+A `report` effect's own events show up in several places: once the
+run's first report arrives, the header shows its message (a warning
+styled in the theme's own warning colour) in place of the run id,
+and it gets its own line in `--log` and (on the Tape and the Flow)
+the story. `--theme <name>` (or `OSI_THEME`) paints the whole screen
+in one of ten named colour themes (`dracula`, `nord`, `solarized-
+dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
+`tokyo-night`, `one-dark`) instead of the terminal's own default
+colours; `T` cycles through them live. `--no-animation` turns the
+scope icon's own trace off, on both `osi <doc>` and `osi watch`.
+
 ### The Tape (`0`)
 
 osi's own design document (`oscilloscope/design/tui-design.md`) is the
@@ -289,27 +300,42 @@ is inferred instead, the same rule as before (once either branch's own
 step has appeared, that branch is taken; with no `else`, the other
 reads as never going to run once the enclosing step has finished or a
 later step in the same chain has started; `if → ?` rather than
-guessing when both branches would read as the very same step names).
-A loop forks into one lane per slot: the passes actually running or
-done first, then one ahead lane per slot the loop has not reached yet
-at all, each reading its own position's history for a label standing
-in for tokens it doesn't have (`cats`), a usual token figure and its
-own queued tool's command, both still marked queued. Four or more
-lanes fold into one double-rail band (`══ 4 lanes + ══`, reading `● 2
-run · 1 wait`) by default; `+`/`-` open or fold the selected fork's own
-lanes three at a time.
+guessing when both branches would read as the very same step names) --
+selecting it (there being no row of its own to select) shows the same
+condition and branch a named decision's own Selected pane does, plus
+which side's own steps actually started, or that neither one's did. A
+loop forks into one lane per *pass*, never per concurrency slot: the
+passes actually running or done first, then one ahead lane per further
+pass the loop's own count promises, each reading its own position's
+history for a label standing in for tokens it doesn't have (`cats`), a
+usual token figure and its own queued tool's command, both still
+marked queued. A parallel `dynamic` forks into one lane per named
+child the same way; a sequential one (`use`, a chain-flow `dynamic`, a
+`try` body with its own `finally`) inlines its own children as plain
+stations in plan order instead, no fork of their own. Below 100
+columns, or a loop four or more lanes wide, those lanes fold into one
+double-rail band (`══ 4 lanes + ══`, reading `● 2 run · 1 wait`); `+`/`-`
+open or fold the *selected* fork's own lanes three at a time, never
+every loop on the rail at once; an open fork never shows more than
+three lanes at a time either way, the window sliding to keep whichever
+one is selected in view.
 
 The Selected pane (bottom left, or bottom right at 100 columns and up)
-shows whichever pass or station is selected: a pass as Status (its own
-currently active step, elapsed time and slot), one row per named step
-it ran with tokens and deviation, and Produced (the last such step's
-own output); a plain station the same asked/doing/produced shape the
-Tape's own full-screen step view already has, including a running
-agent's own live transcript tail. The Story pane (bottom right, 100
+shows whichever pass, station or decision is selected: a pass as
+Status (its own currently active step, elapsed time and slot), one row
+per named step it ran with tokens and deviation, and Produced (the
+last such step's own output); a plain station the same asked/doing/
+produced shape the Tape's own full-screen step view already has,
+including a running agent's own live transcript tail -- a station
+inlined from a sequential container keeps its own ten-cell name on the
+rail, but the Selected pane's own title still says which container
+it's inside (`gate › reply`). The Story pane (bottom right, 100
 columns and 30 rows and up only) is the run's own notable events in
-order -- run start, each decision, each loop starting (`⟳ drafts · 3
-passes · 2 wide`, synthesized here since `--log` writes no event for a
-loop merely starting), each report, each failure and run end.
+order -- run start, each decision (inferred ones included), each loop
+starting (`⟳ drafts · 3 passes · 2 wide`, an unbounded loop's own width
+reading its pass count instead; synthesized here since `--log` writes
+no event for a loop merely starting), each report, each failure and
+run end.
 
 Sizes:
 
@@ -323,16 +349,21 @@ Follow is on when the TUI starts: the rail scrolls to keep Now's own
 arrow on screen as the run moves, and `←`/`→` turn it off, scrolling
 manually -- only the rail itself, once redrawn, knows its own real
 width well enough to turn follow back on again, the moment a manual
-scroll lands Now back in view on its own. `↑`/`↓` move which pass is
-selected; `⏎` opens the current selection full-screen, the same
-toggle the Tape's and Signal's own `⏎` already share. `f` follows the
-running station; `0`-`3` switch screens; `?` opens Flow's own Help,
-listing exactly its own keys and the globals every key bar shares.
+scroll lands Now back in view on its own. `↑`/`↓`/`j`/`k` move which
+pass is selected, turning follow off the same way, and back on the
+moment the selection lands back on the pass the Selected pane would
+otherwise default to; `PageUp`/`PageDown`/`Home`/`End`/`g`/`G` are
+no-ops here, there being no tree left to page or jump through. `⏎`
+opens the current selection full-screen, the same toggle the Tape's
+and Signal's own `⏎` already share, armed only while something is
+actually selected. `f` follows the running station; `0`-`3` switch
+screens; `?` opens Flow's own Help, listing exactly its own keys and
+the globals every key bar shares.
 
 | Key | Action |
 |---|---|
 | `←` / `→` | scroll the rail, turning follow off |
-| `↑` / `↓` | select a pass |
+| `↑` / `↓` / `j` / `k` | select a pass |
 | `+` / `-` | open / fold the selected fork's own lanes, three at a time |
 | `⏎` | open the selection full-screen, and back |
 | `f` | follow the running station (on by default) |
