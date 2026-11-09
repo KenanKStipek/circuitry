@@ -277,6 +277,94 @@ fn draw_tape_header_band(
     frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
 }
 
+/// The status line's own run-end chrome (DESIGN.md §2.1's
+/// `tape--starting`/`tape--ended`/`tape--failed` forms), shared by
+/// every screen that watches a run -- `Some` for Starting/Ended/
+/// Failed, `None` for Normal, where a caller falls back to its own
+/// "newest finished step" line instead (the Tape's own row-based
+/// one, the Flow's/Signal's own `last_finished`-based one).
+fn shared_run_chrome_status_spans(
+    head: &oscilloscope_core::screens::TapeHead,
+    header: &oscilloscope_core::render::Header,
+    ctx: &DrawCtx,
+) -> Option<Vec<Span<'static>>> {
+    use oscilloscope_core::screens::TapeHead;
+    match head {
+        TapeHead::Starting => Some(vec![
+            Span::styled(
+                " engine launching · waiting for the first event ",
+                Style::default().fg(ctx.theme.text),
+            ),
+            Span::styled(
+                format!("· {}", header.engine),
+                Style::default().fg(ctx.theme.dim),
+            ),
+        ]),
+        TapeHead::Ended {
+            ok,
+            duration_s,
+            handled_failure,
+        } => {
+            let total = header.tokens_sent + header.tokens_received;
+            let word = if *ok {
+                "ok"
+            } else {
+                match header.status {
+                    RunStatus::Cancelled => "cancelled",
+                    _ => "aborted",
+                }
+            };
+            let (glyph, glyph_style) = if *ok {
+                ('✓', Style::default().fg(ctx.theme.status_done))
+            } else {
+                ('✗', Style::default().fg(ctx.theme.status_failed))
+            };
+            let mut spans = vec![
+                Span::styled(format!(" {glyph} "), glyph_style),
+                Span::styled(
+                    format!(
+                        "run {word} · {} t · {} ",
+                        oscilloscope_core::format::format_tokens_thousands(total),
+                        oscilloscope_core::format::format_duration(*duration_s)
+                    ),
+                    Style::default().fg(ctx.theme.text),
+                ),
+            ];
+            if let Some((label, _)) = handled_failure {
+                spans.push(Span::styled(
+                    format!("· 1 handled failure · {label}"),
+                    Style::default().fg(ctx.theme.dim),
+                ));
+            }
+            Some(spans)
+        }
+        TapeHead::Failed {
+            error,
+            failing_path,
+        } => {
+            let label = failing_path
+                .as_deref()
+                .map(|p| p.rsplit('.').next().unwrap_or(p).to_string())
+                .unwrap_or_default();
+            // The status line reads one line; a structured dump
+            // after the engine's own prose (a Python-style `[...]`
+            // repr of an allowlist, say) isn't part of it -- the
+            // detail pane's own Error block still quotes `error` in
+            // full.
+            let summary = error.split('[').next().unwrap_or(error).trim_end();
+            Some(vec![
+                Span::styled(" ✗ ", Style::default().fg(ctx.theme.status_failed)),
+                Span::styled(
+                    format!("run failed · {label} "),
+                    Style::default().fg(ctx.theme.text),
+                ),
+                Span::styled(format!("· {summary}"), Style::default().fg(ctx.theme.dim)),
+            ])
+        }
+        TapeHead::Normal => None,
+    }
+}
+
 /// The status line (§3.2): the newest finished row, with its tokens
 /// and age -- never key instructions, which belong to the key bar.
 /// Unchanged by `follow`: issue #678's own golden frames select a
@@ -294,72 +382,10 @@ fn draw_tape_status_line(
     ctx: &DrawCtx,
     now: &str,
 ) {
-    use oscilloscope_core::screens::{TapeHead, TapeItem};
-    match &screen.head {
-        TapeHead::Starting => {
-            let spans = vec![
-                Span::styled(
-                    " engine launching · waiting for the first event ",
-                    Style::default().fg(ctx.theme.text),
-                ),
-                Span::styled(
-                    format!("· {}", header.engine),
-                    Style::default().fg(ctx.theme.dim),
-                ),
-            ];
-            frame.render_widget(Paragraph::new(Line::from(spans)), area);
-            return;
-        }
-        TapeHead::Ended {
-            handled_failure, ..
-        } => {
-            let total = header.tokens_sent + header.tokens_received;
-            let mut spans = vec![
-                Span::styled(" ✓ ", Style::default().fg(ctx.theme.status_done)),
-                Span::styled(
-                    format!(
-                        "run ok · {} t · {} ",
-                        oscilloscope_core::format::format_tokens_thousands(total),
-                        oscilloscope_core::format::format_duration(header.elapsed_s)
-                    ),
-                    Style::default().fg(ctx.theme.text),
-                ),
-            ];
-            if let Some((label, _)) = handled_failure {
-                spans.push(Span::styled(
-                    format!("· 1 handled failure · {label}"),
-                    Style::default().fg(ctx.theme.dim),
-                ));
-            }
-            frame.render_widget(Paragraph::new(Line::from(spans)), area);
-            return;
-        }
-        TapeHead::Failed {
-            error,
-            failing_path,
-        } => {
-            let label = failing_path
-                .as_deref()
-                .map(|p| p.rsplit('.').next().unwrap_or(p).to_string())
-                .unwrap_or_default();
-            // The status line reads one line; a structured dump
-            // after the engine's own prose (a Python-style `[...]`
-            // repr of an allowlist, say) isn't part of it -- the
-            // detail pane's own Error block still quotes `error` in
-            // full.
-            let summary = error.split('[').next().unwrap_or(error).trim_end();
-            let spans = vec![
-                Span::styled(" ✗ ", Style::default().fg(ctx.theme.status_failed)),
-                Span::styled(
-                    format!("run failed · {label} "),
-                    Style::default().fg(ctx.theme.text),
-                ),
-                Span::styled(format!("· {summary}"), Style::default().fg(ctx.theme.dim)),
-            ];
-            frame.render_widget(Paragraph::new(Line::from(spans)), area);
-            return;
-        }
-        TapeHead::Normal => {}
+    use oscilloscope_core::screens::TapeItem;
+    if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
     }
     // §3.2's "the newest finished step", a loop pass's own leaf
     // (`iter_N`'s own `draft`/`pause`, say) included: `screen.items`
@@ -652,6 +678,102 @@ mod tape_token_bar_tests {
                 "the count itself must never be cut: {full:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_run_chrome_status_spans_tests {
+    use super::*;
+    use oscilloscope_core::model::RunStatus;
+    use oscilloscope_core::screens::TapeHead;
+
+    fn header_with_status(status: RunStatus) -> oscilloscope_core::render::Header {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": "t1"}}});
+        let rendered = oscilloscope_core::render::build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            5.0,
+            "t1",
+            &[],
+        );
+        let mut header = rendered.header;
+        header.status = status;
+        header
+    }
+
+    fn spans_text(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn ended_ok_reads_run_ok_with_the_handled_failure_suffix() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let header = header_with_status(RunStatus::Ok);
+        let head = TapeHead::Ended {
+            ok: true,
+            duration_s: 5.0,
+            handled_failure: Some(("flaky".to_string(), "exit 1".to_string())),
+        };
+        let spans =
+            shared_run_chrome_status_spans(&head, &header, &ctx).expect("Ended has its own chrome");
+        let text = spans_text(&spans);
+        assert!(text.contains("run ok"), "{text}");
+        assert!(text.contains("1 handled failure"), "{text}");
+    }
+
+    #[test]
+    fn ended_not_ok_reads_cancelled_or_aborted_never_run_ok() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        for (status, word) in [
+            (RunStatus::Cancelled, "run cancelled"),
+            (RunStatus::Aborted, "run aborted"),
+        ] {
+            let header = header_with_status(status);
+            let head = TapeHead::Ended {
+                ok: false,
+                duration_s: 1.0,
+                handled_failure: None,
+            };
+            let spans = shared_run_chrome_status_spans(&head, &header, &ctx)
+                .expect("Ended has its own chrome");
+            let text = spans_text(&spans);
+            assert!(text.contains(word), "{status:?}: {text}");
+            assert!(!text.contains("run ok"), "{status:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn normal_has_no_shared_chrome_of_its_own() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let header = header_with_status(RunStatus::Running);
+        assert_eq!(
+            shared_run_chrome_status_spans(&TapeHead::Normal, &header, &ctx),
+            None
+        );
     }
 }
 
@@ -2748,7 +2870,7 @@ fn draw_signal(
         ])
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "SIGNAL", now, icon_frame, ctx);
-    draw_signal_status_line(frame, sections[2], screen, ctx, now);
+    draw_signal_status_line(frame, sections[2], screen, header, ctx, now);
     draw_key_bar(
         frame,
         sections[3],
@@ -2809,9 +2931,14 @@ fn draw_signal_status_line(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::SignalScreen,
+    header: &oscilloscope_core::render::Header,
     ctx: &DrawCtx,
     now: &str,
 ) {
+    if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     let Some(last) = &screen.last_finished else {
         frame.render_widget(Paragraph::new(Line::from("")), area);
         return;
@@ -7325,9 +7452,14 @@ fn draw_flow_status_line(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::FlowScreen,
+    header: &oscilloscope_core::render::Header,
     ctx: &DrawCtx,
     now: &str,
 ) {
+    if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     let Some(last) = &screen.last_finished else {
         frame.render_widget(Paragraph::new(Line::from("")), area);
         return;
@@ -8240,7 +8372,7 @@ fn draw_flow(
         ])
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "FLOW", now, icon_frame, ctx);
-    draw_flow_status_line(frame, sections[2], screen, ctx, now);
+    draw_flow_status_line(frame, sections[2], screen, header, ctx, now);
     draw_key_bar(
         frame,
         sections[3],

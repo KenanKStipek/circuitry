@@ -732,11 +732,12 @@ fn build_phase_strip(rows: &[Row]) -> Vec<PhaseStep> {
 
 /// The Tape's own head rule (`design/tui-design.md` §2.1): which of
 /// the four states the list's own top border reads.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TapeHead {
     /// No events yet -- `header.run_start_ts` is `None`.
     Starting,
     /// A run under way, or an attached run already past its start.
+    #[default]
     Normal,
     Ended {
         ok: bool,
@@ -1959,6 +1960,60 @@ fn build_tape_failed_detail(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The Starting/Normal/Ended/Failed head rule (`design/tui-design.md`
+/// §2.1): shared chrome, read the same way by every screen's own
+/// status line (`tui::draw_tape_status_line` and the Flow's/Signal's
+/// own counterparts), not only the Tape's own head rule.
+pub(crate) fn build_run_head(
+    run_start: Option<&str>,
+    header: &Header,
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+) -> TapeHead {
+    if run_start.is_none() {
+        return TapeHead::Starting;
+    }
+    match header.status {
+        RunStatus::Running => TapeHead::Normal,
+        RunStatus::Failed => {
+            // The deepest failed leaf, not the root (`prime`
+            // itself reads `Failed` too, by the same chain-
+            // failure propagation, but is never the row whose own
+            // error this head or the detail pane want).
+            let failing = rows
+                .iter()
+                .find(|r| r.kind.is_leaf() && r.status.kind == StatusKind::Failed)
+                .or_else(|| rows.iter().find(|r| r.status.kind == StatusKind::Failed));
+            let error = failing
+                .and_then(|r| flat.get(&r.path))
+                .and_then(|n| n.error.clone())
+                .unwrap_or_default();
+            TapeHead::Failed {
+                error,
+                failing_path: failing.map(|r| r.path.clone()),
+            }
+        }
+        _ => {
+            let handled = rows
+                .iter()
+                .find(|r| r.status.kind == StatusKind::FailedHandled)
+                .map(|r| {
+                    let error = flat
+                        .get(&r.path)
+                        .and_then(|n| n.error.clone())
+                        .unwrap_or_default();
+                    (r.label.clone(), error)
+                });
+            TapeHead::Ended {
+                ok: matches!(header.status, RunStatus::Ok),
+                duration_s: header.elapsed_s,
+                handled_failure: handled,
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_tape(
     rows: &[Row],
     header: &crate::render::Header,
@@ -2076,48 +2131,7 @@ pub fn build_tape(
         .copied()
         .collect();
 
-    let head = if run_start.is_none() {
-        TapeHead::Starting
-    } else {
-        match header.status {
-            RunStatus::Running => TapeHead::Normal,
-            RunStatus::Failed => {
-                // The deepest failed leaf, not the root (`prime`
-                // itself reads `Failed` too, by the same chain-
-                // failure propagation, but is never the row whose own
-                // error this head or the detail pane want).
-                let failing = rows
-                    .iter()
-                    .find(|r| r.kind.is_leaf() && r.status.kind == StatusKind::Failed)
-                    .or_else(|| rows.iter().find(|r| r.status.kind == StatusKind::Failed));
-                let error = failing
-                    .and_then(|r| flat.get(&r.path))
-                    .and_then(|n| n.error.clone())
-                    .unwrap_or_default();
-                TapeHead::Failed {
-                    error,
-                    failing_path: failing.map(|r| r.path.clone()),
-                }
-            }
-            _ => {
-                let handled = rows
-                    .iter()
-                    .find(|r| r.status.kind == StatusKind::FailedHandled)
-                    .map(|r| {
-                        let error = flat
-                            .get(&r.path)
-                            .and_then(|n| n.error.clone())
-                            .unwrap_or_default();
-                        (r.label.clone(), error)
-                    });
-                TapeHead::Ended {
-                    ok: matches!(header.status, RunStatus::Ok),
-                    duration_s: header.elapsed_s,
-                    handled_failure: handled,
-                }
-            }
-        }
-    };
+    let head = build_run_head(run_start, header, rows, flat);
     // §2.1's own frames: a preview line (and the title's own
     // "Previews On/Off") is a Normal/Usual-state-only thing -- every
     // Starting/Ended/Failed row, finished or not, reads plainly.
@@ -2575,8 +2589,14 @@ pub struct SignalScreen {
     /// §3.2's status line: the most recently finished row, any
     /// depth -- a front end reads its own glyph/colour straight off
     /// `kind`/`status`, the same way the Tape's own status line
-    /// already does for its own last row.
+    /// already does for its own last row. Read only in
+    /// [`TapeHead::Normal`]; the Starting/Ended/Failed states read
+    /// `head` instead, the same shared chrome the Tape's own status
+    /// line builder reads.
     pub last_finished: Option<SignalLastFinished>,
+    /// The Starting/Normal/Ended/Failed head rule (`build_run_head`),
+    /// shared chrome with the Tape's own status line.
+    pub head: TapeHead,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3318,6 +3338,7 @@ pub fn build_signal(
             (sum > 0).then_some(sum)
         },
         last_finished: last_finished_row(rows, flat, plan, run_start),
+        head: build_run_head(run_start, header, rows, flat),
     }
 }
 
@@ -3480,8 +3501,13 @@ pub struct FlowScreen {
     pub selected_decision: Option<SelectedDecision>,
     pub selected_step: Option<FocusedStep>,
     /// §3.2's status line: the newest finished step, shared with
-    /// the Signal's own.
+    /// the Signal's own -- read only in [`TapeHead::Normal`]; the
+    /// Starting/Ended/Failed states read `head` instead, the same
+    /// shared chrome the Tape's own status line builder reads.
     pub last_finished: Option<SignalLastFinished>,
+    /// The Starting/Normal/Ended/Failed head rule (`build_run_head`),
+    /// shared chrome with the Tape's own status line.
+    pub head: TapeHead,
     /// The Totals row's own deviation (§3.3): the sum of every
     /// row's usual tokens that has actually run so far, same as the
     /// Tape's own -- comparing against the whole run's eventual
@@ -3777,6 +3803,7 @@ pub fn build_flow(
         .filter_map(|row| tape_row_usual_tokens(&row.path, plan, header))
         .sum();
     let usual_so_far_tokens = (usual_so_far > 0).then_some(usual_so_far);
+    let head = build_run_head(header.run_start_ts.as_deref(), header, rows, flat);
     FlowScreen {
         rail,
         unit,
@@ -3785,6 +3812,7 @@ pub fn build_flow(
         selected_decision,
         selected_step,
         last_finished,
+        head,
         usual_so_far_tokens,
     }
 }

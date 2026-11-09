@@ -24,5 +24,5 @@ expression: text
 "│ a                                                                                                │"
 "│ tool · shell                                                                                     │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-"                                                                                                    "
+" ✗ run cancelled · 0 t · 5.0s                                                                       "
 " ←→ Scroll  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "
