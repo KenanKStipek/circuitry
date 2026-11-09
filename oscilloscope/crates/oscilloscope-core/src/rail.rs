@@ -1230,7 +1230,7 @@ fn label_first_prompt(items: &mut [RailItem], label: &str) {
 /// alone. The loop's own un-pass-resolved template row
 /// (`loop_path.iter_*`, DESIGN.md's own placeholder) never matches:
 /// `*` isn't a digit.
-fn is_pass_path(candidate: &str, loop_path: &str) -> bool {
+pub fn is_pass_path(candidate: &str, loop_path: &str) -> bool {
     candidate
         .strip_prefix(loop_path)
         .and_then(|rest| rest.strip_prefix(".iter_"))

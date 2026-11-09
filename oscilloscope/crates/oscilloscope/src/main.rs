@@ -1757,6 +1757,20 @@ fn build_flow_screen_if_active(
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     let selected_path = details_selection_path(app);
+    // A root or follow-chosen selection counts as "nothing selected"
+    // for `build_flow`'s own default-pass fallback: `app.selected_path`
+    // is never actually `None` in the real app (the redraw loop
+    // always fills an empty selection with the root's own path), and
+    // while following, the selection is wherever the Tree-wide follow
+    // rule put it, not a real Flow-level choice -- either one should
+    // still land on the rail's own sensible default pass, not the
+    // root's own step pane or whatever leaf follow happens to be on.
+    let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
+    let flow_selected_path = if app.follow || selected_path.as_deref() == root_path {
+        None
+    } else {
+        selected_path
+    };
     Some(oscilloscope_core::screens::build_flow(
         &render_state.unfolded_rows,
         &flat,
@@ -1765,7 +1779,7 @@ fn build_flow_screen_if_active(
         &render_state.header,
         state,
         story,
-        selected_path.as_deref(),
+        flow_selected_path.as_deref(),
         &LocalZone,
         render_state.header.run_end_ts.as_deref(),
         now,
@@ -2312,6 +2326,7 @@ fn run_tui(
                 }
             }
             app.reconcile_folding(&render_state.rows);
+            app.flow_rows = render_state.unfolded_rows.clone();
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -3591,6 +3606,7 @@ fn run_tui_watch(
                 }
             }
             app.reconcile_folding(&render_state.rows);
+            app.flow_rows = render_state.unfolded_rows.clone();
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -5808,6 +5824,54 @@ mod tests {
         assert_eq!(
             line.text,
             "■ run failed: Orchestration validation failed: bad type  0.0s"
+        );
+    }
+
+    /// Issue #691's own follow-up: the real redraw loop never leaves
+    /// `app.selected_path` as `None` (it fills an empty selection
+    /// with the root's own path), so a root selection must still
+    /// count as "nothing selected" for `build_flow`'s own
+    /// default-pass fallback -- otherwise the rail never opens on
+    /// its own default pass in a real run at all.
+    #[test]
+    fn flow_screen_lands_on_its_own_default_pass_when_only_the_root_is_selected() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 0, "total": 2}},
+                "iter_0": {
+                    "nap": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+                }
+            }
+        }});
+        let render_state = oscilloscope_core::render::build(
+            "do.yml",
+            "watch",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.follow = false;
+        app.selected_path = render_state.unfolded_rows.first().map(|r| r.path.clone());
+        let flow_screen = build_flow_screen_if_active(
+            &app,
+            &render_state,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            "t0",
+        )
+        .expect("Flow is the active screen");
+        assert!(
+            flow_screen.selected_pass.is_some(),
+            "a root selection must still land on the rail's own default pass: {flow_screen:?}"
         );
     }
 }

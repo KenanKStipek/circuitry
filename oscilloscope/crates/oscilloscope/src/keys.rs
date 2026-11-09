@@ -165,6 +165,14 @@ pub struct App {
     /// must never flip it back on just because Now already happens to
     /// sit in the current view.
     pub flow_manual_scroll: bool,
+    /// The rail's own unfolded, unfiltered rows (`render::RenderState::
+    /// unfolded_rows`), refreshed on every rebuild: the Flow screen's
+    /// own ↑↓/`+`/`-` keys read this, never `handle_key`'s own `rows`
+    /// (the Tree pane's folded, filter-applied list) -- a pass folding
+    /// absorbs into a breadcrumb, or whose body is a single nested
+    /// container with no `RowKind::Pass` row of its own, is still on
+    /// the rail and must still be reachable.
+    pub flow_rows: Vec<Row>,
     /// Per-fork lane-open overrides (issue #691's `+`/`-`), keyed by
     /// the fork's own path: `0` folds it into its own band, the
     /// fork's own lane count fully opens it, anything in between is
@@ -238,6 +246,7 @@ impl App {
             cost_selected: None,
             flow_scroll: 0,
             flow_manual_scroll: false,
+            flow_rows: Vec::new(),
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_column_ms: 100,
@@ -302,13 +311,29 @@ impl App {
     /// against the rail's own width, the only place that knows it.
     const FLOW_SCROLL_STEP: usize = 10;
 
+    /// A row's own path is a loop pass's (issue #677's
+    /// `rail::is_pass_path`, not `RowKind::Pass`): a loop whose body
+    /// is a single container op (an `if`, another loop, a `dynamic`)
+    /// places that op's own entry directly at the pass's own path,
+    /// with no separate `Pass`-kind row there at all.
+    fn row_is_pass(path: &str) -> bool {
+        match path.rsplit_once('.') {
+            Some((parent, _)) => oscilloscope_core::rail::is_pass_path(path, parent),
+            None => false,
+        }
+    }
+
     /// ↑↓ on the Flow screen (issue #691, §4): moves the selected
     /// lane over every loop pass the run has, in plan order -- the
-    /// rail's own lane concept, never the tree's row list.
-    pub fn flow_select_lane(&mut self, rows: &[&Row], delta: i32) {
-        let paths: Vec<&str> = rows
+    /// rail's own lane concept, read off `self.flow_rows` (the
+    /// rail's own unfolded rows), never the tree pane's own folded,
+    /// filtered list, or a pass folding absorbs into a breadcrumb
+    /// (still on the rail) would be unreachable.
+    pub fn flow_select_lane(&mut self, delta: i32) {
+        let paths: Vec<&str> = self
+            .flow_rows
             .iter()
-            .filter(|r| r.kind == oscilloscope_core::render::RowKind::Pass)
+            .filter(|r| Self::row_is_pass(&r.path))
             .map(|r| r.path.as_str())
             .collect();
         if paths.is_empty() {
@@ -324,52 +349,51 @@ impl App {
             None => paths.len() - 1,
         };
         self.select_tree_path(Some(paths[next].to_string()));
-        self.follow = self.lands_back_on_the_followed_row(rows);
+        let rows: Vec<&Row> = self.flow_rows.iter().collect();
+        self.follow = self.lands_back_on_the_followed_row(&rows);
     }
 
-    /// The loop `+`/`-` act on (issue #677 §9.3's "the selected
-    /// fork's own lanes"): the loop a selected pass belongs to, or
-    /// the selected loop station itself, falling back to the first
-    /// loop on the rail once nothing is selected at all.
-    fn selected_loop_path(&self, rows: &[&Row]) -> Option<String> {
-        if let Some(selected) = self.selected_path.as_deref() {
-            if let Some((loop_path, last)) = selected.rsplit_once('.') {
-                if last.starts_with("iter_")
-                    && rows.iter().any(|r| {
-                        r.kind == oscilloscope_core::render::RowKind::Loop && r.path == loop_path
-                    })
-                {
-                    return Some(loop_path.to_string());
-                }
+    /// The fork `+`/`-` act on (issue #677 §9.3's "the selected
+    /// fork's own lanes", issue #691's own follow-up): the nearest
+    /// ancestor of the current selection that is itself a fork host
+    /// (a loop, or a parallel `dynamic`) on `self.flow_rows` -- never
+    /// a fallback to the first loop on the rail once the selection
+    /// isn't inside one, which used to let `+`/`-` silently act on
+    /// an unrelated fork.
+    fn selected_fork_path(&self) -> Option<String> {
+        let mut candidate = self.selected_path.as_deref()?;
+        loop {
+            if self.flow_rows.iter().any(|r| {
+                r.path == candidate
+                    && matches!(
+                        r.kind,
+                        oscilloscope_core::render::RowKind::Loop
+                            | oscilloscope_core::render::RowKind::Dynamic
+                    )
+            }) {
+                return Some(candidate.to_string());
             }
-            if rows
-                .iter()
-                .any(|r| r.kind == oscilloscope_core::render::RowKind::Loop && r.path == selected)
-            {
-                return Some(selected.to_string());
-            }
+            candidate = candidate.rsplit_once('.')?.0;
         }
-        rows.iter()
-            .find(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-            .map(|r| r.path.clone())
     }
 
     /// `+` (issue #691, §2.3): opens the selected fork's own lanes
     /// three at a time, up to its own real lane count (the loop's
     /// own known total, or however many passes are observed so far
     /// without one).
-    pub fn flow_open_lanes(&mut self, rows: &[&Row]) {
-        let Some(loop_path) = self.selected_loop_path(rows) else {
+    pub fn flow_open_lanes(&mut self) {
+        let Some(loop_path) = self.selected_fork_path() else {
             return;
         };
-        let observed = rows
+        let observed = self
+            .flow_rows
             .iter()
             .filter(|r| {
-                r.kind == oscilloscope_core::render::RowKind::Pass
-                    && r.path.starts_with(&format!("{loop_path}.iter_"))
+                Self::row_is_pass(&r.path) && r.path.starts_with(&format!("{loop_path}.iter_"))
             })
             .count() as u64;
-        let lane_count = rows
+        let lane_count = self
+            .flow_rows
             .iter()
             .find(|r| r.path == loop_path)
             .and_then(|r| r.loop_progress)
@@ -382,8 +406,8 @@ impl App {
 
     /// `-` (issue #691): folds the selected fork's own lanes back
     /// into its own band.
-    pub fn flow_fold_lanes(&mut self, rows: &[&Row]) {
-        if let Some(loop_path) = self.selected_loop_path(rows) {
+    pub fn flow_fold_lanes(&mut self) {
+        if let Some(loop_path) = self.selected_fork_path() {
             self.flow_lanes_open.insert(loop_path, 0);
         }
     }
@@ -549,10 +573,10 @@ impl App {
             // `move_or_scroll`'s own tree-shaped walk, which the
             // rail replaces entirely.
             KeyCode::Up | KeyCode::Char('k') if self.screen == Screen::Flow => {
-                self.flow_select_lane(rows, -1)
+                self.flow_select_lane(-1)
             }
             KeyCode::Down | KeyCode::Char('j') if self.screen == Screen::Flow => {
-                self.flow_select_lane(rows, 1)
+                self.flow_select_lane(1)
             }
             // PageUp/PageDown/Home/End/g/G have no tree to page or
             // jump through on the Flow screen (the rail replaces it
@@ -655,8 +679,8 @@ impl App {
             // Issue #691: `+` opens the selected fork's own lanes
             // (three at a time, DESIGN.md §2.3's folded loop), `-`
             // folds them back into the band.
-            KeyCode::Char('+') if self.screen == Screen::Flow => self.flow_open_lanes(rows),
-            KeyCode::Char('-') if self.screen == Screen::Flow => self.flow_fold_lanes(rows),
+            KeyCode::Char('+') if self.screen == Screen::Flow => self.flow_open_lanes(),
+            KeyCode::Char('-') if self.screen == Screen::Flow => self.flow_fold_lanes(),
             // Issue #691: ⏎ opens the selected station or pass
             // full-screen, the same toggle the Tape and Signal
             // already share -- only while something actually is
@@ -1863,6 +1887,7 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.screen = Screen::Flow;
+        app.flow_rows = rows.to_vec();
         app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
         app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
@@ -1888,6 +1913,7 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.screen = Screen::Flow;
+        app.flow_rows = rows.to_vec();
         assert!(app.follow);
         app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
@@ -1916,6 +1942,7 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.screen = Screen::Flow;
+        app.flow_rows = rows.to_vec();
         app.handle_key(key(KeyCode::Char('j')), &visible, &[], true, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
         app.handle_key(key(KeyCode::Char('j')), &visible, &[], true, false, &[]);
@@ -1974,12 +2001,67 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.screen = Screen::Flow;
+        app.flow_rows = rows.to_vec();
+        app.selected_path = Some("prime.drafts".to_string());
         app.handle_key(key(KeyCode::Char('+')), &visible, &[], true, false, &[]);
         assert_eq!(app.flow_lanes_open.get("prime.drafts"), Some(&3));
         app.handle_key(key(KeyCode::Char('+')), &visible, &[], true, false, &[]);
         assert_eq!(app.flow_lanes_open.get("prime.drafts"), Some(&5));
         app.handle_key(key(KeyCode::Char('-')), &visible, &[], true, false, &[]);
         assert_eq!(app.flow_lanes_open.get("prime.drafts"), Some(&0));
+    }
+
+    /// Issue #691's own follow-up: `+`/`-` act on the fork that
+    /// contains the current selection -- never a fallback to the
+    /// first loop on the rail, which used to let them silently act
+    /// on an unrelated fork whenever the selection wasn't a pass at
+    /// all (nothing selected, or a selection outside every loop).
+    #[test]
+    fn flow_plus_minus_do_nothing_when_the_selection_is_outside_every_fork() {
+        let mut loop_row = row("prime.drafts", 1, StatusKind::Running);
+        loop_row.kind = RowKind::Loop;
+        loop_row.loop_progress = Some(oscilloscope_core::render::LoopProgress {
+            done: 0,
+            total: Some(5),
+            eta_s: None,
+        });
+        let other = row("prime.other", 1, StatusKind::Done);
+        let rows = [loop_row, other];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.flow_rows = rows.to_vec();
+        app.selected_path = Some("prime.other".to_string());
+        app.handle_key(key(KeyCode::Char('+')), &visible, &[], true, false, &[]);
+        assert!(
+            app.flow_lanes_open.is_empty(),
+            "a selection outside every fork must not open the first loop's own lanes: {:?}",
+            app.flow_lanes_open
+        );
+    }
+
+    /// A loop whose body is a single nested container (an `if`, say)
+    /// places that container's own entry directly at the pass's own
+    /// path, with no separate `RowKind::Pass` row at all -- `↑↓` must
+    /// still recognise it as a pass (`rail::is_pass_path`), not only
+    /// a row literally of kind `Pass`.
+    #[test]
+    fn flow_up_down_recognises_a_pass_whose_body_is_a_single_nested_if() {
+        let mut loop_row = row("prime.fan", 1, StatusKind::Running);
+        loop_row.kind = RowKind::Loop;
+        let mut pass0_if = row("prime.fan.iter_0", 2, StatusKind::Running);
+        pass0_if.kind = RowKind::If;
+        let mut pass1_if = row("prime.fan.iter_1", 2, StatusKind::Pending);
+        pass1_if.kind = RowKind::If;
+        let rows = [loop_row, pass0_if, pass1_if];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.flow_rows = rows.to_vec();
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.fan.iter_0"));
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.fan.iter_1"));
     }
 
     #[test]
