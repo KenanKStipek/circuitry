@@ -775,6 +775,11 @@ pub struct TapeTokens {
     /// A loop row's own sparkline: one entry per pass that has a
     /// token figure of its own yet, oldest first.
     pub loop_pass_tokens: Vec<u64>,
+    /// `sent`/`received` are a running prompt's own live estimate,
+    /// not its final figure (issue #675) -- the bar and the count
+    /// draw in the faint "live" style, settling once the row's own
+    /// `sent`/`received` next read the finished, exact pair instead.
+    pub live: bool,
 }
 
 impl TapeTokens {
@@ -908,6 +913,11 @@ pub struct TapeSelectedDetail {
     pub prompt_sent_tokens: Option<u64>,
     pub reply: Option<String>,
     pub reply_tokens: Option<u64>,
+    /// A running prompt's own live figures (issue #675) -- `None`
+    /// once it has finished (`tokens_sent`/`tokens_received` above
+    /// carry its final figures instead by then) or when it never had
+    /// any live record at all (shown as today, never a crash).
+    pub live: Option<crate::model::PromptLiveFigures>,
 }
 
 /// The Starting state's own detail pane content (§2.1: "the detail
@@ -1081,6 +1091,72 @@ fn tape_prompt_what(sent: u64, received: u64, reply_first_words: Option<&str>) -
     }
 }
 
+/// A running prompt's own "what" text (issue #675): the elapsed
+/// time and, on a retry, its own attempt number, first -- the
+/// row's own `what` column is cut from the right the moment the
+/// pane is too narrow for the rest of it (`tape_what_text`), so
+/// whatever comes after this point is the first thing to go. After
+/// that: for a streaming adapter, `waiting for the first token`
+/// before its own first delta, else how much has come back so far
+/// (exact once the provider has reported it, `≈` while it's still
+/// an estimate) and the rate, once there's been enough of a second
+/// delta to measure one. A non-streaming adapter has none of that to
+/// show, only the elapsed time and attempt (today's own tool-row
+/// shape).
+fn tape_running_prompt_what(
+    duration_s: Option<f64>,
+    live: &crate::model::PromptLiveFigures,
+) -> String {
+    // This attempt's own elapsed (`live.elapsed_s`, since its own
+    // `started_at`) wins over the row's own `duration_s` (since the
+    // first attempt's `created_at`, never reset by a retry) -- the
+    // figure right after it (`waiting for the first token`, or the
+    // received count and rate) is always this attempt's own, so the
+    // elapsed next to it must read the same attempt's clock, not one
+    // that also counts an earlier attempt's own backoff.
+    let elapsed = live
+        .elapsed_s
+        .or(duration_s)
+        .map(crate::format::format_duration)
+        .unwrap_or_default();
+    let mut what = elapsed;
+    if let Some(attempt) = live.attempt.filter(|&a| a > 0) {
+        what.push_str(&format!(" · attempt {}", attempt + 1));
+    }
+    if !live.streaming {
+        return what;
+    }
+    if live.waiting_for_first_token {
+        what.push_str(" · waiting for the first token");
+    } else if let Some((n, is_estimate)) = live.tokens_received_or_estimate() {
+        let marker = if is_estimate { "≈" } else { "" };
+        let rate = live
+            .tokens_per_second
+            .map(|r| format!(" · {} t/s", r.round() as i64))
+            .unwrap_or_default();
+        what.push_str(&format!(
+            " · ↓{marker}{} t{rate}",
+            crate::format::format_tokens_thousands(n)
+        ));
+    }
+    what
+}
+
+/// A running prompt's own token column (issue #675): sent/received
+/// read exact-or-estimate the same way the row text does, marked
+/// `live` so the bar and the figure draw in the faint style until
+/// the row's own tokens next read the finished, exact pair instead.
+fn tape_running_prompt_tokens(live: &crate::model::PromptLiveFigures) -> TapeTokens {
+    let sent = live.tokens_sent_or_estimate();
+    let received = live.tokens_received_or_estimate();
+    TapeTokens {
+        sent: sent.map(|(n, _)| n),
+        received: received.map(|(n, _)| n),
+        live: sent.is_some() || received.is_some(),
+        ..Default::default()
+    }
+}
+
 /// §3.4's "first words": the reply's own text, cut at the first
 /// sentence end or a fixed character budget, whichever comes first
 /// -- `Bug.`, `Thanks for the ⋯` (never the whole reply, which the
@@ -1230,6 +1306,7 @@ fn tape_preview_line(text: &str) -> String {
 /// Builds one row's own `(what, preview, tokens)` (§3.4/§3.5).
 /// `queued` is §3.4's " · queued" suffix for a row ahead that is a
 /// loop pass waiting on a busy loop's own concurrency.
+#[allow(clippy::too_many_arguments)]
 fn tape_row_content(
     row: &Row,
     flat: &BTreeMap<String, NodeMeta>,
@@ -1238,6 +1315,7 @@ fn tape_row_content(
     state: Option<&Value>,
     previews_on: bool,
     queued: bool,
+    now: &str,
 ) -> (String, Option<String>, TapeTokens) {
     let node = flat.get(&row.path);
     let pending = row.status.kind == StatusKind::Pending;
@@ -1263,14 +1341,10 @@ fn tape_row_content(
                     TapeTokens::default(),
                 )
             } else {
-                let (sent, received) = node
-                    .map(|n| crate::model::node_tokens(&n.meta))
-                    .unwrap_or((0, 0));
-                let reply_words = node
-                    .map(|n| crate::render::display_value(&n.value))
-                    .filter(|v| !v.is_empty())
-                    .map(|v| first_words(&v, 24));
-                let what = tape_prompt_what(sent, received, reply_words.as_deref());
+                let is_running = matches!(
+                    row.status.kind,
+                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                );
                 let preview = if previews_on {
                     node.and_then(|n| n.meta.get("prompt_sent"))
                         .and_then(Value::as_str)
@@ -1278,12 +1352,41 @@ fn tape_row_content(
                 } else {
                     None
                 };
-                let tokens = TapeTokens {
-                    sent: Some(sent),
-                    received: Some(received),
-                    ..Default::default()
-                };
-                (what, preview, tokens)
+                if is_running {
+                    match crate::model::prompt_live_figures(node, &row.path, model, now) {
+                        Some(live) => {
+                            let what = tape_running_prompt_what(row.duration_s, &live);
+                            let tokens = tape_running_prompt_tokens(&live);
+                            (what, preview, tokens)
+                        }
+                        // No live figures at all (R4: malformed or
+                        // missing `meta.live`, never a crash) -- the
+                        // elapsed time alone, the same shape a
+                        // non-streaming tool's own running row reads.
+                        None => (
+                            row.duration_s
+                                .map(crate::format::format_duration)
+                                .unwrap_or_default(),
+                            preview,
+                            TapeTokens::default(),
+                        ),
+                    }
+                } else {
+                    let (sent, received) = node
+                        .map(|n| crate::model::node_tokens(&n.meta))
+                        .unwrap_or((0, 0));
+                    let reply_words = node
+                        .map(|n| crate::render::display_value(&n.value))
+                        .filter(|v| !v.is_empty())
+                        .map(|v| first_words(&v, 24));
+                    let what = tape_prompt_what(sent, received, reply_words.as_deref());
+                    let tokens = TapeTokens {
+                        sent: Some(sent),
+                        received: Some(received),
+                        ..Default::default()
+                    };
+                    (what, preview, tokens)
+                }
             }
         }
         RowKind::If => {
@@ -1460,7 +1563,12 @@ fn tape_largest_tokens(items: &[TapeItem]) -> Option<u64> {
 /// split and its prompt/reply in full -- `Default` (every field
 /// `None`) for any other kind, which still carries the row's own
 /// finish instant.
-fn build_tape_selected_detail(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> TapeSelectedDetail {
+fn build_tape_selected_detail(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    model: &RunModel,
+    now: &str,
+) -> TapeSelectedDetail {
     let node = flat.get(&row.path);
     let finished_ts = node.and_then(|n| n.completed_at.clone());
     if !matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
@@ -1474,9 +1582,27 @@ fn build_tape_selected_detail(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> T
             ..Default::default()
         };
     }
-    let (sent, received) = node
-        .map(|n| crate::model::node_tokens(&n.meta))
-        .unwrap_or((0, 0));
+    let is_running = matches!(
+        row.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
+    // A running prompt's own `tokens_sent`/`tokens_received` are
+    // always `null` (DESIGN.md), so `node_tokens` would otherwise
+    // report a bogus `0`/`0` here -- `None` instead, so the Tokens
+    // line simply doesn't draw until the row actually finishes; the
+    // Live block below is what a running prompt's detail pane shows
+    // instead.
+    let (sent, received) = if is_running {
+        (None, None)
+    } else {
+        let (sent, received) = node
+            .map(|n| crate::model::node_tokens(&n.meta))
+            .unwrap_or((0, 0));
+        (Some(sent), Some(received))
+    };
+    let live = is_running
+        .then(|| crate::model::prompt_live_figures(node, &row.path, model, now))
+        .flatten();
     let prompt_sent = node
         .and_then(|n| n.meta.get("prompt_sent"))
         .and_then(Value::as_str)
@@ -1486,12 +1612,13 @@ fn build_tape_selected_detail(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> T
         .filter(|v| !v.is_empty());
     TapeSelectedDetail {
         finished_ts,
-        tokens_sent: Some(sent),
-        tokens_received: Some(received),
+        tokens_sent: sent,
+        tokens_received: received,
         prompt_sent,
-        prompt_sent_tokens: Some(sent),
+        prompt_sent_tokens: sent,
+        live,
         reply,
-        reply_tokens: Some(received),
+        reply_tokens: received,
     }
 }
 
@@ -2005,7 +2132,7 @@ pub fn build_tape(
     let mut usual_so_far: u64 = 0;
     for row in &bucket1 {
         let (what, preview, mut tokens) =
-            tape_row_content(row, flat, plan, model, state, previews_on, false);
+            tape_row_content(row, flat, plan, model, state, previews_on, false, now);
         tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         usual_so_far += tokens.usual.unwrap_or(0);
         items.push(TapeItem::Row(TapeRow {
@@ -2034,7 +2161,7 @@ pub fn build_tape(
 
     for row in &bucket2 {
         let (what, preview, mut tokens) =
-            tape_row_content(row, flat, plan, model, state, previews_on, false);
+            tape_row_content(row, flat, plan, model, state, previews_on, false, now);
         tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         usual_so_far += tokens.usual.unwrap_or(0);
         items.push(TapeItem::Row(TapeRow {
@@ -2078,7 +2205,7 @@ pub fn build_tape(
                 .iter()
                 .any(|l| row.path.starts_with(&format!("{}.", l.path)));
         let (what, preview, mut tokens) =
-            tape_row_content(row, flat, plan, model, state, previews_on, queued);
+            tape_row_content(row, flat, plan, model, state, previews_on, queued, now);
         // §2.1: a row ahead shows `usually N t` since it's still
         // expected to run; a failed run's own unreached rows, truly
         // skipped rather than merely not-yet-reached, never do.
@@ -2178,7 +2305,7 @@ pub fn build_tape(
     });
     let selected_row = selected_path.and_then(|p| rows.iter().find(|r| r.path == p));
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
-    let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat));
+    let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat, model, now));
 
     let starting_detail = matches!(head, TapeHead::Starting)
         .then(|| build_tape_starting_detail(rows, flat, plan, header, state));
@@ -2945,6 +3072,8 @@ mod tests {
             effects_planned_full: None,
             tokens_sent: 1000,
             tokens_received: 500,
+            tokens_sent_live_estimate: 0,
+            tokens_received_live_estimate: 0,
             innermost_loop_eta_s: Some(360.0),
             innermost_loop_eta_ts: Some("2026-10-08T11:58:00Z".to_string()),
             history_eta_ts: None,
@@ -3030,6 +3159,7 @@ mod tests {
             progress_total: None,
             progress_eta_s: None,
             live: None,
+            prompt_live: None,
             value: Value::Null,
             meta: json!({}),
         }
@@ -3186,10 +3316,215 @@ mod tests {
         );
         let flat = BTreeMap::new();
         let model = RunModel::new();
-        let (what, preview, _tokens) =
-            tape_row_content(&row, &flat, &plan, &model, None, true, false);
+        let (what, preview, _tokens) = tape_row_content(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            true,
+            false,
+            "2026-10-08T11:52:55Z",
+        );
         assert_eq!(what, "prompt");
         assert_eq!(preview.as_deref(), Some("› hi"));
+    }
+
+    fn running_prompt_row() -> Row {
+        let mut row = tape_row("prime.ask", 1, "ask", RowKind::Prompt, StatusKind::Running);
+        row.duration_s = Some(1.0);
+        row
+    }
+
+    /// §2.1's running-prompt anatomy (issue #675): before the first
+    /// delta, the row reads "waiting for the first token", not a
+    /// bogus `↑0 ↓0`.
+    #[test]
+    fn tape_row_content_shows_waiting_for_the_first_token() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                        "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                        "streaming": true, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": 0,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, tokens) = tape_row_content(
+            &running_prompt_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-10-08T11:46:44.2Z",
+        );
+        assert_eq!(what, "1.2s · waiting for the first token");
+        assert!(tokens.live);
+    }
+
+    /// Mid-stream with estimates only (the Ollama shape): the row
+    /// reads the received estimate marked `≈` and the rate.
+    #[test]
+    fn tape_row_content_shows_a_mid_stream_estimate_and_rate() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                        "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                        "streaming": true, "first_token_at": "2026-10-08T11:46:43.6Z",
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": 41, "chars_received": 160,
+                        "tokens_per_second": 68.0}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, tokens) = tape_row_content(
+            &running_prompt_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-10-08T11:46:44Z",
+        );
+        assert_eq!(what, "1.0s · ↓≈41 t · 68 t/s");
+        assert_eq!(tokens.received, Some(41));
+        assert!(tokens.live);
+    }
+
+    /// Mid-stream with exact input tokens (the Anthropic shape:
+    /// `tokens_sent` set at `message_start`) -- the token column's
+    /// own sent figure is exact, never `≈`, while received stays an
+    /// estimate.
+    #[test]
+    fn tape_row_content_shows_an_exact_sent_count_mid_stream() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                    "adapter": "anthropic", "model": "m", "prompt_chars": 1400,
+                    "live": {"v": 1, "attempt": 0, "adapter": "anthropic", "model": "m",
+                        "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                        "streaming": true, "first_token_at": "2026-10-08T11:46:43.7Z",
+                        "tokens_sent": 348, "tokens_sent_estimate": 350, "tokens_received": null,
+                        "tokens_received_estimate": 5, "chars_received": 20,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (_what, _preview, tokens) = tape_row_content(
+            &running_prompt_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-10-08T11:46:44Z",
+        );
+        assert_eq!(tokens.sent, Some(348));
+        assert_eq!(tokens.received, Some(5));
+    }
+
+    /// A non-streaming adapter's own running row keeps today's bare
+    /// elapsed-time shape -- `streaming: false` means only the sent
+    /// estimate and the clock are live, so there is nothing else to
+    /// show.
+    #[test]
+    fn tape_row_content_shows_only_elapsed_for_a_non_streaming_adapter() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                    "adapter": "litellm", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "litellm", "model": "m",
+                        "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                        "streaming": false, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": null,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_prompt_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-10-08T11:46:44Z",
+        );
+        assert_eq!(what, "1.0s");
+    }
+
+    /// A second attempt after a retry appends its own number.
+    #[test]
+    fn tape_row_content_appends_the_attempt_number_on_a_retry() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 1, "adapter": "ollama", "model": "m",
+                        "started_at": "2026-10-08T11:46:50Z", "updated_at": "2026-10-08T11:46:51Z",
+                        "streaming": true, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": 0,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_prompt_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-10-08T11:46:51Z",
+        );
+        assert_eq!(what, "1.0s · attempt 2 · waiting for the first token");
+    }
+
+    /// A node whose `meta.live` is malformed (or missing entirely)
+    /// shows as today, never a crash -- the elapsed time alone, since
+    /// there is nothing live to read.
+    #[test]
+    fn tape_row_content_falls_back_to_elapsed_with_no_live_data_at_all() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": "not an object"}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, tokens) = tape_row_content(
+            &running_prompt_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-10-08T11:46:44Z",
+        );
+        assert_eq!(what, "1.0s");
+        assert_eq!(tokens, TapeTokens::default());
     }
 
     #[test]
@@ -4018,6 +4353,7 @@ mod tests {
                     progress_total: None,
                     progress_eta_s: None,
                     live: None,
+                    prompt_live: None,
                     value: Value::Null,
                     meta: json!({
                         "adapter": "scripted",

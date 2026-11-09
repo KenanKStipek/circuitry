@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    e2e_enabled, scripted_config, wait_for_step_start, wait_with_timeout, write_doc,
+    e2e_electricity_enabled, e2e_enabled, scripted_config, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
 
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
@@ -2707,5 +2708,193 @@ fn the_tapes_detail_pane_still_shows_at_100x30() {
         Some(130),
         "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
     );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #675's acceptance: a slow-streaming prompt's running row
+/// shows its own live token figures growing, then settles to the
+/// exact ones once it finishes. A raw loopback server stands in for
+/// a real `ollama`, answering with newline-delimited JSON deltas on
+/// its own real delay -- the scripted adapter's own `chunks` deliver
+/// every delta at once, with no delay between them to observe at
+/// all.
+fn spawn_slow_ollama_mock() -> std::net::SocketAddr {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        // Nothing streamed yet -- the running row reads "waiting for
+        // the first token" for as long as this lasts.
+        std::thread::sleep(Duration::from_millis(1500));
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n",
+        );
+        let _ = stream.write_all(b"{\"model\":\"demo\",\"response\":\"Thanks \",\"done\":false}\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(1200));
+        let _ = stream
+            .write_all(b"{\"model\":\"demo\",\"response\":\"for the report.\",\"done\":false}\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = stream.write_all(
+            b"{\"model\":\"demo\",\"response\":\"\",\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":8,\"eval_count\":4}\n",
+        );
+        let _ = stream.flush();
+    });
+    addr
+}
+
+#[test]
+fn a_slow_streaming_prompt_shows_live_token_figures_then_settles() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let addr = spawn_slow_ollama_mock();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: ask\n    type: prompt\n    template: \"Say hi.\"\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"ollama\",\"default_model\":\"demo\",\"runtime\":{{\"adapters\":{{\"ollama\":{{\"base_url\":\"http://{addr}\"}}}}}}}}"
+        ),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_pattern(&captured_buf, "t/s".as_bytes(), Duration::from_secs(10));
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2193}\u{2248}"),
+            "expected the running row's own received estimate marker while streaming; got:\n{rendered:?}"
+        );
+    }
+
+    wait_for_pattern(
+        &captured_buf,
+        "\u{2191}8 \u{2193}4".as_bytes(),
+        Duration::from_secs(20),
+    );
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2191}8 \u{2193}4"),
+            "expected the finished prompt's own exact token figures (prompt_eval_count 8, eval_count 4); got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// [`a_slow_streaming_prompt_shows_live_token_figures_then_settles`],
+/// against a real `electricity` build instead of `cof`: the same
+/// mock, the same document, the same figures, since both engines
+/// write the identical `meta.live` shape (issue #674's PR #683) and
+/// drive `on_progress` from the same NDJSON deltas (`run_curl_
+/// streaming`'s own `on_line`).
+#[test]
+fn a_slow_streaming_prompt_shows_live_token_figures_then_settles_on_electricity() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let addr = spawn_slow_ollama_mock();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: ask\n    type: prompt\n    template: \"Say hi.\"\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"ollama\",\"default_model\":\"demo\",\"runtime\":{{\"adapters\":{{\"ollama\":{{\"base_url\":\"http://{addr}\"}}}}}}}}"
+        ),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc_arg,
+            config_arg,
+            OsStr::new("--engine"),
+            OsStr::new("electricity"),
+            OsStr::new("--out-dir"),
+            out_dir_arg,
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_pattern(&captured_buf, "t/s".as_bytes(), Duration::from_secs(10));
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2193}\u{2248}"),
+            "expected the running row's own received estimate marker while streaming; got:\n{rendered:?}"
+        );
+    }
+
+    wait_for_pattern(
+        &captured_buf,
+        "\u{2191}8 \u{2193}4".as_bytes(),
+        Duration::from_secs(20),
+    );
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2191}8 \u{2193}4"),
+            "expected the finished prompt's own exact token figures (prompt_eval_count 8, eval_count 4); got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
 }

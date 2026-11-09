@@ -763,44 +763,115 @@ fn screen_key_bar_items(
 
 /// §3.5's token bar: `▰▰▰▰▱▱▱▱   215 t`, eight cells at `unit`
 /// tokens each.
-fn tape_token_bar(total: u64, unit: u64, bold: bool, ctx: &DrawCtx) -> Vec<Span<'static>> {
+fn tape_token_bar(
+    total: u64,
+    unit: u64,
+    bold: bool,
+    live: bool,
+    ctx: &DrawCtx,
+) -> Vec<Span<'static>> {
     // Rounded, not floored: 389 at a 50-token unit reads a full
     // bar (▰×8), not 7 filled and one empty.
     let filled = ((total as f64 / unit.max(1) as f64).round() as usize).min(8);
     let empty = 8 - filled;
-    // The 3-cell gap before the count reads as the empty bar's own
+    // A running prompt's own estimate (issue #675) draws the filled
+    // cells in the faint style, never the accent colour a finished
+    // row's exact total earns -- the bar settles to the normal
+    // colour the instant the row's own tokens next read exact.
+    let filled_color = if live {
+        ctx.theme.dim
+    } else {
+        ctx.theme.accent_primary
+    };
+    // The bar's own count never gets the `≈` marker the row's `what`
+    // text and the detail pane's own Received line both carry (issue
+    // #675): the faint style already says "this is a running
+    // estimate", and a live total in the thousands -- a common
+    // prompt's own estimate -- needs every one of the column's 16
+    // cells just for the digits, with none to spare for a marker on
+    // top of them.
+    let count_text = oscilloscope_core::format::format_tokens_t(total);
+    // The gap before the count shrinks as the count itself widens (the
+    // same column-sizing `tape_token_column` already does for a loop's
+    // own sparkline+`t/p` suffix) -- the live estimate's own leading
+    // `≈` would otherwise push a count of 1,000 tokens or more past the
+    // 16-cell column and get cut by the pane's own clipping, silently
+    // turning it into a smaller, wrong number.
+    let gap = 16usize
+        .saturating_sub(8)
+        .saturating_sub(count_text.chars().count())
+        .max(1);
+    // The gap before the count reads as the empty bar's own
     // colour (`design/frames/`'s own span grouping) -- or, once the
     // bar is full and has no empty cells of its own to lend it one,
     // the filled bar's own colour instead.
     let mut spans = if empty > 0 {
         vec![
+            Span::styled("▰".repeat(filled), Style::default().fg(filled_color)),
             Span::styled(
-                "▰".repeat(filled),
-                Style::default().fg(ctx.theme.accent_primary),
-            ),
-            Span::styled(
-                format!("{}   ", "▱".repeat(empty)),
+                format!("{}{}", "▱".repeat(empty), " ".repeat(gap)),
                 Style::default().fg(ctx.theme.dim),
             ),
         ]
     } else {
         vec![Span::styled(
-            "▰".repeat(filled) + "   ",
-            Style::default().fg(ctx.theme.accent_primary),
+            "▰".repeat(filled) + &" ".repeat(gap),
+            Style::default().fg(filled_color),
         )]
     };
-    let count_style = if bold {
+    let count_style = if live {
+        Style::default().fg(ctx.theme.dim)
+    } else if bold {
         Style::default()
             .fg(ctx.theme.text)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(ctx.theme.text)
     };
-    spans.push(Span::styled(
-        oscilloscope_core::format::format_tokens_t(total),
-        count_style,
-    ));
+    spans.push(Span::styled(count_text, count_style));
     spans
+}
+
+#[cfg(test)]
+mod tape_token_bar_tests {
+    use super::*;
+
+    fn printed_width(spans: &[Span<'static>]) -> usize {
+        spans.iter().map(|s| s.content.chars().count()).sum()
+    }
+
+    /// A live count of 1,000 tokens or more -- a common prompt's own
+    /// estimate -- still prints within the column's own 16-cell
+    /// budget: the leading marker the faint style's own count carries
+    /// must shrink the gap before it, not push the whole thing past
+    /// the column and get cut by the pane (issue #675).
+    #[test]
+    fn a_live_estimate_in_the_thousands_still_fits_the_column() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        for total in [41u64, 391, 1902, 9999] {
+            let spans = tape_token_bar(total, 50, false, true, &ctx);
+            let width = printed_width(&spans);
+            assert!(
+                width <= 16,
+                "a live total of {total} printed {width} cells, over the 16-cell column"
+            );
+            let full: String = spans.iter().map(|s| s.content.as_ref()).collect();
+            let expected_count = oscilloscope_core::format::format_tokens_t(total);
+            assert!(
+                full.ends_with(&expected_count),
+                "the count itself must never be cut: {full:?}"
+            );
+        }
+    }
 }
 
 /// §2.1's head rule: `━━ <label> ━━━━...`, filled to `width` -- the Now
@@ -984,6 +1055,7 @@ fn tape_token_column(
                     total,
                     unit,
                     tokens.is_largest,
+                    tokens.live,
                     ctx,
                 )))
             }
@@ -1677,6 +1749,16 @@ fn draw_totals_row(
     ctx: &DrawCtx,
 ) {
     let effects_planned = effects_planned_override.or(header.effects_planned);
+    // Issue #675: every currently running prompt's own live estimate
+    // adds on top of the exact pair, so the Totals row grows while a
+    // prompt streams instead of reading zero for it until it lands --
+    // `live` marks whether either side actually has one right now, so
+    // both figures below can draw in the faint style together and
+    // settle back to the normal one the instant nothing is live any
+    // more.
+    let sent_total = header.tokens_sent + header.tokens_sent_live_estimate;
+    let received_total = header.tokens_received + header.tokens_received_live_estimate;
+    let live = header.tokens_sent_live_estimate > 0 || header.tokens_received_live_estimate > 0;
     // §3.3's own deviation: the sum of every row that has run so far,
     // its own usual tokens (the Tape's `usual_so_far_tokens`) --
     // comparing against the *whole run's* eventual usual instead
@@ -1685,16 +1767,16 @@ fn draw_totals_row(
     // usual total, same as before.
     let usual_pct = usual_so_far_tokens
         .or(header.history_usual_total_tokens)
-        .filter(|_| header.tokens_sent + header.tokens_received > 0)
+        .filter(|_| sent_total + received_total > 0)
         .map(|usual| {
-            let total = header.tokens_sent + header.tokens_received;
+            let total = sent_total + received_total;
             ((total as f64 - usual as f64) / usual.max(1) as f64) * 100.0
         });
     if compact {
         // §5: 60-79 columns drops the ↑/↓ breakdown, the Usual/
         // Effects/Cost words and (since the Tape's own Run End row
         // already dropped it) keeps only the ETA.
-        let total = header.tokens_sent + header.tokens_received;
+        let total = sent_total + received_total;
         let mut spans = vec![
             Span::styled(
                 " ",
@@ -1707,17 +1789,23 @@ fn draw_totals_row(
                     .add_modifier(Modifier::BOLD),
             ),
         ];
-        let mut headline = oscilloscope_core::format::format_tokens_t(total);
+        let mut headline = if live {
+            format!("≈{}", oscilloscope_core::format::format_tokens_t(total))
+        } else {
+            oscilloscope_core::format::format_tokens_t(total)
+        };
         if let Some(pct) = usual_pct {
             headline.push_str(&format!(" {pct:+.0}%"));
         }
         headline.push(' ');
-        spans.push(Span::styled(
-            headline,
+        let headline_style = if live {
+            Style::default().fg(ctx.theme.dim)
+        } else {
             Style::default()
                 .fg(ctx.theme.text)
-                .add_modifier(Modifier::BOLD),
-        ));
+                .add_modifier(Modifier::BOLD)
+        };
+        spans.push(Span::styled(headline, headline_style));
         let effects_text = effects_planned
             .map(|p| format!("{}/{p}", header.effects_done))
             .unwrap_or_else(|| header.effects_done.to_string());
@@ -1766,22 +1854,29 @@ fn draw_totals_row(
         ),
         Span::styled(
             format!(
-                "↑{} ↓{} · ",
-                oscilloscope_core::format::format_tokens_thousands(header.tokens_sent),
-                oscilloscope_core::format::format_tokens_thousands(header.tokens_received)
+                "{}↑{} ↓{} · ",
+                if live { "≈" } else { "" },
+                oscilloscope_core::format::format_tokens_thousands(sent_total),
+                oscilloscope_core::format::format_tokens_thousands(received_total)
             ),
-            Style::default().fg(ctx.theme.text),
+            if live {
+                Style::default().fg(ctx.theme.dim)
+            } else {
+                Style::default().fg(ctx.theme.text)
+            },
         ),
         Span::styled(
             format!(
                 "{} t",
-                oscilloscope_core::format::format_tokens_thousands(
-                    header.tokens_sent + header.tokens_received
-                )
+                oscilloscope_core::format::format_tokens_thousands(sent_total + received_total)
             ),
-            Style::default()
-                .fg(ctx.theme.text)
-                .add_modifier(Modifier::BOLD),
+            if live {
+                Style::default().fg(ctx.theme.dim)
+            } else {
+                Style::default()
+                    .fg(ctx.theme.text)
+                    .add_modifier(Modifier::BOLD)
+            },
         ),
     ];
     if let Some(pct) = usual_pct {
@@ -2000,6 +2095,92 @@ fn tape_normal_detail_lines(
         width,
     ));
 
+    // Issue #675's Live block: a running prompt shows its own live
+    // figures here, in place of the Tokens line below (never both --
+    // `detail.tokens_sent`/`_received` are `None` for exactly as long
+    // as `detail.live` is `Some`, since a running prompt's own exact
+    // tokens don't exist yet).
+    if let Some(live) = &detail.live {
+        if !live.streaming {
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("Live    ", muted),
+                    Span::styled("no live figures from this adapter", muted),
+                ],
+                width,
+            ));
+        } else {
+            let first_token_value = if live.waiting_for_first_token {
+                format!(
+                    "waiting · {}",
+                    live.elapsed_s
+                        .map(oscilloscope_core::format::format_duration)
+                        .unwrap_or_default()
+                )
+            } else {
+                format!(
+                    "after {}",
+                    live.first_token_elapsed_s
+                        .map(oscilloscope_core::format::format_duration)
+                        .unwrap_or_default()
+                )
+            };
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("First token  ", muted),
+                    Span::styled(first_token_value, default),
+                ],
+                width,
+            ));
+            if let Some((n, is_estimate)) = live.tokens_received_or_estimate() {
+                let marker = if is_estimate { "≈" } else { "" };
+                let mut received_text = format!(
+                    "{marker}{} t",
+                    oscilloscope_core::format::format_tokens_thousands(n)
+                );
+                if let Some(rate) = live.tokens_per_second {
+                    received_text.push_str(&format!(" · {} t/s", rate.round() as i64));
+                }
+                lines.push(tape_detail_line(
+                    vec![
+                        Span::styled("Received  ", muted),
+                        Span::styled(received_text, default),
+                    ],
+                    width,
+                ));
+            }
+            if let Some((n, is_estimate)) = live.tokens_sent_or_estimate() {
+                let sent_text = if is_estimate {
+                    format!(
+                        "≈{} t",
+                        oscilloscope_core::format::format_tokens_thousands(n)
+                    )
+                } else {
+                    format!(
+                        "↑{} t",
+                        oscilloscope_core::format::format_tokens_thousands(n)
+                    )
+                };
+                lines.push(tape_detail_line(
+                    vec![
+                        Span::styled("Sent  ", muted),
+                        Span::styled(sent_text, default),
+                    ],
+                    width,
+                ));
+            }
+        }
+        if live.attempt.is_some_and(|a| a > 0) {
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("Attempt  ", muted),
+                    Span::styled(format!("{}", live.attempt.unwrap() + 1), default),
+                ],
+                width,
+            ));
+        }
+    }
+
     if let (Some(sent), Some(received)) = (detail.tokens_sent, detail.tokens_received) {
         let total = sent + received;
         lines.push(tape_detail_line(
@@ -2060,21 +2241,22 @@ fn tape_normal_detail_lines(
 
     if let Some(prompt_sent) = &detail.prompt_sent {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("Prompt Sent ", title_bold),
-                Span::styled(
-                    format!(
-                        "· {} t",
-                        oscilloscope_core::format::format_tokens_thousands(
-                            detail.prompt_sent_tokens.unwrap_or(0)
-                        )
-                    ),
-                    muted,
+        // A running prompt's own `tokens_sent` reads `None`
+        // (`build_tape_selected_detail`'s own doc comment) -- the
+        // Live block below already carries the sent figure for one
+        // of those, so this heading drops its own count rather than
+        // print a bogus `0 t`.
+        let mut heading = vec![Span::styled("Prompt Sent ", title_bold)];
+        if let Some(tokens) = detail.prompt_sent_tokens {
+            heading.push(Span::styled(
+                format!(
+                    "· {} t",
+                    oscilloscope_core::format::format_tokens_thousands(tokens)
                 ),
-            ],
-            width,
-        ));
+                muted,
+            ));
+        }
+        lines.push(tape_detail_line(heading, width));
         for line in tape_word_wrap(prompt_sent, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
@@ -13645,6 +13827,8 @@ mod highlight_tests {
                 effects_planned_full: None,
                 tokens_sent: 0,
                 tokens_received: 0,
+                tokens_sent_live_estimate: 0,
+                tokens_received_live_estimate: 0,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
                 history_eta_ts: None,
@@ -14039,6 +14223,350 @@ mod highlight_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, Color::Reset);
+    }
+}
+
+#[cfg(test)]
+mod tape_live_tests {
+    use super::*;
+    use oscilloscope_core::model::{ProcessState, RunModel};
+    use oscilloscope_core::plan::PlanTree;
+    use oscilloscope_core::render;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use serde_json::{Value, json};
+
+    use crate::keys::App;
+    use crate::theme::ColorMode;
+
+    // -------------------------------------------------------------
+    // A running prompt's live token figures (issue #675)
+    // -------------------------------------------------------------
+
+    fn tape_snapshot_at(width: u16, height: u16, state: &Value, now: &str) -> String {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(state),
+            ProcessState::Running,
+            1.0,
+            now,
+            &[],
+        );
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(state),
+            Some("prime.ask"),
+            true,
+            now,
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Tape;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(state),
+                    &test_ctx,
+                    0,
+                    now,
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    fn running_prompt_state(live: Value) -> Value {
+        json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": live["adapter"].clone(), "model": "m", "prompt_chars": 1400,
+                "prompt_sent": "Reply as the maintainer.",
+                "live": live}}
+        }})
+    }
+
+    const TAPE_NOW: &str = "2026-10-08T11:46:44Z";
+
+    fn waiting_for_first_token_state() -> Value {
+        running_prompt_state(json!({
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:43Z",
+            "streaming": true, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 350, "tokens_received": null,
+            "tokens_received_estimate": null, "chars_received": 0, "tokens_per_second": null
+        }))
+    }
+
+    #[test]
+    fn tape_running_prompt_waiting_for_first_token_at_120x30() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            120,
+            30,
+            &waiting_for_first_token_state(),
+            TAPE_NOW
+        ));
+    }
+
+    #[test]
+    fn tape_running_prompt_waiting_for_first_token_at_80x24() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            80,
+            24,
+            &waiting_for_first_token_state(),
+            TAPE_NOW
+        ));
+    }
+
+    /// Mid-stream with estimates only -- the Ollama shape.
+    fn mid_stream_estimate_state() -> Value {
+        running_prompt_state(json!({
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.6Z",
+            "tokens_sent": null, "tokens_sent_estimate": 350, "tokens_received": null,
+            "tokens_received_estimate": 41, "chars_received": 160, "tokens_per_second": 68.0
+        }))
+    }
+
+    #[test]
+    fn tape_running_prompt_mid_stream_estimate_at_120x30() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            120,
+            30,
+            &mid_stream_estimate_state(),
+            TAPE_NOW
+        ));
+    }
+
+    #[test]
+    fn tape_running_prompt_mid_stream_estimate_at_80x24() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            80,
+            24,
+            &mid_stream_estimate_state(),
+            TAPE_NOW
+        ));
+    }
+
+    /// Mid-stream with exact input tokens -- the Anthropic shape
+    /// (`tokens_sent` set at `message_start`).
+    fn mid_stream_exact_sent_state() -> Value {
+        running_prompt_state(json!({
+            "v": 1, "attempt": 0, "adapter": "anthropic", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.7Z",
+            "tokens_sent": 348, "tokens_sent_estimate": 350, "tokens_received": null,
+            "tokens_received_estimate": 5, "chars_received": 20, "tokens_per_second": null
+        }))
+    }
+
+    #[test]
+    fn tape_running_prompt_mid_stream_exact_sent_at_120x30() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            120,
+            30,
+            &mid_stream_exact_sent_state(),
+            TAPE_NOW
+        ));
+    }
+
+    #[test]
+    fn tape_running_prompt_mid_stream_exact_sent_at_80x24() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            80,
+            24,
+            &mid_stream_exact_sent_state(),
+            TAPE_NOW
+        ));
+    }
+
+    /// A non-streaming adapter: only the clock is live.
+    fn non_streaming_state() -> Value {
+        running_prompt_state(json!({
+            "v": 1, "attempt": 0, "adapter": "litellm", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": false, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 350, "tokens_received": null,
+            "tokens_received_estimate": null, "chars_received": null, "tokens_per_second": null
+        }))
+    }
+
+    #[test]
+    fn tape_running_prompt_non_streaming_adapter_at_120x30() {
+        insta::assert_snapshot!(tape_snapshot_at(120, 30, &non_streaming_state(), TAPE_NOW));
+    }
+
+    #[test]
+    fn tape_running_prompt_non_streaming_adapter_at_80x24() {
+        insta::assert_snapshot!(tape_snapshot_at(80, 24, &non_streaming_state(), TAPE_NOW));
+    }
+
+    /// A second attempt after a retry.
+    fn retry_attempt_state() -> Value {
+        running_prompt_state(json!({
+            "v": 1, "attempt": 1, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:50Z", "updated_at": "2026-10-08T11:46:51Z",
+            "streaming": true, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 350, "tokens_received": null,
+            "tokens_received_estimate": null, "chars_received": 0, "tokens_per_second": null
+        }))
+    }
+
+    #[test]
+    fn tape_running_prompt_retry_attempt_at_120x30() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            120,
+            30,
+            &retry_attempt_state(),
+            "2026-10-08T11:46:51Z"
+        ));
+    }
+
+    #[test]
+    fn tape_running_prompt_retry_attempt_at_80x24() {
+        insta::assert_snapshot!(tape_snapshot_at(
+            80,
+            24,
+            &retry_attempt_state(),
+            "2026-10-08T11:46:51Z"
+        ));
+    }
+
+    /// A node whose `meta.live` is malformed never crashes -- read as
+    /// today, elapsed time alone.
+    #[test]
+    fn tape_running_prompt_with_malformed_live_never_crashes() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": "ollama", "model": "m", "prompt_chars": 40, "live": "not an object"}}
+        }});
+        insta::assert_snapshot!(tape_snapshot_at(120, 30, &state, TAPE_NOW));
+    }
+
+    /// Issue #675's events-only attach: `osi watch` on `--events`
+    /// alone drives the same figures from the latest `progress` line,
+    /// with no live state (`meta.live`) at all.
+    #[test]
+    fn tape_running_prompt_events_only_replay_at_120x30() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::RunStart {
+            ts: "2026-10-08T11:46:43Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: None,
+            engine: Some("cof".to_string()),
+        });
+        model.observe_event(&oscilloscope_core::observe::Event::Start {
+            ts: "2026-10-08T11:46:43Z".to_string(),
+            id: Some(1),
+            path: "prime.ask".to_string(),
+        });
+        model.observe_event(&oscilloscope_core::observe::Event::Progress {
+            ts: "2026-10-08T11:46:44Z".to_string(),
+            id: Some(1),
+            path: "prime.ask".to_string(),
+            ms: Some(1200),
+            tokens_received_estimate: Some(41),
+            chars_received: Some(160),
+            tokens_sent: None,
+            tokens_sent_estimate: Some(350),
+            first_token_ms: Some(600),
+        });
+        let now = "2026-10-08T11:46:44.2Z";
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            1.2,
+            now,
+            &[],
+        );
+        let flat = oscilloscope_core::model::flatten_state(&Value::Null);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            Some("prime.ask"),
+            true,
+            now,
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Tape;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &test_ctx,
+                    0,
+                    now,
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        insta::assert_snapshot!(terminal.backend().to_string());
     }
 }
 
@@ -14619,6 +15147,8 @@ mod tape_frame_goldens {
                 effects_planned_full: None,
                 tokens_sent: 0,
                 tokens_received: 0,
+                tokens_sent_live_estimate: 0,
+                tokens_received_live_estimate: 0,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
                 history_eta_ts: None,

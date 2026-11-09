@@ -2125,6 +2125,58 @@ selected row's own Usual (history's median and the run count behind
 it) and Share (percent of the run's own tokens so far) lines, which
 neither of those two needs.
 
+**A running prompt's own live figures** (issue #675, on top of #674's
+`meta.live`). `model::PromptLive::from_value` parses a streamed
+prompt's own live record -- told apart from the agent tool's
+`AgentLive` by the one key only a prompt's ever carries, `adapter`
+(the opposite of `AgentLive::from_value`'s own check, unchanged) --
+into its own struct (`v`, `attempt`, `adapter`, `model`, the two
+timestamps, `streaming`, `first_token_at`, the sent/received pairs
+each exact-or-estimate, `chars_received`, `tokens_per_second`), kept
+separately on `NodeMeta` as `prompt_live`. `--events`' own `progress`
+line (`observe::Event::Progress`; `id`, `path`, `ms`,
+`tokens_received_estimate`, `chars_received`, `tokens_sent`,
+`tokens_sent_estimate`, `first_token_ms`) is kept, one per path, on
+`RunModel` (`progress_at`), cleared at the path's own next `start`.
+`model::prompt_live_figures` reads either source into one shared
+shape, `PromptLiveFigures` -- state's own `meta.live` when a node has
+one, else `osi watch`'s own events-only fallback, which has no
+`streaming`/`attempt` of its own at all (a `progress` line is only
+ever emitted for a streaming adapter's own delta) and derives its own
+rate from `ms`/`first_token_ms` by the same two-delta, 500ms gate
+`meta.live`'s own `tokens_per_second` already uses.
+
+A running prompt's own Tape row (`screens::tape_running_prompt_what`/
+`tape_running_prompt_tokens`) reads this attempt's own elapsed
+(`live.elapsed_s`, since its own `started_at`, winning over the row's
+own `duration_s`, which counts an earlier attempt's backoff too) and,
+on a retry, `attempt N+1`, first: the row's own `what` column is cut
+from the right the moment the pane is too narrow for all of it, so
+whatever reads first is the only part guaranteed to survive. After
+that: `waiting for the first token` before the first delta, else the
+received count (exact once the provider has reported one, `≈` while
+it is still the running estimate) and the rate once there has been
+enough of a second delta to measure one; a non-streaming adapter has
+none of that to show, only the elapsed time and attempt. The token
+column's own bar and figure (`TapeTokens::live`) draw in the faint
+style for exactly as long as they are this running estimate, settling
+to the normal style the instant the same row's own tokens next read
+the node's finished, exact pair instead -- the two are mutually
+exclusive by construction (`render::build_header`'s own `tokens_sent_
+live_estimate`/`tokens_received_live_estimate`, summed only over a
+node `model::is_running_prompt` still holds true for, add to the
+Totals row the same way, in the same faint style, and read zero again
+the moment a node it was counting finishes), so a prompt that ends
+between two polls is never counted as both running and done. The
+detail pane's own Live block (`tui::tape_normal_detail_lines`) shows
+First Token, Received, Sent and Attempt in place of the Tokens line
+(which has nothing to show for a node with no exact figures yet
+anyway), or `no live figures from this adapter` for a non-streaming
+one; a node whose own `meta.live` fails to parse at all shows as
+before, the bare elapsed time, never a crash. None of the nine
+`tape--*` frame goldens changes: the design's own fixture run has no
+running prompt with a `meta.live` of its own to begin with.
+
 **Keys.** `0`-`3`, `?`, `q`/`c`/`esc` are unchanged. Theme cycling
 moves from `t` to `T` (issue #535's own key); the Tape's own `t`
 swaps its token column for the deviation-from-usual view instead,
