@@ -1,0 +1,9 @@
+name: stream-disconnect-retries
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    retries:
+      max_attempts: 2
+      backoff_ms: 1

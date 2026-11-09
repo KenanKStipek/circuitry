@@ -586,8 +586,10 @@ EVENT_ENGINE_PLACEHOLDER = "<ENGINE>"
 #: semantics §8.7, issue #431's events-conformance acceptance criterion):
 #: shape-checked, then replaced with a fixed placeholder. `run_id` reuses
 #: the same UUID check/placeholder `normalize()` uses for state's own
-#: `run_id`/`_run_id`.
-_EVENT_FIELD_RULES = ("ts", "ms", "run_id", "pid", "engine")
+#: `run_id`/`_run_id`. `first_token_ms` (#674, a `progress` line) is the
+#: same kind of wall-clock-derived value as `ms` and gets the same
+#: placeholder.
+_EVENT_FIELD_RULES = ("ts", "ms", "first_token_ms", "run_id", "pid", "engine")
 
 
 def _normalize_event_field(key: str, value: Any) -> Any:
@@ -595,7 +597,12 @@ def _normalize_event_field(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not _EVENT_TS_RE.match(value):
             raise NormalizationError(f"event {key!r}: not a millisecond UTC timestamp: {value!r}")
         return EVENT_TS_PLACEHOLDER
-    if key == "ms":
+    if key in ("ms", "first_token_ms"):
+        # `progress`'s own `ms`/`first_token_ms` (#674) can be `null` --
+        # unlike `end`'s `ms`, which is omitted rather than nulled when
+        # there's nothing to report (see `cli/events.py::on_complete`).
+        if value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise NormalizationError(f"event {key!r}: expected a non-negative int, got {value!r}")
         return EVENT_MS_PLACEHOLDER

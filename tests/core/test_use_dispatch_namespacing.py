@@ -18,7 +18,12 @@ import yaml
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
 from circuitry.core.store import Store
-from circuitry.core.use import _namespaced_branch_settled_cb, _namespaced_dispatch_cb
+from circuitry.core.use import (
+    _namespaced_branch_settled_cb,
+    _namespaced_dispatch_cb,
+    _namespaced_open_instance_id_cb,
+    _namespaced_progress_cb,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,6 +145,40 @@ def test_namespaced_branch_settled_cb_forwards_the_childs_own_root_path_at_node_
     wrapped("prime")
 
     assert seen == ["prime.sub"]
+
+
+def test_namespaced_progress_cb_is_none_when_callback_is_none() -> None:
+    assert _namespaced_progress_cb(None, "prime.sub") is None
+
+
+def test_namespaced_progress_cb_nests_under_node_path() -> None:
+    seen: list[tuple[str, dict]] = []
+    wrapped = _namespaced_progress_cb(
+        lambda path, data: seen.append((path, data)), "prime.sub"
+    )
+    assert wrapped is not None
+
+    wrapped("prime.step", {"chars_received": 6})
+
+    assert seen == [("prime.sub.step", {"chars_received": 6})]
+
+
+def test_namespaced_open_instance_id_cb_is_none_when_callback_is_none() -> None:
+    assert _namespaced_open_instance_id_cb(None, "prime.sub") is None
+
+
+def test_namespaced_open_instance_id_cb_nests_under_node_path_and_returns_the_answer() -> None:
+    seen: list[str] = []
+
+    def _query(path: str) -> tuple[int, float] | None:
+        seen.append(path)
+        return (1, 2.0)
+
+    wrapped = _namespaced_open_instance_id_cb(_query, "prime.sub")
+    assert wrapped is not None
+
+    assert wrapped("prime.step") == (1, 2.0)
+    assert seen == ["prime.sub.step"]
 
 
 # ── Integration: dispatch/branch_settled through a real use child ───────────

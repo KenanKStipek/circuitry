@@ -1,0 +1,7 @@
+name: stream-openai-mock
+adapter: lmstudio
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

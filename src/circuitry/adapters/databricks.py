@@ -44,11 +44,14 @@ class DatabricksAdapter:
     base_url: str = ""
     default_model: str = "databricks-meta-llama-3-3-70b-instruct"
 
+    streams: bool = True
+
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=_resolve_base_url(self.base_url),
             api_key_env="DATABRICKS_TOKEN",
             default_model=self.default_model,
+            streams=self.streams,
         )
 
     def generate(

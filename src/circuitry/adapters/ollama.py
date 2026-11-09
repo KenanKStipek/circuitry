@@ -13,12 +13,14 @@ from ..curl_support import (
     parse_error_body,
     redact_host_url,
     run_curl,
+    run_curl_streaming,
 )
 from ..preflight import CheckResult
-from ._retry import AdapterCallError, classify_curl_exit
+from ._retry import AdapterCallError, RetryInfo, classify_curl_exit
 from .base import (
     DETERMINISTIC_SEED,
     GenerateOptions,
+    GenerateProgress,
     GenerateResult,
     ImageInput,
     last_user_index,
@@ -38,9 +40,11 @@ def _image_base64(image: ImageInput) -> str:
     return image.base64_data()
 
 
-def _request(*, model: str, prompt: str, options: GenerateOptions) -> tuple[str, dict[str, Any]]:
+def _request(
+    *, model: str, prompt: str, options: GenerateOptions, stream: bool
+) -> tuple[str, dict[str, Any]]:
     """``(endpoint, body)``: ``/api/chat`` for role-tagged turns, else ``/api/generate``."""
-    payload: dict[str, Any] = {"model": model, "stream": False}
+    payload: dict[str, Any] = {"model": model, "stream": stream}
     images = [_image_base64(image) for image in options.images]
     if options.messages:
         endpoint = "/api/chat"
@@ -79,11 +83,138 @@ def _request(*, model: str, prompt: str, options: GenerateOptions) -> tuple[str,
     return endpoint, payload
 
 
+def _result_from_final(raw: dict[str, Any], text: str) -> GenerateResult:
+    """``GenerateResult`` from Ollama's own reply shape, given the finished
+    text and the final JSON object (the whole non-streamed body, or the
+    last ``done: true`` line of a streamed one) — the one place both the
+    streamed and non-streamed paths build their result, so they can't drift.
+    """
+    tokens_sent = raw.get("prompt_eval_count")
+    tokens_received = raw.get("eval_count")
+    done_reason = raw.get("done_reason")
+    return GenerateResult(
+        text=(text or "").strip(),
+        raw=raw,
+        tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
+        tokens_received=int(tokens_received)
+        if isinstance(tokens_received, int)
+        else None,
+        finish_reason=done_reason if isinstance(done_reason, str) else None,
+    )
+
+
+def _delta_text(event: dict[str, Any]) -> str:
+    message = event.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        return content if isinstance(content, str) else ""
+    response = event.get("response")
+    return response if isinstance(response, str) else ""
+
+
+def _parse_ndjson_stream(stdout: str) -> tuple[dict[str, Any], str, bool, Any]:
+    """``(final_raw, text, saw_done, error)`` from a completed NDJSON
+    streaming body, parsed in full — the authoritative result for a
+    streamed call, built the same way the non-streamed path builds its
+    one JSON object's. ``final_raw`` is the last line that isn't an
+    ``error`` payload; ``saw_done`` is whether any line carried
+    ``done: true``; ``error`` is the first ``{"error": ...}`` line's own
+    value, if any (Ollama can send one mid-stream, over an HTTP 200
+    response, once generation has already started — curl's own
+    ``--fail-with-body`` never catches this, since the status line was
+    already 200).
+    """
+    final_raw: dict[str, Any] = {}
+    text_parts: list[str] = []
+    saw_done = False
+    error: Any = None
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        line_error = event.get("error")
+        if line_error is not None and error is None:
+            error = line_error
+            continue
+        final_raw = event
+        if event.get("done") is True:
+            saw_done = True
+        delta = _delta_text(event)
+        if delta:
+            text_parts.append(delta)
+    return final_raw, "".join(text_parts), saw_done, error
+
+
 @dataclass(frozen=True)
 class OllamaAdapter:
     accepts_images: ClassVar[bool] = True
     name: str = "ollama"
     base_url: str = "http://localhost:11434"
+    #: Whether this instance sends ``stream: true``; the instance-level
+    #: override for ``runtime.adapters.<name>.stream: false``.
+    streams: bool = True
+
+    def _raise_curl_failure(
+        self,
+        *,
+        proc: Any,
+        url: str,
+        timeout_seconds: int,
+        model: str | None,
+        streaming: bool = False,
+    ) -> None:
+        # curl exit 7 = couldn't connect (daemon down / wrong base_url);
+        # 28 = --max-time elapsed (daemon reached, still generating);
+        # 22 (--fail-with-body) = HTTP 4xx/5xx, body already parsed into
+        # the message below. These are different problems — surface a
+        # hint that names the actual next step instead of forcing the
+        # user to decode curl, and don't tell someone whose server
+        # answered that it isn't reachable.
+        hint = ""
+        if proc.returncode == 7:
+            hint = (
+                f"Ollama at {self.base_url} is not reachable. "
+                "Start it (`ollama serve`), or set "
+                f"`runtime.adapters.{self.name}.base_url` in your config. "
+                "Run `cof doctor` to verify connectivity."
+            )
+        elif proc.returncode == 28:
+            hint = (
+                f"The model didn't finish within {int(timeout_seconds)}s. "
+                f"Raise `runtime.adapters.{self.name}.timeout_seconds` in "
+                "your config (a prompt's `timeout_ms` can only shorten "
+                "it), or use a smaller/faster model."
+            )
+        elif proc.returncode == 22:
+            body_message = parse_error_body(proc.stdout) or ""
+            if model and "not found" in body_message.lower():
+                hint = f"Try `ollama pull {model}` first."
+        # On the streaming path, a non-22 failure (timeout, disconnect, ...)
+        # leaves whatever the model had already answered in `proc.stdout`
+        # (curl's `--no-buffer` flushes it there as it arrives) -- only a
+        # complete HTTP response (22) has a body worth reporting; anything
+        # else must fail with the same text a non-streamed call's own empty
+        # stdout would give, never the model's own partial reply.
+        stdout_for_message = proc.stdout if (proc.returncode == 22 or not streaming) else ""
+        raise AdapterCallError(
+            curl_failure_message(
+                source="ollama",
+                model=model,
+                url=url,
+                returncode=proc.returncode,
+                stdout=stdout_for_message,
+                stderr=proc.stderr,
+                hint=hint,
+            ),
+            retry_info=classify_curl_exit(proc.returncode, proc.stderr),
+            error_code=curl_error_code(stdout_for_message),
+        )
 
     def _curl_json(
         self,
@@ -108,44 +239,8 @@ class OllamaAdapter:
             raise RuntimeError("curl is not installed or not on PATH") from e
 
         if proc.returncode != 0:
-            # curl exit 7 = couldn't connect (daemon down / wrong base_url);
-            # 28 = --max-time elapsed (daemon reached, still generating);
-            # 22 (--fail-with-body) = HTTP 4xx/5xx, body already parsed into
-            # the message below. These are different problems — surface a
-            # hint that names the actual next step instead of forcing the
-            # user to decode curl, and don't tell someone whose server
-            # answered that it isn't reachable.
-            hint = ""
-            if proc.returncode == 7:
-                hint = (
-                    f"Ollama at {self.base_url} is not reachable. "
-                    "Start it (`ollama serve`), or set "
-                    f"`runtime.adapters.{self.name}.base_url` in your config. "
-                    "Run `cof doctor` to verify connectivity."
-                )
-            elif proc.returncode == 28:
-                hint = (
-                    f"The model didn't finish within {int(timeout_seconds)}s. "
-                    f"Raise `runtime.adapters.{self.name}.timeout_seconds` in "
-                    "your config (a prompt's `timeout_ms` can only shorten "
-                    "it), or use a smaller/faster model."
-                )
-            elif proc.returncode == 22:
-                body_message = parse_error_body(proc.stdout) or ""
-                if model and "not found" in body_message.lower():
-                    hint = f"Try `ollama pull {model}` first."
-            raise AdapterCallError(
-                curl_failure_message(
-                    source="ollama",
-                    model=model,
-                    url=url,
-                    returncode=proc.returncode,
-                    stdout=proc.stdout,
-                    stderr=proc.stderr,
-                    hint=hint,
-                ),
-                retry_info=classify_curl_exit(proc.returncode, proc.stderr),
-                error_code=curl_error_code(proc.stdout),
+            self._raise_curl_failure(
+                proc=proc, url=url, timeout_seconds=timeout_seconds, model=model
             )
 
         try:
@@ -154,6 +249,107 @@ class OllamaAdapter:
             raise RuntimeError(
                 f"curl returned non-JSON response: {proc.stdout[:200]}"
             ) from e
+
+    def _curl_json_streaming(
+        self,
+        *,
+        url: str,
+        payload: dict[str, Any],
+        timeout_seconds: int,
+        model: str | None,
+        on_progress: Any,
+    ) -> tuple[dict[str, Any], str]:
+        """Issue a streaming ``POST`` and return ``(final_raw, text)``,
+        parsed from the *complete* ``proc.stdout`` once the call finishes
+        (:func:`_parse_ndjson_stream`) — never from ``on_line``'s own
+        incremental reading, whose only job is to drive *on_progress* as
+        each line arrives. This is exactly how the non-streamed path
+        parses its one JSON object, so the two can't drift, and a partial
+        read that ``on_line`` happened to see (e.g. a line cut off by a
+        disconnect, never valid JSON on its own) can never leak into the
+        result.
+        """
+
+        def on_line(line: str) -> None:
+            if on_progress is None:
+                return
+            line = line.strip()
+            if not line:
+                return
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(event, dict) or event.get("error") is not None:
+                return
+            delta = _delta_text(event)
+            if delta:
+                on_progress(GenerateProgress(delta_chars=len(delta), delta_count=1))
+
+        body = json.dumps(payload)
+        try:
+            proc = run_curl_streaming(
+                url=url,
+                headers={"Content-Type": "application/json"},
+                data=body,
+                timeout_seconds=timeout_seconds,
+                on_line=on_line,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError("curl is not installed or not on PATH") from e
+
+        if proc.returncode != 0:
+            self._raise_curl_failure(
+                proc=proc, url=url, timeout_seconds=timeout_seconds, model=model, streaming=True
+            )
+
+        final_raw, text, saw_done, stream_error = _parse_ndjson_stream(proc.stdout)
+
+        if not final_raw and stream_error is None:
+            # The server answered a streaming request with one plain JSON
+            # body instead of NDJSON — parse the whole body the
+            # non-streamed way, so the two paths can't drift apart.
+            try:
+                final_raw = json.loads(proc.stdout)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"curl returned non-JSON response: {proc.stdout[:200]}"
+                ) from e
+            return final_raw, _delta_text(final_raw)
+
+        if stream_error is not None:
+            error_body = json.dumps({"error": stream_error})
+            raise AdapterCallError(
+                curl_failure_message(
+                    source="ollama",
+                    model=model,
+                    url=url,
+                    returncode=22,
+                    stdout=error_body,
+                    stderr="",
+                ),
+                retry_info=RetryInfo(retryable=False),
+                error_code=curl_error_code(error_body),
+            )
+
+        if not saw_done:
+            # The stream ended (curl exited 0) without ever delivering a
+            # `done: true` line -- the connection closed, or the server
+            # stopped writing, partway through the reply. Classified the
+            # same way an actual mid-stream disconnect (curl exit 18) is.
+            raise AdapterCallError(
+                curl_failure_message(
+                    source="ollama",
+                    model=model,
+                    url=url,
+                    returncode=18,
+                    stdout="",
+                    stderr="curl: (18) transfer closed with outstanding read data remaining",
+                ),
+                retry_info=classify_curl_exit(18, ""),
+            )
+
+        return final_raw, text
 
     def list_models(self, *, timeout_seconds: float = 2.0) -> list[str]:
         """Locally installed tag names, e.g. ``["gpt-oss:20b", "phi3:mini"]``.
@@ -191,38 +387,33 @@ class OllamaAdapter:
         timeout_seconds: int = 120,
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
+        options = options or GenerateOptions()
         endpoint, payload = _request(
-            model=model, prompt=prompt, options=options or GenerateOptions()
+            model=model, prompt=prompt, options=options, stream=self.streams
         )
         url = self.base_url.rstrip("/") + endpoint
-        raw = self._curl_json(
-            url=url,
-            method="POST",
-            payload=payload,
-            timeout_seconds=timeout_seconds,
-            model=model,
-        )
+        if self.streams:
+            raw, text = self._curl_json_streaming(
+                url=url,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                model=model,
+                on_progress=options.on_progress,
+            )
+        else:
+            raw = self._curl_json(
+                url=url,
+                method="POST",
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                model=model,
+            )
+            text = _delta_text(raw)
 
         # Ollama commonly returns:
         # - prompt_eval_count (tokens processed for prompt)
         # - eval_count (tokens generated)
-        tokens_sent = raw.get("prompt_eval_count")
-        tokens_received = raw.get("eval_count")
-        done_reason = raw.get("done_reason")
-        message = raw.get("message")
-        text = (
-            message.get("content") if isinstance(message, dict) else raw.get("response")
-        )
-
-        return GenerateResult(
-            text=(text or "").strip(),
-            raw=raw,
-            tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
-            tokens_received=int(tokens_received)
-            if isinstance(tokens_received, int)
-            else None,
-            finish_reason=done_reason if isinstance(done_reason, str) else None,
-        )
+        return _result_from_final(raw, text)
 
     def check(self) -> CheckResult:
         missing: list[str] = []

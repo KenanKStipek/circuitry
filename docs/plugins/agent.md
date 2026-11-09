@@ -322,6 +322,13 @@ attempt's session id and transcript, and a watcher shows it as stopped.
 reruns an unfinished one, which first removes any stale `meta.live` left
 from before the interruption.
 
+A plain `prompt` effect carries its own, differently-shaped `meta.live`
+while a streaming adapter's reply is still arriving, published the same
+way (`Store.set`, at most once a second) and removed the same way (every
+exit of the attempt) — see ["Streaming adapters and a prompt's live
+progress"](../orchestration-reference.md#streaming-adapters-and-a-prompts-live-progress)
+in the orchestration reference.
+
 ### The transcript's JSONL lines
 
 Each line is one JSON object with a time (`t`) and a `type`:

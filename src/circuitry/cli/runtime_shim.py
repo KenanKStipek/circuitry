@@ -1002,11 +1002,13 @@ def run(req: RunRequest) -> RunResult:
         ]
         dispatch_observers: list[Callable[[str, int, int], None]] = []
         report_observers: list[Callable[[str, str, str, Any], None]] = []
+        progress_observers: list[Callable[[str, dict[str, Any]], None]] = []
         if event_log is not None:
             start_observers.append(event_log.on_start)
             effect_observers.append(event_log.on_complete)
             dispatch_observers.append(event_log.on_dispatch)
             report_observers.append(event_log.on_report)
+            progress_observers.append(event_log.on_progress)
         if req.concurrent_dispatch_observer is not None:
             dispatch_observers.append(req.concurrent_dispatch_observer)
         if plugins:
@@ -1080,6 +1082,8 @@ def run(req: RunRequest) -> RunResult:
             concurrent_dispatch=_compose_dispatch_observers(dispatch_observers),
             branch_settled=req.branch_settled_observer,
             report=_compose_report_observers(report_observers),
+            progress=_compose_progress_observers(progress_observers),
+            open_instance_id=None if event_log is None else event_log.current_instance,
             _lock=store_lock,
         )
 
@@ -1355,6 +1359,24 @@ def _compose_report_observers(
     def fan_out(path: str, level: str, message: str, data: Any) -> None:
         for observer in observers:
             observer(path, level, message, data)
+
+    return fan_out
+
+
+def _compose_progress_observers(
+    observers: list[Callable[[str, dict[str, Any]], None]],
+) -> Callable[[str, dict[str, Any]], None] | None:
+    """Fold ``--events``' own progress observer into the single callback
+    ``Store`` takes (#674), the same way :func:`_compose_report_observers`
+    composes ``report``."""
+    if not observers:
+        return None
+    if len(observers) == 1:
+        return observers[0]
+
+    def fan_out(path: str, data: dict[str, Any]) -> None:
+        for observer in observers:
+            observer(path, data)
 
     return fan_out
 

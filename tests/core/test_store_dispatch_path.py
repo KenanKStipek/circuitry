@@ -123,3 +123,47 @@ def test_parallel_branches_prefixes_an_unnamed_dispatch_without_a_trailing_dot()
 
     assert dispatches == [("outer", 2, 2)]
     assert settled == ["outer"]
+
+
+def test_resolve_open_instance_resolves_the_effect_path(tmp_path: object) -> None:
+    seen: list[str] = []
+
+    def _open_instance_id(path: str) -> tuple[int, float] | None:
+        seen.append(path)
+        return (7, 1.5)
+
+    store = Store(state={}, open_instance_id=_open_instance_id)
+    assert store.resolve_open_instance("p") == (7, 1.5)
+    assert seen == ["p"]
+
+
+def test_resolve_open_instance_is_none_with_nothing_wired() -> None:
+    store = Store(state={})
+    assert store.resolve_open_instance("p") is None
+
+
+def test_child_store_prefixes_the_open_instance_query_path() -> None:
+    seen: list[str] = []
+
+    def _open_instance_id(path: str) -> tuple[int, float] | None:
+        seen.append(path)
+        return (3, 0.0)
+
+    store = Store(state={}, open_instance_id=_open_instance_id)
+    child = store.child("outer")
+    assert child.resolve_open_instance("p") == (3, 0.0)
+    assert seen == ["outer.p"]
+
+
+def test_parallel_branches_prefix_the_open_instance_query_path() -> None:
+    seen: list[str] = []
+
+    def _open_instance_id(path: str) -> tuple[int, float] | None:
+        seen.append(path)
+        return (9, 0.0)
+
+    store = Store(state={}, open_instance_id=_open_instance_id, on_write=lambda s: None)
+    child = store.child("each")
+    branch = child.parallel_branches(1)[0]
+    assert branch.resolve_open_instance("p") == (9, 0.0)
+    assert seen == ["each.p"]

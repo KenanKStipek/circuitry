@@ -160,6 +160,14 @@ matched by lookup):
     body: '{"greeting": "hi"}'
 ```
 
+A response may also set `delay_ms` (sleep before answering), `body_base64`
+(a non-UTF-8 body, instead of `body`), `close_without_response` (close the
+connection before sending any status line at all), or
+`truncate_after_bytes` (#674: close the connection after writing only this
+many bytes of `body`, with the headers still advertising the *full*
+length — a mid-stream disconnect, for a streamed model reply that drops
+partway through).
+
 `harness.mock_http_server(case_dir, metadata)` is a context manager both
 runners and the generator use identically: it starts the server (owned
 entirely by the harness, on `127.0.0.1` with an ephemeral port, serving

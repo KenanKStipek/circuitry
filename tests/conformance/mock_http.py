@@ -61,6 +61,7 @@ _RESPONSE_ALLOWED_KEYS = frozenset(
         "body_base64",
         "delay_ms",
         "close_without_response",
+        "truncate_after_bytes",
     }
 )
 
@@ -86,6 +87,13 @@ class _Matcher:
     body: bytes
     delay_ms: int
     close_without_response: bool = False
+    #: ``None`` for an ordinary response. Otherwise the connection closes
+    #: after this many bytes of ``body`` -- a mid-stream disconnect (#674):
+    #: the status line and headers (including a ``Content-Length`` for the
+    #: *full* body, never the truncated one, so curl sees fewer bytes than
+    #: promised) go out normally, then only the first *this many* bytes of
+    #: ``body`` are written before the socket closes.
+    truncate_after_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +186,19 @@ def _load_fixture(path: Path) -> list[_Matcher]:
             raise MockHttpFixtureError(
                 f"{path}: entry {i}'s 'response.delay_ms' must not be negative"
             )
+        truncate_after_bytes = resp.get("truncate_after_bytes")
+        if truncate_after_bytes is not None:
+            if close_without_response:
+                raise MockHttpFixtureError(
+                    f"{path}: entry {i}'s 'response' must not set both "
+                    "'truncate_after_bytes' and 'close_without_response'"
+                )
+            truncate_after_bytes = int(truncate_after_bytes)
+            if not 0 <= truncate_after_bytes < len(body_bytes):
+                raise MockHttpFixtureError(
+                    f"{path}: entry {i}'s 'response.truncate_after_bytes' must be "
+                    "between 0 and the body's own length, exclusive"
+                )
         matchers.append(
             _Matcher(
                 method=str(req["method"]).upper(),
@@ -188,6 +209,7 @@ def _load_fixture(path: Path) -> list[_Matcher]:
                 body=body_bytes,
                 delay_ms=delay_ms,
                 close_without_response=close_without_response,
+                truncate_after_bytes=truncate_after_bytes,
             )
         )
     return matchers
@@ -303,7 +325,13 @@ def _make_handler(server: MockHttpServer) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(matcher.body)))
             self.end_headers()
             if write_body:
-                self.wfile.write(matcher.body)
+                if matcher.truncate_after_bytes is not None:
+                    self.wfile.write(matcher.body[: matcher.truncate_after_bytes])
+                    self.wfile.flush()
+                    self.close_connection = True
+                    self.connection.close()
+                else:
+                    self.wfile.write(matcher.body)
 
         def do_GET(self) -> None:
             self._handle()
