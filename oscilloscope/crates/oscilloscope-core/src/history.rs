@@ -2168,7 +2168,13 @@ mod tests {
 
         let mut records = Vec::new();
         for run in ["hist/run-h1", "hist/run-h2", "hist/run-h3"] {
-            let state_path = fixtures.join(run).join("state.json");
+            // `state.live.json`, not `state.json`: the latter is
+            // gitignored everywhere in this repo (a real run's own
+            // leftover state is never meant to be committed), so a
+            // design fixture recorded with one was never actually
+            // pushed -- `state.live.json` is the fixture's own
+            // identical copy that is tracked.
+            let state_path = fixtures.join(run).join("state.live.json");
             let state: Value =
                 serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
             let mut model = RunModel::new();
