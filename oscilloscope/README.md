@@ -175,6 +175,21 @@ the reply in full; `enter` opens the same content full-screen. A
 Totals row (tokens, the run's own deviation from usual, effects done,
 ETA, cost) is pinned above the list's own bottom border.
 
+A running prompt's own row reads its own live figures while a
+streaming adapter answers: `0.6s · ↓≈41 t · 68 t/s` (the received count
+marked `≈` until the provider reports an exact one, the rate once
+there's been enough of a second delta to measure one), `waiting for
+the first token · 1.2s` before the first delta, and `attempt 2` once
+a retry is under way; a non-streaming adapter keeps only the elapsed
+time. The token bar and the Totals row draw this running estimate in
+the faint style and add it to the exact total, settling to the normal
+style the moment the prompt finishes. The detail pane's own Live
+block shows First Token, Received, Sent and Attempt for a running
+prompt (`no live figures from this adapter` for a non-streaming one)
+in place of the Tokens line, which has nothing exact to show yet.
+`osi watch` on `--events` alone drives the same figures from the
+latest `progress` line, with no live state to read at all.
+
 At 100 columns and up the detail pane shows beside the list, and
 preview rows are on by default (`p` toggles; off at 24–29 rows, to
 leave more height for the Now band, on again at 30 and up). At
