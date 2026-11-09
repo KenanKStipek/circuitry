@@ -135,16 +135,16 @@ On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
 osi has four screens, switched with `0`-`3`: the Tape (`0`, the
-default for both `osi <doc>` and `osi watch`), time (`1`, a clock-axis
-timeline, below), flow (`2`, the tree as control flow, below) and cost
-(`3`, below). Selection, follow, folding, filters and collapsed rows
-are shared across every screen.
+default for both `osi <doc>` and `osi watch`), Signal (`1`, the
+token trace, below), flow (`2`, the tree as control flow, below) and
+cost (`3`, below). Selection, follow, folding, filters and collapsed
+rows are shared across every screen.
 
 Every screen shares one header band, status line, key bar and Totals
 row: `osi <document> · <status> <elapsed>` on the left, the `osi`
 word itself animating in place of a separate icon while the run is
 live (a static word with `--no-animation`), the screen's own chip
-(`TAPE`/`TIME`/`FLOW`/`COST`) and the clock on the right; below the
+(`TAPE`/`SIGNAL`/`FLOW`/`COST`) and the clock on the right; below the
 screen's own panel, a status line (the run's own latest report once
 one has arrived, else the newest finished step); a key bar naming
 that screen's own keys; and a Totals row (tokens sent/received and
@@ -225,68 +225,43 @@ once and exits 0, for a tmux status line that runs its own command on
 a timer instead of leaving one process attached. When stdout isn't a
 terminal, only that one final line is ever printed.
 
-### Screen 1 (`time`): a clock-axis timeline
+### The Signal (`1`)
 
-The timeline (top) is one row per folded step (the same breadcrumbs,
-`pass N of M` and quick-steps folding the Tape and Flow use) with a
-bar on a shared clock axis, start and duration columns on the right. The
-axis runs from the run's own start to the later of now and the usual
-(p90) end while the run is going, plus a small margin, or start to end
-once it has finished; labelled ticks (1, 2, 5, 10, 15 or 30 minutes, or a
-whole number of hours) stay about 10 columns apart. A `┃` marks the
-current time through every row and strip, gone once the run has ended. A
-running bar ends in a `▶` head; a failed one ends in `✗`. A pending step
-with enough history gets a ghost bar (`░`), its own usual start and end
-shifted by how far ahead or behind the run is right now — gone without
-enough runs of this document version, and after an edit, since both need
-whole-run figures. The last row, `planned`, is a ghost from now to the
-ETA. A loop collapses to one row by default (`⟲ 3/8`, one bar from its
-first pass's start to its last pass's end); `⏎` expands it into one row
-per pass — an unnamed loop's own passes (which share one path) need
-`--events` to tell them apart at all, numbered `#1`, `#2`, …, or the row
-stays one.
+The trace is one column per 100 ms since the run's own start: tokens
+sent to the model rise above a fixed axis, tokens received fall
+below it, both in the run's own fixed unit (`600 t`/`80 t` by
+default, or derived from history's own usual largest step the same
+way the Tape's own bar unit is — 1.5x it, rounded up to the nearest
+of a doubling series, never sliding once the run has started). A
+`✓` on the axis marks a finished prompt, a `◆` a decision; the Now
+sweep (`┃`) is bold, the axis ahead of it dashed. Seconds marks run
+along the bottom; the Now sweep's own label replaces the marks it
+covers, followed by `Ahead · plan order · usually ends <clock>` once
+there's a whole-run usual to name. Step rows under the axis show
+each top-level entry that has started, at its own column: a
+finished prompt's tokens and deviation and the first words of its
+reply, a tool as a bar across its own duration, a decision with the
+steps its taken branch released, a loop as a bar to Now with how
+many passes are running and queued — the plan still ahead trails the
+last such row, faint.
 
-Below the timeline, three strips on the same axis: **events/min** (start
-and end events per minute, as bar heights; without `--events`, the same
-`created_at`/`completed_at` transitions stand in, and the strip reads
-`(from state)`); **decisions** (a `◆` at the time each named `if`
-decided); and **in flight** (how many steps are running at once, ending
-in the run's own peak, and `N queued` when a prompt is waiting on a
-concurrency slot).
+The Now pane lists the currently running leaves with their own slot,
+a pass waiting for one, the active loop's own progress and per-pass
+tokens, the last burst (how long ago, its tokens, how many prompts)
+and the next prompt in plan order with its usual tokens. Readings
+shows the run's own sent, received, their ratio, the largest column
+(tokens and clock), the single largest finished prompt, and how long
+since the last burst.
 
-The zoom pane (bottom left) is the selected step's own timeline: a
-container's own direct children as rows with bars, one more fold line
-(`+N more`) past what the pane's own height fits; an agent's own tool
-calls as one band per kind (read, edit, bash, other) from its
-transcript, with a `think` band covering the time between calls, a dim
-`…` ahead of the earliest band when the transcript's own tailed window
-doesn't reach back to the session's start, a plain `running: <tool>`
-with no transcript at all, and a footer (`turn 14 · 31 tools · bash
-4m10s (67%)`) from its live summary while running or `meta.raw` once
-finished; a prompt or tool's own bar, with its usual (p50/p90) marked
-when history has it, and `waiting for the reply`/`running` while it's
-still going.
+`←`/`→` scrub a cursor along the axis, turning follow off; `n`
+returns it to Now. `+`/`-` zoom the column width from 50 ms to 1 s
+(100 ms the default). `⏎` opens the step under the cursor
+full-screen, the same view the Tape's own `⏎` does.
 
-"vs usual" (bottom right) lists each timed row's own `now`, `p50`, and
-a mark — `▲` slower, `▼` faster, `≈` usual (outside p10–p90 with 5 or
-more runs, more than 20% from p50 with 3 or 4; a still-running row
-reads `≈` rather than `▼` until it actually finishes faster, or passes
-the usual upper bound) — with a footer (`finish ~12:05 · usual
-11:58–12:09 · from 7 runs`). With fewer than 3 runs of the current
-document version but some history from earlier ones, the title reads
-`vs usual · earlier versions` instead (right after an edit included),
-with no finish time; with no history at all, the pane reads
-`history: 1 of 3 runs of this version` instead of any rows.
-
-`+`/`-` zoom the axis in and out, around now while follow is on or
-around the selection otherwise; `=` fits the whole run again. `tab`
-cycles timeline → zoom → vs usual → timeline; the zoom and vs usual
-panes scroll when focused. `↑↓`/`jk`/`PgUp`/`PgDn`/`Home`/`End`/`g`/`G`
-select rows, shared with every other screen. At 100×30 and larger, the
-timeline with its strips sits above the zoom pane and the vs usual pane,
-side by side (62/38); 80×20 up to that, the timeline and strips alone,
-with the start/duration columns additionally dropped below 90 columns;
-below 80×20, a plain list (status, step, start, duration), no axis.
+At 120 columns and up, the trace sits above the Now pane and
+Readings side by side; 80–99, Readings drops and the Now pane keeps
+only the running rows, with a shortened title; below 80 columns the
+Signal isn't offered.
 
 ### Screen 2 (`flow`): the tree as control flow
 
@@ -386,7 +361,7 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 |---|---|
 | `0` | the Tape |
 | `2` | flow (this screen) |
-| `1` | time (above) |
+| `1` | Signal (above) |
 | `3` | cost (below) |
 | `↑↓` / `j`/`k` | move (the focused pane's own selection, or the selected/story pane's scroll) |
 | `PgUp`/`PgDn` | move a page |

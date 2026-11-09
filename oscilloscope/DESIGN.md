@@ -1678,9 +1678,11 @@ bare `eprintln!` would land as a stray line over the drawn frame;
 `flush_history_notices` prints anything queued once that loop (or
 `--glance`'s own rewritten-in-place line) is done.
 
-### 6.3d The Time screen (issue #650)
+### 6.3d The Time screen (issue #650, superseded by #688)
 
-Screen `1`: a clock-axis timeline, one row per folded step (the
+Screen `1` is the Signal now (§6.3e); this section is kept as the
+record of what shipped here before #688 replaced it, not of what
+`osi` still does. A clock-axis timeline, one row per folded step (the
 same rows Flow and the overview already build), ghost bars from run
 history, three strips (events/min, decisions, in-flight), a zoom
 pane for the selected step, and a "vs usual" pane against history.
@@ -2034,15 +2036,15 @@ start/duration columns additionally dropped below 90 columns. Below
 depth the same way the overview's and Flow's own small-terminal
 lists are, no axis at all.
 
-### 6.3e The Tape and the shared language (shipped, issue #678)
+### 6.3e The Tape and the shared language (shipped, issues #678, #688)
 
 `design/tui-design.md` is the intent for osi's screens; this section
-describes what has actually shipped of it so far -- part 1 of the
-epic (#677): colour roles, the shared chrome, the history median-
-tokens query, and the Tape (`0`), replacing the Overview. Signal
-(`1`), Flow as a rail (`2`) and Store (`3`) are not built yet;
-screens `1`-`3` still render as Time, Flow and Cost, §6.3/§6.3b/
-§6.3d above, under their own chip names.
+describes what has actually shipped of it so far -- parts 1 and 2 of
+the epic (#677): colour roles, the shared chrome, the history
+median-tokens query, the Tape (`0`), replacing the Overview, and
+Signal (`1`), replacing Time. Flow as a rail (`2`) and Store (`3`)
+are not built yet; screens `2`-`3` still render as Flow and Cost,
+§6.3/§6.3b above, under their own chip names.
 
 **Colour roles.** `theme::Theme` grows the design's token set (its
 §6 table) for every shipped theme: `bg_inset`/`bg_surface`,
@@ -2254,6 +2256,76 @@ Flow/Time/Cost's own narrower-terminal goldens (`_at_70x20`,
 they used to, since nothing renders below the shared floor on any
 screen any more.
 
+**The Signal** (`screens::SignalScreen`, `build_signal`; `tui::
+draw_signal`, issue #688, design v1 part 2) replaces Time as screen
+`1`, built from the same inputs `build_tape` already has, plus
+`column_ms` (§3.5/§4's own zoom, 50-1,000 ms, 100 the frame's own
+default) and `cursor_col` (§4's own scrub, `None` while following
+Now). Its own trace is one column per `column_ms` since the run's
+own start (`SignalScreen::buckets`): every finished prompt's own
+sent/received pair lands in the column holding its own end time,
+summed with whatever else finished in the same column; a running
+prompt's own live-or-estimate pair (issue #675) lands in the Now
+column instead, marked `sent_live`/`received_live` so a front end
+draws it in the faint style, settling the instant the node's own
+exact pair takes over. The axis top on each side (`screens::
+signal_axis_top`) is 1.5x the usual largest step's own sent (or
+received) figure from history -- a new `history::StepStats::
+tokens_sent_p50`/`tokens_received_p50`, pooled the same "earlier
+versions" way `tokens_p50` already is, split into its own two
+halves -- rounded up to the nearest of a doubling series (`300, 600,
+1200, ...` sent, `40, 80, 160, ...` received); without enough
+history, `600`/`80`, doubled exactly once if the run's own total so
+far has already passed it, and never again. `SignalScreen::
+step_rows` is one entry per top-level row that has started, in plan
+order, at its own start column: a finished prompt's tokens and
+deviation and its reply's own first words, a tool as a bar from its
+own start to end column (`SignalStepKind::Tool`), a decision with
+the steps its own taken branch released and their tokens/deviation,
+a loop with its own slots-rule text; the plan still ahead (the
+current loop's own next undispatched pass, every top-level row still
+pending, `■ End` while the run is live) trails the *last* such row,
+faint, rather than getting a row of its own, since it has no real
+column yet to sit at. `SignalScreen::now_pane`/`readings` carry the
+Now pane's own running/waiting rows, the active loop's own summary,
+the last burst and next signal, and Sent/Received/Ratio/Peak/
+Largest/Quiet, all read off the same bucket array and `rows`/`flat`
+the trace itself is. `missing_loop_pass_rows` (already `build_tape`'s
+own fix for an undispatched pass's own row never existing in `rows`
+at all) is reused here too, for "waits for a slot" and "Next
+Signal" to see a pass neither the loop nor the pass itself has a
+`Row` for yet.
+
+**Keys.** `←`/`→` (`keys::App::signal_scrub`) move the scrub cursor
+one column at a time, seeded from `signal_now_col` (a cache of the
+latest redraw's own Now column, the same way `tree_viewport` already
+caches a height for the next key to clamp against) and clamped to
+`[0, now_col]`; `n` (`signal_now`) clears it, following again. `+`/
+`-` (`signal_zoom_in`/`_out`) step `column_ms` through five levels
+(`50, 100, 200, 500, 1000`), clamped at both ends. `⏎` toggles the
+same `tape_fullscreen_step` flag the Tape's own `⏎` does, opening
+`SignalScreen::selected` (the step under the cursor -- Now's own
+column while following, built the same `build_focused_step` way the
+Tape's detail pane's is) full-screen (`tui::draw_signal_detail`, a
+plainer block than the Tape's own: Status and, for a prompt, its own
+Reply in full -- no history/share lines, since Signal's own model
+carries none of that per row). A scrubbed cursor only ever moves
+which column the Now sweep, the marks and Readings' own peak read
+from (and which step `⏎` opens) -- §2.2's own "the step rows and the
+Now pane follow the cursor's column" isn't built yet; both keep
+showing the run's own current state regardless of the cursor, short
+of the full historical reconstruction that would need (re-
+truncating `flat`/`rows` to the cursor's own timestamp, the way the
+goldens' own test harness truncates a fixture); see "Not yet
+shipped" below.
+
+**Sizes.** 120 columns and up: the trace sits above the Now pane and
+Readings, side by side (roughly 52/48); 80-119: Readings drops, the
+Now pane keeps only the running rows, and the title shortens to
+`Signal · Sent Above · Received Below · Fixed Scale`; below 80, the
+Tape's own key bar drops `0-3` to `0` (§4), same as before Signal
+existed to switch to at all.
+
 **Goldens and allow-listed cells.** Every `tape--*` frame in
 `design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
 symbol, fg, bg, bold and dim per cell). The design's fixture run
@@ -2285,12 +2357,22 @@ included, and `drafts.iter_1.draft` finishes 2 ms after `gate.reply`
 in `run2/events.jsonl`, so the renderer now reads that pass as the
 newest -- the frame still reads `gate › reply finished`, the step
 that finished 2 ms earlier. Also skipped: the Help overlay's `0 1 2
-3` row, where the frames name the Signal and Store screens that
-parts 2 and 4 of the design introduce while this build still has
-Time and Cost; and the last column of the header and key bar in the
-Help frame, where the `.mock` parser pads a trimmed line's own rest
-out with a bare `fg.default` span rather than this renderer's dimmed
-base fill. Everything else matches exactly.
+3` row's own `Store` cell (5 columns), where the frame names the
+Store screen part 4 of the design introduces while this build still
+has Cost; `Signal` itself, now shipped, matches the frame exactly
+here, so every other cell on that row does too. Also skipped: the
+last column of the header and key bar in the Help frame, where the
+`.mock` parser pads a trimmed line's own rest out with a bare
+`fg.default` span rather than this renderer's dimmed base fill.
+Everything else matches exactly.
+
+Both `signal--*` frames (Normal, at 120×30 and 80×24) are cell-exact
+goldens the same way, replayed to the same frozen instant with the
+same history, in `tui::tape_frame_goldens::signal_normal_120x30_
+matches_the_frame`/`_80x24`. Both pin the status line's own row as
+allow-listed, the same `gate › reply`-vs-`drafts.iter_1.draft`
+reason as the Tape's own goldens above -- every other cell matches
+exactly, no further allow-list needed.
 
 **From the frames, not from the design text.** A few behaviours the
 design document's own prose never states, read off the frames
@@ -2308,9 +2390,31 @@ blank here too, rather than given the movement aliases, `/`, `e`,
 `T`, `c` and `f` §4 also names as Tape keys: populating them changes
 over 300 of the frame's own cells at once, the kind of change this
 repository's own goldens ask to be reported rather than allow-listed
-away.
+away. For the Signal: a decision row's own trailing suffix (`·
+drafts ×2 · 261 t`) names the very next top-level row's own progress
+when that row is an already-active loop -- the design's own prose
+never says a decision's row shows anything about a *different*
+top-level entry at all, only `run2`'s own frame does; a step row's
+own trailing blanks, and every row of the Now pane and Readings,
+continue that row's own last span's style to the pane's own right
+edge, rather than the plain border-coloured blank every other
+unfilled cell in this design gets; a step row cut off at the pane's
+own right edge is a plain hard cut, never `⋯` (§3.8's own rule, for
+this one case); the sent bar's own blank cells, before a column's
+own first real glyph, read `fg.faint` on a labelled row (`600 t`,
+`300 t`, `80 t`) and the plain border colour otherwise, then the
+row's own accent from the first glyph onward, through any gap to the
+next one, not just the glyphs themselves; and the Now pane has no
+deliberate blank row between the active loop's own summary and Last
+Burst, only the one unused row the panel's own height leaves after
+Next Signal.
 
-**Not yet shipped.** The Totals row's cost figure reads `—` on every
+**Not yet shipped.** §2.2's own "the step rows and the Now pane
+follow the cursor's column" (the scrubbed-cursor half of §6.3e's
+own "Keys" above): ←/→ move the cursor and it drives the axis's own
+marks and Readings' own peak, but the step rows and the Now pane
+keep showing the run's current state regardless, not the state as
+of that past column. The Totals row's cost figure reads `—` on every
 screen until a run reports one (`meta.cost_usd`,
 `runtime.last_run.totals.cost_usd`); the frames' scripted adapter
 never does, so every frame reads `—` too. The Help overlay's own six
