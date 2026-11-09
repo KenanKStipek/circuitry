@@ -214,7 +214,7 @@ pub trait Adapter {
     }
 
     /// Whether this adapter instance sends `stream: true` and calls
-    /// [`GenerateOptions::on_progress`] (`getattr(adapter, "streams",
+    /// [`CallContext::on_progress`] (`getattr(adapter, "streams",
     /// False) is True` in Python, read off a config-built boolean
     /// field rather than a trait default any struct literal might
     /// accidentally pick up via `..Default::default()`): `false` for

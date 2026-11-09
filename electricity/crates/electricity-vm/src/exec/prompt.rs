@@ -573,6 +573,13 @@ async fn generate_with_fallbacks(
         let live_state = std::cell::RefCell::new(live::LiveAttemptState::new());
         let next_meta_due = std::cell::Cell::new(None::<std::time::Instant>);
         let last_progress_fired_at = std::cell::Cell::new(None::<std::time::Instant>);
+        // Set whenever `on_progress` updates `live_state` inside the 1 s
+        // throttle window below -- the trailing-publish wait arm around
+        // the `generate` call flushes it on its own once that window
+        // ends, even if no further delta ever arrives (`agent_live.py`'s
+        // own `LivePublisher._loop`, ported: an update inside the window
+        // still goes out within about a second of it).
+        let pending_meta = std::cell::Cell::new(false);
         set_leaf(
             store,
             meta_node,
@@ -620,6 +627,9 @@ async fn generate_with_fallbacks(
                 set_leaf(store, meta_node, "live", snapshot);
                 observer.write();
                 next_meta_due.set(Some(now + std::time::Duration::from_secs(1)));
+                pending_meta.set(false);
+            } else {
+                pending_meta.set(true);
             }
             if progress.delta_chars == 0 {
                 return;
@@ -656,10 +666,48 @@ async fn generate_with_fallbacks(
         // (follow-up). Dropping the
         // `generate` future (what `select!` does to the losing branch)
         // is what actually aborts an in-flight HTTP connection.
-        let generate_outcome = tokio::select! {
-            biased;
-            () = token.cancelled() => return Err(HardStop::Refused(VmError::Cancelled)),
-            result = adapter_holder.as_ref().generate(model_name, prompt_sent, &generate_options, &call) => result,
+        //
+        // A third arm races a wake timer against it so a `meta.live`
+        // update that landed inside `on_progress`'s own 1 s throttle
+        // window still goes out within about a second of it even if no
+        // further delta ever arrives -- `pending_meta` is this attempt's
+        // own flag for that, set by `on_progress` above.
+        let mut generate_fut = std::pin::pin!(adapter_holder.as_ref().generate(
+            model_name,
+            prompt_sent,
+            &generate_options,
+            &call,
+        ));
+        let generate_outcome = loop {
+            let wake_delay = if pending_meta.get() {
+                next_meta_due
+                    .get()
+                    .map_or(std::time::Duration::ZERO, |due| {
+                        due.saturating_duration_since(std::time::Instant::now())
+                    })
+            } else {
+                std::time::Duration::from_secs(3600)
+            };
+            tokio::select! {
+                biased;
+                () = token.cancelled() => return Err(HardStop::Refused(VmError::Cancelled)),
+                result = &mut generate_fut => break result,
+                () = tokio::time::sleep(wake_delay) => {
+                    if pending_meta.get() {
+                        pending_meta.set(false);
+                        let snapshot = live_state.borrow().snapshot(
+                            attempt_number,
+                            adapter_name,
+                            model_name,
+                            streaming,
+                            tokens_sent_estimate,
+                        );
+                        set_leaf(store, meta_node, "live", snapshot);
+                        observer.write();
+                        next_meta_due.set(Some(std::time::Instant::now() + std::time::Duration::from_secs(1)));
+                    }
+                }
+            }
         };
         drop(_clear_live);
         *live_attempt += 1;
