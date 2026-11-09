@@ -431,10 +431,10 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #626: `0`/`2` switch screens during a live run, and the
-/// screen each one draws actually changes on screen -- the overview
-/// (its own `now`/`time`/`flow`/`cost` panes) on `0`, screen 2's own
-/// orchestration pane on `2`.
+/// Issue #626 (updated by #678): `0`/`2` switch screens during a
+/// live run, and the screen each one draws actually changes on
+/// screen -- the Tape (its own list and Totals row) on `0`, screen
+/// 2's own orchestration pane on `2`.
 #[test]
 fn screen_keys_switch_screens_during_a_live_run() {
     if !e2e_enabled() {
@@ -472,22 +472,21 @@ fn screen_keys_switch_screens_during_a_live_run() {
     );
     std::thread::sleep(SIGNAL_DELAY);
 
-    // Default is the overview; this run is still live. Checked
-    // against the whole buffer so far, since nothing has been sent
-    // yet for a key press to have changed anything after.
+    // Default is the Tape; this run is still live. Checked against
+    // the whole buffer so far, since nothing has been sent yet for a
+    // key press to have changed anything after.
     {
         let captured = captured_buf.lock().unwrap().clone();
         let rendered = String::from_utf8_lossy(&captured);
         assert!(
-            rendered.contains("now") && rendered.contains("time") && rendered.contains("cost"),
-            "expected the overview's own panes on screen; got:\n{rendered:?}"
+            rendered.contains("Run Started") && rendered.contains("Totals"),
+            "expected the Tape's own list and Totals row on screen; got:\n{rendered:?}"
         );
     }
 
     // Every check from here on reads only what arrived *after* its
     // own key -- "flow" is in the header's own tab on every screen,
-    // and "cost"/"now"/"time" were already drawn once by the overview
-    // above, so searching the whole cumulative buffer again could
+    // so searching the whole cumulative buffer again for it could
     // never actually fail, key press or not.
     let before_2 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"2");
@@ -508,8 +507,8 @@ fn screen_keys_switch_screens_during_a_live_run() {
         let after = captured_buf.lock().unwrap()[before_0..].to_vec();
         let rendered = String::from_utf8_lossy(&after);
         assert!(
-            rendered.contains("flow") && rendered.contains("cost"),
-            "expected the overview's own cards back after pressing 0; got:\n{rendered:?}"
+            rendered.contains("Totals"),
+            "expected the Tape's own list back after pressing 0; got:\n{rendered:?}"
         );
     }
 
@@ -583,8 +582,15 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
             rendered.contains("tokens by store"),
             "expected the Cost screen's own treemap after pressing 3; got:\n{rendered:?}"
         );
+        // "largest stores" can straddle a cursor-reposition escape
+        // inserted mid-title by the differential redraw this test's
+        // own switch triggers (the same fragility the comment above
+        // `before_3` already describes for a single retransmitted
+        // cell) -- checked as two separate substrings so a redraw
+        // that happens to split the title's own two words is not
+        // mistaken for the Cost screen's table missing outright.
         assert!(
-            rendered.contains("largest stores"),
+            rendered.contains("largest") && rendered.contains("stores"),
             "expected the Cost screen's own table after pressing 3; got:\n{rendered:?}"
         );
         assert!(
@@ -1603,7 +1609,7 @@ fn pressing_3_during_osi_watch_of_a_live_run_opens_the_cost_screen() {
             "expected the Cost screen's own treemap after pressing 3 under osi watch; got:\n{rendered:?}"
         );
         assert!(
-            rendered.contains("largest stores"),
+            rendered.contains("largest") && rendered.contains("stores"),
             "expected the Cost screen's own table after pressing 3 under osi watch; got:\n{rendered:?}"
         );
         assert!(
