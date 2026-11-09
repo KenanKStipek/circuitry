@@ -329,7 +329,7 @@ fn ollama_request_building_matches_circuitry() {
         let model = get(spec, "model").as_str().unwrap();
         let prompt = get(spec, "prompt").as_str().unwrap();
         let options = options_from_json(get(spec, "options"));
-        let (endpoint, payload) = ollama::build_request(model, prompt, &options).unwrap();
+        let (endpoint, payload) = ollama::build_request(model, prompt, &options, false).unwrap();
         let url = format!("http://localhost:11434{endpoint}");
         assert_eq!(url, get(case, "url").as_str().unwrap(), "spec={spec:?}");
         assert_eq!(
