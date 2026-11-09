@@ -299,6 +299,11 @@ pub struct PlanEntry {
     /// for a queued prompt (issue #678), which has no `meta.
     /// prompt_sent` of its own yet to preview instead.
     pub prompt_template: Option<String>,
+    /// A tool leaf's own command and args, when every one of them is
+    /// a plain literal (no templating) and so already known before
+    /// any run at all -- `None` for every other kind, or a tool
+    /// whose own `params` needs a run's state to resolve.
+    pub tool_command: Option<String>,
 }
 
 /// One pass index resolved while matching a concrete path against a
@@ -941,11 +946,13 @@ fn record_op_entry(
     let mut provider = None;
     let mut model = None;
     let mut prompt_template = None;
+    let mut tool_command = None;
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
             LeafKind::Tool(tool) => {
                 provider = Some(tool.provider.clone());
+                tool_command = static_tool_command(&tool.params);
                 PlanEntryKind::Leaf(LeafEffectKind::Tool)
             }
             LeafKind::Prompt(prompt) => {
@@ -1039,9 +1046,49 @@ fn record_op_entry(
             provider,
             model,
             prompt_template,
+            tool_command,
         },
     );
     path
+}
+
+/// [`PlanEntry::tool_command`]: `command` and `args` read straight
+/// off the compiled `params`, when every one of them is a plain
+/// literal -- `None` the moment any part needs a run's own state
+/// (a `{{...}}` template, a `{from: ...}` reference).
+fn static_tool_command(params: &electricity_bytecode::ParamNode) -> Option<String> {
+    use electricity_bytecode::ParamNode;
+    use electricity_value::Value;
+    let ParamNode::Map(map) = params else {
+        return None;
+    };
+    // Every string leaf compiles to a `ParamNode::Template`, even one
+    // with no `{{...}}` of its own (`compile::params::build_param_
+    // node`'s own "every other string leaf ... becomes `ParamNode::
+    // Template`") -- its own source is already the real value in
+    // that case, never rendered mustache syntax.
+    let literal_str = |node: &ParamNode| match node {
+        ParamNode::Literal(Value::Str(s)) => Some(s.clone()),
+        ParamNode::Template(t) if !t.source.contains("{{") => Some(t.source.clone()),
+        _ => None,
+    };
+    let command = map
+        .iter()
+        .find(|(k, _)| matches!(k, Value::Str(s) if s == "command"))
+        .and_then(|(_, v)| literal_str(v))?;
+    let args = map
+        .iter()
+        .find(|(k, _)| matches!(k, Value::Str(s) if s == "args"))
+        .and_then(|(_, v)| match v {
+            ParamNode::List(items) => items.iter().map(literal_str).collect::<Option<Vec<_>>>(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    if args.is_empty() {
+        Some(command)
+    } else {
+        Some(format!("{command} {}", args.join(" ")))
+    }
 }
 
 fn walk_op(

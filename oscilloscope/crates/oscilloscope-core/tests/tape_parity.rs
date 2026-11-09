@@ -81,12 +81,10 @@ fn normalize(mut tape: TapeScreen) -> TapeScreen {
             }
             TapeItem::RunEnd {
                 usual_wall_s,
-                duration_s,
                 eta_ts,
                 ..
             } => {
                 *usual_wall_s = None;
-                *duration_s = None;
                 *eta_ts = None;
             }
             TapeItem::SlotsRule { .. } => {}

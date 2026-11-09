@@ -841,7 +841,6 @@ pub enum TapeItem {
     RunEnd {
         usual_total_tokens: Option<u64>,
         usual_wall_s: Option<f64>,
-        duration_s: Option<f64>,
         eta_ts: Option<String>,
     },
 }
@@ -1332,11 +1331,19 @@ fn tape_row_content(
         }
         RowKind::Tool | RowKind::Use | RowKind::Yield | RowKind::Dynamic | RowKind::TryFinally => {
             if pending {
-                (
-                    format!("{}{queued_suffix}", row.kind.label()),
-                    None,
-                    TapeTokens::default(),
-                )
+                // §2.1's Starting state: a tool ahead reads its own
+                // static command, when every part of it is a plain
+                // literal (issue #678), not just its bare kind.
+                let command = (row.kind == RowKind::Tool)
+                    .then(|| plan.match_path(&row.path))
+                    .flatten()
+                    .and_then(|m| m.entries.first())
+                    .and_then(|e| e.tool_command.clone());
+                let what = match command {
+                    Some(command) => format!("{} · {command}{queued_suffix}", row.kind.label()),
+                    None => format!("{}{queued_suffix}", row.kind.label()),
+                };
+                (what, None, TapeTokens::default())
             } else if skipped {
                 (
                     format!("skipped · not reached · {}", row.kind.label()),
@@ -1497,10 +1504,25 @@ fn build_tape_starting_detail(
     let mut tools = 0u64;
     let mut decisions = 0u64;
     let mut loop_texts = Vec::new();
-    for path in plan.countable_paths() {
+    // Deduplicated the same way `render::build_header`'s own
+    // `effects_planned` is -- `countable_paths()` can repeat an
+    // entry (a chain op reached more than one way).
+    let countable_paths: std::collections::BTreeSet<&String> =
+        plan.countable_paths().iter().collect();
+    for path in countable_paths {
         let (passes, _) = crate::render::leaf_pass_count(path, plan, flat, state);
         total = total.saturating_add(passes);
-        let Some(entry) = plan.match_path(path).and_then(|m| m.entries.first()) else {
+        // `match_path` only ever resolves a concrete `iter_N` segment
+        // (DESIGN.md §5's path-display ask renders the *template*
+        // path's own placeholder as the literal text `"iter_*"`,
+        // which is never a real pass index) -- `"iter_0"` stands in
+        // for it here since the entries at any one pass index are the
+        // same ones at every other.
+        let concrete_path = path.replace("iter_*", "iter_0");
+        let Some(entry) = plan
+            .match_path(&concrete_path)
+            .and_then(|m| m.entries.first())
+        else {
             continue;
         };
         match &entry.kind {
@@ -1548,10 +1570,23 @@ fn build_tape_starting_detail(
         .map(|r| tape_row_label(r, flat, plan))
         .or_else(|| first_path.map(|p| p.rsplit('.').next().unwrap_or(p).to_string()))
         .unwrap_or_default();
+    // A step's own explicit `model:`/`adapter:` wins; failing that,
+    // the run's own effective default (issue #678's Starting state:
+    // known from config before any event, the same `runtime.
+    // effective_settings` a real engine's own live state already
+    // carries for exactly this reason).
+    let effective_model = state
+        .and_then(|s| s.pointer("/runtime/effective_settings/model"))
+        .and_then(Value::as_str);
     let first_step_type = match first_entry {
         Some(entry) => {
             let kind_label = RowKind::from_plan_entry(&entry.kind).label();
-            match entry.model.as_deref().or(entry.provider.as_deref()) {
+            match entry
+                .model
+                .as_deref()
+                .or(entry.provider.as_deref())
+                .or(effective_model)
+            {
                 Some(m) => format!("{kind_label} · {m}"),
                 None => kind_label.to_string(),
             }
@@ -1999,7 +2034,6 @@ pub fn build_tape(
         items.push(TapeItem::RunEnd {
             usual_total_tokens: header.history_usual_total_tokens,
             usual_wall_s: header.history_usual_total_s,
-            duration_s: header.run_end_ts.as_deref().and_then(elapsed_offset),
             eta_ts: header.history_eta_ts.clone(),
         });
     }

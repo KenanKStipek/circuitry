@@ -33,7 +33,10 @@ sha2 = "0.10"
 # throwaway file for `compile`'s existing `Some(path)` branch to read
 # (electricity::check_options takes a path, never a parsed value).
 tempfile = "3"
+# `plan::static_tool_command` reads a tool's own compiled `params`
+# (`ParamNode`/`Value`) directly, to show its command before any run
+# at all (issue #678's Starting state).
+electricity-value = { path = "../../../electricity/crates/electricity-value" }
 
 [dev-dependencies]
-electricity-value = { path = "../../../electricity/crates/electricity-value" }
 insta = "1"

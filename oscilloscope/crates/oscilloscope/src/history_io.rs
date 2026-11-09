@@ -227,10 +227,15 @@ impl HistoryHandle {
         // before preflight runs), which would otherwise offset this
         // run's own figures from every recorded one by however long
         // that takes.
+        // Before the run has even started (issue #678's Starting
+        // state: no `run_start` event yet either), the ETA is "if it
+        // started right now" -- `now` itself, rather than bailing
+        // out with no anchor at all to measure elapsed time from.
         let eta_start_ts = state
             .pointer("/runtime/last_run/started_at")
             .and_then(serde_json::Value::as_str)
-            .or(run_start_ts)?;
+            .or(run_start_ts)
+            .unwrap_or(now);
         let current_hash = state
             .pointer("/runtime/last_run/document_hash")
             .and_then(serde_json::Value::as_str);
