@@ -6464,7 +6464,7 @@ fn flow_now_arrow_x(items: &[RailItem], app: &App, area_width: u16) -> Option<us
     None
 }
 
-/// The rail's own follow rule (DESIGN.md §2.3, issue #691's R4): never
+/// The rail's own follow rule (tui-design.md §2.3): never
 /// scrolls while Now is in view; once it would leave, scrolls to the
 /// top-level item boundary closest to putting Now at 60% of the
 /// visible width. A manual scroll (`follow` already off) turns
