@@ -462,6 +462,7 @@ fn draw_tape_status_line(
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
     header: &oscilloscope_core::render::Header,
+    narrow: bool,
     ctx: &DrawCtx,
     now: &str,
 ) {
@@ -555,10 +556,12 @@ fn draw_tape_status_line(
         .ts
         .as_deref()
         .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now));
+    // §5: 60-79 columns drops the tokens, the same "info column"
+    // narrowing the list's own rows get.
     let tokens = row
         .tokens
         .total()
-        .filter(|_| row.tokens.sent.is_some())
+        .filter(|_| row.tokens.sent.is_some() && !narrow)
         .map(|_| {
             format!(
                 " · ↑{} ↓{}",
@@ -808,6 +811,7 @@ fn tape_row_line(
     selected: bool,
     unit: u64,
     tokens_view_usual: bool,
+    narrow: bool,
     name_width: usize,
     what_width: usize,
     token_width: usize,
@@ -827,12 +831,18 @@ fn tape_row_line(
     } else {
         Style::default().fg(ctx.theme.fg_muted)
     };
-    let ts_text = row
-        .ts
-        .as_deref()
-        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-        .map(|t| format!("{t} "))
-        .unwrap_or_else(|| " ".repeat(9));
+    // §5: 60–79 columns drops the clock column entirely, not just
+    // its text -- the Tape's own 18-cell name field moves 9 columns
+    // to the left to fill the space.
+    let ts_text = if narrow {
+        String::new()
+    } else {
+        row.ts
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+            .map(|t| format!("{t} "))
+            .unwrap_or_else(|| " ".repeat(9))
+    };
     let mut spans = vec![
         Span::styled(ts_text, Style::default().fg(ctx.theme.dim)),
         Span::styled(
@@ -908,19 +918,45 @@ fn draw_tape_list(
     header: &oscilloscope_core::render::Header,
     app: &App,
     narrow: bool,
+    wide_detail: bool,
     ctx: &DrawCtx,
 ) {
-    use oscilloscope_core::screens::{TapeHead, TapeItem};
-    let title = match &screen.head {
-        TapeHead::Starting => "Starting · no events yet".to_string(),
-        _ if screen.selected.is_none() && !app.tape_tokens_view => format!(
-            "Tape · {} Done · {} Running · {} Ahead · ▰ = {} t",
-            screen.done, screen.running, screen.ahead, screen.unit
-        ),
-        _ => format!(
-            "Tape · {} Done · {} Running · {} Ahead · ▰ = {} t",
-            screen.done, screen.running, screen.ahead, screen.unit
-        ),
+    use oscilloscope_core::screens::TapeItem;
+    // §2.1/§5: 60-79 columns shortens the title to the done/planned
+    // count the Totals row's own Effects field already uses; every
+    // other width spells out Done/Running/Ahead, `t`'s own deviation
+    // view in place of the unit when it's on, and `p`'s own state
+    // once the detail pane has room to show previews at all.
+    let title = if narrow {
+        let planned = header.effects_planned.unwrap_or(header.effects_done);
+        format!(
+            "Tape · {}/{planned} · ▰ = {} t",
+            header.effects_done, screen.unit
+        )
+    } else {
+        let suffix = if app.tape_tokens_view {
+            match header.history_same_hash_count {
+                Some(n) if n >= oscilloscope_core::history::P50_MIN_RUNS => {
+                    format!("vs Usual · {n} Runs")
+                }
+                _ => "vs Usual".to_string(),
+            }
+        } else {
+            format!("▰ = {} t", screen.unit)
+        };
+        let previews = if wide_detail {
+            if app.tape_previews_on {
+                " · Previews On"
+            } else {
+                " · Previews Off"
+            }
+        } else {
+            ""
+        };
+        format!(
+            "Tape · {} Done · {} Running · {} Ahead · {suffix}{previews}",
+            screen.done, screen.running, screen.ahead
+        )
     };
     let border_style = if app.pane == Pane::Tree {
         Style::default().fg(ctx.theme.border_focused)
@@ -943,16 +979,30 @@ fn draw_tape_list(
         return;
     }
 
-    let name_width = if narrow { 14 } else { 18 };
+    // §5: 60-79 columns drops the clock and the what column
+    // entirely and gives the name whatever's left after a fixed 16-
+    // cell token field (the bar's own natural width: 8 cells, a 3-
+    // cell gap, up to 5 digits) -- 80 and up keeps the clock and
+    // computes the token field's own width from what's actually
+    // left after the name and what columns instead.
+    let name_width = if narrow {
+        (inner.width as usize).saturating_sub(2 + 16)
+    } else {
+        18
+    };
     let what_width = if narrow {
         0
     } else {
         (inner.width as usize).saturating_sub(40).min(28)
     };
-    // 9 for the clock, 2 for the glyph and its own trailing space --
-    // whatever's left of the pane's own inner width is the token
-    // column's, right-aligned flush to its far edge.
-    let token_width = (inner.width as usize).saturating_sub(9 + 2 + name_width + what_width);
+    let token_width = if narrow {
+        16
+    } else {
+        // 9 for the clock, 2 for the glyph and its own trailing
+        // space -- whatever's left of the pane's own inner width is
+        // the token column's, right-aligned flush to its far edge.
+        (inner.width as usize).saturating_sub(9 + 2 + name_width + what_width)
+    };
 
     let mut lines: Vec<(Option<String>, Line<'static>)> = Vec::new();
     let mut now_band_idx: Option<usize> = None;
@@ -963,25 +1013,26 @@ fn draw_tape_list(
                 document,
                 engine,
             } => {
-                let ts_text = ts
-                    .as_deref()
-                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                    .map(|t| format!("{t} "))
-                    .unwrap_or_else(|| " ".repeat(9));
-                lines.push((
-                    None,
-                    Line::from(vec![
-                        Span::styled(ts_text, Style::default().fg(ctx.theme.dim)),
-                        Span::styled(
-                            "■ Run Started        ",
-                            Style::default().fg(ctx.theme.fg_muted),
-                        ),
-                        Span::styled(
-                            format!("{document} · {engine}"),
-                            Style::default().fg(ctx.theme.dim),
-                        ),
-                    ]),
+                let mut spans = Vec::new();
+                if !narrow {
+                    let ts_text = ts
+                        .as_deref()
+                        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                        .map(|t| format!("{t} "))
+                        .unwrap_or_else(|| " ".repeat(9));
+                    spans.push(Span::styled(ts_text, Style::default().fg(ctx.theme.dim)));
+                }
+                spans.push(Span::styled(
+                    "■ Run Started        ",
+                    Style::default().fg(ctx.theme.fg_muted),
                 ));
+                if !narrow {
+                    spans.push(Span::styled(
+                        format!("{document} · {engine}"),
+                        Style::default().fg(ctx.theme.dim),
+                    ));
+                }
+                lines.push((None, Line::from(spans)));
             }
             TapeItem::Row(row) => {
                 let selected = app.selected_path.as_deref() == Some(row.path.as_str());
@@ -992,14 +1043,20 @@ fn draw_tape_list(
                         selected,
                         screen.unit,
                         app.tape_tokens_view,
+                        narrow,
                         name_width,
                         what_width,
                         token_width,
                         ctx,
                     ),
                 ));
+                // Epic #677's settled point 4: previews are on at
+                // 120 columns and up, off below -- `narrow` (60-79)
+                // already has no room for a second line at all, but
+                // 80-119 doesn't either, below the detail pane's own
+                // threshold that `wide_detail` names.
                 if let Some(preview) = &row.preview {
-                    if !narrow {
+                    if wide_detail {
                         lines.push((
                             Some(row.path.clone()),
                             Line::from(Span::styled(
@@ -1103,23 +1160,28 @@ fn draw_tape_list(
                 ..
             } => {
                 let mut text = "■ Run End            ".to_string();
-                if let Some(usual) = usual_total_tokens {
-                    text.push_str(&format!(
-                        "usually {} t",
-                        oscilloscope_core::format::format_tokens_thousands(*usual)
-                    ));
-                }
-                if let Some(d) = duration_s {
-                    text.push_str(&format!(
-                        " · {}",
-                        oscilloscope_core::format::format_duration(*d)
-                    ));
-                }
-                if let Some(eta) = eta_ts
-                    .as_deref()
-                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                {
-                    text.push_str(&format!("   ETA {eta}"));
+                // §5: 60-79 columns drops the usual total, the
+                // duration and the ETA here -- the Totals row below
+                // already carries the ETA.
+                if !narrow {
+                    if let Some(usual) = usual_total_tokens {
+                        text.push_str(&format!(
+                            "usually {} t",
+                            oscilloscope_core::format::format_tokens_thousands(*usual)
+                        ));
+                    }
+                    if let Some(d) = duration_s {
+                        text.push_str(&format!(
+                            " · {}",
+                            oscilloscope_core::format::format_duration(*d)
+                        ));
+                    }
+                    if let Some(eta) = eta_ts
+                        .as_deref()
+                        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                    {
+                        text.push_str(&format!("   ETA {eta}"));
+                    }
                 }
                 lines.push((
                     None,
@@ -1182,7 +1244,7 @@ fn draw_tape_list(
             width: inner.width,
             height: 1,
         };
-        draw_totals_row(frame, totals_area, header, ctx);
+        draw_totals_row(frame, totals_area, header, narrow, ctx);
     }
 }
 
@@ -1196,6 +1258,7 @@ fn draw_totals_row(
     frame: &mut Frame,
     area: Rect,
     header: &oscilloscope_core::render::Header,
+    compact: bool,
     ctx: &DrawCtx,
 ) {
     let usual_pct = header
@@ -1205,6 +1268,44 @@ fn draw_totals_row(
             let total = header.tokens_sent + header.tokens_received;
             ((total as f64 - usual as f64) / usual.max(1) as f64) * 100.0
         });
+    if compact {
+        // §5: 60-79 columns drops the ↑/↓ breakdown, the Usual/
+        // Effects/Cost words and (since the Tape's own Run End row
+        // already dropped it) keeps only the ETA.
+        let total = header.tokens_sent + header.tokens_received;
+        let mut spans = vec![Span::styled(
+            format!(
+                " Totals {} t",
+                oscilloscope_core::format::format_tokens_thousands(total)
+            ),
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        )];
+        if let Some(pct) = usual_pct {
+            spans.push(Span::styled(
+                format!(" {pct:+.0}%"),
+                tape_deviation_style(pct, ctx.theme),
+            ));
+        }
+        let effects_text = header
+            .effects_planned
+            .map(|p| format!("{}/{p}", header.effects_done))
+            .unwrap_or_else(|| header.effects_done.to_string());
+        let eta_text = header
+            .history_eta_ts
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+        spans.push(Span::styled(
+            format!(
+                " · {effects_text} · ETA {}",
+                eta_text.as_deref().unwrap_or("—")
+            ),
+            Style::default().fg(ctx.theme.fg_muted),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     let mut spans = vec![
         Span::styled(
             " Totals ",
@@ -1334,17 +1435,92 @@ fn draw_tape_detail(
 
 /// The too-small screen (§5): below 60×24, the minimum and
 /// `osi --log`.
+const TAPE_MIN_WIDTH: u16 = 60;
+const TAPE_MIN_HEIGHT: u16 = 24;
+
+/// §5's own too-small screen (the design's `tape--toosmall` frame):
+/// the `osi` word, the minimum each dimension needs and whether it's
+/// met, the plain-language line naming both and `osi --log`, and a
+/// bare `q Quit` key bar -- the only state that ever draws below the
+/// Tape's own 60×24 floor.
 fn draw_tape_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
+    let ok_style = Style::default().fg(ctx.theme.status_done);
+    let err_style = Style::default().fg(ctx.theme.status_failed);
+    let err_bold_style = err_style.add_modifier(Modifier::BOLD);
+    let width_ok = area.width >= TAPE_MIN_WIDTH;
+    let height_ok = area.height >= TAPE_MIN_HEIGHT;
+    let dim_line = |label: &str, have: u16, need: u16, ok: bool| {
+        Line::from(vec![
+            Span::styled(
+                format!("                 {label:<9}"),
+                Style::default().fg(ctx.theme.fg_muted),
+            ),
+            Span::styled(
+                format!("{have:<5}"),
+                if ok { ok_style } else { err_bold_style },
+            ),
+            Span::styled("needs ", Style::default().fg(ctx.theme.fg_muted)),
+            Span::styled(format!("{need:<4}"), Style::default().fg(ctx.theme.text)),
+            Span::styled(
+                if ok { "✓" } else { "✗" },
+                if ok { ok_style } else { err_style },
+            ),
+        ])
+    };
     let lines = vec![
-        Line::from("osi needs at least 60×24"),
-        Line::from("try osi --log instead"),
+        Line::from(""),
+        Line::from(""),
+        Line::from(""),
+        Line::styled(
+            "                            osi",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::from(""),
+        Line::styled(
+            "                     Terminal too small",
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::from(""),
+        dim_line("Width", area.width, TAPE_MIN_WIDTH, width_ok),
+        dim_line("Height", area.height, TAPE_MIN_HEIGHT, height_ok),
+        Line::from(""),
+        Line::styled(
+            format!(
+                "      osi needs {TAPE_MIN_WIDTH} columns and {TAPE_MIN_HEIGHT} rows · try osi --log"
+            ),
+            Style::default().fg(ctx.theme.fg_muted),
+        ),
     ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().fg(ctx.theme.text))
-            .alignment(Alignment::Center),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines), area);
+    if area.height > 0 {
+        let bg = ctx.theme.statusbar_bg;
+        let key_bar_area = Rect {
+            x: area.x,
+            y: area.y + area.height - 1,
+            width: area.width,
+            height: 1,
+        };
+        let pad = (area.width as usize).saturating_sub(7);
+        let spans = vec![
+            Span::styled(" ".repeat(pad), Style::default().bg(bg)),
+            Span::styled(
+                " q ",
+                Style::default()
+                    .fg(ctx.theme.keyhint_key)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Quit ", Style::default().fg(ctx.theme.keyhint_desc).bg(bg)),
+        ];
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+            key_bar_area,
+        );
+    }
 }
 
 /// Screen 0 (issue #678): the header band, the list (with its detail
@@ -1363,7 +1539,7 @@ fn draw_tape(
     icon_frame: u64,
     now: &str,
 ) {
-    if full_area.width < 60 || full_area.height < 24 {
+    if full_area.width < TAPE_MIN_WIDTH || full_area.height < TAPE_MIN_HEIGHT {
         draw_tape_too_small(frame, full_area, ctx);
         return;
     }
@@ -1377,7 +1553,15 @@ fn draw_tape(
         ])
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "TAPE", now, icon_frame, ctx);
-    draw_tape_status_line(frame, sections[2], screen, header, ctx, now);
+    draw_tape_status_line(
+        frame,
+        sections[2],
+        screen,
+        header,
+        full_area.width < 80,
+        ctx,
+        now,
+    );
     draw_tape_key_bar(frame, sections[3], full_area.width >= 80, ctx);
 
     let body = sections[1];
@@ -1390,10 +1574,31 @@ fn draw_tape(
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(63), Constraint::Percentage(37)])
             .split(body);
-        draw_tape_list(frame, cols[0], screen, header, app, false, ctx);
+        // §5: rows 24-29 drop preview rows first, before anything
+        // else gives way, to leave more of a short terminal's own
+        // height for the Now band and what's ahead of it.
+        draw_tape_list(
+            frame,
+            cols[0],
+            screen,
+            header,
+            app,
+            false,
+            full_area.height >= 30,
+            ctx,
+        );
         draw_tape_detail(frame, cols[1], screen, app, transcript_view, ctx, now);
     } else {
-        draw_tape_list(frame, body, screen, header, app, full_area.width < 80, ctx);
+        draw_tape_list(
+            frame,
+            body,
+            screen,
+            header,
+            app,
+            full_area.width < 80,
+            false,
+            ctx,
+        );
     }
 }
 
@@ -2947,7 +3152,7 @@ pub fn draw(
         }
     }
 
-    draw_totals_row(frame, sections[2], &state.header, ctx);
+    draw_totals_row(frame, sections[2], &state.header, false, ctx);
     draw_status_line_generic(frame, sections[3], &state.header, log_lines, ctx);
     draw_key_bar(frame, sections[4], &screen_key_bar_items(app.screen), ctx);
 
