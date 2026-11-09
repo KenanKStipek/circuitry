@@ -12,12 +12,17 @@ runtime:
     routing:       {enabled: false, bands: [...], respect_explicit: true}
     decomposition: {enabled: false, threshold: 80, max_depth: 2,
                     max_chunks: 8, on_failure: route_up}
+    splitting:     {enabled: false, max_input_tokens: 24000, models: {...},
+                    max_parts: 16, max_depth: 2, max_concurrency: null,
+                    on_failure: run_as_is}
 ```
 
-The three switches are independent, with one ordering constraint: scoring is
+The four switches are independent, with one ordering constraint: scoring is
 the substrate both routing and decomposition read, so enabling either of them
-without scoring is a config error. ``scoring`` alone, ``scoring`` + one, and
-all three are each valid.
+without scoring is a config error. ``splitting`` is keyed to a token estimate
+rather than a score, so it needs no scoring prerequisite — it can be the only
+switch on. ``scoring`` alone, ``scoring`` + any of the others, and all four
+are each valid.
 
 The block flows through the normal ``runtime.*`` precedence — an
 orchestration-level ``runtime.complexity`` *replaces* the config-level one
@@ -77,7 +82,17 @@ DEFAULT_ON_FAILURE = "route_up"
 
 ON_FAILURE_CHOICES: tuple[str, ...] = ("route_up", "fail")
 
-_COMPLEXITY_KEYS: tuple[str, ...] = ("scoring", "routing", "decomposition")
+#: ``runtime.complexity.splitting.on_failure`` — the same vocabulary as
+#: decomposition's, but a distinct tuple: nothing enforces the two switches'
+#: choices stay aligned, and splitting has no "route up" (there is no bigger
+#: window — see the module docstring of :mod:`circuitry.core.split`).
+SPLIT_ON_FAILURE_CHOICES: tuple[str, ...] = ("run_as_is", "fail")
+
+DEFAULT_SPLIT_MAX_PARTS = 16
+DEFAULT_SPLIT_MAX_DEPTH = 2
+DEFAULT_SPLIT_ON_FAILURE = "run_as_is"
+
+_COMPLEXITY_KEYS: tuple[str, ...] = ("scoring", "routing", "decomposition", "splitting")
 _SCORING_KEYS: tuple[str, ...] = ("enabled", "weights", "keywords")
 _ROUTING_KEYS: tuple[str, ...] = ("enabled", "bands", "respect_explicit")
 _DECOMPOSITION_KEYS: tuple[str, ...] = (
@@ -85,6 +100,15 @@ _DECOMPOSITION_KEYS: tuple[str, ...] = (
     "threshold",
     "max_depth",
     "max_chunks",
+    "on_failure",
+)
+_SPLITTING_KEYS: tuple[str, ...] = (
+    "enabled",
+    "max_input_tokens",
+    "models",
+    "max_parts",
+    "max_depth",
+    "max_concurrency",
     "on_failure",
 )
 _BAND_KEYS: tuple[str, ...] = ("max", "model", "name")
@@ -206,6 +230,35 @@ class DecompositionSettings:
 
 
 @dataclass(frozen=True)
+class SplittingSettings:
+    """``runtime.complexity.splitting`` — the size trigger for decomposition.
+
+    Independent of ``scoring``: a split is decided by a token estimate
+    against a budget, never by a complexity score, so — unlike ``routing``
+    and ``decomposition`` — enabling this needs no scoring prerequisite.
+    """
+
+    enabled: bool = False
+    max_input_tokens: int | None = None
+    models: Mapping[str, int] = field(default_factory=dict)
+    max_parts: int = DEFAULT_SPLIT_MAX_PARTS
+    max_depth: int = DEFAULT_SPLIT_MAX_DEPTH
+    max_concurrency: int | None = None
+    on_failure: str = DEFAULT_SPLIT_ON_FAILURE
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "max_input_tokens": self.max_input_tokens,
+            "models": dict(self.models),
+            "max_parts": self.max_parts,
+            "max_depth": self.max_depth,
+            "max_concurrency": self.max_concurrency,
+            "on_failure": self.on_failure,
+        }
+
+
+@dataclass(frozen=True)
 class ComplexitySettings:
     """The resolved ``runtime.complexity`` block.
 
@@ -218,6 +271,7 @@ class ComplexitySettings:
     decomposition: DecompositionSettings = field(
         default_factory=DecompositionSettings
     )
+    splitting: SplittingSettings = field(default_factory=SplittingSettings)
 
     @property
     def enabled(self) -> bool:
@@ -226,6 +280,7 @@ class ComplexitySettings:
             self.scoring.enabled
             or self.routing.enabled
             or self.decomposition.enabled
+            or self.splitting.enabled
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -233,6 +288,7 @@ class ComplexitySettings:
             "scoring": self.scoring.as_dict(),
             "routing": self.routing.as_dict(),
             "decomposition": self.decomposition.as_dict(),
+            "splitting": self.splitting.as_dict(),
         }
 
 
@@ -493,6 +549,66 @@ def _parse_decomposition(raw: Any, path: str) -> DecompositionSettings:
     )
 
 
+def _parse_splitting(raw: Any, path: str) -> SplittingSettings:
+    block = _as_mapping(raw, path)
+    _reject_unknown_keys(block, _SPLITTING_KEYS, path)
+
+    enabled = _as_bool(block, "enabled", path, default=False)
+
+    max_input_tokens: int | None = None
+    if block.get("max_input_tokens") is not None:
+        max_input_tokens = _as_int(
+            block["max_input_tokens"], f"{path}.max_input_tokens", minimum=1
+        )
+
+    models: dict[str, int] = {}
+    if block.get("models") is not None:
+        raw_models = _as_mapping(block["models"], f"{path}.models")
+        for name, value in raw_models.items():
+            model_name = _as_non_empty_str(name, f"{path}.models key")
+            models[model_name] = _as_int(value, f"{path}.models.{name}", minimum=1)
+
+    if enabled and max_input_tokens is None and not models:
+        raise ComplexityConfigError(
+            f"{path}.enabled is true but neither {path}.max_input_tokens nor a "
+            f"non-empty {path}.models is set. Splitting needs a budget to "
+            "compare the prompt's estimated size against."
+        )
+
+    max_parts = DEFAULT_SPLIT_MAX_PARTS
+    if block.get("max_parts") is not None:
+        max_parts = _as_int(block["max_parts"], f"{path}.max_parts", minimum=2)
+
+    max_depth = DEFAULT_SPLIT_MAX_DEPTH
+    if block.get("max_depth") is not None:
+        max_depth = _as_int(block["max_depth"], f"{path}.max_depth", minimum=0)
+
+    max_concurrency: int | None = None
+    if block.get("max_concurrency") is not None:
+        max_concurrency = _as_int(
+            block["max_concurrency"], f"{path}.max_concurrency", minimum=1
+        )
+
+    on_failure = DEFAULT_SPLIT_ON_FAILURE
+    if block.get("on_failure") is not None:
+        on_failure = _as_non_empty_str(block["on_failure"], f"{path}.on_failure")
+        if on_failure not in SPLIT_ON_FAILURE_CHOICES:
+            raise ComplexityConfigError(
+                f"{path}.on_failure must be one of "
+                f"{', '.join(SPLIT_ON_FAILURE_CHOICES)}; found {on_failure!r}."
+            )
+
+    return SplittingSettings(
+        enabled=enabled,
+        max_input_tokens=max_input_tokens,
+        models=models,
+        max_parts=max_parts,
+        max_depth=max_depth,
+        max_concurrency=max_concurrency,
+        on_failure=on_failure,
+    )
+
+
 def _check_prerequisites(settings: ComplexitySettings, path: str) -> None:
     if settings.scoring.enabled:
         return
@@ -536,6 +652,7 @@ def parse_complexity_settings(
         decomposition=_parse_decomposition(
             sub_block("decomposition"), f"{path}.decomposition"
         ),
+        splitting=_parse_splitting(sub_block("splitting"), f"{path}.splitting"),
     )
     _check_prerequisites(settings, path)
     return settings
