@@ -1464,8 +1464,9 @@ rendered input (`meta.prompt_sent`, the scorer's own estimator) strictly
 exceeds a token budget, the budget resolved per effect
 (`split.budget_tokens` on the prompt itself, outranking
 `runtime.complexity.splitting.models.<resolved model>`, outranking
-`runtime.complexity.splitting.max_input_tokens` — the first two still split
-even with `runtime.complexity.splitting.enabled: false`; `split.enabled:
+`runtime.complexity.splitting.max_input_tokens` — only `split.budget_tokens`
+still splits with `runtime.complexity.splitting.enabled: false`; the table
+and the top-level default are read only with the switch on. `split.enabled:
 false` on the prompt always opts it out), the template/messages' own single
 largest state reference is sliced into whole units (list items, mapping
 entries, or text at its own structure — blank lines, then lines, then
