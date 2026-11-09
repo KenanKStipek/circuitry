@@ -17,10 +17,10 @@ use electricity_vm::adapter::{
     GenerateResult, PyExc,
 };
 use electricity_vm::retry::RetryInfo;
-use electricity_vm::{CancellationToken, Limiter, Store, VmError};
+use electricity_vm::{CancellationToken, Limiter, RunObserver, Store, VmError};
 use indexmap::IndexMap;
 use std::rc::Rc;
-use support::{Event, RecordingObserver, chain_dynamic, json_registry, program, run_ctx};
+use support::{Event, RecordingObserver, chain_dynamic, json_registry, program, run_ctx, use_leaf};
 
 fn root_path() -> EffectPath {
     EffectPath::root()
@@ -2475,4 +2475,295 @@ async fn error_code_that_looks_like_a_secret_is_redacted() {
     let error_text = get(&meta, "error").unwrap().as_str().unwrap();
     assert!(!error_text.contains(&secret_code));
     assert!(error_text.contains("***REDACTED***"));
+}
+
+/// A streaming fake: delivers a fixed sequence of deltas through
+/// `CallContext::on_progress`, then returns a final `GenerateResult`
+/// assembled from the same text -- enough to drive `exec::prompt`'s own
+/// `meta.live`/`progress` wiring (#674/#676) without a real adapter.
+struct StreamingFakeAdapter {
+    name: String,
+    deltas: Vec<&'static str>,
+    tokens_sent: i64,
+    tokens_received: i64,
+    /// A real wait before the first delta -- long enough to clear
+    /// `exec::use_::ChildObserver::write`'s own 100ms graft throttle,
+    /// whose "always graft the first call" allowance a `use` child's
+    /// earlier, pre-attempt writes (node creation, `meta.created_at`)
+    /// already consume before `meta.live` is ever set. `0` for a test
+    /// that doesn't read a graft at all.
+    pre_delta_delay_ms: u64,
+}
+
+#[async_trait(?Send)]
+impl Adapter for StreamingFakeAdapter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
+    async fn generate(
+        &self,
+        _model: &str,
+        _prompt: &str,
+        _options: &GenerateOptions,
+        call: &CallContext<'_>,
+    ) -> Result<GenerateResult, AdapterError> {
+        let on_progress = call.on_progress.expect("streams() is true");
+        if self.pre_delta_delay_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(self.pre_delta_delay_ms)).await;
+        }
+        let mut text = String::new();
+        for delta in &self.deltas {
+            text.push_str(delta);
+            on_progress(electricity_vm::adapter::GenerateProgress {
+                delta_chars: delta.chars().count(),
+                delta_count: 1,
+                tokens_sent: None,
+                tokens_received: None,
+            });
+        }
+        Ok(GenerateResult {
+            text,
+            raw: Value::None,
+            tokens_sent: Some(self.tokens_sent),
+            tokens_received: Some(self.tokens_received),
+            finish_reason: None,
+            warnings: Vec::new(),
+            cost_usd: None,
+        })
+    }
+
+    async fn check(&self) -> CheckResult {
+        CheckResult {
+            ok: true,
+            ..Default::default()
+        }
+    }
+}
+
+/// Captures `prime.ask.meta.live`'s own current value on every
+/// [`RunObserver::progress`] call -- the node snapshot a `--live-state`
+/// reader would see at that exact moment, read straight off *store*
+/// (shared with the run itself; `Store::snapshot` takes `&self`/`&NodeRef`
+/// only, so this never races the executor, which runs on this same
+/// thread).
+struct LiveCapturingObserver<'a> {
+    store: &'a Store,
+    live_snapshots: std::cell::RefCell<Vec<Value>>,
+}
+
+impl RunObserver for LiveCapturingObserver<'_> {
+    fn effect_start(&self, _path: &EffectPath) -> electricity_vm::observer::InstanceId {
+        1
+    }
+
+    fn progress(
+        &self,
+        _path: &EffectPath,
+        _instance: electricity_vm::observer::InstanceId,
+        _attempt: u32,
+        _data: &electricity_vm::observer::ProgressData,
+    ) {
+        let snapshot = self.store.snapshot(&self.store.root);
+        let live = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+        let live = as_dict(get(live, "ask").unwrap());
+        let live = as_dict(get(live, "meta").unwrap());
+        let live = get(live, "live").cloned().unwrap_or(Value::None);
+        self.live_snapshots.borrow_mut().push(live);
+    }
+}
+
+#[tokio::test]
+async fn streamed_progress_captures_meta_live_at_each_delta_and_clears_it_on_success() {
+    let default = Rc::new(StreamingFakeAdapter {
+        name: "scripted".to_string(),
+        deltas: vec!["hello ", "from ", "scripted"],
+        tokens_sent: 4,
+        tokens_received: 6,
+        pre_delta_delay_ms: 0,
+    }) as Rc<dyn Adapter>;
+    let adapters = registry_with_scripted();
+
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = default;
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let runtime_config = Value::None;
+    ctx.runtime_config = &runtime_config;
+    let leaf = prompt_leaf(
+        root_path().push_name("ask"),
+        "ask",
+        template_prompt("hi there"),
+        OnError::Fail,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let observer = LiveCapturingObserver {
+        store: &store,
+        live_snapshots: std::cell::RefCell::new(Vec::new()),
+    };
+
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    // All three deltas land synchronously within the same instant, so
+    // `exec::prompt`'s own once-a-second `progress` throttle fires only
+    // for the first one -- the same reason cof's own `progress_lock`
+    // throttle does (`core/prompt.py::PromptRuntime._live_attempt`).
+    let captured = observer.live_snapshots.borrow();
+    assert_eq!(captured.len(), 1);
+    let first = as_dict(&captured[0]);
+    assert_eq!(
+        get(first, "v").cloned(),
+        Some(Value::from(1i64)),
+        "meta.live must exist at the progress call: {captured:?}"
+    );
+    assert!(get(first, "streaming").unwrap().as_bool().unwrap());
+    assert_eq!(
+        get(first, "chars_received").cloned(),
+        Some(Value::from(6i64))
+    );
+
+    // Removed on the attempt's successful exit, the same as every other
+    // exit path (`ClearLiveOnDrop`).
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "live"), None);
+    assert_eq!(get(&meta, "tokens_sent").cloned(), Some(Value::from(4i64)));
+    assert_eq!(
+        get(&meta, "tokens_received").cloned(),
+        Some(Value::from(6i64))
+    );
+}
+
+/// Captures a named node's own `meta.live` at *node_path* on every
+/// [`RunObserver::progress`] call, the same way [`LiveCapturingObserver`]
+/// does for a top-level prompt -- used here for one nested a `use`
+/// child's own path, read off the same shared *store* the child
+/// grafts its writes into the parent through.
+struct NestedLiveCapturingObserver {
+    /// The child's own latest grafted snapshot (`exec::use_::
+    /// ChildObserver::write`'s own `graft_child_write` call,
+    /// forwarded here unchanged) -- a `use` child's own writes land
+    /// in its own separate `Store`, never the parent's, so `meta.live`
+    /// on a nested prompt is only ever reachable through this overlay,
+    /// the same way a real `--live-state` mirror reads it.
+    grafted: std::cell::RefCell<Option<Value>>,
+    live_snapshots: std::cell::RefCell<Vec<Value>>,
+}
+
+impl RunObserver for NestedLiveCapturingObserver {
+    fn effect_start(&self, _path: &EffectPath) -> electricity_vm::observer::InstanceId {
+        1
+    }
+
+    fn wants_child_snapshots(&self) -> bool {
+        true
+    }
+
+    fn graft_child_write(&self, _node_path: &EffectPath, snapshot: &Value) {
+        *self.grafted.borrow_mut() = Some(snapshot.clone());
+    }
+
+    fn progress(
+        &self,
+        _path: &EffectPath,
+        _instance: electricity_vm::observer::InstanceId,
+        _attempt: u32,
+        _data: &electricity_vm::observer::ProgressData,
+    ) {
+        let grafted = self.grafted.borrow();
+        let grafted = grafted
+            .as_ref()
+            .expect("write() always grafts before progress() fires");
+        let prime = as_dict(get(as_dict(grafted), "prime").unwrap());
+        let greeting = as_dict(get(prime, "greeting").unwrap());
+        let meta = as_dict(get(greeting, "meta").unwrap());
+        let live = get(meta, "live").cloned().unwrap_or(Value::None);
+        self.live_snapshots.borrow_mut().push(live);
+    }
+}
+
+/// Issue #676's own nested case: a streamed prompt inside a `use`
+/// child's `progress` line (and so, before it, `meta.live`) must carry
+/// the parent's own path, the same way `use`'s `start`/`end` events
+/// already do (`exec::use_::ChildObserver::progress`'s own forwarding).
+#[tokio::test]
+async fn streamed_progress_inside_a_use_child_captures_meta_live_at_the_parents_path() {
+    let default = Rc::new(StreamingFakeAdapter {
+        name: "scripted".to_string(),
+        deltas: vec!["hello ", "from ", "scripted"],
+        tokens_sent: 4,
+        tokens_received: 6,
+        pre_delta_delay_ms: 150,
+    }) as Rc<dyn Adapter>;
+    let adapters = registry_with_scripted();
+
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = default;
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    ctx.supported = electricity_bytecode::Supported::current(&[]);
+    let runtime_config = Value::None;
+    ctx.runtime_config = &runtime_config;
+
+    let inline_yaml = "effects:\n  - type: prompt\n    name: greeting\n    template: hi\n";
+    let leaf = use_leaf(
+        root_path().push_name("sub"),
+        "sub",
+        UseSource::Inline(TemplateText::new(
+            inline_yaml.to_string(),
+            true,
+            Escape::Html,
+        )),
+        None,
+        None,
+        true,
+        RetryPolicy::default(),
+        None,
+        OnError::Fail,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let observer = NestedLiveCapturingObserver {
+        grafted: std::cell::RefCell::new(None),
+        live_snapshots: std::cell::RefCell::new(Vec::new()),
+    };
+
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let captured = observer.live_snapshots.borrow();
+    assert_eq!(captured.len(), 1);
+    let first = as_dict(&captured[0]);
+    assert!(get(first, "streaming").unwrap().as_bool().unwrap());
+    assert_eq!(
+        get(first, "chars_received").cloned(),
+        Some(Value::from(6i64))
+    );
 }

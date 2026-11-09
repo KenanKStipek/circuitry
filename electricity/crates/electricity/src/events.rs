@@ -548,6 +548,82 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    fn progress_data(
+        tokens_received_estimate: i64,
+        chars_received: i64,
+        tokens_sent: Option<i64>,
+    ) -> electricity_vm::observer::ProgressData {
+        electricity_vm::observer::ProgressData {
+            tokens_received_estimate,
+            chars_received,
+            tokens_sent,
+            tokens_sent_estimate: 3,
+        }
+    }
+
+    #[test]
+    fn on_progress_writes_the_cof_shaped_fields_in_order() {
+        let path = temp_path("progress-fields");
+        let log = EventLog::open(&path);
+        let id = log.on_start("prime.greeting");
+        log.on_progress("prime.greeting", id, 0, &progress_data(1, 6, None));
+        log.close();
+        let lines = read_lines(&path);
+        let payload = lines[1].as_dict().unwrap();
+        assert_eq!(
+            payload
+                .keys()
+                .map(|k| k.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "v",
+                "seq",
+                "ts",
+                "ev",
+                "id",
+                "path",
+                "ms",
+                "tokens_received_estimate",
+                "chars_received",
+                "tokens_sent",
+                "tokens_sent_estimate",
+                "first_token_ms",
+            ]
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn on_progress_resets_first_token_ms_on_a_new_attempt() {
+        let path = temp_path("progress-first-token-reset");
+        let log = EventLog::open(&path);
+        let id = log.on_start("prime.greeting");
+        // Attempt 0's own first delta -- `first_token_ms` is pinned to
+        // this call's own elapsed time.
+        log.on_progress("prime.greeting", id, 0, &progress_data(1, 3, None));
+        // Attempt 0 fails and retries; attempt 1's own first delta must
+        // not reuse attempt 0's `first_token_ms` -- a fresh entry, not
+        // the one from several lines up.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        log.on_progress("prime.greeting", id, 1, &progress_data(1, 3, None));
+        log.close();
+        let lines = read_lines(&path);
+        let first = lines[1].as_dict().unwrap();
+        let second = lines[2].as_dict().unwrap();
+        let first_ms = first.get(&Value::Str("ms".to_string())).unwrap();
+        let first_token_ms_0 = first
+            .get(&Value::Str("first_token_ms".to_string()))
+            .unwrap();
+        assert_eq!(first_ms, first_token_ms_0);
+        let second_ms = second.get(&Value::Str("ms".to_string())).unwrap();
+        let first_token_ms_1 = second
+            .get(&Value::Str("first_token_ms".to_string()))
+            .unwrap();
+        assert_eq!(second_ms, first_token_ms_1);
+        assert_ne!(first_token_ms_0, first_token_ms_1);
+        fs::remove_file(&path).unwrap();
+    }
+
     fn blob_dict(blob_len: usize) -> Value {
         let mut d = electricity_value::Dict::new();
         d.insert(

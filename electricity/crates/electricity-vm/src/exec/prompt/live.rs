@@ -144,3 +144,98 @@ impl LiveAttemptState {
         Value::Dict(dict)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_key_order_matches_core_prompt_py_live_attempt_state() {
+        let state = LiveAttemptState::new();
+        let snapshot = state.snapshot(0, "ollama", "llama3", true, 4);
+        // Round-tripped through `electricity_json` rather than read
+        // straight off the in-memory `Dict` -- this is what `--live-state`
+        // and the store's own writer actually see, and `electricity_json`'s
+        // reader is the one this crate's own contract (`CLAUDE.md`'s
+        // workspace rule against `serde_json`'s `preserve_order`) commits
+        // to keeping insertion-ordered.
+        let encoded =
+            electricity_json::dumps(&snapshot, electricity_json::WriteMode::COMPACT).unwrap();
+        let parsed = electricity_json::loads(&encoded).unwrap();
+        let Value::Dict(ref dict) = parsed else {
+            panic!("snapshot is always a dict");
+        };
+        let keys: Vec<String> = dict
+            .keys()
+            .map(|k| match k {
+                Value::Str(s) => s.clone(),
+                other => panic!("unexpected key {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "v",
+                "attempt",
+                "adapter",
+                "model",
+                "started_at",
+                "updated_at",
+                "streaming",
+                "first_token_at",
+                "tokens_sent",
+                "tokens_sent_estimate",
+                "tokens_received",
+                "tokens_received_estimate",
+                "chars_received",
+                "tokens_per_second",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_zero_char_progress_call_sets_tokens_sent_only_and_is_not_a_delta() {
+        let mut state = LiveAttemptState::new();
+        state.apply(&GenerateProgress {
+            delta_chars: 0,
+            delta_count: 0,
+            tokens_sent: Some(12),
+            tokens_received: None,
+        });
+        assert_eq!(state.tokens_sent(), Some(12));
+        assert_eq!(state.chars_received(), 0);
+        assert_eq!(state.tokens_received_estimate(), 0);
+        assert!(state.first_token_at.is_none());
+    }
+
+    #[test]
+    fn tokens_per_second_is_none_before_two_deltas() {
+        let mut state = LiveAttemptState::new();
+        state.apply(&GenerateProgress {
+            delta_chars: 4,
+            delta_count: 1,
+            tokens_sent: None,
+            tokens_received: None,
+        });
+        assert_eq!(state.tokens_per_second(), None);
+    }
+
+    #[test]
+    fn tokens_per_second_is_none_before_500ms_even_with_two_deltas() {
+        let mut state = LiveAttemptState::new();
+        state.apply(&GenerateProgress {
+            delta_chars: 4,
+            delta_count: 2,
+            tokens_sent: None,
+            tokens_received: None,
+        });
+        assert_eq!(state.tokens_per_second(), None);
+    }
+
+    #[test]
+    fn estimate_tokens_ceiling_divides_by_four_chars() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcde"), 2);
+    }
+}
