@@ -424,12 +424,22 @@ fn build_level(
     ctx: &Ctx<'_>,
 ) -> (Vec<RailItem>, usize) {
     let mut items = Vec::new();
-    let unnamed = ctx
+    // A decision inside a *named* loop's pass has its own host, and
+    // every path either of its own branches contributes, recorded
+    // with the `iter_*` placeholder (`PlanTree::unnamed_if_decisions`'s
+    // own doc comment), never a concrete pass's own `iter_N` -- both
+    // are concretised against this level's own real `host` before
+    // anything below compares them against `rows`' own real paths,
+    // or such a decision never matches a row, a host, or its own
+    // untaken branch at all.
+    let normalized_host = crate::plan::normalize_pass_segments(host);
+    let unnamed: Vec<UnnamedIfDecision> = ctx
         .plan
         .unnamed_if_decisions()
         .iter()
-        .filter(|d| d.host_path == host)
-        .collect::<Vec<_>>();
+        .filter(|d| d.host_path == normalized_host)
+        .map(|d| concretize_decision(d, &normalized_host, host))
+        .collect();
     let mut unnamed_emitted = vec![false; unnamed.len()];
     let mut index_for_host = 0usize;
     let mut hidden: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -464,7 +474,7 @@ fn build_level(
             let index = index_for_host;
             index_for_host += 1;
             let (station, fork, consumed, hide) =
-                build_unnamed_decision(unnamed[pos], rows, i, depth, index, ctx);
+                build_unnamed_decision(&unnamed[pos], rows, i, depth, index, ctx);
             items.push(RailItem::Station(station));
             items.push(RailItem::Fork(fork));
             hidden.extend(hide);
@@ -540,6 +550,35 @@ fn build_level(
         items.push(RailItem::Fork(fork));
     }
     (items, i)
+}
+
+/// `decision`, with its own host and every path either branch
+/// contributes rewritten from `normalized_host`'s own `iter_*`
+/// placeholder to `host`'s own concrete pass (a no-op when `decision`
+/// isn't inside a loop pass at all, since `normalized_host == host`
+/// then and every rewrite leaves its own path unchanged).
+fn concretize_decision(
+    decision: &UnnamedIfDecision,
+    normalized_host: &str,
+    host: &str,
+) -> UnnamedIfDecision {
+    let translate = |p: &str| -> String {
+        match p.strip_prefix(normalized_host) {
+            Some(rest) => format!("{host}{rest}"),
+            None => p.to_string(),
+        }
+    };
+    UnnamedIfDecision {
+        host_path: host.to_string(),
+        condition: decision.condition.clone(),
+        then_paths: decision.then_paths.iter().map(|p| translate(p)).collect(),
+        else_paths: decision.else_paths.iter().map(|p| translate(p)).collect(),
+        later_siblings: decision
+            .later_siblings
+            .iter()
+            .map(|p| translate(p))
+            .collect(),
+    }
 }
 
 /// An unnamed `if`'s own decision (DESIGN.md: "a decision forks into
@@ -906,9 +945,13 @@ fn loop_body_template(loop_path: &str, ctx: &Ctx<'_>) -> Vec<RailItem> {
         .filter(|p| p.starts_with(&prefix))
         .map(|p| {
             let path = p.replacen("iter_*", "iter_0", 1);
+            // `match_path` resolves a real `iter_N` pass segment
+            // through its own trie logic, never the literal `iter_*`
+            // placeholder text `leaf_paths` itself uses -- resolved
+            // against the concrete path just built above, not `p`.
             let row_kind = ctx
                 .plan
-                .match_path(p)
+                .match_path(&path)
                 .and_then(|m| m.entries.first())
                 .map(|e| RowKind::from_plan_entry(&e.kind))
                 .unwrap_or(RowKind::Unknown);
@@ -1019,6 +1062,22 @@ fn label_first_prompt(items: &mut [RailItem], label: &str) {
     }
 }
 
+/// Whether `candidate` is one of `loop_path`'s own passes -- by its
+/// own path shape (`loop_path.iter_<digits>`), never by its own
+/// `RowKind`: a loop whose body is a single container op (an `if`,
+/// another loop, a `dynamic`) places that op's own entry directly at
+/// the pass's own path, with no separate `Pass`-kind row of its own
+/// at all to tell the pass boundary apart from its own body by kind
+/// alone. The loop's own un-pass-resolved template row
+/// (`loop_path.iter_*`, DESIGN.md's own placeholder) never matches:
+/// `*` isn't a digit.
+fn is_pass_path(candidate: &str, loop_path: &str) -> bool {
+    candidate
+        .strip_prefix(loop_path)
+        .and_then(|rest| rest.strip_prefix(".iter_"))
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn build_loop_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     let row = &rows[i];
     let depth = row.depth;
@@ -1026,7 +1085,7 @@ fn build_loop_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     let mut j = i + 1;
     let mut observed = 0u64;
     while j < rows.len() && rows[j].depth > depth {
-        if rows[j].depth == depth + 1 && rows[j].kind == RowKind::Pass {
+        if rows[j].depth == depth + 1 && is_pass_path(&rows[j].path, &row.path) {
             let (mut items, next) = build_level(rows, j + 1, depth + 2, &rows[j].path, ctx);
             let running = items.iter().any(
                 |it| matches!(it, RailItem::Station(s) if edge_style(s.status) == EdgeStyle::Live),
@@ -1150,6 +1209,27 @@ pub const FORK_TAIL: usize = 5;
 /// actually drawn open or folded into its own band is a display-time
 /// decision (screen width, lane count, the `+`/`-` override), made by
 /// the caller, never here.
+/// Finds the station at `path`, anywhere on the rail (recursing
+/// into every fork's own lanes) -- the only way to resolve an
+/// unnamed decision's own synthetic `.__if` path, which has no row
+/// of its own for anything else to look it up by.
+pub fn find_station<'a>(items: &'a [RailItem], path: &str) -> Option<&'a Station> {
+    for item in items {
+        match item {
+            RailItem::Station(s) if s.path == path => return Some(s),
+            RailItem::Fork(fork) => {
+                for lane in &fork.lanes {
+                    if let Some(found) = find_station(&lane.items, path) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub fn item_width(item: &RailItem) -> usize {
     match item {
         RailItem::Station(_) => STATION_WIDTH,
@@ -1303,5 +1383,139 @@ mod tests {
             a_then_shown,
             "the first decision's own taken branch must show its real station"
         );
+    }
+
+    fn each_loop_yaml(body_tool: &str) -> String {
+        format!(
+            "effects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n      as: item\n    body:\n      - name: {body_tool}\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n"
+        )
+    }
+
+    fn find_fork_after<'a>(items: &'a [RailItem], name: &str) -> Option<&'a Fork> {
+        items.iter().enumerate().find_map(|(i, it)| match it {
+            RailItem::Station(s) if s.name == name => match items.get(i + 1) {
+                Some(RailItem::Fork(f)) => Some(f),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
+    /// A loop pass with only one step never breadcrumb-folds away on
+    /// the rail (the tree screen's own fold -- [`crate::fold`] --
+    /// never applies to it at all, since the rail always reads
+    /// unfolded rows): `build_loop_fork` must still find it as a
+    /// real pass, not an empty lane.
+    #[test]
+    fn a_loop_pass_with_a_single_step_still_shows_its_own_station() {
+        let plan = compile_doc(&each_loop_yaml("nap"));
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 2}},
+                "iter_0": {
+                    "nap": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+                }
+            }
+        }});
+        let rail = build_rail_for(&plan, &state);
+        let fork = find_fork_after(&rail.items, "fan").expect("a fork after fan");
+        assert_eq!(fork.lanes.len(), 2, "{fork:?}");
+        let nap_shown = fork.lanes[0].items.iter().any(
+            |it| matches!(it, RailItem::Station(s) if s.name == "nap" && s.row_kind == RowKind::Tool),
+        );
+        assert!(
+            nap_shown,
+            "a single-step pass must still show its own step: {fork:?}"
+        );
+    }
+
+    /// An unnamed `if` inside a *named* loop's own pass (host
+    /// `fan.iter_*`, DESIGN.md's own placeholder) resolves against
+    /// each pass's own concrete rows independently -- pass 0's own
+    /// decision here is settled (`then` ran), and its synthetic
+    /// path is pass 0's own concrete `iter_0`, never the placeholder
+    /// itself (which every pass would otherwise collide on).
+    #[test]
+    fn an_unnamed_if_inside_a_loop_pass_resolves_against_that_passs_own_rows() {
+        let yaml = "effects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n      as: item\n    body:\n      - type: if\n        if: {mode: cel, expr: \"true\"}\n        then:\n          - name: nap\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"x\\\"\"}\n        else:\n          - name: snooze\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"y\\\"\"}\n";
+        let plan = compile_doc(yaml);
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 1}},
+                "iter_0": {
+                    "nap": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+                }
+            }
+        }});
+        let rail = build_rail_for(&plan, &state);
+        let decision = find_station(&rail.items, "prime.fan.iter_0.__if").unwrap_or_else(|| {
+            panic!(
+                "no decision at the pass's own concrete path: {:?}",
+                rail.items
+            )
+        });
+        assert_eq!(
+            decision.headline,
+            Headline::Branch(Some("then".to_string()))
+        );
+    }
+
+    /// A loop that hasn't produced a single real pass yet -- not
+    /// even a scaffolded Pending one, which `render::build_rows`
+    /// itself seeds whenever a bounded each loop's own count already
+    /// resolves -- still previews its own body on every ahead lane,
+    /// read straight from the plan rather than from an observed pass
+    /// (there is none): built with the same clean rows `render::
+    /// build` gives a loop no event has ever mentioned, but a state
+    /// that *does* resolve `each.in` passed to `build_rail` directly,
+    /// the one piece `build_rows` itself would otherwise have
+    /// scaffolded real rows from first.
+    #[test]
+    fn an_unstarted_loop_previews_its_own_plan_body_on_every_ahead_lane() {
+        let plan = compile_doc(&each_loop_yaml("nap"));
+        let rows_state =
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let mut model = crate::model::RunModel::new();
+        let rendered = crate::render::build(
+            "do.yml",
+            "test",
+            &plan,
+            &mut model,
+            Some(&rows_state),
+            crate::model::ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+        );
+        assert!(
+            !rendered
+                .unfolded_rows
+                .iter()
+                .any(|r| r.kind == RowKind::Pass),
+            "the fixture itself must start with zero observed passes: {:?}",
+            rendered.unfolded_rows
+        );
+        let lookup_state = serde_json::json!({"input": {"items": ["cats", "dogs"]}});
+        let flat = crate::model::flatten_state(&rows_state);
+        let zone = chrono::FixedOffset::east_opt(0).unwrap();
+        let rail = build_rail(
+            &rendered.unfolded_rows,
+            &flat,
+            &plan,
+            &rendered.header,
+            Some(&lookup_state),
+            &zone,
+        );
+        let fork = find_fork_after(&rail.items, "fan").expect("a fork after fan");
+        assert_eq!(fork.lanes.len(), 2, "{fork:?}");
+        for lane in &fork.lanes {
+            assert!(lane.waiting, "{fork:?}");
+            let nap_previewed = lane
+                .items
+                .iter()
+                .any(|it| matches!(it, RailItem::Station(s) if s.row_kind == RowKind::Tool));
+            assert!(
+                nap_previewed,
+                "an ahead lane must preview the plan body: {fork:?}"
+            );
+        }
     }
 }

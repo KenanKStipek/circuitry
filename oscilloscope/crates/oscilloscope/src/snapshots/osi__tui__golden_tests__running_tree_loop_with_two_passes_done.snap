@@ -7,7 +7,7 @@ expression: text
 "│▾ Now 00:00:00 · 5.0s                                                                             │"
 "│■ Start   ── ✓ a       ── ✓ b       ── ⟳ fan     ══ 4 lanes + ══ ■ End                            │"
 "│             0.0s         0.0s         2/4 passes   ● 0 run                                       │"
-"│cof                                                 · 4 wait                                      │"
+"│cof                                                 · 2 wait                                      │"
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"

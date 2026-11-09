@@ -3655,10 +3655,20 @@ pub fn build_flow(
     let mut story_lines_with_loops = story_lines.to_vec();
     story_lines_with_loops.extend(loop_story_lines(rows, flat, plan));
     let story = crate::flow::build_story(&story_lines_with_loops, &[], zone);
-    let pass_path = selected_path
-        .filter(|p| rows.iter().any(|r| r.path == *p && r.kind == RowKind::Pass))
-        .map(str::to_string)
-        .or_else(|| default_pass_path(rows).map(str::to_string));
+    // The default pass only stands in for the selection when there
+    // is none at all, or when the selection already names one of a
+    // loop's own passes -- never for a selection that lands on some
+    // other station or decision entirely, which must show its own
+    // pane instead (issue #691's own follow-up: a loop existing on
+    // the rail must not make every other station's own pane
+    // unreachable).
+    let pass_path = match selected_path {
+        None => default_pass_path(rows).map(str::to_string),
+        Some(p) if rows.iter().any(|r| r.path == p && r.kind == RowKind::Pass) => {
+            Some(p.to_string())
+        }
+        Some(_) => None,
+    };
     let selected_pass =
         pass_path.and_then(|p| build_selected_pass(&p, rows, flat, plan, header, state));
     let mut selected_decision = None;
