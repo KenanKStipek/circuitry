@@ -396,3 +396,114 @@ def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:
     assert len(raw_lines) == 300
     for line in raw_lines:
         json.loads(line)
+
+
+def test_on_progress_carries_the_open_starts_id_and_running_figures(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.p", {})
+    log.on_progress(
+        "prime.p",
+        {
+            "tokens_received_estimate": 1,
+            "chars_received": 6,
+            "tokens_sent": None,
+            "tokens_sent_estimate": 3,
+        },
+    )
+    log.close()
+
+    start, progress = _lines(tmp_path / "events.jsonl")
+    assert progress["ev"] == "progress"
+    assert progress["id"] == start["id"]
+    assert progress["path"] == "prime.p"
+    assert progress["tokens_received_estimate"] == 1
+    assert progress["chars_received"] == 6
+    assert progress["tokens_sent"] is None
+    assert progress["tokens_sent_estimate"] == 3
+    assert isinstance(progress["ms"], int)
+    assert progress["first_token_ms"] == progress["ms"]
+
+
+def test_on_progress_with_no_open_start_has_a_null_id_and_ms(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_progress("prime.p", {"tokens_received_estimate": 1, "chars_received": 6})
+    log.close()
+
+    progress = _lines(tmp_path / "events.jsonl")[0]
+    assert progress["id"] is None
+    assert progress["ms"] is None
+    assert progress["first_token_ms"] is None
+
+
+def test_on_progress_reuses_first_token_ms_on_later_calls(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.p", {})
+    log.on_progress("prime.p", {"tokens_received_estimate": 1, "chars_received": 6})
+    log.on_progress("prime.p", {"tokens_received_estimate": 2, "chars_received": 11})
+    log.close()
+
+    _start, first, second = _lines(tmp_path / "events.jsonl")
+    assert second["first_token_ms"] == first["first_token_ms"]
+    assert second["ms"] >= first["ms"]
+
+
+def test_on_progress_resets_first_token_ms_on_a_new_attempt(tmp_path: Path) -> None:
+    """One `start`/`end` pair covers every retry of a prompt (#674) --
+    `first_token_ms` must not carry an earlier, failed attempt's value
+    into a fresh one's own first delta."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.p", {})
+    log.on_progress(
+        "prime.p", {"tokens_received_estimate": 1, "chars_received": 6, "attempt": 0}
+    )
+    log.on_progress(
+        "prime.p", {"tokens_received_estimate": 1, "chars_received": 6, "attempt": 1}
+    )
+    log.close()
+
+    _start, first, second = _lines(tmp_path / "events.jsonl")
+    assert second["first_token_ms"] == second["ms"]
+    assert second["first_token_ms"] != first["first_token_ms"] or second["ms"] == first["ms"]
+
+
+def test_current_instance_matches_the_open_starts_id_and_is_none_after_complete(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    assert log.current_instance("prime.p") is None
+    log.on_start("prime.p", {})
+    instance = log.current_instance("prime.p")
+    assert instance is not None
+    instance_id, _started_at = instance
+    assert isinstance(instance_id, int)
+    log.on_complete("prime.p", {"meta": {"error": None}})
+    assert log.current_instance("prime.p") is None
+    log.close()
+
+
+def test_on_progress_prefers_a_captured_instance_over_a_later_same_path_start(
+    tmp_path: Path,
+) -> None:
+    """#674 review finding 9: a same-path concurrent `start` (an unnamed
+    tree-flow loop sharing one compiled path) must not steal an earlier
+    attempt's own `progress` line -- the captured `_instance` (taken once,
+    when that attempt began) always wins over a fresh path lookup."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.each.t", {})
+    captured = log.current_instance("prime.each.t")
+    assert captured is not None
+    first_id, _ = captured
+
+    # A second, concurrent instance of the same path opens before the
+    # first's own progress line fires -- `_open_by_path` now points at it.
+    log.on_start("prime.each.t", {})
+
+    log.on_progress(
+        "prime.each.t",
+        {"tokens_received_estimate": 1, "chars_received": 6, "_instance": captured},
+    )
+    log.close()
+
+    lines = _lines(tmp_path / "events.jsonl")
+    progress = next(line for line in lines if line["ev"] == "progress")
+    assert progress["id"] == first_id

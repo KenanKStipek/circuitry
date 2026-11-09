@@ -155,10 +155,14 @@ class _LiveAttemptState:
     chars_received: int = 0
 
     def tokens_per_second(self) -> float | None:
-        if self.first_token_monotonic is None:
+        # Below two deltas, or within 500ms of the first one, the estimate
+        # is dividing a tiny count by noise (scheduling jitter, clock
+        # resolution), giving a wildly inflated rate rather than a useful
+        # figure.
+        if self.first_token_monotonic is None or self.tokens_received_estimate < 2:
             return None
         elapsed = time.monotonic() - self.first_token_monotonic
-        if elapsed <= 0:
+        if elapsed < 0.5:
             return None
         return self.tokens_received_estimate / elapsed
 
@@ -641,6 +645,11 @@ class PromptRuntime:
             "template_files",
             "error_code",
             "http_status",
+            # A stale `live` from a killed run (#674) must not survive a
+            # `--resume` pass that never reaches `_live_attempt` at all
+            # (dry run, decomposition, an early failure) -- the same
+            # leftover `tool.py` pops for the agent tool's own `meta.live`.
+            "live",
         ):
             meta.pop(key, None)
         meta["waiting_for"] = None
@@ -1390,8 +1399,16 @@ class PromptRuntime:
         with: unchanged when *adapter* does not stream, or carrying an
         ``on_progress`` wired to this attempt's own live record when it
         does. ``--events``' own ``progress`` line (``Store.fire_progress``)
-        rides the same publishes, so it never fires on this method's own
-        start/clear writes either.
+        is fired from here too, synchronously, on whichever thread calls
+        ``on_progress`` -- never through ``LivePublisher``'s own background
+        thread, whose ``update`` only ever overwrites a pending snapshot
+        rather than queuing one: routing the line through it as well would
+        make which delta's figures actually get published (and whether a
+        fast burst of deltas produces one line or several) depend on when
+        that thread happens to wake up, never deterministic. It is never
+        fired for a zero-``delta_chars`` progress call (Anthropic's own
+        ``message_start``, which only ever reports ``tokens_sent``) or on
+        this method's own start/clear writes.
         """
         from .complexity import _estimate_tokens
 
@@ -1403,9 +1420,53 @@ class PromptRuntime:
         streaming = getattr(adapter, "streams", False) is True
         tokens_sent_estimate = _estimate_tokens(prompt)
         live_state = _LiveAttemptState()
+        # Captured once, right now, on this method's own calling thread --
+        # the effect's dispatch thread, which already called
+        # `fire_effect_start` before this attempt began -- so every
+        # `progress` line this attempt fires later (from the adapter's own
+        # reader thread) carries the instance that was actually open when
+        # this attempt started, never one a same-path concurrent `start`
+        # (an unnamed tree-flow loop sharing one compiled path) has since
+        # moved a path-keyed lookup on to.
+        captured_instance = store.resolve_open_instance(name)
 
-        def _publish(snapshot: dict[str, Any]) -> None:
-            store.set(f"{name}.meta.live", snapshot)
+        def _snapshot_locked() -> dict[str, Any]:
+            """Caller already holds ``live_state.lock``."""
+            return live_state.snapshot(
+                attempt=attempt_index,
+                adapter=adapter_name,
+                model=model_name,
+                streaming=streaming,
+                tokens_sent_estimate=tokens_sent_estimate,
+            )
+
+        def _snapshot() -> dict[str, Any]:
+            with live_state.lock:
+                return _snapshot_locked()
+
+        # Only a streaming adapter ever calls `on_progress`, so a
+        # non-streaming one has nothing for `LivePublisher`'s own writer
+        # thread to do beyond the one write below and the clearing write
+        # in `finally` -- skip spawning it at all.
+        publisher = LivePublisher(lambda snapshot: store.set(f"{name}.meta.live", snapshot)) if streaming else None
+
+        progress_lock = threading.Lock()
+        last_progress_fired_at: list[float | None] = [None]
+
+        def _on_progress(progress: GenerateProgress) -> None:
+            with live_state.lock:
+                live_state.apply(progress)
+                snapshot = _snapshot_locked()
+            assert publisher is not None  # only wired when `streaming`
+            publisher.update(snapshot)
+            if progress.delta_chars <= 0:
+                return
+            now = time.monotonic()
+            with progress_lock:
+                last_fired = last_progress_fired_at[0]
+                if last_fired is not None and now - last_fired < 1.0:
+                    return
+                last_progress_fired_at[0] = now
             store.fire_progress(
                 name,
                 {
@@ -1413,32 +1474,24 @@ class PromptRuntime:
                     "chars_received": snapshot["chars_received"],
                     "tokens_sent": snapshot["tokens_sent"],
                     "tokens_sent_estimate": snapshot["tokens_sent_estimate"],
+                    # Neither of these is part of the `progress` line
+                    # itself -- `cli.events.EventLog.on_progress` reads
+                    # `_instance` in place of its own fresh lookup (the
+                    # capture above), and `attempt` only to reset
+                    # `first_token_ms` on a new attempt, since one
+                    # `start`/`end` pair covers every retry of a prompt.
+                    "_instance": captured_instance,
+                    "attempt": attempt_index,
                 },
             )
-
-        def _snapshot() -> dict[str, Any]:
-            with live_state.lock:
-                return live_state.snapshot(
-                    attempt=attempt_index,
-                    adapter=adapter_name,
-                    model=model_name,
-                    streaming=streaming,
-                    tokens_sent_estimate=tokens_sent_estimate,
-                )
-
-        publisher = LivePublisher(_publish)
-
-        def _on_progress(progress: GenerateProgress) -> None:
-            with live_state.lock:
-                live_state.apply(progress)
-            publisher.update(_snapshot())
 
         store.set(f"{name}.meta.live", _snapshot())
         live_options = replace(options, on_progress=_on_progress) if streaming else options
         try:
             yield live_options
         finally:
-            publisher.close()
+            if publisher is not None:
+                publisher.close()
             store.unset(f"{name}.meta.live")
 
     def _generate_with_fallbacks(

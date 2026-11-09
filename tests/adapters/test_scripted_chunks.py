@@ -6,6 +6,7 @@ state unchanged from the same reply without ``chunks``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -163,4 +164,72 @@ def test_chunks_reply_final_state_matches_the_same_reply_without_chunks(tmp_path
 
     assert chunked.ok and plain.ok
     assert "live" not in chunked.state["prime"]["greeting"].get("meta", {})
-    assert _strip_timestamps(chunked.state["prime"]) == _strip_timestamps(plain.state["prime"])
+    chunked_meta = _strip_timestamps(chunked.state["prime"])
+    plain_meta = _strip_timestamps(plain.state["prime"])
+    assert chunked_meta == plain_meta
+    # Dict equality alone doesn't check key order; meta's own key order
+    # is part of the contract this must not disturb.
+    assert list(chunked_meta["greeting"]["meta"].keys()) == list(
+        plain_meta["greeting"]["meta"].keys()
+    )
+
+
+def test_chunks_inside_a_use_child_fires_progress_namespaced_under_the_parent(
+    tmp_path: Path,
+) -> None:
+    """#674 review finding 5: a streamed prompt running inside a `use`
+    child's own `progress` line must carry the parent's own path, the
+    same way its `start`/`end` events already do."""
+    child_orch_path = tmp_path / "child.yml"
+    child_orch_path.write_text(
+        yaml.dump(
+            {"effects": [{"type": "prompt", "name": "greeting", "template": "say hello"}]},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    orch_path = tmp_path / "parent.yml"
+    orch_path.write_text(
+        yaml.dump(
+            {
+                "adapter": "scripted",
+                "model": "test",
+                "effects": [
+                    {"type": "use", "name": "sub", "path": str(child_orch_path)}
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    replies_path = _write_replies(
+        tmp_path,
+        {"prime.sub.greeting": [{"chunks": ["hello ", "from ", "scripted"]}]},
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+    events_path = tmp_path / "events.jsonl"
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state=None,
+            adapter=adapter,
+            config=CircuitryConfig(default_adapter="scripted", default_model="test"),
+            skip_preflight=True,
+            events_path=events_path,
+        )
+    )
+
+    assert result.ok
+    lines = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    progress_lines = [line for line in lines if line["ev"] == "progress"]
+    assert progress_lines, "expected at least one progress line"
+    assert all(line["path"] == "prime.sub.greeting" for line in progress_lines)

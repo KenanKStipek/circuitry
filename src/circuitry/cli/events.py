@@ -90,6 +90,14 @@ class EventLog:
         # `progress` line for the same id reuses it (#674) -- protected by
         # `self._lock` like everything else that touches shared state here.
         self._first_token_ms: dict[int, int] = {}
+        # One `start`/`end` pair covers every attempt of a retried prompt
+        # (`core.prompt`'s own retry loop fires `effect_start` once, before
+        # the attempt loop runs), so `first_token_ms` must be reset when a
+        # new attempt's own first delta arrives, never carried over from an
+        # earlier, failed attempt the way the bare instance id would. Keyed
+        # the same as `_first_token_ms`; absent until the first progress
+        # call for a given instance names its own attempt.
+        self._first_token_ms_attempt: dict[int, int] = {}
         # `on_progress` fires from a streaming adapter's own reader thread
         # or `agent_live.LivePublisher`'s own throttling thread (#674) --
         # never the thread that called `on_start` for this path, so it
@@ -190,6 +198,17 @@ class EventLog:
         except Exception as exc:
             self._disable("dispatch", exc)
 
+    def current_instance(self, path: str) -> tuple[int, float] | None:
+        """The ``(instance id, started at)`` currently open for *path* --
+        ``Store.open_instance_id``'s own backing call (#674 review): a
+        streamed prompt's own attempt captures this once, right as it
+        begins, rather than letting a later ``progress`` line re-derive it
+        from this same lookup at fire time, which a same-path concurrent
+        ``start`` could have since moved on to a different instance.
+        """
+        with self._lock:
+            return self._open_by_path.get(path)
+
     def on_start(self, path: str, node: dict[str, Any]) -> None:
         del node
         if self._disabled:
@@ -235,6 +254,7 @@ class EventLog:
                     if self._open_by_path.get(path) == (instance_id, started_at):
                         del self._open_by_path[path]
                     self._first_token_ms.pop(instance_id, None)
+                    self._first_token_ms_attempt.pop(instance_id, None)
                 else:
                     instance_id = None
                     ms = None
@@ -261,12 +281,20 @@ class EventLog:
         """Write one ``progress`` line (#674): the same running figures
         ``meta.live`` carries (``tokens_received_estimate``,
         ``chars_received``, ``tokens_sent``, ``tokens_sent_estimate``),
-        plus ``id`` (the open ``start`` instance for *path* on this thread,
-        ``None`` if there is none) and ``ms``/``first_token_ms`` computed
-        from that instance's own start time -- the same reference
-        :meth:`on_complete`'s own ``ms`` uses, so the two can never drift.
-        Called only on a streamed prompt's own throttled publishes, never
-        on the write that starts or clears ``meta.live``.
+        plus ``id`` and ``ms``/``first_token_ms`` computed from that
+        instance's own start time -- the same reference :meth:`on_complete`'s
+        own ``ms`` uses, so the two can never drift. Called only on a
+        streamed prompt's own throttled publishes, never on the write that
+        starts or clears ``meta.live``.
+
+        ``data['_instance']`` (set by :meth:`Store.resolve_open_instance`,
+        captured once when the attempt began) is preferred over a fresh
+        ``_open_by_path`` lookup here: a same-path concurrent ``start`` (an
+        unnamed tree-flow loop sharing one compiled path) can have since
+        moved that lookup on to a different instance than the one this
+        progress line actually belongs to. Absent only for a caller that
+        predates the capture-at-attempt-start convention, in which case
+        this falls back to the lookup as before.
         """
         if self._disabled:
             return
@@ -274,13 +302,25 @@ class EventLog:
             with self._lock:
                 if self._disabled:
                     return
-                open_instance = self._open_by_path.get(path)
+                captured = data.get("_instance")
+                open_instance = captured if captured is not None else self._open_by_path.get(path)
                 if open_instance is not None:
                     instance_id, started_at = open_instance
                     ms = max(0, round((time.monotonic() - started_at) * 1000))
                 else:
                     instance_id = None
                     ms = None
+                attempt = data.get("attempt")
+                if (
+                    instance_id is not None
+                    and attempt is not None
+                    and self._first_token_ms_attempt.get(instance_id) != attempt
+                ):
+                    # A new attempt's own first delta -- the previous
+                    # attempt's `first_token_ms`, if any, belongs to a
+                    # failed try and must not leak into this one's.
+                    self._first_token_ms.pop(instance_id, None)
+                    self._first_token_ms_attempt[instance_id] = attempt
                 first_token_ms: int | None
                 if instance_id is None:
                     first_token_ms = None

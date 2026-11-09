@@ -1081,6 +1081,7 @@ def run(req: RunRequest) -> RunResult:
             branch_settled=req.branch_settled_observer,
             report=_compose_report_observers(report_observers),
             progress=_compose_progress_observers(progress_observers),
+            open_instance_id=None if event_log is None else event_log.current_instance,
             _lock=store_lock,
         )
 

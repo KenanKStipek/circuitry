@@ -26,6 +26,16 @@ _ReportCallback = Callable[[str, str, str, Any], None]
 #: ``meta.live``.
 _ProgressCallback = Callable[[str, dict[str, Any]], None]
 
+#: ``Store.open_instance_id`` -- ``(path) -> (instance id, started at) |
+#: None``, a query rather than a notification: the currently open
+#: ``--events`` ``start`` instance for *path*, read the moment a prompt's
+#: own attempt begins (#674) so its later ``progress`` lines always carry
+#: the instance they actually belong to, never one re-derived at fire
+#: time from a lookup that a same-path concurrent ``start`` (an unnamed
+#: tree-flow loop sharing one compiled path) could have since moved on to
+#: a different instance.
+_OpenInstanceQuery = Callable[[str], "tuple[int, float] | None"]
+
 
 def replace_node(
     state: dict[str, Any], parts: list[str], replacement: dict[str, Any]
@@ -131,6 +141,22 @@ def _prefixed_progress_cb(
     return _forward
 
 
+def _prefixed_open_instance_id_cb(
+    callback: _OpenInstanceQuery | None, prefix: str
+) -> _OpenInstanceQuery | None:
+    """Wrap ``open_instance_id`` the same way :func:`_prefixed_progress_cb`
+    wraps ``progress`` -- a query, not a notification, so this returns the
+    parent's own answer for the nested path rather than forwarding void.
+    """
+    if callback is None or not prefix:
+        return callback
+
+    def _query(path: str) -> tuple[int, float] | None:
+        return callback(_under_prefix(prefix, path))
+
+    return _query
+
+
 @dataclass
 class Store:
     """
@@ -188,6 +214,9 @@ class Store:
     #: timestamps/version), and never on the write that starts or clears
     #: ``meta.live`` itself.
     progress: _ProgressCallback | None = None
+    #: See ``_OpenInstanceQuery`` above. ``None`` when nothing is wired
+    #: (no ``--events``, or a store built without one, e.g. most tests).
+    open_instance_id: _OpenInstanceQuery | None = None
     _path_prefix: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     #: The top-level state dict this store is a view into; None for a root.
@@ -302,6 +331,7 @@ class Store:
             branch_settled=self.branch_settled,
             report=self.report,
             progress=self.progress,
+            open_instance_id=self.open_instance_id,
             _path_prefix=new_prefix,
             _lock=self._lock,
             _root_state=self.root_state,
@@ -367,6 +397,9 @@ class Store:
                 ),
                 report=_prefixed_report_cb(self.report, self._path_prefix),
                 progress=_prefixed_progress_cb(self.progress, self._path_prefix),
+                open_instance_id=_prefixed_open_instance_id_cb(
+                    self.open_instance_id, self._path_prefix
+                ),
                 _lock=self._lock,
                 _true_root=self.true_root_state,
             )
@@ -538,6 +571,20 @@ class Store:
         if self.progress is None:
             return
         self.progress(self.effect_path(name), data)
+
+    def resolve_open_instance(self, name: str) -> tuple[int, float] | None:
+        """The ``--events`` ``start`` instance currently open for *name*,
+        read right now on this thread -- the capture-at-attempt-start call
+        a streamed prompt makes once, before it ever calls *on_progress*
+        (#674 review), so every later ``progress`` line it fires carries
+        this same instance, never one a same-path concurrent ``start``
+        (an unnamed tree-flow loop sharing one compiled path) has since
+        moved a path-keyed lookup on to. ``None`` when nothing is wired or
+        there is no such open instance.
+        """
+        if self.open_instance_id is None:
+            return None
+        return self.open_instance_id(self.effect_path(name))
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
