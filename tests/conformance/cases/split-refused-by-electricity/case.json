@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case: electricity refuses an effective config with splitting enabled",
+  "description": "runtime.complexity.splitting.enabled: true, with a budget this one small prompt never crosses -- the Python engine runs it normally. electricity refuses the whole document up front (the standard preview marker) because its effective config enables the size trigger, which it only parses, never runs.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "electricity_preview_ok": true,
+  "expect": "success"
+}

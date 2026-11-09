@@ -46,6 +46,7 @@ fn template_prompt(template: &str) -> PromptOp {
         retries: None,
         description: None,
         group: None,
+        split_budget_tokens: None,
     }
 }
 
@@ -358,6 +359,72 @@ async fn a_successful_decomposition_writes_the_merged_value_and_the_record() {
         .filter(|e| matches!(e, Event::Totals(meta) if meta.contains("\"decomposition\"")))
         .count();
     assert_eq!(bigs_own_totals, 1, "{events:?}");
+}
+
+/// `runtime.state.record_children` (issue #672): the score trigger's
+/// child grafts its own declared effects (`a`/`b`/`merge`, the plan's own
+/// top-level names) under the decomposing node, alongside `value`/`meta` --
+/// the same posture a `use` child's own `record_children` gives, ported to
+/// `decompose::maybe_decompose` by this change. Without the setting (the
+/// test right above this one), none of the child's effects land on `big`
+/// at all.
+#[tokio::test]
+async fn record_children_grafts_the_decomposition_childs_own_effects() {
+    let complexity = decomposing_complexity(10.0, 2, 5);
+    let replies = vec![
+        planner_reply(SOUND_PLAN_YAML, &["a", "b"]),
+        FakeAdapter::text("chunk a reply"),
+        FakeAdapter::text("chunk b reply"),
+    ];
+    let big = big_template();
+
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut state_cfg = Dict::new();
+    state_cfg.insert(Value::Str("record_children".to_string()), Value::Bool(true));
+    let mut runtime_cfg = Dict::new();
+    runtime_cfg.insert(Value::Str("state".to_string()), Value::Dict(state_cfg));
+    let runtime_config = Value::Dict(runtime_cfg);
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = Rc::new(FakeAdapter::new("scripted", replies));
+    let adapters = registry_with_scripted();
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    ctx.complexity = &complexity;
+    ctx.supported = electricity_bytecode::Supported::current(&[]);
+    ctx.runtime_config = &runtime_config;
+    let leaf = prompt_leaf(
+        root_path().push_name("big"),
+        "big",
+        template_prompt(&big),
+        OnError::Fail,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let observer = RecordingObserver::new();
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let big_node = as_dict(get(prime, "big").unwrap());
+    assert_eq!(
+        get(big_node, "value"),
+        Some(&Value::Str("merged".to_string()))
+    );
+    // The plan's own declared effects, grafted alongside value/meta.
+    assert!(get(big_node, "a").is_some(), "{big_node:?}");
+    assert!(get(big_node, "b").is_some(), "{big_node:?}");
+    assert!(get(big_node, "merge").is_some(), "{big_node:?}");
 }
 
 #[tokio::test]

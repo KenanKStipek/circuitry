@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 7: more parts than max_parts records too_many_parts and runs as-is",
+  "description": "runtime.complexity.splitting.max_parts: 2 with a list long enough to split into more than two whole-item slices at the configured budget -- meta.decomposition records reason: too_many_parts, outcome: run_as_is, and the prompt dispatches whole on its own path.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "items=[\"aa\", \"bb\", \"cc\", \"dd\", \"ee\", \"ff\"]"],
+  "expect": "success"
+}

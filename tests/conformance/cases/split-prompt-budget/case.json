@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 9: split.budget_tokens splits even with the runtime switch off",
+  "description": "runtime.complexity.splitting is entirely absent from config (the default, off), but the effect's own split.budget_tokens: 20 still splits its over-budget input -- the size trigger needs no runtime switch at all when an effect names its own budget.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #672 acceptance case 4: an object-schema prompt without split.merge.template fails under on_failure: fail",
+  "description": "runtime.complexity.splitting.on_failure: fail -- the same object-output prompt as split-no-merge-run-as-is, but this time no_merge propagates under the effect's own on_error as a DecompositionError, never dispatching the prompt at all.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

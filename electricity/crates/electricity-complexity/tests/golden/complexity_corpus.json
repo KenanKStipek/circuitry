@@ -45017,7 +45017,7 @@
       "raw": {
         "bogus": true
       },
-      "error": "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, scoring."
+      "error": "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, scoring, splitting."
     },
     {
       "description": "settings full block, enabled, weights and keywords",

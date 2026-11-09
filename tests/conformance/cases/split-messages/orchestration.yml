@@ -1,0 +1,14 @@
+name: split-messages
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    messages:
+      - role: system
+        content: "You summarize documents."
+      - role: user
+        content: "Summarize every paragraph in one line.\n\n{{input.doc}}"

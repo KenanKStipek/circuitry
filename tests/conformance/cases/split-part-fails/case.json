@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 7: a part failing fails the plan; nothing partial lands at the path",
+  "description": "One part's own model call fails -- the whole split fails as execution_failed, nothing partial ever lands at prime.big.value, and (on_failure: run_as_is, the default) the original prompt dispatches whole instead.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

@@ -1,0 +1,10 @@
+name: split-reference-twice
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    template: "First: {{input.doc}}\nAgain: {{input.doc}}"

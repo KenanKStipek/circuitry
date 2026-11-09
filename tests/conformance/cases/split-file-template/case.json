@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #672 acceptance case 6: a dispatch-time file template splits on its own text",
+  "description": "template: {file: ...} has no state references to analyze -- the file's own text is split directly (ref_path 'template'), each part sent as a literal {{{part}}}.",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": [
+    "-e", "work_dir=__CASE_DIR__",
+    "-e", "prompt_file=prompts/doc.txt"
+  ],
+  "expect": "success"
+}

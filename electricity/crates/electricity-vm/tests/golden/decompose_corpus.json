@@ -295,6 +295,16 @@
           [
             {
               "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
+            }
+          ],
+          [
+            {
+              "t": "str",
               "v": "score"
             },
             {
@@ -416,6 +426,16 @@
           [
             {
               "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
+            }
+          ],
+          [
+            {
+              "t": "str",
               "v": "score"
             },
             {
@@ -521,6 +541,16 @@
             {
               "t": "bool",
               "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
             }
           ],
           [
@@ -636,6 +666,16 @@
           [
             {
               "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
+            }
+          ],
+          [
+            {
+              "t": "str",
               "v": "score"
             },
             {
@@ -743,6 +783,16 @@
           [
             {
               "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
+            }
+          ],
+          [
+            {
+              "t": "str",
               "v": "score"
             },
             {
@@ -831,6 +881,16 @@
             {
               "t": "bool",
               "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
             }
           ],
           [
@@ -3345,6 +3405,7 @@
       "depth": 0,
       "expected_key_order": [
         "decomposed",
+        "trigger",
         "score",
         "threshold",
         "depth",
@@ -3367,6 +3428,16 @@
             {
               "t": "bool",
               "v": true
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "trigger"
+            },
+            {
+              "t": "str",
+              "v": "score"
             }
           ],
           [

@@ -92,6 +92,16 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     );
     add("PromptDefinition", "enabled", "op::Op::enabled");
     add("PromptDefinition", "group", "effects::PromptOp::group");
+    add(
+        "PromptDefinition",
+        "split",
+        "documented divergence: only split.budget_tokens is IR-carried \
+         (effects::PromptOp::split_budget_tokens, read solely by the preview \
+         refusal walk) -- issue #672's size trigger is a Python-only preview \
+         feature electricity refuses up front rather than running, so the \
+         rest of the block (enabled/max_parts/separator/merge) has nothing \
+         to carry it to.",
+    );
 
     // MessageDef -> effects::Message
     add(

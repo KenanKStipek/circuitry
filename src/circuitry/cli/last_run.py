@@ -112,6 +112,11 @@ class LastRun:
         return value if isinstance(value, bool) else None
 
     @property
+    def split(self) -> bool | None:
+        value = self.args.get("split")
+        return value if isinstance(value, bool) else None
+
+    @property
     def env_pairs(self) -> list[str]:
         pairs = self.args.get("env_vars")
         if not isinstance(pairs, list):

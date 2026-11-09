@@ -620,6 +620,59 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             runtime_yaml="complexity:\n  1: x\n",
         )
     )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_needs_no_scoring_prerequisite",
+            runtime={
+                "complexity": {
+                    "splitting": {"enabled": True, "max_input_tokens": 1000}
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_enabled_without_a_budget_is_an_error",
+            runtime={"complexity": {"splitting": {"enabled": True}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_enabled_with_only_models_is_valid",
+            runtime={
+                "complexity": {
+                    "splitting": {
+                        "enabled": True,
+                        "models": {"llama3.1:8b": 24000},
+                    }
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_max_input_tokens_must_be_positive",
+            runtime={"complexity": {"splitting": {"max_input_tokens": 0}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_max_parts_must_be_at_least_two",
+            runtime={"complexity": {"splitting": {"max_parts": 1}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_on_failure_must_be_a_valid_choice",
+            runtime={"complexity": {"splitting": {"on_failure": "bogus"}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_splitting_unknown_key_is_rejected",
+            runtime={"complexity": {"splitting": {"budget": 100}}},
+        )
+    )
 
     # --- build_persistence_backend: the alias lookup and per-backend validation ---
     cases.append(persistence_case("persistence_disabled_is_never_validated", runtime={"persistence": {"backend": "nonsense"}}))

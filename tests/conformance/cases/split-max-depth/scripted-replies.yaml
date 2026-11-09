@@ -1,0 +1,6 @@
+prime.big.parts.iter_0.map:
+  - text: "part0 short reply text"
+prime.big.parts.iter_1.map:
+  - text: "part1 short reply text"
+prime.big.merge:
+  - text: "whole reply"
