@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #682: a text join merge with an explicit split.separator",
+  "description": "split-text-join's own companion with the default blank-line separator overridden: split.separator joins the parts' own replies with ' | ' instead.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}
