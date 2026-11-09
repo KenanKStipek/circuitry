@@ -2275,8 +2275,10 @@ tokens_sent_p50`/`tokens_received_p50`, pooled the same "earlier
 versions" way `tokens_p50` already is, split into its own two
 halves -- rounded up to the nearest of a doubling series (`300, 600,
 1200, ...` sent, `40, 80, 160, ...` received); without enough
-history, `600`/`80`, doubled exactly once if the run's own total so
-far has already passed it, and never again. `SignalScreen::
+history, `600`/`80`, doubled exactly once if the run's own largest
+single column has already passed it (never the run's own running
+total, which almost every run passes long before any one column
+does), and never again. `SignalScreen::
 step_rows` is one entry per top-level row that has started, in plan
 order, at its own start column: a finished prompt's tokens and
 deviation and its reply's own first words, a tool as a bar from its
@@ -2296,28 +2298,48 @@ at all) is reused here too, for "waits for a slot" and "Next
 Signal" to see a pass neither the loop nor the pass itself has a
 `Row` for yet.
 
+**The trace's own visible window.** A run that outgrows the pane's
+own width (past about 11 s at the default 100 ms per column, at 120
+columns) keeps scrolling so the cursor -- Now, while following it
+-- never runs off the right edge: `tui::signal_window_start` keeps a
+quarter of the pane's own width ahead of it once the run is longer
+than that, buckets, marks, step rows and the seconds row all reading
+at `start_col + col` from then on. A step row that started before
+the window's own left edge simply isn't drawn (off screen, same as
+anything before column `0` always was); a tool's own bar still
+draws, clipped to the window's own edge, for as long as it is still
+running past it.
+
 **Keys.** `←`/`→` (`keys::App::signal_scrub`) move the scrub cursor
 one column at a time, seeded from `signal_now_col` (a cache of the
 latest redraw's own Now column, the same way `tree_viewport` already
 caches a height for the next key to clamp against) and clamped to
 `[0, now_col]`; `n` (`signal_now`) clears it, following again. `+`/
 `-` (`signal_zoom_in`/`_out`) step `column_ms` through five levels
-(`50, 100, 200, 500, 1000`), clamped at both ends. `⏎` toggles the
-same `tape_fullscreen_step` flag the Tape's own `⏎` does, opening
-`SignalScreen::selected` (the step under the cursor -- Now's own
-column while following, built the same `build_focused_step` way the
-Tape's detail pane's is) full-screen (`tui::draw_signal_detail`, a
-plainer block than the Tape's own: Status and, for a prompt, its own
-Reply in full -- no history/share lines, since Signal's own model
-carries none of that per row). A scrubbed cursor only ever moves
-which column the Now sweep, the marks and Readings' own peak read
-from (and which step `⏎` opens) -- §2.2's own "the step rows and the
-Now pane follow the cursor's column" isn't built yet; both keep
-showing the run's own current state regardless of the cursor, short
-of the full historical reconstruction that would need (re-
-truncating `flat`/`rows` to the cursor's own timestamp, the way the
-goldens' own test harness truncates a fixture); see "Not yet
-shipped" below.
+(`50, 100, 200, 500, 1000`), clamped at both ends, and reset a
+scrubbed cursor back to Now, since a column's own width just changed
+under it. `⏎` toggles the same `tape_fullscreen_step` flag the
+Tape's own `⏎` does, only while `SignalScreen::selected` (the step
+under the cursor) is actually `Some` -- switching screens resets the
+toggle too, so the Tape's own open step view can never reappear as
+Signal's, or Signal's as the Tape's -- opening it full-screen
+(`tui::draw_signal_detail`, a plainer block than the Tape's own:
+Status and, for a prompt, its own Reply in full -- no history/share
+lines, since Signal's own model carries none of that per row). The
+scrubbed cursor itself is drawn (`tui::draw_signal_chart`'s own
+`selection.bg` tint down the trace's whole height, distinct from the
+Now sweep's own bold accent whenever the two differ) and moves which
+column Readings' own Peak, Largest and Quiet read up to -- Sent,
+Received and Ratio stay the run's own running totals, and the step
+rows and the Now pane keep showing the run's own current state
+regardless of the cursor, short of the full historical
+reconstruction that would need (re-truncating `flat`/`rows` to the
+cursor's own timestamp, the way the goldens' own test harness
+truncates a fixture); see "Not yet shipped" below. The Help overlay
+(`?`) is Signal's own dedicated one (`signal_help_lines`), the same
+fixed `2,5,72,18` overlay the Tape's own `Help · Tape` uses, listing
+exactly `←→`, `+/-`, `n`, `⏎` and the globals every key bar shares --
+never the shared, centred overlay Flow and Cost still fall back to.
 
 **Sizes.** 120 columns and up: the trace sits above the Now pane and
 Readings, side by side (roughly 52/48); 80-119: Readings drops, the
@@ -2411,10 +2433,10 @@ Next Signal.
 
 **Not yet shipped.** §2.2's own "the step rows and the Now pane
 follow the cursor's column" (the scrubbed-cursor half of §6.3e's
-own "Keys" above): ←/→ move the cursor and it drives the axis's own
-marks and Readings' own peak, but the step rows and the Now pane
-keep showing the run's current state regardless, not the state as
-of that past column. The Totals row's cost figure reads `—` on every
+own "Keys" above): ←/→ move the cursor, draw it, and drive
+Readings' own Peak, Largest and Quiet, but the step rows and the
+Now pane keep showing the run's current state regardless, not the
+state as of that past column. The Totals row's cost figure reads `—` on every
 screen until a run reports one (`meta.cost_usd`,
 `runtime.last_run.totals.cost_usd`); the frames' scripted adapter
 never does, so every frame reads `—` too. The Help overlay's own six
@@ -2453,7 +2475,7 @@ figures.
 - **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSI_E2E_ELECTRICITY=1`.
 - **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/log/token-bar/header change each, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSI_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
 - **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents using only `tool`/`json`, `dynamic`, a CEL `if` and `finally:`, recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
-- **The Time screen (issue #650).** `oscilloscope-core/src/time.rs` unit-tests every pure piece on its own: tick choice across spans from 30s to 6h, and that ticks stay about 10 columns apart at any width; `bar_cells`'s own partial-block end, an exact cell boundary (no partial glyph), and a running bar clamped to the axis's own end; `now_column` outside the axis; ghost bars shifted by `vs_usual_shift_s` (zero before any step finishes, `None` below the same-hash run threshold or after an edit with nothing pooled to fall back on), and `None` below the run threshold or with no shift to apply; loop expand for a named chain loop (including one whose own `iter_N` carries no `{value, meta}`, only its child does -- the real shape a live PTY run against `cof` caught), a named tree loop's two overlapping passes both keeping their own real span, double-digit pass indices sorting correctly against single-digit ones (`iter_9` next to `iter_10`, the one case a naive string-prefix check alone would get wrong), an unnamed loop's own body leaf (never a `RowKind::Loop` row, against a real compiled plan) expanding its passes by event id, and the same leaf with no `--events` staying one row; the events/min strip with and without events (and its own per-minute overflow tail folded in, and a currently running leaf's own start alongside a finished interval's), `quiet_agent`'s own lone-running-prompt-at-a-low-rate rule, decisions keeping only the first sighting per path, in-flight heights by overlap, and `queued_now`; the zoom pane's agent bands (gaps covered by `think`, a still-running call extended to now, no calls at all) and its footer's busiest-tool percentage; vs-usual marks at the 3- and 5-run thresholds (including that a still-running step never reads faster-than-usual early), `earlier_versions` correctly telling "too few runs at all" apart from "enough pooled history, just not of this hash", and the too-few-runs case. `oscilloscope-core/src/screens.rs` covers `build_time_screen` end to end against a real compiled plan: a running row's own bar and the now line, a loop row's passes spliced in only once `app.time_expanded_loops` names it, and `TimeZoomExtra` for a container (direct children only, not a grandchild) and for a running tool/prompt (`running`/`waiting for the reply`) and a finished one with pooled p50/p90. `oscilloscope-core/tests/time_parity.rs` mirrors `flow_parity.rs`: the same row paths/labels/statuses (never timing) on both engines' recorded fixtures, including a's and b's own quick-steps fold agreeing. `tui.rs` unit-tests `time_bar_string`'s own running head and failed end, `overlay_now_line`'s own head-stays-one-cell-left-of-the-now-line rule, `multi_segment_bar`, and `zoom_container_budget`'s own `+N more` reserve, all directly rather than only through a golden. `tui.rs`'s own golden tests cover the Time screen at 120×40, 100×30, 80×24 and 70×20, running and finished, with and without history, a collapsed and an expanded loop, and a running agent in the zoom pane with a real transcript (bands, footer, and a dim `…` once the tail is marked as not reaching the session's own start) and, separately, with none at all (`running: <tool>`); a 400-pass loop still collapses to one row, the existing 2,000-node timing test also builds and draws the Time screen within the same budget, and a second 2,000-node timing fixture uses real clock times rather than the shared fixture's unparseable ones, so its own timing actually exercises the bar/strip arithmetic rather than measuring blank rows. `oscilloscope/tests/e2e_tui_pty.rs`'s `pressing_1_during_a_live_run_opens_the_time_screen` presses `1` during a live `cof` run, checks a running row's own bar and the now line, navigates to a finished loop row and presses `⏎` for one row per pass, then `+` and `=`, each checked against its own incremental output rather than the whole buffer (which already contained everything either key's own check was looking for). `oscilloscope/tests/e2e_history.rs` gains an electricity-only run history test and one that pools a `cof` run and an `electricity` run of the identical document under one `document_hash`. `oscilloscope-core/src/history.rs` covers `build_record` folding overflowed passes into `(other)` once the interval log's own cap is reached.
+- **The Signal screen (issue #688, replacing the Time screen of issue #650).** `oscilloscope-core/src/screens.rs` unit-tests `build_signal` end to end against synthetic rows and nodes: the axis rule with history (1.5x the usual largest step, the smallest doubling-series value at or above it) and without (600/80, doubled once past the run's own largest single column, never past the run's own running total, and never a second time); two prompts ending in the same 100 ms column summing into it rather than each getting their own; a decision's own `◆` mark winning over a finished prompt's `✓` sharing its column; a running prompt's own live estimate landing in the Now column, never the column its own start time would otherwise place it at; and Readings' own ratio and peak. `oscilloscope/src/keys.rs` unit-tests `←→` scrubbing one column at a time and clamping to Now and zero, `+`/`-` stepping the five zoom levels and clamping at both ends (and resetting a scrubbed cursor back to Now, since a column's own width just changed under it), `n` returning to Now, `⏎` toggling the full-screen step view only while a step is actually under the cursor, and switching screens resetting that shared toggle. `oscilloscope/src/tui.rs` unit-tests the chart directly: a live column's own bar draws faint, never in the Now sweep's bold style; a run many times longer than the pane is wide still keeps the sweep on screen (the trace's own window scrolls to follow the cursor, or Now while following it); a scrubbed cursor is tinted distinctly from the sweep; an axis top of 1,200 or more is never cut, with its own thousands separator; and the Help overlay lists exactly Signal's own keys, not Flow's or Cost's older generic list. `tui.rs`'s own golden tests cover the Signal screen at 120×30 and 80×24 against the design's own frames, replayed from the `run2` fixture frozen 3.62s after its own start with three pooled history runs. `oscilloscope/tests/e2e_tui_pty.rs` presses `1` during a live `cof` run and checks the Now sweep and the running step's own row, scrubs, zooms and returns to Now, opens and closes the full-screen step view, returns to the Tape with `0`, and separately checks that 80 columns drops the Readings pane and that below 80 columns Signal bounces back to the Tape on its own, picked up on the next redraw with no key needed.
 
 ---
 

@@ -209,10 +209,10 @@ and turn follow off unless the move lands the selection right back
 on the row follow would have picked itself -- `f` toggles follow by
 hand. `T` cycles the colour theme; `?` opens Help, listing exactly
 this screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
-Tape keys at all -- they still work on the time, flow and cost
-screens below, which keep their own panes until their own part of
-this redesign. Below 60×24, every screen -- not only the Tape --
-shows the too-small notice instead.
+Tape keys at all -- they still work on the flow and cost screens
+below, which keep their own panes until their own part of this
+redesign. Below 60×24, every screen -- not only the Tape -- shows
+the too-small notice instead.
 
 ### `--glance`
 
@@ -253,15 +253,23 @@ shows the run's own sent, received, their ratio, the largest column
 (tokens and clock), the single largest finished prompt, and how long
 since the last burst.
 
-`←`/`→` scrub a cursor along the axis, turning follow off; `n`
-returns it to Now. `+`/`-` zoom the column width from 50 ms to 1 s
-(100 ms the default). `⏎` opens the step under the cursor
-full-screen, the same view the Tape's own `⏎` does.
+`←`/`→` scrub a cursor along the axis, drawn distinctly from the Now
+sweep, turning follow off; `n` returns it to Now, and moves which
+column Readings' own Peak, Largest and Quiet read up to. `+`/`-`
+zoom the column width from 50 ms to 1 s (100 ms the default), and
+return a scrubbed cursor to Now. `⏎` opens the step under the
+cursor full-screen, in a plainer view than the Tape's own `⏎` --
+Status and, for a prompt, its own Reply in full, nothing else -- and
+only while there's a step under the cursor to show at all. A run
+longer than the pane is wide scrolls to keep the cursor (Now, while
+following it) on screen.
 
-At 120 columns and up, the trace sits above the Now pane and
-Readings side by side; 80–99, Readings drops and the Now pane keeps
-only the running rows, with a shortened title; below 80 columns the
-Signal isn't offered.
+At 120 columns and 30 rows and up, the trace sits above the Now pane
+and Readings side by side; 80–119 columns, or rows 24–29 even at full
+width, Readings drops and the Now pane keeps only the running rows,
+with a shortened title; below 80 columns the Signal isn't offered,
+bouncing back to the Tape on its own if the terminal shrinks below
+it while Signal is on screen.
 
 ### Screen 2 (`flow`): the tree as control flow
 
