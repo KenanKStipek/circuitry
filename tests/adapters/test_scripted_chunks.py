@@ -177,7 +177,7 @@ def test_chunks_reply_final_state_matches_the_same_reply_without_chunks(tmp_path
 def test_chunks_inside_a_use_child_fires_progress_namespaced_under_the_parent(
     tmp_path: Path,
 ) -> None:
-    """#674 review finding 5: a streamed prompt running inside a `use`
+    """A streamed prompt running inside a `use`
     child's own `progress` line must carry the parent's own path, the
     same way its `start`/`end` events already do."""
     child_orch_path = tmp_path / "child.yml"

@@ -69,7 +69,7 @@ class _NeverRespondsHandler(http.server.BaseHTTPRequestHandler):
 class _OllamaTwoDeltasThenHangsHandler(http.server.BaseHTTPRequestHandler):
     """Two real NDJSON deltas, then silence past ``--max-time`` -- the
     shape a mid-stream timeout takes once the model has already answered
-    something (#674 review finding 1)."""
+    something (#674)."""
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", 0))
@@ -274,7 +274,7 @@ def test_streamed_timeout_classifies_the_same_as_a_non_streamed_one() -> None:
 
 
 def test_streamed_timeout_after_real_deltas_never_leaks_partial_text() -> None:
-    """#674 review finding 1: a timeout reached only after the model has
+    """A timeout reached only after the model has
     already answered something must fail with the same text an empty-body
     timeout gives -- never the partial reply sitting in curl's own
     ``--no-buffer``-flushed stdout."""

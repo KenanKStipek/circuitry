@@ -484,7 +484,7 @@ def test_current_instance_matches_the_open_starts_id_and_is_none_after_complete(
 def test_on_progress_prefers_a_captured_instance_over_a_later_same_path_start(
     tmp_path: Path,
 ) -> None:
-    """#674 review finding 9: a same-path concurrent `start` (an unnamed
+    """A same-path concurrent `start` (an unnamed
     tree-flow loop sharing one compiled path) must not steal an earlier
     attempt's own `progress` line -- the captured `_instance` (taken once,
     when that attempt began) always wins over a fresh path lookup."""
