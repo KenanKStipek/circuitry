@@ -95,6 +95,29 @@ pub fn format_tokens(n: u64) -> String {
     format!("{n} t")
 }
 
+/// Thousands-separated, no unit suffix (`design/tui-design.md` §3.8:
+/// "tokens with thousands separators and a space before `t`") --
+/// the Tape's own scale, never [`format_tokens`]'s `kt`/`Mt`
+/// abbreviation, which the screens built before this design still
+/// use.
+pub fn format_tokens_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// [`format_tokens_thousands`], with the Tape's own ` t` unit
+/// suffix: `215 t`, `1,902 t`.
+pub fn format_tokens_t(n: u64) -> String {
+    format!("{} t", format_tokens_thousands(n))
+}
+
 /// A store's own share of a total, as a percentage (issue #641):
 /// `{share:.0}%` alone reads a share under 0.5% back as a plain
 /// `0%`, indistinguishable from one that is actually zero -- any

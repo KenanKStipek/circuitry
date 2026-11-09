@@ -1360,7 +1360,7 @@ pub enum FullValueField {
     Value,
 }
 
-fn display_value(v: &Value) -> String {
+pub(crate) fn display_value(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),

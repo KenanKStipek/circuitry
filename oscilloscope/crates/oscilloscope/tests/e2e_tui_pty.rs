@@ -1884,18 +1884,13 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         !rendered.contains("aborted"),
         "the TUI showed the finished run as aborted instead of failed; got:\n{rendered:?}"
     );
-    // The header's own status span starts a fresh styled run right
-    // at the word `failed` -- an SGR sequence (ending `m`) directly
-    // followed by the literal text, rather than every other place
-    // `failed` appears in this buffer (the plan/log rows and the
-    // error text print it mid-line, after a cursor-position escape
-    // or a plain space, never straight out of an `m`). Checking for
-    // that shape, rather than crossterm's own exact SGR encoding for
-    // `Color::Red` (review finding 3 on PR #496), survives a
-    // dependency bump that changes how a color is encoded without
-    // losing what this assertion is actually for.
+    // The Tape's own header band (issue #678) carries the status
+    // glyph and word together, `✗ Failed`, right out of its own SGR
+    // run -- the same "straight out of an `m`" shape the old header
+    // line's bare `failed` used to check for (review finding 3 on PR
+    // #496), just with the glyph ahead of the Title Case word now.
     assert!(
-        rendered.contains("mfailed"),
+        rendered.contains("m✗ Failed"),
         "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
 

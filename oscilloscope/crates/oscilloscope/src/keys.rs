@@ -191,6 +191,14 @@ pub struct App {
     /// The vs usual pane's own scroll position and interior height.
     pub time_vs_usual_scroll: usize,
     pub time_vs_usual_viewport: usize,
+    /// The Tape's own previews toggle (issue #678, §4's `p`): on by
+    /// default at 120 columns and up (§9's settled point 4).
+    pub tape_previews_on: bool,
+    /// The Tape's own token column toggle (§4's `t`): fixed-scale
+    /// bars by default, the deviation-from-usual view once set.
+    pub tape_tokens_view: bool,
+    /// ⏎ on the Tape (§4): the selected row's own step, full-screen.
+    pub tape_fullscreen_step: bool,
 }
 
 impl App {
@@ -231,6 +239,9 @@ impl App {
             time_zoom_viewport: 0,
             time_vs_usual_scroll: 0,
             time_vs_usual_viewport: 0,
+            tape_previews_on: true,
+            tape_tokens_view: false,
+            tape_fullscreen_step: false,
         }
     }
 
@@ -459,25 +470,14 @@ impl App {
                     self.collapsed.remove(path);
                 }
             }
-            // Issue #626: ⏎ on the overview opens screen 2 with the
-            // running step selected -- the same deepest-running-row
-            // tie-break `follow_target` and the now pane's own focus
-            // use, over the rows actually visible right now (root
-            // excluded: it's "running" for the whole run, never a
-            // real step to jump to).
-            KeyCode::Enter if self.screen == Screen::Overview => {
-                if let Some(target) = rows
-                    .iter()
-                    .filter(|r| {
-                        r.status.kind == oscilloscope_core::model::StatusKind::Running
-                            && r.kind != oscilloscope_core::render::RowKind::Root
-                    })
-                    .max_by_key(|r| r.depth)
-                {
-                    let path = target.path.clone();
-                    self.screen = Screen::Flow;
-                    self.select_tree_path(Some(path));
-                }
+            // Issue #678 (design v1 §4): ⏎ on the Tape opens the
+            // selected row's own step full-screen -- `esc` or ⏎
+            // again returns to the list.
+            KeyCode::Enter if self.screen == Screen::Tape => {
+                self.tape_fullscreen_step = !self.tape_fullscreen_step;
+            }
+            KeyCode::Esc if self.tape_fullscreen_step => {
+                self.tape_fullscreen_step = false;
             }
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
@@ -580,7 +580,16 @@ impl App {
                     self.screen = screen;
                 }
             }
-            KeyCode::Char('t') => return Action::CycleTheme,
+            // Issue #678: `T` cycles the theme (moved from `t`,
+            // which the Tape now uses for its own token column);
+            // `t`/`p` below are no-ops on every other screen.
+            KeyCode::Char('T') => return Action::CycleTheme,
+            KeyCode::Char('t') if self.screen == Screen::Tape => {
+                self.tape_tokens_view = !self.tape_tokens_view;
+            }
+            KeyCode::Char('p') if self.screen == Screen::Tape => {
+                self.tape_previews_on = !self.tape_previews_on;
+            }
             // Issue #635: the Flow screen's own content swaps -- `s`
             // for the selected pane (the focused step's own detail vs
             // today's state tree, so a named report stays
@@ -1438,31 +1447,13 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_the_overview_opens_screen_2_with_the_running_step_selected() {
-        let rows = [
-            row("prime", 0, StatusKind::Running),
-            row("prime.a", 1, StatusKind::Done),
-            row("prime.b", 1, StatusKind::Running),
-        ];
-        let visible: Vec<&Row> = rows.iter().collect();
+    fn enter_on_the_tape_toggles_the_fullscreen_step_view() {
         let mut app = App::new(false);
-        assert_eq!(
-            app.screen,
-            Screen::Overview,
-            "the overview is the default screen"
-        );
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
-        assert_eq!(app.screen, Screen::Flow);
-        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
-    }
-
-    #[test]
-    fn enter_on_the_overview_with_nothing_running_does_nothing() {
-        let rows = [row("prime.a", 1, StatusKind::Done)];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Enter), &visible, &[], true, false, &[]);
-        assert_eq!(app.screen, Screen::Overview);
+        assert_eq!(app.screen, Screen::Tape, "the Tape is the default screen");
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(!app.tape_fullscreen_step);
     }
 
     #[test]
@@ -1994,22 +1985,55 @@ mod tests {
     }
 
     #[test]
-    fn t_returns_the_cycle_theme_action() {
+    fn shift_t_returns_the_cycle_theme_action() {
         let mut app = App::new(false);
         assert_eq!(
-            app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false, &[]),
+            app.handle_key(key(KeyCode::Char('T')), &[], &[], true, false, &[]),
             Action::CycleTheme
         );
     }
 
     #[test]
+    fn t_on_the_tape_toggles_the_tokens_view_instead_of_the_theme() {
+        let mut app = App::new(false);
+        app.screen = Screen::Tape;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false, &[]),
+            Action::None
+        );
+        assert!(app.tape_tokens_view);
+        app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false, &[]);
+        assert!(!app.tape_tokens_view);
+    }
+
+    #[test]
+    fn p_on_the_tape_toggles_previews() {
+        let mut app = App::new(false);
+        app.screen = Screen::Tape;
+        assert!(app.tape_previews_on);
+        app.handle_key(key(KeyCode::Char('p')), &[], &[], true, false, &[]);
+        assert!(!app.tape_previews_on);
+    }
+
+    #[test]
+    fn enter_on_the_tape_opens_the_selected_steps_fullscreen_view() {
+        let mut app = App::new(false);
+        app.screen = Screen::Tape;
+        assert!(!app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert!(!app.tape_fullscreen_step);
+    }
+
+    #[test]
     fn zero_and_two_switch_screens() {
         let mut app = App::new(false);
-        assert_eq!(app.screen, Screen::Overview);
+        assert_eq!(app.screen, Screen::Tape);
         app.handle_key(key(KeyCode::Char('2')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Flow);
         app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &[]);
-        assert_eq!(app.screen, Screen::Overview);
+        assert_eq!(app.screen, Screen::Tape);
     }
 
     #[test]
@@ -2171,7 +2195,7 @@ mod tests {
     #[test]
     fn cost_keys_do_nothing_outside_the_cost_screen() {
         let mut app = App::new(false);
-        assert_eq!(app.screen, Screen::Overview);
+        assert_eq!(app.screen, Screen::Tape);
         let tree = vec![cost_leaf("agent", 60)];
         app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &tree);
         assert_eq!(app.cost_measure, Measure::Total);
@@ -2491,7 +2515,7 @@ mod tests {
     #[test]
     fn plus_minus_and_equals_are_no_ops_off_the_time_screen() {
         let mut app = App::new(false);
-        app.screen = Screen::Overview;
+        app.screen = Screen::Tape;
         app.handle_key(key(KeyCode::Char('+')), &[], &[], false, false, &[]);
         assert_eq!(app.time_zoom, None);
     }

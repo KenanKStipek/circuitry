@@ -1,31 +1,33 @@
-//! Screens (issue #626): `Screen` names the four screens `osi`
+//! Screens (issue #626): `Screen` names the five screens `osi`
 //! switches between with `0`-`3`; [`header_line`] builds the one
 //! line every screen shares (replacing the old three-row header);
-//! [`Overview`] is screen 0's own model, built from exactly the
-//! same inputs `render::build` already has (the live state,
-//! `--events`, the plan and `runtime.last_run.totals` -- no engine
-//! change). Neither function draws anything -- no terminal code
-//! lives here (DESIGN.md §6.1), so `oscilloscope`'s `tui.rs` is the
-//! only thing that turns a segment's role or a card's field into
-//! colour and position.
+//! [`TapeScreen`] is screen 0's own model (issue #678, replacing the
+//! old Overview), built from exactly the same inputs `render::build`
+//! already has (the live state, `--events`, the plan and
+//! `runtime.last_run.totals` -- no engine change). Neither function
+//! draws anything -- no terminal code lives here (DESIGN.md §6.1),
+//! so `oscilloscope`'s `tui.rs` is the only thing that turns a
+//! segment's role or a row's field into colour and position.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::fold::is_quick_step;
 use crate::format::{ClockZone, format_clock_time};
-use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind, run_totals};
+use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind};
 use crate::observe::duration_seconds;
 use crate::plan::PlanTree;
-use crate::render::{Row, RowKind, TokenBar, TokenBlock, details_for, token_bar_in_flight_line};
+use crate::render::{Row, RowKind, TokenBlock, details_for};
 
 /// Which of the four screens is on display (issue #650: all four
 /// now have a screen to show).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
+    /// The home screen (issue #678's design v1, replacing the old
+    /// overview): one time axis, the Now band, a fixed-scale token
+    /// column.
     #[default]
-    Overview,
+    Tape,
     Time,
     Flow,
     Cost,
@@ -34,7 +36,7 @@ pub enum Screen {
 impl Screen {
     pub fn number(self) -> u8 {
         match self {
-            Screen::Overview => 0,
+            Screen::Tape => 0,
             Screen::Time => 1,
             Screen::Flow => 2,
             Screen::Cost => 3,
@@ -43,7 +45,7 @@ impl Screen {
 
     pub fn label(self) -> &'static str {
         match self {
-            Screen::Overview => "overview",
+            Screen::Tape => "tape",
             Screen::Time => "time",
             Screen::Flow => "flow",
             Screen::Cost => "cost",
@@ -53,7 +55,7 @@ impl Screen {
     pub fn is_available(self) -> bool {
         matches!(
             self,
-            Screen::Overview | Screen::Time | Screen::Flow | Screen::Cost
+            Screen::Tape | Screen::Time | Screen::Flow | Screen::Cost
         )
     }
 
@@ -62,7 +64,7 @@ impl Screen {
     /// callers never need a second check of [`Screen::is_available`].
     pub fn from_key(c: char) -> Option<Screen> {
         let screen = match c {
-            '0' => Screen::Overview,
+            '0' => Screen::Tape,
             '1' => Screen::Time,
             '2' => Screen::Flow,
             '3' => Screen::Cost,
@@ -73,7 +75,7 @@ impl Screen {
 
     /// Every screen with a tab, in tab order (issue #626's header).
     pub fn available() -> &'static [Screen] {
-        &[Screen::Overview, Screen::Time, Screen::Flow, Screen::Cost]
+        &[Screen::Tape, Screen::Time, Screen::Flow, Screen::Cost]
     }
 }
 
@@ -562,132 +564,6 @@ pub struct FocusedStep {
     pub usual_busy_p90_s: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct EndedSummary {
-    pub outcome: RunStatus,
-    pub start_ts: Option<String>,
-    pub end_ts: Option<String>,
-    pub tokens_sent: u64,
-    pub tokens_received: u64,
-    pub cost_usd: Option<f64>,
-    /// The agent node still holding `meta.live` with no `completed_at`
-    /// once the whole run has ended (issue #637: an interrupted run's
-    /// agent reads `stopped`, not silently dropped) -- `None` for an
-    /// ordinary finished or failed run with no session left mid-way.
-    pub stopped_agent: Option<FocusedStep>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum NowFocus {
-    /// Something is running: the focused step, plus how many other
-    /// rows are running at the same time (DESIGN.md's "+2 more
-    /// running").
-    Running(FocusedStep, usize),
-    /// Nothing is running, and the run hasn't ended.
-    LastFinished(FocusedStep),
-    Ended(EndedSummary),
-    /// No row has ever appeared at all (a run just starting).
-    None,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NowPane {
-    pub log_lines: Vec<String>,
-    pub focus: NowFocus,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct TimeCard {
-    pub start_ts: Option<String>,
-    pub end_ts: Option<String>,
-    pub elapsed_s: f64,
-    pub eta_ts: Option<String>,
-    /// Set exactly when `eta_ts` came from history rather than the
-    /// loop ETA fallback — the only case the overview's own `(12m)`/
-    /// `usual …`/`vs usual …` figures apply to.
-    pub eta_from_history: bool,
-    /// `eta_ts`'s own seconds-from-now — the overview's own `(12m)`.
-    pub eta_remaining_s: Option<f64>,
-    /// Set once the run is past its own usual (p90) end — the
-    /// overview reads `ETA ?` rather than falling back to the loop
-    /// ETA, same three-way choice the header line makes.
-    pub eta_past_usual: bool,
-    pub usual_low_ts: Option<String>,
-    pub usual_high_ts: Option<String>,
-    pub vs_usual_s: Option<f64>,
-    pub usual_total_s: Option<f64>,
-    /// How many ok runs of the current document hash history has,
-    /// shown as `history: N of 3 runs` only while it's below the
-    /// threshold a whole-run ETA itself needs (`eta_from_history` is
-    /// false but history isn't simply off).
-    pub history_count: Option<usize>,
-    pub bar: Vec<(String, f64)>,
-    pub slowest_finished: Option<(String, f64)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum FlowEvent {
-    Decision {
-        name: String,
-        branch: String,
-        ts: Option<String>,
-    },
-    Report {
-        message: String,
-        ts: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct FlowCard {
-    pub effects_done: u64,
-    pub effects_planned: Option<u64>,
-    pub effects_planned_is_lower_bound: bool,
-    pub failures: u64,
-    /// The latest two decisions or reports, newest first (DESIGN.md:
-    /// "the latest two decisions ... or reports").
-    pub recent: Vec<FlowEvent>,
-    pub loops: Vec<(String, u64, Option<u64>)>,
-    pub next_pending: Option<String>,
-    pub quick_steps: Option<(u64, f64)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct CostCard {
-    pub tokens_sent: u64,
-    pub tokens_received: u64,
-    /// `None` until some effect's own `meta.cost_usd` (or the run's
-    /// own `runtime.last_run.totals.cost_usd`) has actually reported
-    /// one (DESIGN.md: "cost ... once any effect reports
-    /// meta.cost_usd") -- never shown as `$0.00` in the meantime.
-    pub cost_usd: Option<f64>,
-    /// Tokens (sent + received) completed in each of a fixed number
-    /// of equal time buckets spanning the run so far, oldest first --
-    /// the sparkline's own data (DESIGN.md: "tokens over time as a
-    /// sparkline"), bucketed from exactly what every other card
-    /// already reads: each effect's own `meta.tokens_sent`/
-    /// `tokens_received` against its own `completed_at`. Empty before
-    /// the run has a start time or anything has completed.
-    pub tokens_over_time: Vec<u64>,
-    pub top_store: Option<(String, u64)>,
-    pub in_flight: String,
-    /// The ended run's own stopped agent (issue #637) -- its label,
-    /// and its last-known `meta.live.tokens_sent`/`tokens_received`
-    /// (either may be `None`, same as the live summary itself) --
-    /// since `tokens_sent`/`tokens_received` above never include a
-    /// session that never completed.
-    pub stopped_agent: Option<(String, Option<u64>, Option<u64>)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Overview {
-    pub phase_strip: Vec<PhaseStep>,
-    pub now_pane: NowPane,
-    pub time_card: TimeCard,
-    pub flow_card: FlowCard,
-    pub cost_card: CostCard,
-}
-
 fn node_for<'a>(row: &Row, flat: &'a BTreeMap<String, NodeMeta>) -> Option<&'a NodeMeta> {
     flat.get(&row.path)
 }
@@ -720,17 +596,6 @@ fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -
 /// running to remove it (`docs/plugins/agent.md`: "a watcher shows
 /// it as stopped"). `None` once every agent either finished normally
 /// or never started at all.
-fn stopped_agent_row<'a>(
-    rows: &'a [Row],
-    flat: &BTreeMap<String, NodeMeta>,
-    plan: &PlanTree,
-) -> Option<&'a Row> {
-    rows.iter().find(|r| {
-        is_agent_row(r, flat, plan)
-            && node_for(r, flat).is_some_and(|n| n.live.is_some() && n.completed_at.is_none())
-    })
-}
-
 fn build_focused_step(
     row: &Row,
     flat: &BTreeMap<String, NodeMeta>,
@@ -848,116 +713,6 @@ fn build_focused_step(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_now_pane(
-    rows: &[Row],
-    flat: &BTreeMap<String, NodeMeta>,
-    plan: &PlanTree,
-    model: &RunModel,
-    state: Option<&Value>,
-    header: &crate::render::Header,
-    log: &[String],
-    selected_path: Option<&str>,
-    now: &str,
-) -> NowPane {
-    const LOG_TAIL: usize = 20;
-    let log_lines: Vec<String> = log.iter().rev().take(LOG_TAIL).rev().cloned().collect();
-
-    let focus = if !matches!(header.status, RunStatus::Running) {
-        // Issue #647: a stopped agent's own session ended with the
-        // run, so its "since" line must stop ticking at the run's
-        // end, not keep counting against osi's own wall clock --
-        // `run_ended_at` freezes only `elapsed_s`'s own fallback,
-        // never `stale` (`AgentLive::is_recent`), which must stay
-        // keyed on the real wall clock: a leftover `meta.live` is
-        // stale forever once the run has ended, no matter how long
-        // ago that was by the time it's actually viewed.
-        let stopped_agent = stopped_agent_row(rows, flat, plan).map(|row| {
-            build_focused_step(
-                row,
-                flat,
-                plan,
-                model,
-                state,
-                now,
-                header.run_end_ts.as_deref(),
-            )
-        });
-        NowFocus::Ended(EndedSummary {
-            outcome: header.status,
-            start_ts: header.run_start_ts.clone(),
-            end_ts: header.run_end_ts.clone(),
-            tokens_sent: header.tokens_sent,
-            tokens_received: header.tokens_received,
-            cost_usd: effective_cost_usd(state, flat),
-            stopped_agent,
-        })
-    } else {
-        // The document root is "running" for the whole run, which
-        // would otherwise inflate "+N more running" by one for the
-        // entire run's duration even with nothing else going on --
-        // it's never a real step to surface here.
-        //
-        // A container counts as running the moment any descendant of
-        // its own is (`completed_at` stays unset until every child
-        // has), so a leaf actually running makes every one of its
-        // ancestors "running" too -- only the leaves (no running
-        // descendant of their own) are real steps to count or focus
-        // on; `review > fix > agent` with `agent` running must read
-        // one running step, not three.
-        let all_running: Vec<&Row> = rows
-            .iter()
-            .filter(|r| r.status.kind == StatusKind::Running && r.kind != RowKind::Root)
-            .collect();
-        let running: Vec<&Row> = all_running
-            .iter()
-            .filter(|r| {
-                let prefix = format!("{}.", r.path);
-                !all_running
-                    .iter()
-                    .any(|other| other.path.starts_with(&prefix))
-            })
-            .copied()
-            .collect();
-        // The step follow selects (DESIGN.md): whichever running row
-        // is the shared selection, same as the orchestration pane's
-        // own follow target -- falling back to the deepest running
-        // row (the same tie-break `keys::App::follow_target` uses)
-        // when the selection isn't actually one of the running rows
-        // right now (follow off, or mid-transition between rebuilds).
-        let target = selected_path
-            .and_then(|p| running.iter().find(|r| r.path == p).copied())
-            .or_else(|| running.iter().max_by_key(|r| r.depth).copied());
-        if let Some(target) = target {
-            let mut step = build_focused_step(target, flat, plan, model, state, now, None);
-            if let Some(usual) = crate::history::display_key(&target.path, plan)
-                .and_then(|key| header.history_step_usual.get(&key))
-            {
-                step.usual_busy_p50_s = usual.busy_p50_s;
-                step.usual_busy_p90_s = usual.busy_p90_s;
-            }
-            NowFocus::Running(step, running.len() - 1)
-        } else {
-            let last_finished = rows
-                .iter()
-                .filter(|r| r.status.kind == StatusKind::Done)
-                .max_by_key(|r| {
-                    node_for(r, flat)
-                        .and_then(|n| n.completed_at.clone())
-                        .unwrap_or_default()
-                });
-            match last_finished {
-                Some(row) => NowFocus::LastFinished(build_focused_step(
-                    row, flat, plan, model, state, now, None,
-                )),
-                None => NowFocus::None,
-            }
-        }
-    };
-
-    NowPane { log_lines, focus }
-}
-
 fn build_phase_strip(rows: &[Row]) -> Vec<PhaseStep> {
     rows.iter()
         .filter(|r| r.depth == 1)
@@ -971,288 +726,682 @@ fn build_phase_strip(rows: &[Row]) -> Vec<PhaseStep> {
         .collect()
 }
 
-fn fill_phase_start_times(steps: &mut [PhaseStep], flat: &BTreeMap<String, NodeMeta>) {
-    for step in steps.iter_mut() {
-        step.start_ts = flat.get(&step.path).and_then(|n| n.created_at.clone());
+// ---------------------------------------------------------------------
+// The Tape (screen 0, issue #678)
+// ---------------------------------------------------------------------
+
+/// The Tape's own head rule (`design/tui-design.md` §2.1): which of
+/// the four states the list's own top border reads.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TapeHead {
+    /// No events yet -- `header.run_start_ts` is `None`.
+    Starting,
+    /// A run under way, or an attached run already past its start.
+    Normal,
+    Ended {
+        ok: bool,
+        duration_s: f64,
+        /// A handled failure's own row label and error, shown in the
+        /// detail pane's own Outcome line.
+        handled_failure: Option<(String, String)>,
+    },
+    Failed {
+        error: String,
+        /// The row that actually failed, so the detail pane can
+        /// still show it even once the head rule reads Failed.
+        failing_path: Option<String>,
+    },
+}
+
+/// One row's own token column (§3.5/§3.6): carries the raw figures a
+/// front end needs for *either* the fixed-scale bar or, after `t`,
+/// the deviation view -- which one is drawn is a front end's own
+/// choice, never baked in here, so toggling `t` never rebuilds the
+/// screen.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TapeTokens {
+    /// This row's own tokens sent/received, once known (a finished
+    /// or running prompt/tool) -- `None` for a row ahead with
+    /// nothing of its own yet.
+    pub sent: Option<u64>,
+    pub received: Option<u64>,
+    /// History's own median for this exact row (§3.5's "usually"),
+    /// pooled across loop passes the same way `StepStats` already is
+    /// -- `None` below the 3-run threshold.
+    pub usual: Option<u64>,
+    /// Set on the run's single largest finished step -- the one bold
+    /// figure in the column (§3.5).
+    pub is_largest: bool,
+    /// A loop row's own sparkline: one entry per pass that has a
+    /// token figure of its own yet, oldest first.
+    pub loop_pass_tokens: Vec<u64>,
+}
+
+impl TapeTokens {
+    pub fn total(&self) -> Option<u64> {
+        match (self.sent, self.received) {
+            (None, None) => None,
+            (sent, received) => Some(sent.unwrap_or(0) + received.unwrap_or(0)),
+        }
     }
 }
 
-fn build_time_card(header: &crate::render::Header, phase_strip: &[PhaseStep]) -> TimeCard {
-    let bar = phase_strip
-        .iter()
-        .filter_map(|s| s.duration_s.map(|d| (s.label.clone(), d)))
-        .collect();
-    let slowest_finished = phase_strip
-        .iter()
-        .filter(|s| s.status.kind == StatusKind::Done)
-        .filter_map(|s| s.duration_s.map(|d| (s.label.clone(), d)))
-        .max_by(|a, b| a.1.total_cmp(&b.1));
-    // Issue #649: the same three-way choice the header line makes --
-    // `ETA ?` once past the usual end, else history's own `ETA ~`,
-    // else the loop ETA -- so the card and the header never disagree.
-    let (eta_ts, eta_from_history) = if header.history_eta_past_usual {
-        (None, true)
-    } else if header.history_eta_ts.is_some() {
-        (header.history_eta_ts.clone(), true)
-    } else {
-        (header.innermost_loop_eta_ts.clone(), false)
-    };
-    let history_count = if eta_from_history {
-        None
-    } else {
-        header.history_same_hash_count
-    };
-    TimeCard {
-        start_ts: header.run_start_ts.clone(),
-        end_ts: header.run_end_ts.clone(),
-        elapsed_s: header.elapsed_s,
-        eta_ts,
-        eta_from_history,
-        eta_remaining_s: if eta_from_history {
-            header.history_eta_remaining_s
-        } else {
-            None
-        },
-        eta_past_usual: header.history_eta_past_usual,
-        usual_low_ts: if eta_from_history {
-            header.history_eta_low_ts.clone()
-        } else {
-            None
-        },
-        usual_high_ts: if eta_from_history {
-            header.history_eta_high_ts.clone()
-        } else {
-            None
-        },
-        vs_usual_s: if eta_from_history {
-            header.history_vs_usual_s
-        } else {
-            None
-        },
-        usual_total_s: if eta_from_history {
-            header.history_usual_total_s
-        } else {
-            None
-        },
-        history_count,
-        bar,
-        slowest_finished,
-    }
+/// A row's own "what it did or will do" (§3.4) -- already formatted
+/// text, so a front end never has to know a leaf's own kind to draw
+/// it; `render::details_for`'s own field order feeds every variant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TapeRow {
+    pub path: String,
+    /// The step name, its loop prefix dropped when a loop row of its
+    /// own already carries it (§3.4: `iter_0 › draft`, never
+    /// `drafts.iter_0 › draft`).
+    pub label: String,
+    pub kind: RowKind,
+    pub status: RowStatus,
+    /// The event clock, shown on every row except one ahead (§3.4's
+    /// anatomy: "the event clock… the status glyph…").
+    pub ts: Option<String>,
+    /// What this row did, is doing, or will do -- `↑212 ↓3 · Bug.`,
+    /// `3.0s · sleep 3`, `kind != ""`, `3 passes · 2 wide · 0 done`,
+    /// `prompt · queued`, `skipped · not reached · prompt`.
+    pub what: String,
+    /// The faint preview line under a prompt row, when previews are
+    /// on -- the text actually sent once finished, the plan's own
+    /// unrendered template while still ahead.
+    pub preview: Option<String>,
+    /// Bold: the running rows below the Now band (§3.4).
+    pub bold: bool,
+    pub tokens: TapeTokens,
 }
 
-fn build_flow_card(
-    rows: &[Row],
-    unfolded_rows: &[Row],
-    flat: &BTreeMap<String, NodeMeta>,
-    model: &RunModel,
-    header: &crate::render::Header,
-) -> FlowCard {
-    // A container's own status propagates from a failed descendant
-    // the same way "running" does -- `review > fix > agent` with
-    // `agent` failed reads every one of its ancestors as `Failed`/
-    // `FailedHandled` too, so only the leaves (no failed descendant
-    // of their own) are real failures to count; the root is never
-    // one either.
-    let failing: Vec<&Row> = rows
-        .iter()
-        .filter(|r| {
-            r.kind != RowKind::Root
-                && matches!(
-                    r.status.kind,
-                    StatusKind::Failed | StatusKind::FailedHandled
-                )
-        })
-        .collect();
-    let failures = failing
-        .iter()
-        .filter(|r| {
-            let prefix = format!("{}.", r.path);
-            !failing.iter().any(|other| other.path.starts_with(&prefix))
-        })
-        .count() as u64;
+/// A non-row line in the Tape's own list (§2.1): the bookends, the
+/// Now band and the slots rule.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TapeItem {
+    RunStarted {
+        ts: Option<String>,
+        document: String,
+        engine: String,
+    },
+    Row(TapeRow),
+    NowBand {
+        ts: Option<String>,
+        elapsed_s: f64,
+    },
+    SlotsRule {
+        busy: u64,
+        slots: u64,
+        queued: u64,
+    },
+    RunEnd {
+        usual_total_tokens: Option<u64>,
+        usual_wall_s: Option<f64>,
+        duration_s: Option<f64>,
+        eta_ts: Option<String>,
+    },
+}
 
-    let mut decisions: Vec<(String, String, Option<String>)> = flat
-        .iter()
-        .filter_map(|(path, node)| {
-            let branch = node.branch.as_ref()?;
-            let name = path.rsplit('.').next().unwrap_or(path).to_string();
-            let ts = node
-                .completed_at
-                .clone()
-                .or_else(|| node.created_at.clone());
-            Some((name, branch.clone(), ts))
-        })
-        .collect();
-    decisions.sort_by(|a, b| b.2.cmp(&a.2));
+/// Screen 0's own model (issue #678, replacing the old Overview): the
+/// Tape's list, top to bottom, plus the counts and head rule its own
+/// title and top border need, and the selected row's own detail (the
+/// same [`FocusedStep`] the Flow and Time screens already build
+/// theirs from).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TapeScreen {
+    /// Tokens per bar cell, derived from history (§3.5) -- `50`
+    /// without enough of it.
+    pub unit: u64,
+    pub items: Vec<TapeItem>,
+    pub done: u64,
+    pub running: u64,
+    pub ahead: u64,
+    pub head: TapeHead,
+    pub selected: Option<FocusedStep>,
+    /// The selected row's own usual tokens and the run count behind
+    /// it (§2.1's detail pane: "265 t +47% · median of 3 runs") --
+    /// `None` below the 3-run threshold.
+    pub selected_usual: Option<(u64, usize)>,
+    /// The selected row's own share of the run's tokens so far, as a
+    /// whole percent (§2.1's "45% of this run so far").
+    pub selected_share_pct: Option<u64>,
+}
 
-    let mut recent: Vec<FlowEvent> = decisions
+/// §3.5's unit rule: the smallest of these that keeps `largest`
+/// inside eight cells, `50` with no `largest` to go on at all (no
+/// history, or nothing finished yet).
+fn tape_unit(largest_usual: Option<u64>) -> u64 {
+    const STEPS: [u64; 6] = [10, 20, 50, 100, 200, 500];
+    let Some(largest) = largest_usual else {
+        return 50;
+    };
+    STEPS
         .into_iter()
-        .take(2)
-        .map(|(name, branch, ts)| FlowEvent::Decision { name, branch, ts })
+        .find(|&unit| largest <= unit * 8)
+        .unwrap_or(500)
+}
+
+/// A tool row's own "what" text once finished or running: `3.0s ·
+/// sleep 3` -- duration, then the rendered command and its args,
+/// straight from `meta.params_rendered` (the same field `render::
+/// details_for`'s own `meta_summary` reads, but read here directly
+/// off the already-flattened node so a row's own text costs no more
+/// than this one lookup -- `details_for` re-flattens the whole state
+/// on every call, which a per-row loop here must never pay for).
+fn tape_tool_what(row: &Row, node: Option<&NodeMeta>) -> String {
+    let command = node.and_then(|n| {
+        let command = n.meta.pointer("/params_rendered/command")?.as_str()?;
+        let args = n
+            .meta
+            .pointer("/params_rendered/args")
+            .and_then(Value::as_array)
+            .map(|args| {
+                args.iter()
+                    .map(crate::render::display_value)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|a| !a.is_empty());
+        Some(match args {
+            Some(args) => format!("{command} {args}"),
+            None => command.to_string(),
+        })
+    });
+    match (row.duration_s, command) {
+        (Some(d), Some(cmd)) => format!("{} · {cmd}", crate::format::format_duration(d)),
+        (Some(d), None) => crate::format::format_duration(d),
+        (None, Some(cmd)) => cmd,
+        (None, None) => String::new(),
+    }
+}
+
+/// A finished prompt's own "what" text: `↑212 ↓3 · Bug.` -- sent,
+/// received, then the reply's own first words (§3.4).
+fn tape_prompt_what(sent: u64, received: u64, reply_first_words: Option<&str>) -> String {
+    let arrows = format!(
+        "↑{} ↓{}",
+        crate::format::format_tokens_thousands(sent),
+        crate::format::format_tokens_thousands(received)
+    );
+    match reply_first_words {
+        Some(words) if !words.is_empty() => format!("{arrows} · {words}"),
+        _ => arrows,
+    }
+}
+
+/// §3.4's "first words": the reply's own text, cut at the first
+/// sentence end or a fixed character budget, whichever comes first
+/// -- `Bug.`, `Thanks for the …` (never the whole reply, which the
+/// detail pane shows in full).
+fn first_words(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    if let Some(end) = text.find(['.', '!', '?']) {
+        let cut = &text[..=end];
+        if cut.chars().count() <= max_chars {
+            return cut.to_string();
+        }
+    }
+    let truncated: String = text.chars().take(max_chars).collect();
+    if truncated.chars().count() < text.chars().count() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+/// Whether `path` (an ahead row) is a loop pass waiting for a free
+/// concurrency slot (§3.4's " · queued"): its own last path segment
+/// is `iter_N`, same shape every pass placeholder resolves to.
+fn tape_row_is_queued_pass(path: &str) -> bool {
+    path.rsplit('.').next().is_some_and(|seg| {
+        seg.strip_prefix("iter_")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+/// An `if`'s own condition text (§2.1: `gate → then` followed by its
+/// condition, dim) -- `None` for anything but a named `if` the plan
+/// actually has a condition for.
+fn tape_condition_text(plan: &PlanTree, path: &str) -> Option<String> {
+    let entry = plan.match_path(path)?.entries.first()?;
+    match &entry.kind {
+        crate::plan::PlanEntryKind::If { condition, .. } => {
+            condition.as_ref().map(|c| c.text.clone())
+        }
+        _ => None,
+    }
+}
+
+/// A prompt row's own preview line (§2.1: the faint `› …` line under
+/// a prompt), truncated to a plain budget -- a front end still clips
+/// it further to the pane's own width, same as any other row text,
+/// but this keeps a single preview from being an unreasonably long
+/// string regardless.
+const TAPE_PREVIEW_CHARS: usize = 120;
+
+fn tape_preview_line(text: &str) -> String {
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("› {}", first_words(&collapsed, TAPE_PREVIEW_CHARS))
+}
+
+/// Builds one row's own `(what, preview, tokens)` (§3.4/§3.5).
+/// `queued` is §3.4's " · queued" suffix for a row ahead that is a
+/// loop pass waiting on a busy loop's own concurrency.
+fn tape_row_content(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    previews_on: bool,
+    queued: bool,
+) -> (String, Option<String>, TapeTokens) {
+    let node = flat.get(&row.path);
+    let pending = row.status.kind == StatusKind::Pending;
+    let skipped = matches!(row.status.kind, StatusKind::Skipped);
+    let queued_suffix = if queued { " · queued" } else { "" };
+
+    match row.kind {
+        RowKind::Prompt | RowKind::Reflector => {
+            if pending {
+                let preview = previews_on
+                    .then(|| plan.prompt_template(&row.path))
+                    .flatten()
+                    .map(|t| tape_preview_line(&t));
+                (
+                    format!("prompt{queued_suffix}"),
+                    preview,
+                    TapeTokens::default(),
+                )
+            } else if skipped {
+                (
+                    "skipped · not reached · prompt".to_string(),
+                    None,
+                    TapeTokens::default(),
+                )
+            } else {
+                let (sent, received) = node
+                    .map(|n| crate::model::node_tokens(&n.meta))
+                    .unwrap_or((0, 0));
+                let reply_words = node
+                    .map(|n| crate::render::display_value(&n.value))
+                    .filter(|v| !v.is_empty())
+                    .map(|v| first_words(&v, 24));
+                let what = tape_prompt_what(sent, received, reply_words.as_deref());
+                let preview = if previews_on {
+                    node.and_then(|n| n.meta.get("prompt_sent"))
+                        .and_then(Value::as_str)
+                        .map(tape_preview_line)
+                } else {
+                    None
+                };
+                let tokens = TapeTokens {
+                    sent: Some(sent),
+                    received: Some(received),
+                    ..Default::default()
+                };
+                (what, preview, tokens)
+            }
+        }
+        RowKind::If => {
+            let branch = node.and_then(|n| n.branch.clone());
+            let condition = tape_condition_text(plan, &row.path);
+            match branch {
+                Some(_) => (condition.unwrap_or_default(), None, TapeTokens::default()),
+                None => ("if".to_string(), None, TapeTokens::default()),
+            }
+        }
+        RowKind::Loop => {
+            if pending {
+                ("loop".to_string(), None, TapeTokens::default())
+            } else {
+                let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
+                let total = row.loop_progress.and_then(|p| p.total);
+                let slots = model
+                    .running_or_queued_bound(&row.path)
+                    .unwrap_or(total.unwrap_or(0));
+                let total_text = total
+                    .map(|t| format!("{t} passes"))
+                    .unwrap_or_else(|| "? passes".to_string());
+                let what = format!("{total_text} · {slots} wide · {done} done");
+                // The sparkline: one bar per pass index that has a
+                // token figure of its own so far, oldest first -- one
+                // pass over `flat`, grouped by index, rather than a
+                // fresh O(flat.len()) scan per index (issue #678: a
+                // 2,000-pass loop must still redraw well under the
+                // redraw interval).
+                let prefix = format!("{}.iter_", row.path);
+                let mut per_pass: std::collections::BTreeMap<u64, (u64, u64)> =
+                    std::collections::BTreeMap::new();
+                for (path, node) in flat {
+                    let Some(rest) = path.strip_prefix(&prefix) else {
+                        continue;
+                    };
+                    let Some(Ok(idx)) = rest.split('.').next().map(str::parse) else {
+                        continue;
+                    };
+                    let (sent, received) = crate::model::node_tokens(&node.meta);
+                    let entry = per_pass.entry(idx).or_insert((0, 0));
+                    entry.0 += sent;
+                    entry.1 += received;
+                }
+                let tokens = TapeTokens {
+                    loop_pass_tokens: per_pass
+                        .values()
+                        .filter(|(s, r)| s + r > 0)
+                        .map(|(s, r)| s + r)
+                        .collect(),
+                    ..Default::default()
+                };
+                (what, None, tokens)
+            }
+        }
+        RowKind::Tool | RowKind::Use | RowKind::Yield | RowKind::Dynamic | RowKind::TryFinally => {
+            if pending {
+                (
+                    format!("{}{queued_suffix}", row.kind.label()),
+                    None,
+                    TapeTokens::default(),
+                )
+            } else if skipped {
+                (
+                    format!("skipped · not reached · {}", row.kind.label()),
+                    None,
+                    TapeTokens::default(),
+                )
+            } else {
+                (tape_tool_what(row, node), None, TapeTokens::default())
+            }
+        }
+        RowKind::Root
+        | RowKind::Pass
+        | RowKind::QuickSteps
+        | RowKind::Report
+        | RowKind::Unknown => (String::new(), None, TapeTokens::default()),
+    }
+}
+
+/// A step's own full label for the Tape's list (§3.4): an `if`'s own
+/// row carries its branch (`gate → then`); everything else keeps
+/// `render::Row::label` as-is (already relative to its parent, and
+/// a loop pass's own direct child is already named `iter_0 ›
+/// draft` by `fold`/`render`, never repeating the loop's own name).
+fn tape_row_label(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> String {
+    if row.kind == RowKind::If {
+        if let Some(branch) = flat.get(&row.path).and_then(|n| n.branch.clone()) {
+            return format!("{} → {branch}", row.label);
+        }
+    }
+    row.label.clone()
+}
+
+/// §3.5's unit rule applied to the run's own largest *actual* step
+/// so far, for the bold figure, and separately its largest *usual*
+/// step, for the bar's own scale.
+fn tape_largest_tokens(items: &[TapeItem]) -> Option<u64> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            TapeItem::Row(row) => row.tokens.total(),
+            _ => None,
+        })
+        .max()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_tape(
+    rows: &[Row],
+    header: &crate::render::Header,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    state: Option<&Value>,
+    selected_path: Option<&str>,
+    previews_on: bool,
+    now: &str,
+) -> TapeScreen {
+    let run_start = header.run_start_ts.as_deref();
+    let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
+
+    let mut bucket1: Vec<&Row> = Vec::new();
+    let mut bucket2: Vec<&Row> = Vec::new();
+    let mut bucket3: Vec<&Row> = Vec::new();
+    for row in rows {
+        if row.kind == RowKind::Root {
+            continue;
+        }
+        let is_active_leaf = row.kind.is_leaf()
+            && matches!(
+                row.status.kind,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            );
+        if is_active_leaf {
+            bucket2.push(row);
+        } else if row.status.kind == StatusKind::Pending {
+            bucket3.push(row);
+        } else {
+            bucket1.push(row);
+        }
+    }
+    let sort_key = |row: &&Row| -> f64 {
+        let node = flat.get(&row.path);
+        let ts = node
+            .and_then(|n| n.completed_at.as_deref())
+            .or_else(|| node.and_then(|n| n.created_at.as_deref()));
+        ts.and_then(elapsed_offset).unwrap_or(f64::INFINITY)
+    };
+    bucket1.sort_by(|a, b| sort_key(a).total_cmp(&sort_key(b)));
+
+    // Loops with a running pass right now (bucket2 is never a
+    // container, so this groups each active leaf by its own nearest
+    // Loop ancestor among bucket1) -- the slots rule (§3.4's "2 of 2
+    // Slots Busy · 1 Pass Queued") is drawn once per such loop.
+    let running_loops: Vec<&Row> = bucket1
+        .iter()
+        .filter(|r| r.kind == RowKind::Loop && r.status.kind != StatusKind::Done)
+        .copied()
         .collect();
-    if recent.len() < 2 {
-        if let Some(report) = model.latest_report() {
-            recent.push(FlowEvent::Report {
-                message: report.message.clone(),
-                ts: Some(report.ts.clone()),
+
+    let mut items: Vec<TapeItem> = Vec::new();
+    items.push(TapeItem::RunStarted {
+        ts: run_start.map(str::to_string),
+        document: header.document.clone(),
+        engine: header.engine.clone(),
+    });
+
+    for row in &bucket1 {
+        let (what, preview, tokens) = tape_row_content(row, flat, plan, model, previews_on, false);
+        items.push(TapeItem::Row(TapeRow {
+            path: row.path.clone(),
+            label: tape_row_label(row, flat),
+            kind: row.kind,
+            status: row.status.clone(),
+            ts: flat
+                .get(&row.path)
+                .and_then(|n| n.completed_at.clone().or_else(|| n.created_at.clone())),
+            what,
+            preview,
+            bold: false,
+            tokens,
+        }));
+    }
+
+    if matches!(header.status, RunStatus::Running) {
+        items.push(TapeItem::NowBand {
+            ts: Some(now.to_string()),
+            elapsed_s: header.elapsed_s,
+        });
+    }
+
+    for row in &bucket2 {
+        let (what, preview, tokens) = tape_row_content(row, flat, plan, model, previews_on, false);
+        items.push(TapeItem::Row(TapeRow {
+            path: row.path.clone(),
+            label: tape_row_label(row, flat),
+            kind: row.kind,
+            status: row.status.clone(),
+            ts: flat.get(&row.path).and_then(|n| n.created_at.clone()),
+            what,
+            preview,
+            bold: true,
+            tokens,
+        }));
+    }
+
+    for loop_row in &running_loops {
+        let total = loop_row.loop_progress.and_then(|p| p.total);
+        let done = loop_row.loop_progress.map(|p| p.done).unwrap_or(0);
+        let prefix = format!("{}.", loop_row.path);
+        let busy = bucket2
+            .iter()
+            .filter(|r| r.path.starts_with(&prefix))
+            .count() as u64;
+        let slots = model
+            .running_or_queued_bound(&loop_row.path)
+            .unwrap_or(busy);
+        let queued = total.map(|t| t.saturating_sub(done).saturating_sub(busy));
+        if let Some(queued) = queued {
+            items.push(TapeItem::SlotsRule {
+                busy,
+                slots,
+                queued,
             });
         }
     }
 
-    let loops: Vec<(String, u64, Option<u64>)> = rows
-        .iter()
-        .filter(|r| r.kind == RowKind::Loop)
-        .filter_map(|r| r.loop_progress.map(|p| (r.label.clone(), p.done, p.total)))
-        .collect();
-
-    let next_pending = rows
-        .iter()
-        .find(|r| r.status.kind == StatusKind::Pending)
-        .map(|r| r.label.clone());
-
-    let (count, total_s) = unfolded_rows
-        .iter()
-        .filter(|r| is_quick_step(r))
-        .fold((0u64, 0.0f64), |(c, s), r| {
-            (c + 1, s + r.duration_s.unwrap_or(0.0))
-        });
-    let quick_steps = if count > 0 {
-        Some((count, total_s))
-    } else {
-        None
-    };
-
-    FlowCard {
-        effects_done: header.effects_done,
-        effects_planned: header.effects_planned,
-        effects_planned_is_lower_bound: header.effects_planned_is_lower_bound,
-        failures,
-        recent,
-        loops,
-        next_pending,
-        quick_steps,
+    for row in &bucket3 {
+        let queued = tape_row_is_queued_pass(&row.path)
+            && running_loops
+                .iter()
+                .any(|l| row.path.starts_with(&format!("{}.", l.path)));
+        let (what, preview, mut tokens) =
+            tape_row_content(row, flat, plan, model, previews_on, queued);
+        if let Some(key) = crate::history::display_key(&row.path, plan) {
+            tokens.usual = header
+                .history_step_usual
+                .get(&key)
+                .and_then(|s| s.tokens_p50);
+        }
+        items.push(TapeItem::Row(TapeRow {
+            path: row.path.clone(),
+            label: tape_row_label(row, flat),
+            kind: row.kind,
+            status: row.status.clone(),
+            ts: None,
+            what,
+            preview,
+            bold: false,
+            tokens,
+        }));
     }
-}
 
-/// Issue #626: the cost card (and the ended summary, in
-/// `build_now_pane`) show a dollar figure the moment any effect's
-/// own `meta.cost_usd` has reported one, not only once the run has
-/// ended and `runtime.last_run.totals.cost_usd` exists (DESIGN.md:
-/// "cost ... once any effect reports meta.cost_usd") -- the
-/// authoritative total once cof has written it, summed from every
-/// node's own report otherwise. Shown only when it's actually
-/// positive -- `$0.00` means "not reported", same as `None`.
-fn effective_cost_usd(state: Option<&Value>, flat: &BTreeMap<String, NodeMeta>) -> Option<f64> {
-    state
-        .and_then(run_totals)
-        .and_then(|t| t.get("cost_usd").and_then(Value::as_f64))
-        .or_else(|| {
-            let sum: f64 = flat
-                .values()
-                .filter_map(|n| n.meta.get("cost_usd").and_then(Value::as_f64))
-                .sum();
-            (sum > 0.0).then_some(sum)
-        })
-        .filter(|c| *c > 0.0)
-}
+    let usual_total_tokens = header
+        .history_step_usual
+        .get("_total")
+        .and_then(|s| s.tokens_p50);
+    items.push(TapeItem::RunEnd {
+        usual_total_tokens,
+        usual_wall_s: None,
+        duration_s: header.run_end_ts.as_deref().and_then(elapsed_offset),
+        eta_ts: header.history_eta_ts.clone(),
+    });
 
-/// Issue #626's own sparkline: tokens completed in each of a fixed
-/// number of equal time buckets spanning `run_start_ts`..`now`, from
-/// every node's own `meta.tokens_sent`/`tokens_received` against its
-/// own `completed_at` -- the same per-node token rule `node_tokens`
-/// already applies elsewhere, bucketed by time instead of summed.
-fn build_tokens_over_time(
-    header: &crate::render::Header,
-    flat: &BTreeMap<String, NodeMeta>,
-    now: &str,
-) -> Vec<u64> {
-    const BUCKETS: usize = 12;
-    let Some(start) = header
-        .run_start_ts
-        .as_deref()
-        .and_then(crate::diff::parse_instant)
-    else {
-        return Vec::new();
+    let largest = tape_largest_tokens(&items);
+    for item in &mut items {
+        if let TapeItem::Row(row) = item {
+            if let Some(total) = row.tokens.total() {
+                if Some(total) == largest && largest.is_some() {
+                    row.tokens.is_largest = true;
+                }
+            }
+        }
+    }
+
+    let largest_usual = header
+        .history_step_usual
+        .values()
+        .filter_map(|s| s.tokens_p50)
+        .max();
+    let unit = tape_unit(largest_usual);
+
+    let done = bucket1
+        .iter()
+        .filter(|r| r.kind.is_leaf() && r.status.kind == StatusKind::Done)
+        .count() as u64;
+    let running = bucket2.len() as u64;
+    let ahead = bucket3.iter().filter(|r| r.kind.is_leaf()).count() as u64;
+
+    let head = if run_start.is_none() {
+        TapeHead::Starting
+    } else {
+        match header.status {
+            RunStatus::Running => TapeHead::Normal,
+            RunStatus::Failed => {
+                let failing = rows.iter().find(|r| r.status.kind == StatusKind::Failed);
+                let error = failing
+                    .and_then(|r| flat.get(&r.path))
+                    .and_then(|n| n.error.clone())
+                    .unwrap_or_default();
+                TapeHead::Failed {
+                    error,
+                    failing_path: failing.map(|r| r.path.clone()),
+                }
+            }
+            _ => {
+                let handled = rows
+                    .iter()
+                    .find(|r| r.status.kind == StatusKind::FailedHandled)
+                    .map(|r| {
+                        let error = flat
+                            .get(&r.path)
+                            .and_then(|n| n.error.clone())
+                            .unwrap_or_default();
+                        (r.label.clone(), error)
+                    });
+                TapeHead::Ended {
+                    ok: matches!(header.status, RunStatus::Ok),
+                    duration_s: header.elapsed_s,
+                    handled_failure: handled,
+                }
+            }
+        }
     };
-    let Some(end) = crate::diff::parse_instant(now) else {
-        return Vec::new();
-    };
-    let span_ms = (end - start).num_milliseconds().max(1) as f64;
-    let mut buckets = vec![0u64; BUCKETS];
-    for node in flat.values() {
-        let Some(completed) = node
-            .completed_at
-            .as_deref()
-            .and_then(crate::diff::parse_instant)
-        else {
-            continue;
-        };
+
+    let selected = selected_path
+        .and_then(|p| rows.iter().find(|r| r.path == p))
+        .map(|row| {
+            build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+            )
+        });
+
+    let selected_usual = selected_path
+        .and_then(|p| crate::history::display_key(p, plan))
+        .and_then(|key| header.history_step_usual.get(&key))
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+
+    let selected_share_pct = selected_path.and_then(|p| {
+        let node = flat.get(p)?;
         let (sent, received) = crate::model::node_tokens(&node.meta);
         let total = sent + received;
-        if total == 0 {
-            continue;
-        }
-        let frac = ((completed - start).num_milliseconds().max(0) as f64 / span_ms).min(0.999_999);
-        let idx = ((frac * BUCKETS as f64) as usize).min(BUCKETS - 1);
-        buckets[idx] += total;
-    }
-    buckets
-}
+        let run_total = header.tokens_sent + header.tokens_received;
+        (run_total > 0).then(|| (total * 100) / run_total)
+    });
 
-#[allow(clippy::too_many_arguments)]
-fn build_cost_card(
-    rows: &[Row],
-    unfolded_rows: &[Row],
-    header: &crate::render::Header,
-    state: Option<&Value>,
-    flat: &BTreeMap<String, NodeMeta>,
-    plan: &PlanTree,
-    token_bar: &TokenBar,
-    now: &str,
-) -> CostCard {
-    // Issue #637: `header.tokens_sent`/`received` (`runtime.last_run.
-    // totals`, or the subtree fallback) never carry a session that
-    // never completed -- its own `meta.live` is the only place its
-    // last-known figures ever existed, so the stopped agent's own
-    // tokens are reported separately here rather than folded in.
-    let stopped_agent = (!matches!(header.status, RunStatus::Running))
-        .then(|| stopped_agent_row(rows, flat, plan))
-        .flatten()
-        .and_then(|row| {
-            let live = node_for(row, flat)?.live.as_ref()?;
-            Some((row.label.clone(), live.tokens_sent, live.tokens_received))
-        });
-    // Issue #641: the overview's own "top" line must read the same
-    // folded, relative label the Cost screen's own table shows for
-    // that same store (`plan › agent`, never the full dotted path) --
-    // `largest_stores` already builds exactly that label through the
-    // by-store tree, so this reads its own first (largest) row
-    // rather than keeping a second, unfolded scan of `flat` that
-    // could only ever report the raw path. `kinds`/`statuses`, from
-    // `unfolded_rows` (every real path, never collapsed into a
-    // breadcrumb), are what that tree needs to fold chains the same
-    // way the Cost screen's own does.
-    let unfolded_kinds: BTreeMap<String, RowKind> = unfolded_rows
-        .iter()
-        .map(|r| (r.path.clone(), r.kind))
-        .collect();
-    let unfolded_statuses: BTreeMap<String, RowStatus> = unfolded_rows
-        .iter()
-        .map(|r| (r.path.clone(), r.status.clone()))
-        .collect();
-    let top_store =
-        crate::cost::largest_stores("prime", flat, &unfolded_statuses, &unfolded_kinds, state)
-            .rows
-            .first()
-            .map(|row| (row.label.clone(), row.tokens_sent + row.tokens_received));
-    CostCard {
-        tokens_sent: header.tokens_sent,
-        tokens_received: header.tokens_received,
-        cost_usd: effective_cost_usd(state, flat),
-        tokens_over_time: build_tokens_over_time(header, flat, now),
-        top_store,
-        in_flight: token_bar_in_flight_line(token_bar),
-        stopped_agent,
+    TapeScreen {
+        unit,
+        items,
+        done,
+        running,
+        ahead,
+        head,
+        selected,
+        selected_usual,
+        selected_share_pct,
     }
 }
 
@@ -1341,63 +1490,6 @@ pub fn build_cost_screen(
         tokens_over_time,
         chart_start_ts: header.run_start_ts.clone(),
         chart_end_ts: end.to_string(),
-    }
-}
-
-/// Builds screen 0's own model (issue #626) -- a caller builds this
-/// only while the overview is actually on display (performance:
-/// "models for screens not on display aren't built"), right after
-/// `render::build_folded`, from exactly the pieces that call already
-/// produced: `rows` is the already-folded orchestration rows (so the
-/// phase strip's own single-child folding is `fold::fold_rows`'s,
-/// not reimplemented here), `unfolded_rows` is `RenderState::
-/// unfolded_rows` (quick steps are counted from the real tree, not
-/// however folding happened to group them this frame).
-#[allow(clippy::too_many_arguments)]
-pub fn build_overview(
-    rows: &[Row],
-    unfolded_rows: &[Row],
-    header: &crate::render::Header,
-    flat: &BTreeMap<String, NodeMeta>,
-    plan: &PlanTree,
-    model: &RunModel,
-    state: Option<&Value>,
-    token_bar: &TokenBar,
-    log: &[String],
-    selected_path: Option<&str>,
-    now: &str,
-) -> Overview {
-    let mut phase_strip = build_phase_strip(rows);
-    fill_phase_start_times(&mut phase_strip, flat);
-    let now_pane = build_now_pane(
-        rows,
-        flat,
-        plan,
-        model,
-        state,
-        header,
-        log,
-        selected_path,
-        now,
-    );
-    let time_card = build_time_card(header, &phase_strip);
-    let flow_card = build_flow_card(rows, unfolded_rows, flat, model, header);
-    let cost_card = build_cost_card(
-        rows,
-        unfolded_rows,
-        header,
-        state,
-        flat,
-        plan,
-        token_bar,
-        now,
-    );
-    Overview {
-        phase_strip,
-        now_pane,
-        time_card,
-        flow_card,
-        cost_card,
     }
 }
 
@@ -2042,11 +2134,216 @@ mod tests {
 
     #[test]
     fn screen_from_key_only_accepts_available_screens() {
-        assert_eq!(Screen::from_key('0'), Some(Screen::Overview));
+        assert_eq!(Screen::from_key('0'), Some(Screen::Tape));
         assert_eq!(Screen::from_key('1'), Some(Screen::Time));
         assert_eq!(Screen::from_key('2'), Some(Screen::Flow));
         assert_eq!(Screen::from_key('3'), Some(Screen::Cost));
         assert_eq!(Screen::from_key('x'), None);
+    }
+
+    // -------------------------------------------------------------
+    // The Tape (issue #678)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn tape_unit_picks_the_smallest_scale_that_fits_eight_cells() {
+        assert_eq!(tape_unit(None), 50);
+        assert_eq!(tape_unit(Some(0)), 10);
+        assert_eq!(tape_unit(Some(80)), 10);
+        assert_eq!(tape_unit(Some(81)), 20);
+        assert_eq!(tape_unit(Some(400)), 50);
+        assert_eq!(tape_unit(Some(401)), 100);
+        assert_eq!(tape_unit(Some(1600)), 200);
+        assert_eq!(tape_unit(Some(4000)), 500);
+        assert_eq!(tape_unit(Some(100_000)), 500);
+    }
+
+    fn tape_row(path: &str, depth: usize, label: &str, kind: RowKind, status: StatusKind) -> Row {
+        Row {
+            path: path.to_string(),
+            depth,
+            label: label.to_string(),
+            kind,
+            status: RowStatus {
+                kind: status,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: kind != RowKind::Tool && kind != RowKind::Prompt,
+        }
+    }
+
+    fn tape_node(created_at: &str, completed_at: Option<&str>) -> NodeMeta {
+        NodeMeta {
+            created_at: Some(created_at.to_string()),
+            completed_at: completed_at.map(str::to_string),
+            error: None,
+            branch: None,
+            progress_done: None,
+            progress_total: None,
+            progress_eta_s: None,
+            live: None,
+            value: Value::Null,
+            meta: json!({}),
+        }
+    }
+
+    /// A demo.yml-shaped moment (§2.1): two finished leaves, a
+    /// two-slot tree loop with one finished pass and one still
+    /// running, and one pass ahead -- the same shape the
+    /// `tape--normal--120x30` frame freezes. Checks the ordering
+    /// rule (finished rows above the Now band, in finish order;
+    /// running leaves below it; a dispatched loop stays above even
+    /// though it hasn't finished) and the slots rule's own figures.
+    #[test]
+    fn build_tape_orders_rows_around_the_now_band_and_computes_the_slots_rule() {
+        let mut rows = vec![
+            tape_row("prime.kind", 1, "kind", RowKind::Prompt, StatusKind::Done),
+            tape_row(
+                "prime.drafts",
+                1,
+                "drafts",
+                RowKind::Loop,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.drafts.iter_0.draft",
+                3,
+                "iter_0 › draft",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_0.pause",
+                3,
+                "iter_0 › pause",
+                RowKind::Tool,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.draft",
+                3,
+                "iter_1 › draft",
+                RowKind::Prompt,
+                StatusKind::Pending,
+            ),
+        ];
+        rows[1].loop_progress = Some(crate::render::LoopProgress {
+            done: 0,
+            total: Some(2),
+            eta_s: None,
+        });
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.kind".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        flat.insert(
+            "prime.drafts".to_string(),
+            tape_node("2026-01-01T00:00:02Z", None),
+        );
+        flat.insert(
+            "prime.drafts.iter_0.draft".to_string(),
+            tape_node("2026-01-01T00:00:02Z", Some("2026-01-01T00:00:02Z")),
+        );
+        flat.insert(
+            "prime.drafts.iter_0.pause".to_string(),
+            tape_node("2026-01-01T00:00:02Z", None),
+        );
+
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.status = RunStatus::Running;
+
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let tape = build_tape(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            true,
+            "2026-01-01T00:00:02Z",
+        );
+
+        // Finished rows (kind, the dispatched-but-unfinished loop,
+        // its one finished pass) all sit above the Now band, in
+        // finish/dispatch order; the running pause is below it; the
+        // pending sibling pass is ahead, after the slots rule.
+        let order: Vec<String> = tape
+            .items
+            .iter()
+            .map(|item| match item {
+                TapeItem::RunStarted { .. } => "start".to_string(),
+                TapeItem::Row(r) => r.path.clone(),
+                TapeItem::NowBand { .. } => "now".to_string(),
+                TapeItem::SlotsRule { .. } => "slots".to_string(),
+                TapeItem::RunEnd { .. } => "end".to_string(),
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                "start",
+                "prime.kind",
+                "prime.drafts",
+                "prime.drafts.iter_0.draft",
+                "now",
+                "prime.drafts.iter_0.pause",
+                "slots",
+                "prime.drafts.iter_1.draft",
+                "end",
+            ]
+        );
+        match &tape.items[6] {
+            TapeItem::SlotsRule {
+                busy,
+                slots,
+                queued,
+            } => {
+                assert_eq!(*busy, 1);
+                assert_eq!(*slots, 1); // no dispatch event in this test: falls back to `busy`
+                assert_eq!(*queued, 1);
+            }
+            other => panic!("expected a slots rule, got {other:?}"),
+        }
+        assert_eq!(tape.done, 2); // `kind` and the loop's own finished pass, `iter_0 › draft`
+        assert_eq!(tape.running, 1);
+        assert_eq!(tape.ahead, 1);
+    }
+
+    #[test]
+    fn tape_row_is_queued_pass_only_matches_a_literal_pass_segment() {
+        assert!(tape_row_is_queued_pass("prime.drafts.iter_2"));
+        assert!(!tape_row_is_queued_pass("prime.drafts.iter_2.draft"));
+        assert!(!tape_row_is_queued_pass("prime.drafts"));
+        assert!(!tape_row_is_queued_pass("prime.summary"));
+    }
+
+    /// A queued ahead prompt's own preview line (§2.1) reads the
+    /// plan's unrendered template -- it has no `meta.prompt_sent` of
+    /// its own yet, since it hasn't run.
+    #[test]
+    fn build_tape_previews_a_queued_prompts_own_template() {
+        let plan = tree_loop_with_prompt_plan();
+        let row = tape_row(
+            "prime.fan.iter_0.ask",
+            2,
+            "iter_0 › ask",
+            RowKind::Prompt,
+            StatusKind::Pending,
+        );
+        let flat = BTreeMap::new();
+        let model = RunModel::new();
+        let (what, preview, _tokens) = tape_row_content(&row, &flat, &plan, &model, true, false);
+        assert_eq!(what, "prompt");
+        assert_eq!(preview.as_deref(), Some("› hi"));
     }
 
     #[test]
@@ -2059,7 +2356,7 @@ mod tests {
             120,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let text = header_line_text(&segments);
         assert!(text.contains("feature-0417.yml"));
@@ -2067,7 +2364,7 @@ mod tests {
         assert!(text.contains("47m57s"));
         assert!(text.contains("11:52:55"));
         assert!(text.contains("loop ETA ~11:58"));
-        assert!(text.contains("[0 overview]"));
+        assert!(text.contains("[0 tape]"));
         assert!(text.contains("2 flow"));
         assert_eq!(text.chars().count(), segments_width(&segments));
     }
@@ -2083,7 +2380,7 @@ mod tests {
             120,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let text = header_line_text(&segments);
         assert!(text.contains("ETA ~12:05"), "{text}");
@@ -2101,84 +2398,11 @@ mod tests {
             120,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let text = header_line_text(&segments);
         assert!(text.contains("ETA ?"), "{text}");
         assert!(!text.contains("loop ETA"), "{text}");
-    }
-
-    #[test]
-    fn time_card_shows_the_history_eta_vs_usual_and_usual_range_once_there_is_enough_history() {
-        let mut header = base_header();
-        header.history_eta_ts = Some("2026-10-08T12:05:00Z".to_string());
-        header.history_eta_remaining_s = Some(720.0);
-        header.history_vs_usual_s = Some(180.0);
-        header.history_usual_total_s = Some(2700.0);
-        header.history_eta_low_ts = Some("2026-10-08T11:58:00Z".to_string());
-        header.history_eta_high_ts = Some("2026-10-08T12:09:00Z".to_string());
-        header.history_same_hash_count = Some(7);
-        let card = build_time_card(&header, &[]);
-        assert!(card.eta_from_history);
-        assert!(!card.eta_past_usual);
-        assert_eq!(card.eta_ts, header.history_eta_ts);
-        assert_eq!(card.eta_remaining_s, Some(720.0));
-        assert_eq!(card.vs_usual_s, Some(180.0));
-        assert_eq!(card.usual_total_s, Some(2700.0));
-        assert_eq!(card.usual_low_ts, header.history_eta_low_ts);
-        assert_eq!(card.usual_high_ts, header.history_eta_high_ts);
-        // Once there's a real ETA, the run count is enough on its
-        // own (via `ETA ~`) -- `history: N of 3 runs` is only for
-        // when there isn't one yet.
-        assert_eq!(card.history_count, None);
-    }
-
-    #[test]
-    fn time_card_shows_a_run_count_instead_of_an_eta_below_the_threshold() {
-        let mut header = base_header();
-        header.history_same_hash_count = Some(1);
-        let card = build_time_card(&header, &[]);
-        assert!(!card.eta_from_history);
-        assert_eq!(card.eta_ts, header.innermost_loop_eta_ts);
-        assert_eq!(card.history_count, Some(1));
-        assert_eq!(card.vs_usual_s, None);
-    }
-
-    #[test]
-    fn time_card_shows_a_zero_run_count_on_a_documents_very_first_ok_run() {
-        let mut header = base_header();
-        header.history_same_hash_count = Some(0);
-        let card = build_time_card(&header, &[]);
-        assert!(!card.eta_from_history);
-        assert_eq!(
-            card.history_count,
-            Some(0),
-            "history is on and collecting, even with no runs of this hash yet"
-        );
-    }
-
-    #[test]
-    fn time_card_shows_no_run_count_when_history_hasnt_resolved_a_document_yet() {
-        let mut header = base_header();
-        header.history_same_hash_count = None;
-        let card = build_time_card(&header, &[]);
-        assert!(!card.eta_from_history);
-        assert_eq!(card.history_count, None);
-    }
-
-    #[test]
-    fn time_card_shows_no_eta_at_all_once_past_the_usual_end() {
-        let mut header = base_header();
-        header.history_eta_past_usual = true;
-        header.history_same_hash_count = Some(7);
-        let card = build_time_card(&header, &[]);
-        assert!(card.eta_from_history);
-        assert!(card.eta_past_usual);
-        assert_eq!(card.eta_ts, None);
-        assert_eq!(
-            card.history_count, None,
-            "a run count is only shown below the ETA's own threshold, not past usual"
-        );
     }
 
     #[test]
@@ -2196,7 +2420,7 @@ mod tests {
             120,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let text = header_line_text(&segments);
         assert!(text.contains("\u{25b8} fixing 1 blocker"));
@@ -2213,7 +2437,7 @@ mod tests {
             120,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let wide_text = header_line_text(&wide);
         let narrow = header_line(
@@ -2223,7 +2447,7 @@ mod tests {
             100,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let narrow_text = header_line_text(&narrow);
         assert!(narrow_text.chars().count() <= wide_text.chars().count());
@@ -2254,7 +2478,7 @@ mod tests {
             80,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let text = header_line_text(&segments);
         // The report is already down to a bare `▸` (step 2) before the
@@ -2277,7 +2501,7 @@ mod tests {
             50,
             true,
             0,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         let text = header_line_text(&segments);
         // Squeezed enough to drop the document to nothing and the
@@ -2307,7 +2531,7 @@ mod tests {
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 overview]  1 time  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 tape]  1 time  2 flow  3 cost",
             ),
         ];
         for (width, want) in expected {
@@ -2318,7 +2542,7 @@ mod tests {
                 width,
                 true,
                 0,
-                Some(Screen::Overview),
+                Some(Screen::Tape),
             );
             assert_eq!(header_line_text(&segments), want, "at {width} columns");
         }
@@ -2358,7 +2582,7 @@ mod tests {
                 width,
                 true,
                 0,
-                Some(Screen::Overview),
+                Some(Screen::Tape),
             );
             assert_eq!(header_line_text(&segments), want, "at {width} columns");
         }
@@ -2388,7 +2612,7 @@ mod tests {
             120,
             false,
             7,
-            Some(Screen::Overview),
+            Some(Screen::Tape),
         );
         assert_eq!(segments[0].role, HeaderRole::Icon);
         assert_eq!(segments[0].text, "\u{25c9}");
@@ -2572,140 +2796,10 @@ mod tests {
     /// Issue #631: a step known only from `--events` (a tree-loop
     /// pass's prompt, confirmed running before it ever gets a state
     /// node of its own) shows `since`/elapsed from its own `start`
-    /// event, and the model from the compiled plan's own prompt op --
-    /// neither of which a state-only read could ever answer.
-    #[test]
-    fn now_pane_for_an_event_only_step_shows_since_and_model_from_the_plan() {
-        let plan = tree_loop_with_prompt_plan();
-        let mut model = RunModel::new();
-        model.observe_event(&crate::observe::Event::Dispatch {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            path: "prime.fan".to_string(),
-            branches: 2,
-            concurrency: Some(2),
-        });
-        model.observe_event(&crate::observe::Event::Start {
-            ts: "2026-01-01T00:00:00Z".to_string(),
-            id: Some(1),
-            path: "prime.fan.iter_0.ask".to_string(),
-        });
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
-        let flat = flat_from(state.clone());
-        let statuses = model.observe(&state, &plan, ProcessState::Running);
-        // The same "every path either side has heard of" view
-        // `render::all_observed_paths` builds -- an event-only path
-        // (confirmed running by `statuses` alone) never has a `flat`
-        // entry of its own, so `flat.keys()` alone would miss it.
-        let all_paths: BTreeMap<String, ()> = statuses
-            .keys()
-            .chain(flat.keys())
-            .map(|k| (k.clone(), ()))
-            .collect();
-        let rows = crate::render::build_rows(
-            &plan,
-            &flat,
-            &statuses,
-            &all_paths,
-            "2026-01-01T00:06:12Z",
-            &model,
-            None,
-        );
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            Some(&state),
-            &base_header(),
-            &[],
-            None,
-            "2026-01-01T00:06:12Z",
-        );
-        match pane.focus {
-            NowFocus::Running(step, _) => {
-                assert_eq!(step.since_ts.as_deref(), Some("2026-01-01T00:00:00Z"));
-                assert!((step.elapsed_s.unwrap() - 372.0).abs() < 1e-9);
-                assert_eq!(step.provider_or_model.as_deref(), Some("scripted-model"));
-            }
-            other => panic!("expected Running, got {other:?}"),
-        }
-    }
-
-    /// Issue #647: a stopped agent's own "since" line must stop
-    /// ticking at the run's end -- rendering `osi show`'s own now
-    /// pane days after a cancelled run still reads the same elapsed
-    /// it would have right when the run ended, never osi's own wall
-    /// clock at render time.
-    #[test]
-    fn a_stopped_agents_elapsed_freezes_at_the_runs_end_not_osis_wall_clock() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {
-                "created_at": "2026-01-01T11:46:43Z", "completed_at": "2026-01-01T11:46:54Z",
-                "error": "Interrupted (Ctrl-C/SIGINT)"
-            },
-            "fix": {"value": null, "meta": {
-                "created_at": "2026-01-01T11:46:43Z", "completed_at": null, "provider": "agent",
-                "live": {
-                    "engine": "pi", "updated_at": "2026-01-01T11:46:50Z",
-                    "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
-                }
-            }}
-        }});
-        let flat = flat_from(state.clone());
-        let statuses = model.observe(&state, &plan, ProcessState::exited(true));
-        let all_paths: BTreeMap<String, ()> = statuses
-            .keys()
-            .chain(flat.keys())
-            .map(|k| (k.clone(), ()))
-            .collect();
-        let rows = crate::render::build_rows(
-            &plan,
-            &flat,
-            &statuses,
-            &all_paths,
-            "2026-01-01T11:52:55Z",
-            &model,
-            None,
-        );
-        let mut header = base_header();
-        header.status = RunStatus::Cancelled;
-        header.run_end_ts = Some("2026-01-01T11:46:54Z".to_string());
-
-        let elapsed_at = |now: &str| {
-            let pane = build_now_pane(
-                &rows,
-                &flat,
-                &plan,
-                &model,
-                Some(&state),
-                &header,
-                &[],
-                None,
-                now,
-            );
-            match pane.focus {
-                NowFocus::Ended(summary) => summary
-                    .stopped_agent
-                    .expect("a leftover meta.live names a stopped agent")
-                    .elapsed_s
-                    .expect("since_ts is known"),
-                other => panic!("expected Ended, got {other:?}"),
-            }
-        };
-        let soon = elapsed_at("2026-01-01T11:46:55Z");
-        let long_after = elapsed_at("2026-02-01T00:00:00Z");
-        assert!((soon - 11.0).abs() < 1e-9); // 11:46:43 -> 11:46:54
-        assert_eq!(
-            soon, long_after,
-            "a stopped agent's own elapsed must not tick with osi's wall clock"
-        );
-    }
-
-    /// Issue #647: Flow's own selected pane, not only the overview's
-    /// now pane, must freeze a stopped agent's elapsed at the run's
-    /// end -- `build_flow_screen` has its own `build_focused_step`
-    /// call, which must get `run_ended_at` too.
+    /// Issue #647: Flow's own selected pane must freeze a stopped
+    /// agent's elapsed at the run's end -- `build_flow_screen` has
+    /// its own `build_focused_step` call, which must get
+    /// `run_ended_at` too.
     #[test]
     fn flow_screens_stopped_agents_elapsed_freezes_at_the_runs_end_not_osis_wall_clock() {
         let plan = PlanTree::empty();
@@ -3048,445 +3142,6 @@ mod tests {
         assert!(!strip.iter().any(|s| s.label.contains('\u{203a}')));
     }
 
-    #[test]
-    fn several_running_steps_report_the_extra_count() {
-        let rows = vec![
-            Row {
-                path: "prime.a".to_string(),
-                depth: 1,
-                label: "a".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(1.0),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: false,
-            },
-            Row {
-                path: "prime.b".to_string(),
-                depth: 1,
-                label: "b".to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(1.0),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: false,
-            },
-        ];
-        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let header = base_header();
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            None,
-            &header,
-            &[],
-            None,
-            "2026-10-08T11:00:00Z",
-        );
-        match pane.focus {
-            NowFocus::Running(_, more) => assert_eq!(more, 1),
-            other => panic!("expected Running, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn nested_running_containers_count_as_one_running_step() {
-        fn running_row(path: &str, depth: usize) -> Row {
-            Row {
-                path: path.to_string(),
-                depth,
-                label: path.rsplit('.').next().unwrap_or(path).to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(1.0),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: true,
-            }
-        }
-        // `review > fix > agent`: a container is "running" the moment
-        // any descendant is (`completed_at` unset until every child
-        // has one), so all three rows read `Running` here even though
-        // only `agent` (the leaf) is a real step actually in flight.
-        let rows = vec![
-            running_row("prime.review", 1),
-            running_row("prime.review.fix", 2),
-            running_row("prime.review.fix.agent", 3),
-        ];
-        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let header = base_header();
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            None,
-            &header,
-            &[],
-            None,
-            "2026-10-08T11:00:00Z",
-        );
-        match pane.focus {
-            NowFocus::Running(step, more) => {
-                assert_eq!(step.path, "prime.review.fix.agent");
-                assert_eq!(more, 0, "only the leaf is a real running step");
-            }
-            other => panic!("expected Running, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_running_steps_own_usual_busy_time_is_filled_in_from_history() {
-        fn running_row(path: &str) -> Row {
-            Row {
-                path: path.to_string(),
-                depth: 1,
-                label: path.to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(1.0),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: false,
-            }
-        }
-        let rows = vec![running_row("prime.slow")];
-        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let mut header = base_header();
-        header.history_step_usual.insert(
-            "slow".to_string(),
-            crate::history::StepStats {
-                count: 5,
-                busy_p50_s: Some(300.0),
-                busy_p10_s: None,
-                busy_p90_s: Some(540.0),
-                ..Default::default()
-            },
-        );
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            None,
-            &header,
-            &[],
-            None,
-            "2026-10-08T11:00:00Z",
-        );
-        match pane.focus {
-            NowFocus::Running(step, _) => {
-                assert_eq!(step.usual_busy_p50_s, Some(300.0));
-                assert_eq!(step.usual_busy_p90_s, Some(540.0));
-            }
-            other => panic!("expected Running, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn the_running_focus_prefers_the_deepest_row_over_the_root() {
-        fn running_row(path: &str, depth: usize) -> Row {
-            Row {
-                path: path.to_string(),
-                depth,
-                label: path.to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Running,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(1.0),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: false,
-            }
-        }
-        let rows = vec![running_row("prime", 0), running_row("prime.a.b", 2)];
-        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let header = base_header();
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            None,
-            &header,
-            &[],
-            None,
-            "2026-10-08T11:00:00Z",
-        );
-        match pane.focus {
-            NowFocus::Running(step, _) => assert_eq!(step.path, "prime.a.b"),
-            other => panic!("expected Running, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn nested_failed_containers_count_as_one_failure() {
-        fn failed_row(path: &str, depth: usize) -> Row {
-            Row {
-                path: path.to_string(),
-                depth,
-                label: path.rsplit('.').next().unwrap_or(path).to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::FailedHandled,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(1.0),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: true,
-            }
-        }
-        let rows = vec![
-            failed_row("prime.review", 1),
-            failed_row("prime.review.fix", 2),
-            failed_row("prime.review.fix.agent", 3),
-        ];
-        let flat = BTreeMap::new();
-        let model = RunModel::new();
-        let header = base_header();
-        let card = build_flow_card(&rows, &rows, &flat, &model, &header);
-        assert_eq!(card.failures, 1, "only the leaf is a real failure");
-    }
-
-    #[test]
-    fn decisions_come_from_a_named_ifs_branch() {
-        let mut flat = BTreeMap::new();
-        flat.insert(
-            "prime.check".to_string(),
-            NodeMeta {
-                created_at: Some("2026-10-08T11:00:00Z".to_string()),
-                completed_at: Some("2026-10-08T11:00:01Z".to_string()),
-                error: None,
-                branch: Some("then".to_string()),
-                progress_done: None,
-                progress_total: None,
-                progress_eta_s: None,
-                live: None,
-                value: Value::Null,
-                meta: json!({"branch": "then"}),
-            },
-        );
-        let rows = Vec::new();
-        let model = RunModel::new();
-        let header = base_header();
-        let card = build_flow_card(&rows, &rows, &flat, &model, &header);
-        assert_eq!(card.recent.len(), 1);
-        match &card.recent[0] {
-            FlowEvent::Decision { name, branch, .. } => {
-                assert_eq!(name, "check");
-                assert_eq!(branch, "then");
-            }
-            other => panic!("expected Decision, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn quick_steps_are_counted_from_the_unfolded_rows() {
-        fn quick_row(path: &str) -> Row {
-            Row {
-                path: path.to_string(),
-                depth: 1,
-                label: path.to_string(),
-                kind: RowKind::Tool,
-                status: RowStatus {
-                    kind: StatusKind::Done,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: Some(0.3),
-                loop_progress: None,
-                dim: Some("shell".to_string()),
-                has_children: false,
-            }
-        }
-        let unfolded = vec![
-            quick_row("prime.a"),
-            quick_row("prime.b"),
-            quick_row("prime.c"),
-        ];
-        let flat = BTreeMap::new();
-        let model = RunModel::new();
-        let header = base_header();
-        let card = build_flow_card(&unfolded, &unfolded, &flat, &model, &header);
-        let (count, total_s) = card.quick_steps.expect("three quick steps");
-        assert_eq!(count, 3);
-        assert!((total_s - 0.9).abs() < 1e-9);
-    }
-
-    /// Issue #641: the overview's own "top" line reads the same
-    /// folded, relative label the Cost screen's own table would show
-    /// for that store (`plan › agent`, a single-child chain folded
-    /// into one breadcrumb) -- never the full dotted path
-    /// (`prime.plan.agent`) `crate::cost::largest_stores` itself
-    /// would never show either.
-    #[test]
-    fn top_store_uses_the_same_folded_relative_label_as_the_cost_table() {
-        let header = base_header();
-        let token_bar = TokenBar::default();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
-            "plan": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"},
-                "agent": {"value": "y", "meta": {
-                    "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
-                    "tokens_sent_total": 100, "tokens_received_total": 50
-                }}
-            }
-        }});
-        let flat = flat_from(state.clone());
-        let unfolded_rows = [
-            Row {
-                path: "prime.plan".to_string(),
-                depth: 0,
-                label: "plan".to_string(),
-                kind: RowKind::Use,
-                status: RowStatus {
-                    kind: StatusKind::Done,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: true,
-            },
-            Row {
-                path: "prime.plan.agent".to_string(),
-                depth: 1,
-                label: "agent".to_string(),
-                kind: RowKind::Prompt,
-                status: RowStatus {
-                    kind: StatusKind::Done,
-                    skip_reason: None,
-                    retrying: false,
-                },
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            },
-        ];
-        let card = build_cost_card(
-            &[],
-            &unfolded_rows,
-            &header,
-            Some(&state),
-            &flat,
-            &PlanTree::empty(),
-            &token_bar,
-            "2026-10-08T11:52:55Z",
-        );
-        assert_eq!(card.top_store, Some(("plan › agent".to_string(), 150)));
-    }
-
-    #[test]
-    fn cost_is_hidden_until_any_effect_reports_it() {
-        let header = base_header();
-        let token_bar = TokenBar::default();
-        let flat = BTreeMap::new();
-        let no_cost = build_cost_card(
-            &[],
-            &[],
-            &header,
-            Some(&json!({"runtime": {"last_run": {"totals": {}}}})),
-            &flat,
-            &PlanTree::empty(),
-            &token_bar,
-            "2026-10-08T11:52:55Z",
-        );
-        assert_eq!(no_cost.cost_usd, None);
-        let with_cost = build_cost_card(
-            &[],
-            &[],
-            &header,
-            Some(&json!({"runtime": {"last_run": {"totals": {"cost_usd": 14.2}}}})),
-            &flat,
-            &PlanTree::empty(),
-            &token_bar,
-            "2026-10-08T11:52:55Z",
-        );
-        assert_eq!(with_cost.cost_usd, Some(14.2));
-    }
-
-    #[test]
-    fn cost_sums_from_meta_cost_usd_mid_run_before_totals_exist() {
-        let header = base_header();
-        let token_bar = TokenBar::default();
-        let mut flat = BTreeMap::new();
-        flat.insert(
-            "prime.a".to_string(),
-            NodeMeta {
-                created_at: Some("2026-10-08T11:04:58Z".to_string()),
-                completed_at: Some("2026-10-08T11:05:58Z".to_string()),
-                error: None,
-                branch: None,
-                progress_done: None,
-                progress_total: None,
-                progress_eta_s: None,
-                live: None,
-                value: Value::Null,
-                meta: json!({"cost_usd": 1.5}),
-            },
-        );
-        flat.insert(
-            "prime.b".to_string(),
-            NodeMeta {
-                created_at: Some("2026-10-08T11:06:00Z".to_string()),
-                completed_at: Some("2026-10-08T11:07:00Z".to_string()),
-                error: None,
-                branch: None,
-                progress_done: None,
-                progress_total: None,
-                progress_eta_s: None,
-                live: None,
-                value: Value::Null,
-                meta: json!({"cost_usd": 0.75}),
-            },
-        );
-        let card = build_cost_card(
-            &[],
-            &[],
-            &header,
-            None,
-            &flat,
-            &PlanTree::empty(),
-            &token_bar,
-            "2026-10-08T11:52:55Z",
-        );
-        assert_eq!(card.cost_usd, Some(2.25));
-    }
-
     /// Issue #641: with more top-level phases than the front end has
     /// distinct glyphs for (`max_phase_bands`), the chart's own
     /// series cap to that many, the smallest ones folded into one
@@ -3554,109 +3209,6 @@ mod tests {
         );
         assert_eq!(screen.tokens_over_time.len(), 6);
         assert_eq!(screen.tokens_over_time.last().unwrap().0, "other");
-    }
-
-    #[test]
-    fn tokens_over_time_buckets_by_each_effects_own_completion() {
-        let mut header = base_header();
-        header.run_start_ts = Some("2026-10-08T11:00:00Z".to_string());
-        let mut flat = BTreeMap::new();
-        flat.insert(
-            "prime.a".to_string(),
-            NodeMeta {
-                created_at: Some("2026-10-08T11:00:00Z".to_string()),
-                completed_at: Some("2026-10-08T11:00:10Z".to_string()),
-                error: None,
-                branch: None,
-                progress_done: None,
-                progress_total: None,
-                progress_eta_s: None,
-                live: None,
-                value: Value::Null,
-                meta: json!({"tokens_sent": 100, "tokens_received": 0}),
-            },
-        );
-        flat.insert(
-            "prime.b".to_string(),
-            NodeMeta {
-                created_at: Some("2026-10-08T11:00:50Z".to_string()),
-                completed_at: Some("2026-10-08T11:00:55Z".to_string()),
-                error: None,
-                branch: None,
-                progress_done: None,
-                progress_total: None,
-                progress_eta_s: None,
-                live: None,
-                value: Value::Null,
-                meta: json!({"tokens_sent": 0, "tokens_received": 40}),
-            },
-        );
-        let buckets = build_tokens_over_time(&header, &flat, "2026-10-08T11:01:00Z");
-        assert_eq!(buckets.len(), 12);
-        assert_eq!(buckets.iter().sum::<u64>(), 140);
-        // A 60s span in 12 buckets is 5s each: the first completion
-        // (at 10s) lands in bucket 2, well before the second (at 55s,
-        // the last bucket).
-        assert!(
-            buckets[2] > 0,
-            "the early completion lands in an early bucket: {buckets:?}"
-        );
-        assert!(
-            buckets[buckets.len() - 1] > 0,
-            "the late completion lands in a late bucket: {buckets:?}"
-        );
-    }
-
-    #[test]
-    fn a_finished_run_shows_the_ended_summary() {
-        let mut header = base_header();
-        header.status = RunStatus::Ok;
-        header.run_end_ts = Some("2026-10-08T11:58:00Z".to_string());
-        let rows = Vec::new();
-        let flat = BTreeMap::new();
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            None,
-            &header,
-            &[],
-            None,
-            "2026-10-08T11:58:00Z",
-        );
-        match pane.focus {
-            NowFocus::Ended(summary) => assert_eq!(summary.outcome, RunStatus::Ok),
-            other => panic!("expected Ended, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_failed_run_shows_the_ended_summary_too() {
-        let mut header = base_header();
-        header.status = RunStatus::Failed;
-        header.run_end_ts = Some("2026-10-08T11:58:00Z".to_string());
-        let rows = Vec::new();
-        let flat = BTreeMap::new();
-        let plan = PlanTree::empty();
-        let model = RunModel::new();
-        let pane = build_now_pane(
-            &rows,
-            &flat,
-            &plan,
-            &model,
-            None,
-            &header,
-            &[],
-            None,
-            "2026-10-08T11:58:00Z",
-        );
-        match pane.focus {
-            NowFocus::Ended(summary) => assert_eq!(summary.outcome, RunStatus::Failed),
-            other => panic!("expected Ended, got {other:?}"),
-        }
     }
 
     fn agent_row(path: &str) -> Row {

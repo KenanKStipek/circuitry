@@ -283,6 +283,11 @@ pub struct PlanEntry {
     /// for a prompt with none set) — issue #631's now pane, same
     /// reasoning as `provider` above.
     pub model: Option<String>,
+    /// A prompt leaf's own template source, verbatim and unrendered
+    /// (`None` for every other kind) — the Tape's own preview line
+    /// for a queued prompt (issue #678), which has no `meta.
+    /// prompt_sent` of its own yet to preview instead.
+    pub prompt_template: Option<String>,
 }
 
 /// One pass index resolved while matching a concrete path against a
@@ -579,6 +584,18 @@ impl PlanTree {
             return None;
         }
         entry.model.clone().or_else(|| entry.provider.clone())
+    }
+
+    /// A queued prompt's own template source, verbatim and
+    /// unrendered (issue #678's Tape preview line for a row ahead,
+    /// which has no `meta.prompt_sent` of its own yet). `None` for
+    /// any other kind, or a path the plan has nothing to say about.
+    pub fn prompt_template(&self, path: &str) -> Option<String> {
+        let entry = self.match_path(path)?.entries.first()?;
+        if !matches!(entry.kind, PlanEntryKind::Leaf(LeafEffectKind::Prompt)) {
+            return None;
+        }
+        entry.prompt_template.clone()
     }
 
     /// Whether `path` is a report's own (#605/#610): resolved the
@@ -878,6 +895,7 @@ fn record_op_entry(
     }
     let mut provider = None;
     let mut model = None;
+    let mut prompt_template = None;
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
@@ -888,6 +906,13 @@ fn record_op_entry(
             LeafKind::Prompt(prompt) => {
                 provider = prompt.provider.clone();
                 model = prompt.model.clone();
+                prompt_template = if let electricity_bytecode::PromptContent::Template(template) =
+                    &prompt.content
+                {
+                    Some(template.source.clone())
+                } else {
+                    None
+                };
                 PlanEntryKind::Leaf(LeafEffectKind::Prompt)
             }
             LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
@@ -968,6 +993,7 @@ fn record_op_entry(
             parent_flow,
             provider,
             model,
+            prompt_template,
         },
     );
     path
