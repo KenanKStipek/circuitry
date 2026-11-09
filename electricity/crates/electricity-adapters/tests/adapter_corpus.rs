@@ -364,6 +364,31 @@ fn ollama_outcome_interpretation_matches_circuitry() {
     }
 }
 
+#[test]
+fn ollama_streaming_outcome_interpretation_matches_circuitry() {
+    for case in list(&corpus(), "ollama_streaming_outcome_cases") {
+        let outcome = outcome_from_case(case);
+        let model = get(case, "model").as_str().unwrap();
+        let timeout_seconds = u32_val(get(case, "timeout_seconds"));
+        let base_url = get(case, "base_url").as_str().unwrap();
+        let url = format!("{base_url}/api/generate");
+        let actual = ollama::interpret_streaming_outcome(
+            "ollama",
+            &outcome,
+            model,
+            timeout_seconds,
+            base_url,
+            &url,
+        );
+        let expected = expected_from_result(get(case, "result"));
+        assert_matches_expected(
+            actual,
+            &expected,
+            &format!("ollama streaming outcome {case:?}"),
+        );
+    }
+}
+
 // ---------------------------------------------------------------------
 // 3. The OpenAI-compatible family.
 // ---------------------------------------------------------------------
@@ -420,6 +445,27 @@ fn openai_compat_outcome_interpretation_matches_circuitry() {
     }
 }
 
+#[test]
+fn openai_compat_streaming_outcome_interpretation_matches_circuitry() {
+    for case in list(&corpus(), "openai_compat_streaming_outcome_cases") {
+        let outcome = outcome_from_case(case);
+        let model = get(case, "model").as_str().unwrap();
+        let actual = openai_compat::interpret_streaming_outcome(
+            "OpenAI-compatible",
+            &outcome,
+            model,
+            "http://localhost:1234/v1/chat/completions",
+            &[],
+        );
+        let expected = expected_from_result(get(case, "result"));
+        assert_matches_expected(
+            actual,
+            &expected,
+            &format!("openai_compat streaming outcome {case:?}"),
+        );
+    }
+}
+
 // ---------------------------------------------------------------------
 // 4. `openai`.
 // ---------------------------------------------------------------------
@@ -470,6 +516,26 @@ fn openai_outcome_interpretation_matches_circuitry() {
     }
 }
 
+#[test]
+fn openai_streaming_outcome_interpretation_matches_circuitry() {
+    for case in list(&corpus(), "openai_streaming_outcome_cases") {
+        let outcome = outcome_from_case(case);
+        let model = get(case, "model").as_str().unwrap();
+        let actual = openai::interpret_streaming_outcome(
+            &outcome,
+            model,
+            "https://api.openai.com/v1/chat/completions",
+            "circuitry-test-fake-key",
+        );
+        let expected = expected_from_result(get(case, "result"));
+        assert_matches_expected(
+            actual,
+            &expected,
+            &format!("openai streaming outcome {case:?}"),
+        );
+    }
+}
+
 // ---------------------------------------------------------------------
 // 5. `anthropic`.
 // ---------------------------------------------------------------------
@@ -515,6 +581,26 @@ fn anthropic_outcome_interpretation_matches_circuitry() {
         );
         let expected = expected_from_result(get(case, "result"));
         assert_matches_expected(actual, &expected, &format!("anthropic outcome {case:?}"));
+    }
+}
+
+#[test]
+fn anthropic_streaming_outcome_interpretation_matches_circuitry() {
+    for case in list(&corpus(), "anthropic_streaming_outcome_cases") {
+        let outcome = outcome_from_case(case);
+        let model = get(case, "model").as_str().unwrap();
+        let actual = anthropic::interpret_streaming_outcome(
+            &outcome,
+            model,
+            "https://api.anthropic.com/v1/messages",
+            "circuitry-test-fake-key",
+        );
+        let expected = expected_from_result(get(case, "result"));
+        assert_matches_expected(
+            actual,
+            &expected,
+            &format!("anthropic streaming outcome {case:?}"),
+        );
     }
 }
 
@@ -584,4 +670,179 @@ fn classify_curl_outcome_is_exercised_by_every_outcome_case() {
             let _ = classify_curl_outcome(&outcome);
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// 7. Streaming vs. non-streamed parity (#676): each protocol's own
+// first `*_streaming_outcome_cases` entry is a successful reply --
+// its `GenerateResult` (already captured from Circuitry's own
+// streaming code in the corpus) must equal what the *non-streamed*
+// `interpret_outcome` gives for an ordinary, complete JSON body
+// carrying the exact same reply, so the two parsing paths can never
+// quietly drift apart from each other.
+// ---------------------------------------------------------------------
+
+#[test]
+fn ollama_streamed_success_matches_a_non_streamed_body_with_the_same_reply() {
+    let streamed = outcome_from_case(&list(&corpus(), "ollama_streaming_outcome_cases")[0]);
+    let streamed_result = ollama::interpret_streaming_outcome(
+        "ollama",
+        &streamed,
+        "m",
+        30,
+        "http://localhost:11434",
+        "http://localhost:11434/api/generate",
+    )
+    .unwrap();
+
+    let plain = CurlOutcome {
+        returncode: 0,
+        stdout: concat!(
+            r#"{"response": "hi there", "prompt_eval_count": 3, "#,
+            r#""eval_count": 5, "done_reason": "stop"}"#,
+        )
+        .to_string(),
+        stderr: String::new(),
+        status: None,
+        retry_after: None,
+    };
+    let non_streamed = ollama::interpret_outcome(
+        "ollama",
+        &plain,
+        "m",
+        30,
+        "http://localhost:11434",
+        "http://localhost:11434/api/generate",
+    )
+    .unwrap();
+
+    assert_eq!(streamed_result.text, non_streamed.text);
+    assert_eq!(streamed_result.tokens_sent, non_streamed.tokens_sent);
+    assert_eq!(
+        streamed_result.tokens_received,
+        non_streamed.tokens_received
+    );
+    assert_eq!(streamed_result.finish_reason, non_streamed.finish_reason);
+}
+
+#[test]
+fn openai_compat_streamed_success_matches_a_non_streamed_body_with_the_same_reply() {
+    let streamed = outcome_from_case(&list(&corpus(), "openai_compat_streaming_outcome_cases")[0]);
+    let streamed_result = openai_compat::interpret_streaming_outcome(
+        "OpenAI-compatible",
+        &streamed,
+        "m",
+        "http://localhost:1234/v1/chat/completions",
+        &[],
+    )
+    .unwrap();
+
+    let plain = CurlOutcome {
+        returncode: 0,
+        stdout: concat!(
+            r#"{"choices": [{"message": {"content": "hi there"}, "#,
+            r#""finish_reason": "stop"}], "#,
+            r#""usage": {"prompt_tokens": 3, "completion_tokens": 5}}"#,
+        )
+        .to_string(),
+        stderr: String::new(),
+        status: None,
+        retry_after: None,
+    };
+    let non_streamed = openai_compat::interpret_outcome(
+        "OpenAI-compatible",
+        &plain,
+        "m",
+        "http://localhost:1234/v1/chat/completions",
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(streamed_result.text, non_streamed.text);
+    assert_eq!(streamed_result.tokens_sent, non_streamed.tokens_sent);
+    assert_eq!(
+        streamed_result.tokens_received,
+        non_streamed.tokens_received
+    );
+    assert_eq!(streamed_result.finish_reason, non_streamed.finish_reason);
+}
+
+#[test]
+fn openai_streamed_success_matches_a_non_streamed_body_with_the_same_reply() {
+    let streamed = outcome_from_case(&list(&corpus(), "openai_streaming_outcome_cases")[0]);
+    let streamed_result = openai::interpret_streaming_outcome(
+        &streamed,
+        "m",
+        "https://api.openai.com/v1/chat/completions",
+        "circuitry-test-fake-key",
+    )
+    .unwrap();
+
+    let plain = CurlOutcome {
+        returncode: 0,
+        stdout: concat!(
+            r#"{"choices": [{"message": {"content": "hi there"}, "#,
+            r#""finish_reason": "stop"}], "#,
+            r#""usage": {"prompt_tokens": 3, "completion_tokens": 5}}"#,
+        )
+        .to_string(),
+        stderr: String::new(),
+        status: None,
+        retry_after: None,
+    };
+    let non_streamed = openai::interpret_outcome(
+        &plain,
+        "m",
+        "https://api.openai.com/v1/chat/completions",
+        "circuitry-test-fake-key",
+    )
+    .unwrap();
+
+    assert_eq!(streamed_result.text, non_streamed.text);
+    assert_eq!(streamed_result.tokens_sent, non_streamed.tokens_sent);
+    assert_eq!(
+        streamed_result.tokens_received,
+        non_streamed.tokens_received
+    );
+    assert_eq!(streamed_result.finish_reason, non_streamed.finish_reason);
+}
+
+#[test]
+fn anthropic_streamed_success_matches_a_non_streamed_body_with_the_same_reply() {
+    let streamed = outcome_from_case(&list(&corpus(), "anthropic_streaming_outcome_cases")[0]);
+    let streamed_result = anthropic::interpret_streaming_outcome(
+        &streamed,
+        "m",
+        "https://api.anthropic.com/v1/messages",
+        "circuitry-test-fake-key",
+    )
+    .unwrap();
+
+    let plain = CurlOutcome {
+        returncode: 0,
+        stdout: concat!(
+            r#"{"content": [{"type": "text", "text": "hi there"}], "#,
+            r#""usage": {"input_tokens": 3, "output_tokens": 5}, "#,
+            r#""stop_reason": "end_turn"}"#,
+        )
+        .to_string(),
+        stderr: String::new(),
+        status: None,
+        retry_after: None,
+    };
+    let non_streamed = anthropic::interpret_outcome(
+        &plain,
+        "m",
+        "https://api.anthropic.com/v1/messages",
+        "circuitry-test-fake-key",
+    )
+    .unwrap();
+
+    assert_eq!(streamed_result.text, non_streamed.text);
+    assert_eq!(streamed_result.tokens_sent, non_streamed.tokens_sent);
+    assert_eq!(
+        streamed_result.tokens_received,
+        non_streamed.tokens_received
+    );
+    assert_eq!(streamed_result.finish_reason, non_streamed.finish_reason);
 }
