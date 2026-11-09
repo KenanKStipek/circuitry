@@ -2,7 +2,7 @@
 source: crates/oscilloscope/src/tui.rs
 expression: text
 ---
-"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 5m00s · 00:05:00 · ETA ~00:12   0  [1]  2  3         "
+" ⠤⠤⠤⠤⠤⠤⠤⠤  do-thing.yml · ✓ Ended 5m00s                        TIME    00:05:00 "
 "┌ timeline ────────────────────────────────────────────────────────────────────┐"
 "│                       00:00      00:01      00:02      00:03      00:04      │"
 "│                       ├──────────┼──────────┼──────────┼──────────┼─────────┤│"
@@ -19,10 +19,10 @@ expression: text
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"
-"│                                                                              │"
-"│                                                                              │"
-"│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
 "events/min (state)      █          █          ▅                               ▅ "
 "decisions                                                                       "
 "in flight               ██████████████████████                                  "
+" Totals ↑10 ↓20 · 30 t  2/2 Effects  ETA 00:12:00  Cost —                       "
+"                                                                                "
+" ↑↓ Select   tab Pane   +/- Zoom   = Fit   v Full Value   e Errors   / Filter   "

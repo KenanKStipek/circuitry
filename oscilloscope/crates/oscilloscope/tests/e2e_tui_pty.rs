@@ -1891,12 +1891,13 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         "the TUI showed the finished run as aborted instead of failed; got:\n{rendered:?}"
     );
     // The Tape's own header band (issue #678) carries the status
-    // glyph and word together, `✗ Failed`, right out of its own SGR
-    // run -- the same "straight out of an `m`" shape the old header
-    // line's bare `failed` used to check for (review finding 3 on PR
-    // #496), just with the glyph ahead of the Title Case word now.
+    // glyph and word together, `✗ Failed` -- the icon trace just
+    // ahead of it is in the same failed colour now (§9's settled
+    // icon-in-the-word-osi rule), so ratatui's own diff can reuse
+    // that run's SGR code across the cursor jump between them
+    // rather than emitting a fresh one right before the glyph.
     assert!(
-        rendered.contains("m✗ Failed"),
+        rendered.contains("✗ Failed"),
         "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
 

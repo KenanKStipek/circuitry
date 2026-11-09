@@ -246,10 +246,8 @@ fn build_steps(
         // run together for the Time screen's own ghost bars, but
         // the Tape needs this exact pass's own figure, unsummed.
         let literal_key = display_key_literal(&interval.path, plan);
-        if literal_key.is_some() && literal_key != stripped_key {
-            if let Some(resolved) =
-                resolve_interval_with_key(interval, literal_key.unwrap(), run_start_ts)
-            {
+        if let Some(key) = literal_key.filter(|key| Some(key) != stripped_key.as_ref()) {
+            if let Some(resolved) = resolve_interval_with_key(interval, key, run_start_ts) {
                 by_key
                     .entry(resolved.key.clone())
                     .or_default()
@@ -2230,15 +2228,24 @@ mod tests {
             Some(402)
         );
         assert_eq!(
-            stats.per_step.get("drafts.iter_0.draft").and_then(|s| s.tokens_p50),
+            stats
+                .per_step
+                .get("drafts.iter_0.draft")
+                .and_then(|s| s.tokens_p50),
             Some(154)
         );
         assert_eq!(
-            stats.per_step.get("drafts.iter_1.draft").and_then(|s| s.tokens_p50),
+            stats
+                .per_step
+                .get("drafts.iter_1.draft")
+                .and_then(|s| s.tokens_p50),
             Some(153)
         );
         assert_eq!(
-            stats.per_step.get("drafts.iter_2.draft").and_then(|s| s.tokens_p50),
+            stats
+                .per_step
+                .get("drafts.iter_2.draft")
+                .and_then(|s| s.tokens_p50),
             Some(155)
         );
         assert_eq!(stats.whole_run.and_then(|r| r.tokens_p50), Some(1324));

@@ -1,19 +1,15 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 6603
 expression: text
 ---
-"⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 44.0s · 00:00:00   0  1  [2]  3     "
+" ⠔⠒⠒⠤⠤⠔⠒⠒  do-thing.yml · ● Running 44.0s            FLOW    00:00:00 "
 "┌ selected ──────────────────────────────────────────────────────────┐"
 "│step_44                                                             │"
 "│tool · shell                                                        │"
 "│doing:                                                              │"
 "│running                                                             │"
-"│produced:                                                           │"
 "└────────────────────────────────────────────────────────────────────┘"
 "┌ flow (do-thing · 44/49) (following) ◆ decision ⟲ loop ▶ running 41/┐"
-"│  ✓ step_39                                                         │"
-"│  ✓ step_4                                                          │"
 "│  ✓ step_40                                                         │"
 "│  ✓ step_41                                                         │"
 "│  ✓ step_42                                                         │"
@@ -23,3 +19,6 @@ expression: text
 "│health: 0 failed · 0 retries · 0 warnings                           │"
 "│○ 3 more planned                                                    │"
 "└────────────────────────────────────────────────────────────────────┘"
+" Totals ↑0 ↓0 · 0 t  44/49 Effects  ETA —  Cost —                     "
+"                                                                      "
+" ↑↓ Select   tab Pane   s State   l Log   z Fold   v Full Value   e Er"

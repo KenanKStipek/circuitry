@@ -960,7 +960,11 @@ fn first_words(text: &str, max_chars: usize) -> String {
 /// the Tape goes through this, not only the ones ahead, so a
 /// finished or running row's `+47%` deviation has the same figure
 /// behind it as a queued one's `usually 155 t`.
-fn tape_row_usual_tokens(path: &str, plan: &PlanTree, header: &crate::render::Header) -> Option<u64> {
+fn tape_row_usual_tokens(
+    path: &str,
+    plan: &PlanTree,
+    header: &crate::render::Header,
+) -> Option<u64> {
     let literal = crate::history::display_key_literal(path, plan)
         .and_then(|key| header.history_step_usual.get(&key))
         .and_then(|s| s.tokens_p50);
@@ -1227,7 +1231,11 @@ pub fn build_tape(
         // anatomy for them).
         if matches!(
             row.kind,
-            RowKind::Root | RowKind::Pass | RowKind::QuickSteps | RowKind::Report | RowKind::Unknown
+            RowKind::Root
+                | RowKind::Pass
+                | RowKind::QuickSteps
+                | RowKind::Report
+                | RowKind::Unknown
         ) {
             continue;
         }
@@ -2370,6 +2378,7 @@ mod tests {
                 TapeItem::NowBand { .. } => "now".to_string(),
                 TapeItem::SlotsRule { .. } => "slots".to_string(),
                 TapeItem::RunEnd { .. } => "end".to_string(),
+                TapeItem::HeadRule => "head_rule".to_string(),
             })
             .collect();
         assert_eq!(

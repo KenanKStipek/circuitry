@@ -1,13 +1,11 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 6110
 expression: text
 ---
-"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · aborted 5.0s · 00:00:00   0  1  [2]  3        "
+" ⠤⠤⠤⠤⠤⠤⠤⠤  do-thing.yml · ✗ Aborted 5.0s             FLOW    00:00:00 "
 "┌ selected ──────────────────────────────────────────────────────────┐"
 "│a                                                                   │"
 "│tool                                                                │"
-"│                                                                    │"
 "│                                                                    │"
 "│                                                                    │"
 "└────────────────────────────────────────────────────────────────────┘"
@@ -17,9 +15,10 @@ expression: text
 "│  · b                                                               │"
 "│  · fan                                                             │"
 "│                                                                    │"
-"│                                                                    │"
-"│                                                                    │"
 "│quick steps folded: 0 · 0.0s                                        │"
 "│health: 0 failed · 0 retries · 0 warnings                           │"
 "│                                                                    │"
 "└────────────────────────────────────────────────────────────────────┘"
+" Totals ↑0 ↓0 · 0 t  0/5 Effects  ETA —  Cost —                       "
+"                                                                      "
+" ↑↓ Select   tab Pane   s State   l Log   z Fold   v Full Value   e Er"

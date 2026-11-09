@@ -364,6 +364,7 @@ fn draw_tape_header_band(
     header: &oscilloscope_core::render::Header,
     chip: &str,
     now: &str,
+    icon_frame: u64,
     ctx: &DrawCtx,
 ) {
     let bg = ctx.theme.statusbar_bg;
@@ -373,11 +374,31 @@ fn draw_tape_header_band(
         RunStatus::Ok => ('✓', ctx.theme.status_done),
         _ => ('✗', ctx.theme.status_failed),
     };
+    // Issue #677's settled §9 point 1: the animated trace takes the
+    // `osi` word's own cells while animation is on; the word returns
+    // under `--no-animation`.
+    let osi_text = if ctx.no_animation {
+        " osi  ".to_string()
+    } else {
+        format!(
+            " {}  ",
+            oscilloscope_core::icon::header_trace_text(
+                icon_frame,
+                header.status == RunStatus::Running,
+                true
+            )
+        )
+    };
+    let osi_color = if ctx.no_animation {
+        ctx.theme.accent_primary
+    } else {
+        crate::icon::trace_color(header.status, ctx.theme)
+    };
     let mut left = vec![
         Span::styled(
-            " osi  ",
+            osi_text,
             Style::default()
-                .fg(ctx.theme.accent_primary)
+                .fg(osi_color)
                 .bg(bg)
                 .add_modifier(Modifier::BOLD),
         ),
@@ -398,13 +419,31 @@ fn draw_tape_header_band(
             Style::default().fg(ctx.theme.text).bg(bg),
         ),
     ];
+    // `t`'s own banner (issue #535), now `T`'s: shown for about 2
+    // seconds after a theme switch, reserved out of `pad` the same
+    // way the old one-line header did so it never overflows the
+    // band together with the clock.
+    let banner_text = ctx
+        .theme_banner
+        .map(|name| format!("theme: {name}  "))
+        .unwrap_or_default();
     let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let clock_text =
         oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
     let chip_text = format!("  {chip}  ");
-    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let right_width = banner_text.chars().count()
+        + chip_text.chars().count()
+        + 2
+        + clock_text.chars().count()
+        + 1;
     let pad = (area.width as usize).saturating_sub(left_width + right_width);
     left.push(Span::styled(" ".repeat(pad), base));
+    if !banner_text.is_empty() {
+        left.push(Span::styled(
+            banner_text,
+            Style::default().fg(ctx.theme.dim).bg(bg),
+        ));
+    }
     left.push(Span::styled(
         chip_text,
         Style::default()
@@ -442,7 +481,9 @@ fn draw_tape_status_line(
             );
             return;
         }
-        TapeHead::Ended { handled_failure, .. } => {
+        TapeHead::Ended {
+            handled_failure, ..
+        } => {
             let total = header.tokens_sent + header.tokens_received;
             let mut spans = vec![
                 Span::styled(
@@ -469,7 +510,10 @@ fn draw_tape_status_line(
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
             return;
         }
-        TapeHead::Failed { error, failing_path } => {
+        TapeHead::Failed {
+            error,
+            failing_path,
+        } => {
             let label = failing_path
                 .as_deref()
                 .map(|p| p.rsplit('.').next().unwrap_or(p).to_string())
@@ -547,10 +591,12 @@ fn draw_tape_status_line(
 
 /// The key bar (§3.2): keys in `keyhint.key`, labels in Title Case,
 /// `? Help  q Quit` last.
-fn draw_tape_key_bar(frame: &mut Frame, area: Rect, wide: bool, ctx: &DrawCtx) {
+/// A key bar line (§3.2), shared by every screen: `items` in
+/// `keyhint.key`/`keyhint.desc`, on `statusbar.bg`.
+fn draw_key_bar(frame: &mut Frame, area: Rect, items: &[(&str, &str)], ctx: &DrawCtx) {
     let bg = ctx.theme.statusbar_bg;
     let mut spans: Vec<Span> = Vec::new();
-    let push = |key: &str, desc: &str, spans: &mut Vec<Span>| {
+    for (key, desc) in items {
         spans.push(Span::styled(
             format!(" {key} "),
             Style::default()
@@ -562,22 +608,54 @@ fn draw_tape_key_bar(frame: &mut Frame, area: Rect, wide: bool, ctx: &DrawCtx) {
             format!("{desc}  "),
             Style::default().fg(ctx.theme.keyhint_desc).bg(bg),
         ));
-    };
-    push("↑↓", "Select", &mut spans);
-    push("enter", "Open", &mut spans);
-    if wide {
-        push("p", "Previews", &mut spans);
     }
-    push("t", "Tokens", &mut spans);
-    if wide {
-        push("0-3", "Screens", &mut spans);
-    }
-    push("?", "Help", &mut spans);
-    push("q", "Quit", &mut spans);
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
         area,
     );
+}
+
+fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![("↑↓", "Select"), ("enter", "Open")];
+    if wide {
+        items.push(("p", "Previews"));
+    }
+    items.push(("t", "Tokens"));
+    if wide {
+        items.push(("0-3", "Screens"));
+    }
+    items.push(("?", "Help"));
+    items.push(("q", "Quit"));
+    items
+}
+
+fn draw_tape_key_bar(frame: &mut Frame, area: Rect, wide: bool, ctx: &DrawCtx) {
+    draw_key_bar(frame, area, &tape_key_bar_items(wide), ctx);
+}
+
+/// Flow/Time/Cost's own keys (§9's shared chrome around their own,
+/// unchanged panels): each screen's own existing keys, kept exactly
+/// as before, plus the globals every key bar now carries.
+fn screen_key_bar_items(
+    screen: oscilloscope_core::screens::Screen,
+) -> Vec<(&'static str, &'static str)> {
+    use oscilloscope_core::screens::Screen;
+    let mut items = vec![("↑↓", "Select"), ("tab", "Pane")];
+    match screen {
+        Screen::Flow => items.extend([
+            ("s", "State"),
+            ("l", "Log"),
+            ("z", "Fold"),
+            ("v", "Full Value"),
+        ]),
+        Screen::Time => items.extend([("+/-", "Zoom"), ("=", "Fit"), ("v", "Full Value")]),
+        Screen::Cost => items.extend([("i/o/$", "Measure")]),
+        Screen::Tape => {}
+    }
+    items.extend([("e", "Errors"), ("/", "Filter"), ("0-3", "Screens")]);
+    items.push(("?", "Help"));
+    items.push(("q", "Quit"));
+    items
 }
 
 /// §3.5's token bar: `▰▰▰▰▱▱▱▱   215 t`, eight cells at `unit`
@@ -611,7 +689,13 @@ fn tape_token_bar(total: u64, unit: u64, bold: bool, ctx: &DrawCtx) -> Vec<Span<
 /// whether the outer `━━`/fill and the inner label share one colour
 /// (Now, the slots rule) or not (Starting's `border.default` rule
 /// around a `fg.muted` label).
-fn tape_rule_line(label: &str, outer: Color, inner: Color, bold_inner: bool, width: usize) -> Line<'static> {
+fn tape_rule_line(
+    label: &str,
+    outer: Color,
+    inner: Color,
+    bold_inner: bool,
+    width: usize,
+) -> Line<'static> {
     let prefix = "━━ ";
     let suffix_text = format!("{label} ");
     let used = prefix.chars().count() + suffix_text.chars().count();
@@ -673,7 +757,10 @@ fn tape_token_column(
         return Some(Line::from(vec![
             Span::styled(spark, Style::default().fg(ctx.theme.accent_secondary)),
             Span::styled(
-                format!("   {} t/p", oscilloscope_core::format::format_tokens_thousands(avg)),
+                format!(
+                    "   {} t/p",
+                    oscilloscope_core::format::format_tokens_thousands(avg)
+                ),
                 Style::default().fg(ctx.theme.fg_muted),
             ),
         ]));
@@ -715,6 +802,7 @@ fn tape_token_column(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tape_row_line(
     row: &oscilloscope_core::screens::TapeRow,
     selected: bool,
@@ -1094,81 +1182,98 @@ fn draw_tape_list(
             width: inner.width,
             height: 1,
         };
-        let usual_pct = header
-            .history_usual_total_tokens
-            .filter(|_| header.tokens_sent + header.tokens_received > 0)
-            .map(|usual| {
-                let total = header.tokens_sent + header.tokens_received;
-                ((total as f64 - usual as f64) / usual.max(1) as f64) * 100.0
-            });
-        let mut spans = vec![
-            Span::styled(
-                " Totals ",
-                Style::default()
-                    .fg(ctx.theme.text)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "↑{} ↓{} · ",
-                    oscilloscope_core::format::format_tokens_thousands(header.tokens_sent),
-                    oscilloscope_core::format::format_tokens_thousands(header.tokens_received)
-                ),
-                Style::default().fg(ctx.theme.text),
-            ),
-            Span::styled(
-                format!(
-                    "{} t",
-                    oscilloscope_core::format::format_tokens_thousands(
-                        header.tokens_sent + header.tokens_received
-                    )
-                ),
-                Style::default()
-                    .fg(ctx.theme.text)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
-        if let Some(pct) = usual_pct {
-            spans.push(Span::styled(
-                format!("  {pct:+.0}% "),
-                tape_deviation_style(pct, ctx.theme),
-            ));
-            spans.push(Span::styled(
-                "Usual  ",
-                Style::default().fg(ctx.theme.fg_muted),
-            ));
-        }
-        let effects_text = header
-            .effects_planned
-            .map(|p| format!("{}/{p}", header.effects_done))
-            .unwrap_or_else(|| header.effects_done.to_string());
-        spans.push(Span::styled(
-            format!("{effects_text} "),
-            Style::default().fg(ctx.theme.text),
-        ));
-        spans.push(Span::styled(
-            "Effects  ",
-            Style::default().fg(ctx.theme.fg_muted),
-        ));
-        let eta_text = header
-            .history_eta_ts
-            .as_deref()
-            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-        spans.push(Span::styled(
-            "ETA ",
-            Style::default().fg(ctx.theme.fg_muted),
-        ));
-        spans.push(Span::styled(
-            format!("{}  ", eta_text.as_deref().unwrap_or("—")),
-            Style::default().fg(ctx.theme.text),
-        ));
-        spans.push(Span::styled(
-            "Cost ",
-            Style::default().fg(ctx.theme.fg_muted),
-        ));
-        spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim)));
-        frame.render_widget(Paragraph::new(Line::from(spans)), totals_area);
+        draw_totals_row(frame, totals_area, header, ctx);
     }
+}
+
+/// The Totals row (§3.3): tokens sent/received and the run's own
+/// total, its deviation from the whole run's own usual tokens once
+/// history knows one, effects done of planned, the ETA and (not yet
+/// wired to a real figure) the run's own cost -- shared by every
+/// screen, pinned above the Tape's own bottom border and, on every
+/// other screen, its own outer row below the body.
+fn draw_totals_row(
+    frame: &mut Frame,
+    area: Rect,
+    header: &oscilloscope_core::render::Header,
+    ctx: &DrawCtx,
+) {
+    let usual_pct = header
+        .history_usual_total_tokens
+        .filter(|_| header.tokens_sent + header.tokens_received > 0)
+        .map(|usual| {
+            let total = header.tokens_sent + header.tokens_received;
+            ((total as f64 - usual as f64) / usual.max(1) as f64) * 100.0
+        });
+    let mut spans = vec![
+        Span::styled(
+            " Totals ",
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "↑{} ↓{} · ",
+                oscilloscope_core::format::format_tokens_thousands(header.tokens_sent),
+                oscilloscope_core::format::format_tokens_thousands(header.tokens_received)
+            ),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(
+            format!(
+                "{} t",
+                oscilloscope_core::format::format_tokens_thousands(
+                    header.tokens_sent + header.tokens_received
+                )
+            ),
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(pct) = usual_pct {
+        spans.push(Span::styled(
+            format!("  {pct:+.0}% "),
+            tape_deviation_style(pct, ctx.theme),
+        ));
+        spans.push(Span::styled(
+            "Usual  ",
+            Style::default().fg(ctx.theme.fg_muted),
+        ));
+    } else {
+        spans.push(Span::raw("  "));
+    }
+    let effects_text = header
+        .effects_planned
+        .map(|p| format!("{}/{p}", header.effects_done))
+        .unwrap_or_else(|| header.effects_done.to_string());
+    spans.push(Span::styled(
+        format!("{effects_text} "),
+        Style::default().fg(ctx.theme.text),
+    ));
+    spans.push(Span::styled(
+        "Effects  ",
+        Style::default().fg(ctx.theme.fg_muted),
+    ));
+    let eta_text = header
+        .history_eta_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    spans.push(Span::styled(
+        "ETA ",
+        Style::default().fg(ctx.theme.fg_muted),
+    ));
+    spans.push(Span::styled(
+        format!("{}  ", eta_text.as_deref().unwrap_or("—")),
+        Style::default().fg(ctx.theme.text),
+    ));
+    spans.push(Span::styled(
+        "Cost ",
+        Style::default().fg(ctx.theme.fg_muted),
+    ));
+    spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim)));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// The detail pane (§2.1): the selected row's own Status, Type,
@@ -1255,6 +1360,7 @@ fn draw_tape(
     app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
+    icon_frame: u64,
     now: &str,
 ) {
     if full_area.width < 60 || full_area.height < 24 {
@@ -1270,7 +1376,7 @@ fn draw_tape(
             Constraint::Length(1),
         ])
         .split(full_area);
-    draw_tape_header_band(frame, sections[0], header, "TAPE", now, ctx);
+    draw_tape_header_band(frame, sections[0], header, "TAPE", now, icon_frame, ctx);
     draw_tape_status_line(frame, sections[2], screen, header, ctx, now);
     draw_tape_key_bar(frame, sections[3], full_area.width >= 80, ctx);
 
@@ -1288,96 +1394,6 @@ fn draw_tape(
         draw_tape_detail(frame, cols[1], screen, app, transcript_view, ctx, now);
     } else {
         draw_tape_list(frame, body, screen, header, app, full_area.width < 80, ctx);
-    }
-}
-
-/// Draws [`oscilloscope_core::screens::header_line`]'s own segments
-/// (issue #626): one line, no border -- the three-row bordered
-/// header this replaces is gone, along with the three-row scope icon
-/// beside it (the icon's own trace is now the line's first segment).
-fn draw_header_line(
-    frame: &mut Frame,
-    area: Rect,
-    segments: &[oscilloscope_core::screens::HeaderSegment],
-    ctx: &DrawCtx,
-) {
-    use oscilloscope_core::screens::HeaderRole;
-    let status = status_of(segments);
-    let spans: Vec<Span> = segments
-        .iter()
-        .map(|seg| {
-            let style = match seg.role {
-                HeaderRole::Icon => {
-                    Style::default().fg(crate::icon::trace_color(status, ctx.theme))
-                }
-                HeaderRole::Alive => Style::default().fg(ctx.theme.status_running),
-                HeaderRole::Status => Style::default().fg(run_status_color(status, ctx.theme)),
-                HeaderRole::Elapsed | HeaderRole::Clock => Style::default(),
-                HeaderRole::Eta => Style::default(),
-                HeaderRole::Report => Style::default(),
-                HeaderRole::Warning => Style::default().fg(ctx.theme.warning),
-                HeaderRole::Document => Style::default(),
-                HeaderRole::TabActive => Style::default().add_modifier(Modifier::BOLD),
-                HeaderRole::TabInactive => Style::default().fg(ctx.theme.dim),
-                HeaderRole::Plain => Style::default(),
-            };
-            let highlight_key = match seg.role {
-                HeaderRole::Status => Some("header:status"),
-                HeaderRole::Report | HeaderRole::Warning => Some("header:report"),
-                _ => None,
-            };
-            let style = match highlight_key.and_then(|k| ctx.highlight(k)) {
-                Some(h) => with_highlight(style, Some(h)),
-                None => style,
-            };
-            Span::styled(seg.text.clone(), style)
-        })
-        .collect();
-    let mut spans = spans;
-    // `t`'s own banner (issue #535), kept as a trailing segment of
-    // the one-line header -- unrelated to `Header`/`screens::
-    // header_line` (DESIGN.md §6.1: it's a TUI-only, ephemeral
-    // notice about the front end's own colour choice, not something
-    // `--glance` or a GUI front end would ever need to show).
-    if let Some(name) = ctx.theme_banner {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("theme: {name}"),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    let paragraph = Paragraph::new(Line::from(spans));
-    frame.render_widget(paragraph, area);
-}
-
-/// The header line carries no `RunStatus` of its own in
-/// [`oscilloscope_core::screens::HeaderSegment`] (DESIGN.md §6.1: no
-/// terminal code, and a status enum is still just data) -- its own
-/// `Status` segment's *text* (`"running"`/`"ok"`/...) is the one
-/// place it survives into the segment list, so this reads it back
-/// out rather than threading `RunStatus` past `header_line`'s own
-/// return value as a second, redundant parameter.
-fn status_of(segments: &[oscilloscope_core::screens::HeaderSegment]) -> RunStatus {
-    segments
-        .iter()
-        .find(|s| s.role == oscilloscope_core::screens::HeaderRole::Status)
-        .map(|s| match s.text.as_str() {
-            "ok" => RunStatus::Ok,
-            "failed" => RunStatus::Failed,
-            "cancelled" => RunStatus::Cancelled,
-            "aborted" => RunStatus::Aborted,
-            _ => RunStatus::Running,
-        })
-        .unwrap_or(RunStatus::Running)
-}
-
-fn run_status_color(status: RunStatus, theme: &Theme) -> Color {
-    match status {
-        RunStatus::Running => theme.status_running,
-        RunStatus::Ok => theme.status_done,
-        RunStatus::Failed => theme.status_failed,
-        RunStatus::Cancelled => theme.status_cancelled,
-        RunStatus::Aborted => theme.status_aborted,
     }
 }
 
@@ -2785,6 +2801,7 @@ pub fn draw(
                 app,
                 transcript_view,
                 ctx,
+                icon_frame,
                 now,
             );
         }
@@ -2792,43 +2809,70 @@ pub fn draw(
         return;
     }
 
+    // Issue #678's R3: the header band, the Totals row, the status
+    // line and the key bar are the outer frame shared by every
+    // screen now, not just the Tape -- Flow/Time/Cost keep their own
+    // inner panels and their own keys exactly as before, drawn into
+    // whatever's left of `area` below the band and above the other
+    // three rows.
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(5)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(area);
-
-    // `draw_header_line` appends the theme banner (`t`'s own, issue
-    // #535) after the line `header_line` itself already sized to
-    // the full width -- reserving room for it here, not after, is
-    // what keeps the two from overflowing past `area.width` together.
-    let banner_width = ctx
-        .theme_banner
-        .map(|name| format!("  theme: {name}").chars().count() as u16)
-        .unwrap_or(0);
-    let segments = oscilloscope_core::screens::header_line(
+    let chip = match app.screen {
+        oscilloscope_core::screens::Screen::Tape => "TAPE",
+        oscilloscope_core::screens::Screen::Time => "TIME",
+        oscilloscope_core::screens::Screen::Flow => "FLOW",
+        oscilloscope_core::screens::Screen::Cost => "COST",
+    };
+    draw_tape_header_band(
+        frame,
+        sections[0],
         &state.header,
+        chip,
         now,
-        ctx.zone,
-        area.width.saturating_sub(banner_width),
-        !ctx.no_animation,
         icon_frame,
-        Some(app.screen),
+        ctx,
     );
-    draw_header_line(frame, sections[0], &segments, ctx);
 
+    // The body's own threshold checks (three-pane Flow, and so on)
+    // read a `frame_area` as wide as the real terminal but as tall as
+    // what is actually left for them below the header band and above
+    // the Totals/status/key-bar rows -- the literal `area` would let
+    // them believe they have three more rows than `body` really does.
+    let reduced_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: area.height.saturating_sub(4),
+    };
     let body = sections[1];
     match app.screen {
         oscilloscope_core::screens::Screen::Tape => {}
         oscilloscope_core::screens::Screen::Cost => {
             if let Some(cost_screen) = cost_screen {
-                draw_cost_screen(frame, area, body, cost_screen, app, cost_layout, ctx);
+                draw_cost_screen(
+                    frame,
+                    reduced_area,
+                    body,
+                    cost_screen,
+                    app,
+                    cost_layout,
+                    ctx,
+                );
             }
         }
         oscilloscope_core::screens::Screen::Flow => {
             if let Some(flow_screen) = flow_screen {
                 draw_flow_screen(
                     frame,
-                    area,
+                    reduced_area,
                     body,
                     state,
                     flow_screen,
@@ -2845,7 +2889,7 @@ pub fn draw(
             if let Some(time_screen) = time_screen {
                 draw_time_screen(
                     frame,
-                    area,
+                    reduced_area,
                     body,
                     state,
                     time_screen,
@@ -2858,7 +2902,53 @@ pub fn draw(
         }
     }
 
+    draw_totals_row(frame, sections[2], &state.header, ctx);
+    draw_status_line_generic(frame, sections[3], &state.header, log_lines, ctx);
+    draw_key_bar(frame, sections[4], &screen_key_bar_items(app.screen), ctx);
+
     draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
+}
+
+/// Flow/Time/Cost's own status line (§3.2), until their own part of
+/// the redesign gives them a bespoke one the way the Tape has -- the
+/// run's own latest report, in the theme's own warning/error colour,
+/// collapsed to a bare `▸` when it would not fit (issue #610's
+/// behaviour, carried over from the one-line header this replaces),
+/// else the newest line already in the run's own log.
+fn draw_status_line_generic(
+    frame: &mut Frame,
+    area: Rect,
+    header: &oscilloscope_core::render::Header,
+    log_lines: &[String],
+    ctx: &DrawCtx,
+) {
+    use oscilloscope_core::observe::ReportLevel;
+    if let Some(report) = &header.latest_report {
+        let (prefix, style) = match report.level {
+            ReportLevel::Warning => ("▸ warning: ", Style::default().fg(ctx.theme.warning)),
+            ReportLevel::Info => ("▸ ", Style::default().fg(ctx.theme.status_info)),
+        };
+        let full = format!(" {prefix}{}", report.message);
+        let text = if full.chars().count() as u16 > area.width {
+            " ▸".to_string()
+        } else {
+            full
+        };
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
+        return;
+    }
+    let text = log_lines.last().cloned().unwrap_or_default();
+    let style = if is_warning_report_log_line(&text) {
+        Style::default().fg(ctx.theme.warning)
+    } else if is_report_log_line(&text) {
+        Style::default().fg(ctx.theme.status_info)
+    } else {
+        Style::default().fg(ctx.theme.text)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(format!(" {text}"), style))),
+        area,
+    );
 }
 
 /// [`draw`]'s own dialog overlays (help, confirm, the full-value and
@@ -6419,7 +6509,11 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        let backend = TestBackend::new(100, 30);
+        // 34 tall, not 30: issue #678's shared chrome reserves 4 of
+        // those rows outside the body, so the Time screen's own vs-
+        // usual pane (below) needs 4 more than it used to for the
+        // same effective body height.
+        let backend = TestBackend::new(100, 34);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -8073,8 +8167,14 @@ mod golden_tests {
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
         }});
+        // Issue #678's shared chrome gave the status line a row of
+        // its own, so 54 columns -- "almost no room" for the old
+        // one-line header, sharing that width with the document and
+        // the clock -- is now plenty on its own; 20 is narrower than
+        // the report text itself, which is what the collapse-to-a-
+        // bare-mark rule actually needs to be exercised.
         let text = snapshot_at(
-            54,
+            20,
             24,
             &plan,
             &mut model,
@@ -8084,7 +8184,7 @@ mod golden_tests {
             "prime.a",
             &[],
         );
-        let line = text.lines().next().unwrap();
+        let line = text.lines().nth_back(1).unwrap();
         assert!(line.contains("▸"), "{line}");
         assert!(!line.contains("running behind"), "{line}");
         assert!(!line.contains("warning:"), "{line}");
@@ -8154,7 +8254,12 @@ mod golden_tests {
             rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
-        let backend = TestBackend::new(100, 30);
+        // 34 tall, not 30: issue #678's shared chrome reserves 4 of
+        // those rows (header band, Totals, status line, key bar)
+        // outside the body, so the Flow screen's own three-pane
+        // threshold (its own story pane, the second `▸` below) needs
+        // 4 more than it used to for the same effective body height.
+        let backend = TestBackend::new(100, 34);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -8195,11 +8300,12 @@ mod golden_tests {
         assert_eq!(
             buffer[(hx, hy)].fg,
             theme.warning,
-            "the header's own report mark must use the theme's warning colour"
+            "the Flow screen's own story pane report mark must use the theme's warning colour"
         );
         // The second `▸` in the buffer, reading left to right then
-        // top to bottom, is the log pane's own -- the header's own row
-        // comes first.
+        // top to bottom, is the shared status line's own (issue
+        // #678) -- the Flow screen's own story pane, above it, comes
+        // first.
         let mut found = 0;
         let mut log_cell = None;
         for y in 0..buffer.area.height {
@@ -11080,9 +11186,12 @@ mod golden_tests {
         let plan = each_loop_plan_for_tui();
         let mut model = RunModel::new();
         let state = each_loop_state();
+        // 34 tall, not 30: issue #678's shared chrome reserves 4 of
+        // those rows outside the body, so the zoom pane below needs
+        // 4 more than it used to for the same effective body height.
         let text = time_snapshot_at(
             100,
-            30,
+            34,
             &plan,
             &mut model,
             Some(&state),
@@ -12143,10 +12252,12 @@ mod highlight_tests {
         );
     }
 
-    /// Issue #626: the scope icon's own trace is now the header
-    /// line's first segment, drawn at every width -- there is no
-    /// longer a narrow-terminal threshold below which it hides (the
-    /// old three-row bezel icon had one; the inline trace does not).
+    /// Issue #626/#678: the scope icon's own trace takes the header
+    /// band's own `osi` word while animating, drawn at every width --
+    /// there is no longer a narrow-terminal threshold below which it
+    /// hides (the old three-row bezel icon had one; the inline trace
+    /// does not). Cell 0 is the band's own leading space (§3.1's
+    /// ` osi  <where>`), so the trace itself is read from cell 1.
     #[test]
     fn the_icon_draws_at_every_width() {
         let rendered = minimal_render_state();
@@ -12188,7 +12299,7 @@ mod highlight_tests {
                     )
                 })
                 .unwrap();
-            terminal.backend().buffer()[(0, 0)].symbol() == " "
+            terminal.backend().buffer()[(1, 0)].symbol() == " "
         };
         assert!(
             !first_cell_is_blank(40),
@@ -12202,9 +12313,12 @@ mod highlight_tests {
 
     /// Issue #535's own theme acceptance item: a named theme paints
     /// the whole screen's background, so an otherwise-untouched cell
-    /// (the frame's own top-left corner, drawn over by nothing but
-    /// the header block's border, which sets no background of its
-    /// own) still reads the theme's background colour.
+    /// still reads the theme's background colour. `(95, 21)` is
+    /// blank space in the Totals row (issue #678's shared chrome),
+    /// to the right of its own content -- that row's own `Paragraph`
+    /// sets no style of its own, unlike the header band above it,
+    /// which fills its entire row, so this is the simplest cell
+    /// left showing only the base fill.
     #[test]
     fn a_named_theme_paints_the_background_of_an_empty_cell() {
         let rendered = minimal_render_state();
@@ -12246,17 +12360,17 @@ mod highlight_tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 0)].bg, theme.background.unwrap());
+        assert_eq!(buffer[(95, 21)].bg, theme.background.unwrap());
     }
 
     /// Finding 7: the base fill set only `bg`, so a named theme's
     /// own `text` colour never actually painted anything -- a plain
     /// cell (nothing drawn over it but the base fill) must read the
     /// theme's `text`, not the terminal's own default foreground.
-    /// `(95, 0)` is blank space on the one-line header (issue #626),
-    /// to the right of its own content -- the header has no border
-    /// of its own any more, so this is the simplest cell that's
-    /// reliably untouched by anything but the base fill.
+    /// `(95, 21)` is blank space in the Totals row (issue #678's
+    /// shared chrome), to the right of its own content -- the
+    /// simplest cell that's reliably untouched by anything but the
+    /// base fill.
     #[test]
     fn a_named_theme_paints_the_default_text_colour_of_an_empty_cell() {
         let rendered = minimal_render_state();
@@ -12298,8 +12412,8 @@ mod highlight_tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(95, 0)].symbol(), " ");
-        assert_eq!(buffer[(95, 0)].fg, theme.text);
+        assert_eq!(buffer[(95, 21)].symbol(), " ");
+        assert_eq!(buffer[(95, 21)].fg, theme.text);
     }
 
     #[test]

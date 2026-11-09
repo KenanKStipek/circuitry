@@ -1074,17 +1074,19 @@ pub fn visible_rows_for_tape(
         .items
         .iter()
         .filter_map(|item| match item {
-            oscilloscope_core::screens::TapeItem::Row(row) => Some(oscilloscope_core::render::Row {
-                path: row.path.clone(),
-                depth: 0,
-                label: row.label.clone(),
-                kind: row.kind,
-                status: row.status.clone(),
-                duration_s: None,
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            }),
+            oscilloscope_core::screens::TapeItem::Row(row) => {
+                Some(oscilloscope_core::render::Row {
+                    path: row.path.clone(),
+                    depth: 0,
+                    label: row.label.clone(),
+                    kind: row.kind,
+                    status: row.status.clone(),
+                    duration_s: None,
+                    loop_progress: None,
+                    dim: None,
+                    has_children: false,
+                })
+            }
             _ => None,
         })
         .collect()

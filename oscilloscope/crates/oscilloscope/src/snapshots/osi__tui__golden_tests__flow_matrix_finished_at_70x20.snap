@@ -2,13 +2,12 @@
 source: crates/oscilloscope/src/tui.rs
 expression: text
 ---
-"⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0  1  [2]  3             "
+" ⠤⠤⠤⠤⠤⠤⠤⠤  do-thing.yml · ✓ Ended 2.0s               FLOW    00:00:02 "
 "┌ selected ──────────────────────────────────────────────────────────┐"
 "│chosen                                                              │"
 "│tool · shell                                                        │"
 "│produced:                                                           │"
 "│ok                                                                  │"
-"│                                                                    │"
 "└────────────────────────────────────────────────────────────────────┘"
 "┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running 4/7 ─────────────┐"
 "│✓ prime   2.0s                                                      │"
@@ -16,9 +15,10 @@ expression: text
 "│  ◆ gate  → then   0.0s                                             │"
 "│    · else: other                                                   │"
 "│    ✓ chosen   0.3s                                                 │"
-"│  ◆ if y > 1  → then  (inferred)                                    │"
-"│    · else: u_else                                                  │"
 "│quick steps folded: 4 · 0.9s                                        │"
 "│health: 0 failed · 0 retries · 0 warnings                           │"
-"│                                                                    │"
+"│○ 1 more planned                                                    │"
 "└────────────────────────────────────────────────────────────────────┘"
+" Totals ↑0 ↓0 · 0 t  8/8 Effects  ETA —  Cost —                       "
+"                                                                      "
+" ↑↓ Select   tab Pane   s State   l Log   z Fold   v Full Value   e Er"
