@@ -140,17 +140,18 @@ timeline, below), flow (`2`, the tree as control flow, below) and cost
 (`3`, below). Selection, follow, folding, filters and collapsed rows
 are shared across every screen.
 
-Time, flow and cost share one header line: the scope icon's own
-animated trace (a static `◉` with `--no-animation`), the document, `♥`
-while the engine process is alive, the run's status and elapsed time,
-the current clock time, the innermost running loop's ETA, the latest
-report (#610, once one has arrived), and the screen tabs. When it's
-short of room: the tabs shrink to their own numbers first, then the
-report truncates (down to a bare `▸`), then the document (keeping its
-own tail), then the ETA goes — status, elapsed and the clock never
-truncate. `osi watch` names the document from the run's own
-`runtime.last_run.orchestration_path`. The Tape draws its own header
-band instead (below).
+Every screen shares one header band, status line, key bar and Totals
+row: `osi <document> · <status> <elapsed>` on the left, the `osi`
+word itself animating in place of a separate icon while the run is
+live (a static word with `--no-animation`), the screen's own chip
+(`TAPE`/`TIME`/`FLOW`/`COST`) and the clock on the right; below the
+screen's own panel, a status line (the run's own latest report once
+one has arrived, else the newest finished step); a key bar naming
+that screen's own keys; and a Totals row (tokens sent/received and
+the total, the run's own deviation from its usual tokens once
+history has one, effects done of planned, the ETA and the run's own
+cost). `osi watch` names the document from the run's own
+`runtime.last_run.orchestration_path`.
 
 ### The Tape (`0`)
 
@@ -174,10 +175,25 @@ the reply in full; `enter` opens the same content full-screen. A
 Totals row (tokens, the run's own deviation from usual, effects done,
 ETA, cost) is pinned above the list's own bottom border.
 
-At 80–119 columns the detail pane drops; `enter` opens the step's
-details over the list instead. At 60–79 columns the list keeps only
-the glyph, the name and the token column. Below 60×24, a plain
-too-small notice names the minimum and points at `osi --log`.
+At 120 columns and up the detail pane shows beside the list, and
+previous rows are on by default (`p` toggles; off below 24 rows, to
+leave more height for the Now band). At 80–119 columns the detail
+pane drops, previews are always off, and `enter` opens the step's
+details over the list instead. At 60–79 columns the list drops its
+clock column too, keeping only the glyph, the name and a fixed-width
+token column, and the title, the status line and the Totals row all
+shorten to their own bare figures. Below 60×24, a plain too-small
+screen names the minimum each dimension needs against what the
+terminal has, and points at `osi --log`.
+
+`↑↓`/`j`/`k`, `PageUp`/`PageDown`, `Home`/`End` and `g`/`G` move over
+the Tape's own rows in the order it draws them (finish order, then
+what's running, then what's ahead), not the plan's own tree order.
+`T` cycles the colour theme; `?` opens Help, listing exactly this
+screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
+Tape keys at all -- they still work on the time, flow and cost
+screens below, which keep their own panes until their own part of
+this redesign.
 
 ### `--glance`
 

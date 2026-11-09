@@ -1049,21 +1049,26 @@ every existing test, sees the full, unfolded tree): on by default,
   `iter_N` key, and the details pane's own title shows both
   (`pass 3 of 8 (iter_2)`).
 
-**Keys:**
+**Keys** (issue #678: `←→`, `z` and `v` are gone from the Tape, which
+has no pane or fold state of its own for them to act on; `tab` only
+cycles its own pane focus there, with no effect on `↑↓`'s own
+movement -- the table below still applies to Flow/Time/Cost as
+shipped. `t` moved to `T`; the Tape's own keys, including its own
+`t`/`p`, are §6.3e's):
 
 | Key | Action |
 |---|---|
 | `↑↓`/`jk` | move (the focused pane's own selection, or the details pane's scroll) |
 | `PgUp`/`PgDn` | move a page (the focused pane's own last-rendered interior height) |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
-| `←→` | collapse / expand (orchestration pane) |
+| `←→` | collapse / expand (orchestration pane; Flow/Time/Cost only) |
 | `⏎` | expand a quick-steps row (issue #613) in place; `←` folds it again |
-| `z` | fold on/off (issue #613: breadcrumbs and quick-steps summaries); on by default |
+| `z` | fold on/off (issue #613: breadcrumbs and quick-steps summaries); on by default; Flow/Time/Cost only |
 | `f` | follow the running row (on by default) |
 | `e` | errors only (keeps a failed leaf's own ancestors so there's still a tree to show it under) |
 | `/` | filter (substring, on path or label; same ancestor-keeping rule) |
 | `tab` | orchestration → details → state |
-| `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it |
+| `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it; Flow/Time/Cost only |
 | `c` | cancel, with a confirm — the same as a *confirmed* `c`/`q` always has (`do_run`'s own signal-forwarding/kill-escalation path, not a separate one) |
 | `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`, and leaves the instant the engine exits — see "the finished screen" below); with nothing running, quits at once, no confirm; in `osi watch`, always just detaches, with no confirm — watch owns no engine to cancel |
 | Ctrl-C | checked before any dialog, and never merely dismisses one: forwards SIGINT at once with no confirm while something's running (a second Ctrl-C starts the same 10s kill deadline a real repeated SIGINT would), quits at once with nothing running, and in `osi watch` always just detaches |
@@ -1233,10 +1238,12 @@ background — documented, per role, in `theme.rs` itself.
 
 `--theme <name>` (both `osi <doc>` and `osi watch`) chooses a theme;
 with neither flag, `OSI_THEME` applies; with neither, `terminal`. An
-unknown name from either is a usage error listing the valid ones. `t`
-cycles live through the eleven names in listed order, wrapping, without
-rebuilding the render state; the header shows the new name for about 2
-seconds, and the log pane gets a `theme: <name>` line. `ColorMode`
+unknown name from either is a usage error listing the valid ones. `T`
+(issue #678 moved it from `t`, which the Tape now uses for its own
+token column) cycles live through the eleven names in listed order,
+wrapping, without rebuilding the render state; the header band shows
+the new name for about 2 seconds, and the log pane gets a
+`theme: <name>` line. `ColorMode`
 (`theme::ColorMode::from_env`) is detected once at startup from
 `NO_COLOR`/`COLORTERM`/`TERM`, in that priority order, and shared by
 every theme choice for the run: truecolour keeps a named theme's RGB as
@@ -2060,14 +2067,22 @@ new role the same way they already covered every existing one.
 `tokens_p50`, the median of tokens sent plus received -- per step
 path (pooled the same "earlier versions" way `busy_p50_s` already
 is) and for the whole run, over the same runs and the same 3-run
-threshold as every other `_p50` figure here. Pinned against the
-design's own fixture history (`design/fixtures/hist`): the
-non-loop steps and the whole run's own total match the design
-builders' own summary (`hist/history.json`) exactly; a tree loop's
-own pass stays pass-stripped and summed within one run, as the
-existing recorder already does for the Time screen's ghost bars, so
-its own per-pass-index figures (which that summary also has) are a
-finer grain the recorder has never kept.
+threshold as every other `_p50` figure here. A loop pass is also
+kept by its own literal, un-stripped path (`history::display_key_
+literal`), alongside the existing pass-stripped one the Time
+screen's ghost bars read: the stripped key still sums every pass of
+a run together, which is what that needs, but the Tape's own
+"usually" for one specific pass (`drafts.iter_2.draft`) needs that
+pass's own three recorded figures, never summed with its siblings'.
+Pinned against the design's own fixture history (`design/fixtures/
+hist`): the non-loop steps, the whole run's own total, and now each
+of a tree loop's own three passes individually, all match the
+design builders' own summary (`hist/history.json`) exactly. The
+whole-run figure reaches the header through a new `Header::
+history_usual_total_tokens`, set in `history_io::apply_history_eta`
+from `DocumentStats::whole_run`'s own `tokens_p50` -- the Tape's
+`+12%` Totals deviation and `usually 1,324 t` Run End both read it
+from there, not a `_total` step key that never existed.
 
 **The Tape** (`screens::TapeScreen`, `build_tape`) replaces the
 Overview as screen 0. Built from the same inputs `render::build`
@@ -2104,30 +2119,69 @@ and `p` toggles prompt previews (`keys::App::tape_tokens_view`/
 step full-screen (`tape_fullscreen_step`), in place of the
 Overview's old "open Flow with the running step selected". Every
 movement key (`j`/`k`, the arrows, `PageUp`/`PageDown`, `Home`/`End`,
-`g`/`G`, `/`, `e`, `f`) already worked over whichever screen's own
-rows are the ones in view, so the Tape needed no key-handling changes
-of its own for any of them. `s`/`l`/`z`/`v`/`Tab` still work exactly
-as before on Flow/Time/Cost, which keep their own shipped panes; they
-are simply no longer in the Tape's own key bar or its Help overlay,
-since the Tape has none of the panes they act on.
+`g`/`G`, `/`, `e`, `f`) moves over `keys::visible_rows_for_tape`'s own
+list -- the Tape's own draw order (finish order, then running, then
+rows ahead), never the plan's depth-first order `visible_rows`
+returns for everything else, which put a loop's later passes and the
+plan's own root in places the Tape never draws them. `Tab`, `z`
+(fold) and `v` (full value) go from the Tape entirely -- they
+reached a pane or a fold state the design gives it no key for at
+all -- as do `Left`/`Right` (collapse/expand), since its rows have
+no collapsed state of their own; `s`/`l` were already scoped to
+Flow. All five stay live on Flow/Time/Cost, which keep their own
+shipped panes, until their own part of the redesign; each of those
+three screens' own Help overlay (`tui::screen_help_text`) lists its
+own keys, since the Tape's no longer does.
 
-**Sizes.** 120 columns and up: the list beside its detail pane.
-80–119: the list alone, full width. 60–79: the list without its
-clock/what-it-did columns (glyph, name and the token column only).
-Below 60×24: a plain too-small notice naming the minimum and
-`osi --log`. The existing screens' own breakpoints (§6.3's
-`tui::thresholds`) are unchanged.
+**Sizes.** 120 columns and up: the list beside its detail pane,
+previous rows on by default (off at 24–29 rows, to leave more height
+for the Now band and what's ahead of it). 80–119: the list alone,
+full width, previews always off. 60–79: the list without its
+clock column, with the name column absorbing the freed width and a
+fixed 16-cell token field, a shortened `Tape · done/planned · ▰ =
+unit t` title, and the Run Started/Run End rows, the status line and
+the Totals row all dropped to their own bare figures. Below 60×24:
+`tui::draw_tape_too_small` -- the `osi` word, `Terminal too small`,
+a Width/Height row each against what the terminal needs with a
+check or a cross, the plain-language line naming both and
+`osi --log`, and a `q Quit` key bar, matching `design/frames/tape--
+toosmall--60x16.mock` cell for cell. The existing screens' own
+breakpoints (§6.3's `tui::thresholds`) are unchanged.
 
-**Header band, status line, key bar, Totals row.** New chrome,
-drawn only for the Tape today (`tui::draw_tape`): `osi <document> ·
-<status> <elapsed>` on the left of a `statusbar.bg` band, the screen
-chip and the clock on the right; a status line naming the newest
-finished row; a key bar in `keyhint.key`/`keyhint.desc`; a Totals
-row pinned above the list's own bottom border. Time, Flow and Cost
-keep today's one-line header (§6.3's `header_line`) and their own
-panels exactly as shipped -- the design names this chrome as shared
-across every screen eventually, but only the Tape draws it in this
-part.
+**Header band, status line, key bar, Totals row.** This chrome
+(`tui::draw_tape_header_band`/`draw_tape_status_line`/`draw_key_bar`/
+`draw_totals_row`) now wraps every screen, not only the Tape: `osi
+<document> · <status> <elapsed>` on the left of a `statusbar.bg`
+band, with the scope icon's own trace taking the `osi` word's cells
+while it animates (issue #677's settled §9 point 1) and the screen's
+own chip (`TAPE`/`TIME`/`FLOW`/`COST`) and the clock on the right; a
+status line (the run's own latest report when there is one, in its
+level's colour and collapsing to a bare `▸` when it would not fit,
+else the newest line already in the run's own log, until Flow/Time/
+Cost get a bespoke one of their own); a key bar in `keyhint.key`/
+`keyhint.desc`, each screen's own keys; a Totals row (tokens sent/
+received and the total, its own deviation from the whole run's usual
+tokens once history has one, effects done of planned, the ETA and
+--- not yet wired to a real figure on any screen --- the run's own
+cost). Flow/Time/Cost keep their own inner panels and their own keys
+exactly as shipped; `tui::draw`'s own outer `Layout` just gives them
+4 fewer rows of body than before to draw them in.
+
+**Not yet shipped.** The Starting/Ended/Failed head states draw
+their own full-width rule and status line, but the detail pane's own
+Engine/Plan/Shape (Starting), Outcome/Tokens/Effects/Decision/
+Largest (Ended) and Outcome/Step/Tokens/Usual/Error/Not Reached
+(Failed) content from `design/tui-design.md` §2.1 is not built; the
+pane reads "nothing selected" in those three states instead. The
+unit's own upfront count (§3.5: a loop whose `each.in` is a document
+literal counts its eventual passes from the plan before any of them
+runs) is not built either -- `effects_planned` still only learns a
+loop's own total once the engine's own `progress.total` says so, the
+same rule every other screen's own effects count already used. The
+`.mock` goldens (`tui::tape_frame_goldens`) cover only the too-small
+screen so far; the other eight need the three detail panes above
+and a run state frozen to a fixed instant mid-run, neither of which
+exists yet.
 
 ### 6.4 Tests
 
