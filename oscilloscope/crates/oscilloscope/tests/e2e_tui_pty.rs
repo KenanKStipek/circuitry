@@ -2502,3 +2502,210 @@ fn resizing_through_the_tapes_four_size_classes_and_back() {
     );
     assert_no_leftover_process(work.path());
 }
+
+/// Issue #678's own key map: `↑`/`↓` move the Tape's own selection
+/// (off the running row `follow` picked by default, onto the
+/// finished `ask` prompt above it), `enter` opens that row's own
+/// step full-screen (the list's own bordered title, always `Tape
+/// · …`, disappears -- `draw_tape` skips `draw_tape_list` entirely
+/// while full-screen), and `esc` closes it back to the normal
+/// side-by-side layout.
+#[test]
+fn arrow_keys_enter_and_esc_move_and_open_a_step_on_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("Tape \u{b7}"),
+            "expected the list's own bordered title before any key; got:\n{rendered:?}"
+        );
+    }
+
+    let before_up = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b[A");
+    wait_for_pattern_since(&captured_buf, before_up, b"ask", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_up..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("ask"),
+            "expected the detail pane to follow the selection up onto ask; got:\n{rendered:?}"
+        );
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    wait_for_pattern_since(
+        &captured_buf,
+        before_enter,
+        b"Prompt Sent",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Prompt Sent"),
+            "expected the full-screen step view's own content; got:\n{rendered:?}"
+        );
+        assert!(
+            !rendered.contains("Tape \u{b7}"),
+            "expected the list's own bordered title gone while full-screen; got:\n{rendered:?}"
+        );
+    }
+
+    let before_esc = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b");
+    wait_for_pattern_since(&captured_buf, before_esc, b"Tape", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_esc..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Tape \u{b7}"),
+            "expected the list's own bordered title back after esc; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own key map: `c` cancels the run after a
+/// confirmation, the same as `q` does, but never quits osi itself --
+/// the TUI stays up afterward, now showing the run's own Ended state,
+/// until a later `q` actually exits it.
+#[test]
+fn pressing_c_cancels_the_run_without_quitting_the_tui() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, _slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_c = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"c");
+    wait_for_pattern_since(&captured_buf, before_c, b"ancel", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_c..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.to_lowercase().contains("cancel"),
+            "expected the cancel confirmation dialog; got:\n{rendered:?}"
+        );
+    }
+
+    let before_y = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"y");
+    wait_for_pattern_since(&captured_buf, before_y, b"Ended", Duration::from_secs(20));
+    {
+        let after = captured_buf.lock().unwrap()[before_y..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Ended"),
+            "expected the Tape to show the run's own Ended state after cancelling; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should still exit 130 (the run itself was cancelled); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own §5: the detail pane stays down to 100 columns,
+/// not just 120 -- only below 100 does the Tape drop to one pane.
+#[test]
+fn the_tapes_detail_pane_still_shows_at_100x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_100 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 100, 30);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_100,
+        b"Selected",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_100..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Selected"),
+            "expected the detail pane's own title at 100x30; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}

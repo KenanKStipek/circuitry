@@ -80,20 +80,26 @@ fn with_highlight(style: Style, highlight: Option<Style>) -> Style {
 
 /// Issue #527's own small-terminal fallback thresholds: below each,
 /// drop one more pane, in this order, until the rest fits. The header
-/// line itself never disappears. These are whole-*terminal* sizes
+/// line itself never disappears. These are whole-*terminal* widths
 /// (DESIGN.md §6.3, the README's TUI section) — checked against
-/// `frame.area()` itself, never against `body` (the terminal minus
-/// the header's own single row), which would silently shift every
-/// height threshold down by one.
+/// `frame.area()`'s own width, never `body`'s. The *height* figures
+/// are four rows lower than the panel's own named size (issue #678's
+/// shared chrome: the header band, the Totals row, the status line
+/// and the key bar cost every screen four rows that used to be the
+/// panel's own, so a panel named for an `N`-row terminal is checked
+/// against `N - 4` of what is actually left for it, `reduced_area`
+/// at every one of these call sites) -- a panel named "80×20" still
+/// means a terminal that's actually 80×20, not 80×24.
 mod thresholds {
     /// Below this, the two-column layout itself collapses to one.
     /// Issue #635: no screen still uses this pair on its own (the
     /// Flow screen's own `FLOW_TWO_PANE_MIN_WIDTH`/`_MIN_HEIGHT`
     /// below happen to share the same numbers); kept for the Cost
     /// screen's own thresholds just below, which are defined relative
-    /// to it.
+    /// to it. Named for an 80×20 terminal (the panel's own height is
+    /// 20 minus the shared chrome's own four rows).
     pub const TWO_COLUMN_MIN_WIDTH: u16 = 80;
-    pub const TWO_COLUMN_MIN_HEIGHT: u16 = 20;
+    pub const TWO_COLUMN_MIN_HEIGHT: u16 = 16;
 
     /// The Cost screen's own thresholds (issue #632, DESIGN.md's
     /// "small terminals"): at this size and up, the tokens-over-time
@@ -105,7 +111,7 @@ mod thresholds {
     /// against `frame.area()`, never `body`, inclusive (100×30 and
     /// 80×20 themselves already qualify).
     pub const COST_CHART_MIN_WIDTH: u16 = 100;
-    pub const COST_CHART_MIN_HEIGHT: u16 = 30;
+    pub const COST_CHART_MIN_HEIGHT: u16 = 26;
     /// Below this, the treemap itself is dropped too, leaving the
     /// table alone (`⏎` still zooms it) -- the same floor screen 2's
     /// own two-column layout collapses at.
@@ -120,7 +126,7 @@ mod thresholds {
     /// that, one column: selected over flow, no story, the flow
     /// pane's own columns dropped to duration alone.
     pub const FLOW_THREE_PANE_MIN_WIDTH: u16 = 100;
-    pub const FLOW_THREE_PANE_MIN_HEIGHT: u16 = 30;
+    pub const FLOW_THREE_PANE_MIN_HEIGHT: u16 = 26;
     pub const FLOW_TWO_PANE_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
     pub const FLOW_TWO_PANE_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
     /// Below this flow-pane width, the cost column is dropped first
@@ -147,7 +153,7 @@ mod thresholds {
     /// at [`TIME_AXIS_ONLY_MIN_WIDTH`]/`_MIN_HEIGHT`), the timeline
     /// and strips alone. Below that, a plain list with no axis.
     pub const TIME_THREE_PANE_MIN_WIDTH: u16 = 100;
-    pub const TIME_THREE_PANE_MIN_HEIGHT: u16 = 30;
+    pub const TIME_THREE_PANE_MIN_HEIGHT: u16 = 26;
     pub const TIME_AXIS_ONLY_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
     pub const TIME_AXIS_ONLY_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
     /// Below this, the timeline's own start/duration columns are
@@ -489,6 +495,10 @@ fn draw_tape_header_band(
 
 /// The status line (§3.2): the newest finished row, with its tokens
 /// and age -- never key instructions, which belong to the key bar.
+/// Unchanged by `follow`: issue #678's own golden frames select a
+/// row with `follow` explicitly off (a real selection always turns
+/// it off) and still read the same finished-step line, so this
+/// never varies with it either.
 #[allow(clippy::too_many_arguments)]
 fn draw_tape_status_line(
     frame: &mut Frame,
@@ -567,21 +577,17 @@ fn draw_tape_status_line(
         }
         TapeHead::Normal => {}
     }
-    // §3.2's "the newest finished step" skips a loop pass's own
-    // leaf (`iter_N`'s own `draft`/`pause`, say) even when it's
-    // genuinely the most recent thing to finish by the clock --
-    // every design frame's own worked example (`gate › reply`,
-    // issue #678) reads a repeated pass's own step as secondary to
-    // whichever uniquely-named step actually finished last.
+    // §3.2's "the newest finished step", a loop pass's own leaf
+    // (`iter_N`'s own `draft`/`pause`, say) included: `screen.items`
+    // is already in finish order while the run is live, so the last
+    // `Done`/`FailedHandled` row scanning from the end is literally
+    // whichever step finished most recently by the clock.
     let last = screen.items.iter().rev().find_map(|item| match item {
         TapeItem::Row(row)
             if matches!(
                 row.status.kind,
                 StatusKind::Done | StatusKind::FailedHandled
-            ) && !row.path.split('.').any(|seg| {
-                seg.strip_prefix("iter_")
-                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-            }) =>
+            ) =>
         {
             Some(row)
         }
@@ -645,26 +651,71 @@ fn draw_tape_status_line(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The key bar (§3.2): keys in `keyhint.key`, labels in Title Case,
-/// `? Help  q Quit` last.
 /// A key bar line (§3.2), shared by every screen: `items` in
-/// `keyhint.key`/`keyhint.desc`, on `statusbar.bg`.
+/// `keyhint.key`/`keyhint.desc`, on `statusbar.bg`, with the last
+/// two items (every caller's own trailing `?`/`q` pair) flush
+/// against the bar's right edge and whatever the left items don't
+/// use left as a plain run of background-only cells in between --
+/// the same shape `draw_too_small`'s own bare `q Quit` already
+/// draws by hand. A left item that would run into the right pair
+/// is dropped, not clipped mid-word (§3.8's own truncation rule),
+/// with a trailing `⋯` marking the cut.
 fn draw_key_bar(frame: &mut Frame, area: Rect, items: &[(&str, &str)], ctx: &DrawCtx) {
     let bg = ctx.theme.statusbar_bg;
-    let mut spans: Vec<Span> = Vec::new();
-    for (key, desc) in items {
-        spans.push(Span::styled(
-            format!(" {key} "),
-            Style::default()
-                .fg(ctx.theme.keyhint_key)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!("{desc}  "),
-            Style::default().fg(ctx.theme.keyhint_desc).bg(bg),
-        ));
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc).bg(bg);
+    let split = items.len().saturating_sub(2);
+    let (left, right) = items.split_at(split);
+
+    let mut right_spans = Vec::new();
+    let mut right_width = 0usize;
+    for (i, (key, desc)) in right.iter().enumerate() {
+        let key_text = format!("{key} ");
+        right_width += key_text.chars().count();
+        right_spans.push(Span::styled(key_text, key_style));
+        let desc_text = if i + 1 == right.len() {
+            format!("{desc} ")
+        } else {
+            format!("{desc}  ")
+        };
+        right_width += desc_text.chars().count();
+        right_spans.push(Span::styled(desc_text, desc_style));
     }
+
+    let budget = (area.width as usize).saturating_sub(right_width);
+    let mut spans = Vec::new();
+    let mut used = 0usize;
+    let mut dropped = false;
+    for (i, (key, desc)) in left.iter().enumerate() {
+        let key_text = if i == 0 {
+            format!(" {key} ")
+        } else {
+            format!("{key} ")
+        };
+        let desc_text = format!("{desc}  ");
+        let item_width = key_text.chars().count() + desc_text.chars().count();
+        // Room for a trailing "⋯ " once a later item might not fit,
+        // so the cut never lands mid-word partway through this one.
+        let reserve = if i + 1 < left.len() { 2 } else { 0 };
+        if used + item_width + reserve > budget {
+            dropped = true;
+            break;
+        }
+        used += item_width;
+        spans.push(Span::styled(key_text, key_style));
+        spans.push(Span::styled(desc_text, desc_style));
+    }
+    if dropped {
+        spans.push(Span::styled("⋯ ", desc_style));
+        used += 2;
+    }
+
+    let pad = budget.saturating_sub(used);
+    spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+    spans.extend(right_spans);
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
         area,
@@ -683,63 +734,6 @@ fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     items.push(("?", "Help"));
     items.push(("q", "Quit"));
     items
-}
-
-/// The Tape's own key bar (§3.2): unlike every other screen's
-/// (`draw_key_bar`'s own uniform " {key} {desc}  " pattern, two
-/// spaces between items), the Tape's own `?`/`q` pair sits flush
-/// against the bar's right edge, with whatever the left items don't
-/// use as a plain run of background-only cells in between -- the
-/// same shape `draw_tape_too_small`'s own bare `q Quit` already
-/// draws by hand.
-fn draw_tape_key_bar(frame: &mut Frame, area: Rect, wide: bool, ctx: &DrawCtx) {
-    let items = tape_key_bar_items(wide);
-    let bg = ctx.theme.statusbar_bg;
-    let key_style = Style::default()
-        .fg(ctx.theme.keyhint_key)
-        .bg(bg)
-        .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(ctx.theme.keyhint_desc).bg(bg);
-    let split = items.len().saturating_sub(2);
-    let (left, right) = items.split_at(split);
-
-    let mut spans = Vec::new();
-    let mut used = 0usize;
-    for (i, (key, desc)) in left.iter().enumerate() {
-        let key_text = if i == 0 {
-            format!(" {key} ")
-        } else {
-            format!("{key} ")
-        };
-        used += key_text.chars().count();
-        spans.push(Span::styled(key_text, key_style));
-        let desc_text = format!("{desc}  ");
-        used += desc_text.chars().count();
-        spans.push(Span::styled(desc_text, desc_style));
-    }
-
-    let mut right_spans = Vec::new();
-    let mut right_width = 0usize;
-    for (i, (key, desc)) in right.iter().enumerate() {
-        let key_text = format!("{key} ");
-        right_width += key_text.chars().count();
-        right_spans.push(Span::styled(key_text, key_style));
-        let desc_text = if i + 1 == right.len() {
-            format!("{desc} ")
-        } else {
-            format!("{desc}  ")
-        };
-        right_width += desc_text.chars().count();
-        right_spans.push(Span::styled(desc_text, desc_style));
-    }
-
-    let pad = (area.width as usize).saturating_sub(used + right_width);
-    spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-    spans.extend(right_spans);
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
-        area,
-    );
 }
 
 /// Flow/Time/Cost's own keys (§9's shared chrome around their own,
@@ -1509,38 +1503,47 @@ fn draw_tape_list(
                 // (§3.4: this row has no clock of its own either).
                 let gap = if narrow { String::new() } else { " ".repeat(9) };
                 if !narrow {
-                    if let Some(usual) = usual_total_tokens {
-                        text.push_str(&format!(
-                            "usually {} t",
-                            oscilloscope_core::format::format_tokens_thousands(*usual)
-                        ));
-                    }
-                    // 80-119 columns drops just the duration (the
-                    // row still carries its own usual total and
-                    // ETA) -- the Totals row below already has
-                    // less room there too, and this row's own gap
-                    // before the ETA is tuned for 120's own layout.
-                    if wide_detail {
-                        if let Some(d) = usual_wall_s {
+                    match usual_total_tokens {
+                        Some(usual) => {
                             text.push_str(&format!(
-                                " · {}",
-                                oscilloscope_core::format::format_duration(*d)
+                                "usually {} t",
+                                oscilloscope_core::format::format_tokens_thousands(*usual)
                             ));
+                            // 80-119 columns drops just the duration
+                            // (the row still carries its own usual
+                            // total and ETA) -- the Totals row
+                            // below already has less room there
+                            // too, and this row's own gap before
+                            // the ETA is tuned for 120's own layout.
+                            if wide_detail {
+                                if let Some(d) = usual_wall_s {
+                                    text.push_str(&format!(
+                                        " · {}",
+                                        oscilloscope_core::format::format_duration(*d)
+                                    ));
+                                }
+                            }
+                            if let Some(eta) = eta_ts.as_deref().and_then(|t| {
+                                oscilloscope_core::format::format_clock_time(t, ctx.zone)
+                            }) {
+                                // The wide gap only makes sense
+                                // lined up against the duration it
+                                // shares a row with; without one
+                                // (80-119 columns), ETA reads right
+                                // after the usual total instead.
+                                if wide_detail {
+                                    text.push_str(&format!("      ETA {eta}"));
+                                } else {
+                                    text.push_str(&format!(" · ETA {eta}"));
+                                }
+                            }
                         }
-                    }
-                    if let Some(eta) = eta_ts
-                        .as_deref()
-                        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                    {
-                        // The wide gap only makes sense lined up
-                        // against the duration it shares a row
-                        // with; without one (80-119 columns), ETA
-                        // reads right after the usual total instead.
-                        if wide_detail {
-                            text.push_str(&format!("      ETA {eta}"));
-                        } else {
-                            text.push_str(&format!(" · ETA {eta}"));
-                        }
+                        // §3.5: below three finished runs, `usually`
+                        // and the deviation are absent and the ETA
+                        // itself reads `—`, said plainly here since
+                        // this row is the one place `ETA` and no
+                        // history both show up together.
+                        None => text.push_str("ETA — · no history yet"),
                     }
                 }
                 let width = (inner.width as usize).saturating_sub(gap.chars().count() + 2);
@@ -2574,21 +2577,22 @@ fn draw_tape_detail(
 }
 
 /// The too-small screen (§5): below 60×24, the minimum and
-/// `osi --log`.
-const TAPE_MIN_WIDTH: u16 = 60;
-const TAPE_MIN_HEIGHT: u16 = 24;
+/// `osi --log` -- every screen's own floor, not only the Tape's,
+/// since nothing below it has room for the shared chrome at all.
+const MIN_WIDTH: u16 = 60;
+const MIN_HEIGHT: u16 = 24;
 
 /// §5's own too-small screen (the design's `tape--toosmall` frame):
 /// the `osi` word, the minimum each dimension needs and whether it's
 /// met, the plain-language line naming both and `osi --log`, and a
 /// bare `q Quit` key bar -- the only state that ever draws below the
-/// Tape's own 60×24 floor.
-fn draw_tape_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
+/// shared 60×24 floor, on every screen.
+fn draw_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
     let ok_style = Style::default().fg(ctx.theme.status_done);
     let err_style = Style::default().fg(ctx.theme.status_failed);
     let err_bold_style = err_style.add_modifier(Modifier::BOLD);
-    let width_ok = area.width >= TAPE_MIN_WIDTH;
-    let height_ok = area.height >= TAPE_MIN_HEIGHT;
+    let width_ok = area.width >= MIN_WIDTH;
+    let height_ok = area.height >= MIN_HEIGHT;
     let dim_line = |label: &str, have: u16, need: u16, ok: bool| {
         Line::from(vec![
             Span::styled(
@@ -2625,13 +2629,11 @@ fn draw_tape_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
                 .add_modifier(Modifier::BOLD),
         ),
         Line::from(""),
-        dim_line("Width", area.width, TAPE_MIN_WIDTH, width_ok),
-        dim_line("Height", area.height, TAPE_MIN_HEIGHT, height_ok),
+        dim_line("Width", area.width, MIN_WIDTH, width_ok),
+        dim_line("Height", area.height, MIN_HEIGHT, height_ok),
         Line::from(""),
         Line::styled(
-            format!(
-                "      osi needs {TAPE_MIN_WIDTH} columns and {TAPE_MIN_HEIGHT} rows · try osi --log"
-            ),
+            format!("      osi needs {MIN_WIDTH} columns and {MIN_HEIGHT} rows · try osi --log"),
             Style::default().fg(ctx.theme.fg_muted),
         ),
     ];
@@ -2677,8 +2679,8 @@ fn draw_tape(
     icon_frame: u64,
     now: &str,
 ) {
-    if full_area.width < TAPE_MIN_WIDTH || full_area.height < TAPE_MIN_HEIGHT {
-        draw_tape_too_small(frame, full_area, ctx);
+    if full_area.width < MIN_WIDTH || full_area.height < MIN_HEIGHT {
+        draw_too_small(frame, full_area, ctx);
         return;
     }
     let sections = Layout::default()
@@ -2701,14 +2703,21 @@ fn draw_tape(
         ctx,
         now,
     );
-    draw_tape_key_bar(frame, sections[3], full_area.width >= 80, ctx);
+    draw_key_bar(
+        frame,
+        sections[3],
+        &tape_key_bar_items(full_area.width >= 80),
+        ctx,
+    );
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
         draw_tape_detail(frame, body, screen, app, ctx);
         return;
     }
-    if full_area.width >= 120 {
+    // §5: the detail pane stays down to 100 columns, not just
+    // 120 -- only below that does it drop to one pane.
+    if full_area.width >= 100 {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(63), Constraint::Percentage(37)])
@@ -4096,16 +4105,21 @@ const HELP_ROWS: &[(&str, &str, &str, &str)] = &[
         "quit · confirms if running",
     ),
 ];
-const HELP_LEGEND_ROWS: &[(&str, &str, &str, &str)] = &[
-    ("▰", "= 50 t · fixed scale", "✓ ✗", "done · failed"),
-    ("usual", "median of 3 past runs", "● ·", "running · ahead"),
-    (
-        "+25%",
-        "above usual · red past +50%",
-        "◆ ⟳ ■",
-        "decision · loop · run",
-    ),
-];
+const HELP_LEGEND_ROWS: &[(&str, &str, &str, &str)] = &[(
+    "+25%",
+    "above usual · red past +50%",
+    "◆ ⟳ ■",
+    "decision · loop · run",
+)];
+
+// §4 also names `j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`, `/`,
+// `e`, `T` and `f` as Tape keys, and says the Help overlay lists
+// all of it -- but every `tape--help` frame leaves its own six
+// rows here blank (`design/frames/tape--help--120x30.mock`, rows
+// 15-20), so adding them would stop matching the frame on over 300
+// cells at once, past the point an allow-list still documents a
+// design ambiguity rather than papering over one. Left for the
+// frame to settle; see the PR's own design-questions note.
 
 fn tape_help_row(key1: &str, desc1: &str, key2: &str, desc2: &str, ctx: &DrawCtx) -> Line<'static> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
@@ -4118,7 +4132,7 @@ fn tape_help_row(key1: &str, desc1: &str, key2: &str, desc2: &str, ctx: &DrawCtx
     ])
 }
 
-fn tape_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+fn tape_help_lines(ctx: &DrawCtx, unit: u64, history_runs: Option<usize>) -> Vec<Line<'static>> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
     let mut lines: Vec<Line<'static>> = HELP_ROWS
         .iter()
@@ -4129,6 +4143,21 @@ fn tape_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
         format!("{:<35}{:<34}", "Tokens", "Glyphs"),
         muted,
     )));
+    let runs = history_runs.unwrap_or(oscilloscope_core::history::P50_MIN_RUNS);
+    lines.push(tape_help_row(
+        "▰",
+        &format!("= {unit} t · fixed scale"),
+        "✓ ✗",
+        "done · failed",
+        ctx,
+    ));
+    lines.push(tape_help_row(
+        "usual",
+        &format!("median of {runs} past runs"),
+        "● ·",
+        "running · ahead",
+        ctx,
+    ));
     lines.extend(
         HELP_LEGEND_ROWS
             .iter()
@@ -4248,6 +4277,15 @@ pub fn draw(
         );
     }
 
+    // §5's own floor (issue #678): below 60×24, every screen reads
+    // the too-small notice, not only the Tape -- the shared chrome
+    // (the header band, the Totals row, the status line, the key
+    // bar) leaves nothing below it for any screen's own panels.
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        draw_too_small(frame, area, ctx);
+        return;
+    }
+
     // Issue #678: the Tape draws its own header band, status line and
     // key bar (§3) over the whole frame, not the old one-line header
     // every other screen below still shares -- its own dialogs (help,
@@ -4275,7 +4313,16 @@ pub fn draw(
             height: 1,
         };
         dim_backdrop_for_dialog(frame, area, Some(status_line), app, ctx);
-        draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
+        draw_dialog_overlay(
+            frame,
+            area,
+            app,
+            details,
+            raw_state,
+            ctx,
+            tape_screen.map(|s| s.unit).unwrap_or(50),
+            state.header.history_same_hash_count,
+        );
         return;
     }
 
@@ -4387,7 +4434,7 @@ pub fn draw(
     draw_key_bar(frame, sections[4], &screen_key_bar_items(app.screen), ctx);
 
     dim_backdrop_for_dialog(frame, area, None, app, ctx);
-    draw_dialog_overlay(frame, area, app, details, raw_state, ctx);
+    draw_dialog_overlay(frame, area, app, details, raw_state, ctx, 50, None);
 }
 
 /// Flow/Time/Cost's own status line (§3.2), until their own part of
@@ -4479,6 +4526,7 @@ fn dim_backdrop_for_dialog(
 /// filter popups) — unchanged by issue #626, just pulled out so
 /// `draw` itself reads as "header, then the current screen, then
 /// whatever's on top of it".
+#[allow(clippy::too_many_arguments)]
 fn draw_dialog_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -4486,6 +4534,8 @@ fn draw_dialog_overlay(
     details: Option<&Details>,
     raw_state: Option<&serde_json::Value>,
     ctx: &DrawCtx,
+    tape_unit: u64,
+    tape_history_runs: Option<usize>,
 ) {
     match &app.dialog {
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
@@ -4520,7 +4570,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(tape_help_lines(ctx))
+            let paragraph = Paragraph::new(tape_help_lines(ctx, tape_unit, tape_history_runs))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -8193,9 +8243,9 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        // Below both of the Time screen's own width/height
-        // thresholds -- the plain-list fallback.
-        let backend = TestBackend::new(70, 15);
+        // Below the Time screen's own width threshold (80) --
+        // the plain-list fallback, regardless of height.
+        let backend = TestBackend::new(70, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -9136,7 +9186,7 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        let backend = TestBackend::new(70, 20);
+        let backend = TestBackend::new(70, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut cost_layout = CostLayoutCache::default();
         terminal
@@ -9698,52 +9748,20 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// Issue #626 moved the header line's own truncation order (the
-    /// tabs shrink first, then the report, then the document, then
-    /// the ETA) into `oscilloscope_core::screens::header_line` itself
-    /// -- `oscilloscope-core`'s own tests cover the order directly
-    /// now (`header_line_shrinks_tabs_to_numbers_first`, `header_
-    /// line_truncates_report_before_document_at_80_columns`,
-    /// `header_line_drops_eta_before_status_at_50_columns`). This is
-    /// the one place left here that still shows a report actually
-    /// reaching the screen through `draw`'s own one-line header.
-    #[test]
-    fn header_report_collapses_to_a_bare_mark_when_almost_no_room_is_left() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        model.observe_event(&Event::Report {
-            ts: "t".to_string(),
-            path: "prime".to_string(),
-            level: oscilloscope_core::observe::ReportLevel::Warning,
-            message: "running behind schedule".to_string(),
-            data: None,
-            data_truncated: false,
-        });
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
-        }});
-        // Issue #678's shared chrome gave the status line a row of
-        // its own, so 54 columns -- "almost no room" for the old
-        // one-line header, sharing that width with the document and
-        // the clock -- is now plenty on its own; 20 is narrower than
-        // the report text itself, which is what the collapse-to-a-
-        // bare-mark rule actually needs to be exercised.
-        let text = snapshot_at(
-            20,
-            24,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-            "cof",
-            "prime.a",
-            &[],
-        );
-        let line = text.lines().nth_back(1).unwrap();
-        assert!(line.contains("▸"), "{line}");
-        assert!(!line.contains("running behind"), "{line}");
-        assert!(!line.contains("warning:"), "{line}");
-    }
+    // Issue #626 moved the header line's own truncation order (the
+    // tabs shrink first, then the report, then the document, then
+    // the ETA) into `oscilloscope_core::screens::header_line` itself
+    // -- `oscilloscope-core`'s own tests cover the order directly
+    // (`header_line_shrinks_tabs_to_numbers_first`, `header_line_
+    // truncates_report_before_document_at_80_columns`, `header_
+    // line_drops_eta_before_status_at_50_columns`, the report-
+    // collapses-to-a-bare-mark cases around line 3300). This TUI-
+    // level copy used to additionally prove a report reaches the
+    // screen through `draw`'s own one-line header, at a terminal
+    // narrower than the report text itself (20 columns) -- issue
+    // #678's shared 60×24 floor means `draw` never renders that
+    // header at all below 60 columns on any screen now, so there is
+    // no longer a real terminal size left to exercise it at.
 
     /// #610: a warning-level report is styled in the theme's own
     /// warning colour, both in the header's own status-line slot and
@@ -10503,7 +10521,7 @@ mod golden_tests {
             rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:00Z",
         );
-        let backend = TestBackend::new(70, 20);
+        let backend = TestBackend::new(70, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -12906,7 +12924,7 @@ mod golden_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        let backend = TestBackend::new(100, 22);
+        let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -13857,8 +13875,11 @@ mod highlight_tests {
                 .unwrap();
             terminal.backend().buffer()[(1, 0)].symbol() == " "
         };
+        // 60, not an arbitrarily narrower width: issue #678's own
+        // 60x24 floor means nothing ever renders this band at all
+        // below it, on any screen.
         assert!(
-            !first_cell_is_blank(40),
+            !first_cell_is_blank(60),
             "the icon's own trace must draw even on a narrow terminal"
         );
         assert!(
@@ -14034,6 +14055,142 @@ mod tape_frame_goldens {
     use ratatui::backend::TestBackend;
 
     use crate::theme::{ColorMode, Theme, ThemeName};
+
+    /// The Normal/Usual goldens' own status-line row (y=28 at
+    /// 120x30): `gate.reply` finishes 2 ms before two loop passes
+    /// do, but §3.2 reads the newest finished step regardless, same
+    /// as the frame -- `(51, 24)` is the unrelated Run End rounding
+    /// cell both goldens already carry.
+    const STATUS_LINE_READS_AN_EARLIER_STEP_120X30: [(u16, u16); 43] = [
+        (51, 24),
+        (3, 28),
+        (4, 28),
+        (5, 28),
+        (6, 28),
+        (7, 28),
+        (8, 28),
+        (10, 28),
+        (11, 28),
+        (12, 28),
+        (13, 28),
+        (14, 28),
+        (15, 28),
+        (16, 28),
+        (17, 28),
+        (18, 28),
+        (20, 28),
+        (21, 28),
+        (22, 28),
+        (23, 28),
+        (24, 28),
+        (25, 28),
+        (26, 28),
+        (27, 28),
+        (28, 28),
+        (29, 28),
+        (30, 28),
+        (31, 28),
+        (32, 28),
+        (33, 28),
+        (34, 28),
+        (35, 28),
+        (36, 28),
+        (38, 28),
+        (39, 28),
+        (40, 28),
+        (41, 28),
+        (42, 28),
+        (43, 28),
+        (44, 28),
+        (45, 28),
+        (46, 28),
+        (47, 28),
+    ];
+
+    /// Same reason as [`STATUS_LINE_READS_AN_EARLIER_STEP_120X30`],
+    /// at 80x24's own status-line row (y=22).
+    const STATUS_LINE_READS_AN_EARLIER_STEP_80X24: [(u16, u16); 42] = [
+        (3, 22),
+        (4, 22),
+        (5, 22),
+        (6, 22),
+        (7, 22),
+        (8, 22),
+        (10, 22),
+        (11, 22),
+        (12, 22),
+        (13, 22),
+        (14, 22),
+        (15, 22),
+        (16, 22),
+        (17, 22),
+        (18, 22),
+        (20, 22),
+        (21, 22),
+        (22, 22),
+        (23, 22),
+        (24, 22),
+        (25, 22),
+        (26, 22),
+        (27, 22),
+        (28, 22),
+        (29, 22),
+        (30, 22),
+        (31, 22),
+        (32, 22),
+        (33, 22),
+        (34, 22),
+        (35, 22),
+        (36, 22),
+        (38, 22),
+        (39, 22),
+        (40, 22),
+        (41, 22),
+        (42, 22),
+        (43, 22),
+        (44, 22),
+        (45, 22),
+        (46, 22),
+        (47, 22),
+    ];
+
+    /// Same reason as [`STATUS_LINE_READS_AN_EARLIER_STEP_120X30`],
+    /// at 60x24's own status-line row (y=22) -- narrower, so the
+    /// row's own text (and the mismatch) cuts off sooner.
+    const STATUS_LINE_READS_AN_EARLIER_STEP_60X24: [(u16, u16); 32] = [
+        (3, 22),
+        (4, 22),
+        (5, 22),
+        (6, 22),
+        (7, 22),
+        (8, 22),
+        (10, 22),
+        (11, 22),
+        (12, 22),
+        (13, 22),
+        (14, 22),
+        (15, 22),
+        (16, 22),
+        (17, 22),
+        (18, 22),
+        (20, 22),
+        (21, 22),
+        (22, 22),
+        (23, 22),
+        (24, 22),
+        (25, 22),
+        (26, 22),
+        (27, 22),
+        (28, 22),
+        (29, 22),
+        (30, 22),
+        (31, 22),
+        (32, 22),
+        (33, 22),
+        (34, 22),
+        (35, 22),
+        (36, 22),
+    ];
 
     fn frames_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../design/frames")
@@ -14781,17 +14938,23 @@ mod tape_frame_goldens {
         );
         // Two cells allow-listed (issue #678's own "explicit,
         // documented allow-list, never a weakened comparison"):
-        // the design's own `hist/run-h1..3` give a real median wall
-        // time of ~5.0565s (`(5.048706 + 5.060017 + 5.083877) / 3`'s
-        // own middle value, by real-run timestamps, not the engine's
-        // own slightly different `totals.wall_time_s`), which rounds
-        // to `5.1s` under this renderer's own round-half-up
-        // `format_duration` -- the frame itself reads `5.0s` in both
-        // places this figure appears (the detail pane's own Usual
-        // line, the list's own Run End row). Matching it would need
-        // a different rounding rule for this one figure alone, which
-        // would be inventing behaviour the design never asked for,
-        // not fixing a real bug this golden found.
+        // osi's own history measures a run's wall time from
+        // `last_run.started_at` to `completed_at` (`build_record`'s
+        // own `duration_seconds`), and `hist/run-h1..3`'s own three
+        // runs give 5.056502s, 5.079809s, 5.044445s by that measure
+        // -- a median of 5.056502s, which rounds to `5.1s` under
+        // this renderer's own round-half-up `format_duration`. The
+        // design's own `hist/history.json` instead pools each run's
+        // `run_start`→`run_end` *event* timestamps (5.037s, 5.049s,
+        // 5.073s), a median of 5.049s, which rounds to `5.0s` --
+        // the frame reads `5.0s` in both places this figure appears
+        // (the detail pane's own Usual line, the list's own Run End
+        // row). The two measures of the same three runs disagree by
+        // design, not by a rounding choice this renderer could still
+        // make differently; matching the frame here would mean
+        // switching osi's own history to the event clock instead of
+        // `last_run`'s own fields, which is a data-source decision
+        // the design never asked for, not a bug this golden found.
         let allowed_cells = [(97, 5), (51, 16)];
         assert_tape_frame(
             "tape--starting--120x30",
@@ -14916,6 +15079,12 @@ mod tape_frame_goldens {
         // the moment a selection moves (`move_or_scroll`); matters
         // once the list is too short for every row and the Now
         // band both to stay on screen at the same time.
+        //
+        // The status line's own row (y=28) is allow-listed too: §3.2
+        // says the status line shows the newest finished step, and
+        // `run2/events.jsonl` finishes `drafts.iter_1.draft` 2 ms
+        // after `gate.reply` -- the frame still reads `gate ›
+        // reply finished`, the step that finished 2 ms earlier.
         assert_tape_frame(
             "tape--normal--120x30",
             120,
@@ -14925,7 +15094,7 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             |app| app.follow = false,
             now,
-            &[(51, 24)],
+            &STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
         );
     }
 
@@ -14946,7 +15115,7 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             true,
         );
-        // Same one cell allow-listed as the Normal golden's own.
+        // Same cells allow-listed as the Normal golden's own.
         assert_tape_frame(
             "tape--usual--120x30",
             120,
@@ -14959,7 +15128,7 @@ mod tape_frame_goldens {
                 app.tape_tokens_view = true;
             },
             now,
-            &[(51, 24)],
+            &STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
         );
     }
 
@@ -14980,6 +15149,8 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             true,
         );
+        // The status-line row (y=22) is allow-listed, same reason
+        // as the 120x30 goldens' own.
         assert_tape_frame(
             "tape--normal--80x24",
             80,
@@ -14989,7 +15160,7 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             |app| app.follow = false,
             now,
-            &[],
+            &STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
         );
     }
 
@@ -15010,6 +15181,8 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             true,
         );
+        // The status-line row (y=22) is allow-listed, same reason
+        // as the 120x30 goldens' own.
         assert_tape_frame(
             "tape--normal--60x24",
             60,
@@ -15019,7 +15192,7 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             |app| app.follow = false,
             now,
-            &[],
+            &STATUS_LINE_READS_AN_EARLIER_STEP_60X24,
         );
     }
 
@@ -15055,21 +15228,28 @@ mod tape_frame_goldens {
             // Two cells allow-listed, documented here, issue #678's
             // own "explicit, documented allow-list, never a
             // weakened comparison":
-            // - (119,0) and (119,29): the header and key bar's own
-            //   very last column, past either's own content, reads
-            //   this document's own `fg.default` rather than this
-            //   renderer's own dimmed one -- a design mockup's own
-            //   rendering quirk at that one column alone, not a
-            //   real bug this golden found (every other cell on
+            // - (119,0) and (119,29): the trailing blank past the
+            //   header and key bar's own content -- the `.mock`
+            //   parser pads every trimmed line out to the frame's
+            //   own width with a bare `fg.default` span of its own
+            //   (`parse_mock`'s own padding, not a style the mockup
+            //   itself ever wrote), where this renderer's base fill
+            //   is `fg.dim`/`fg.faint` instead. Every other cell on
             //   both rows, including their own trailing blanks
-            //   elsewhere, matches exactly).
+            //   elsewhere, matches exactly.
             // - (52,6)-(68,6): the help overlay's own `0 1 2 3`
-            //   row names the screens `Tape Signal Flow Store`;
-            //   the actual screens, in this codebase and the rest
-            //   of this very design document, are Tape/Time/Flow/
-            //   Cost -- matching the frame's own text here would
-            //   mean inventing two screens that don't exist, not
-            //   fixing a real bug.
+            //   row names the screens `Tape Signal Flow Store` --
+            //   the design document's own names for `1`/`3`
+            //   (§2.2, §2.4). This codebase still calls those two
+            //   Time and Cost (issue #678's R3: an unported screen
+            //   keeps its current chip name until its own part
+            //   lands), so matching the frame's own text here would
+            //   mean renaming them two parts early, not fixing a
+            //   real bug.
+            // - the status line's own row (y=28), below the modal:
+            //   same reason as the Normal/Usual goldens' own
+            //   (`STATUS_LINE_READS_AN_EARLIER_STEP_120X30`'s own
+            //   doc comment) -- the Help overlay never covers it.
             &[
                 (119, 0),
                 (119, 29),
@@ -15088,7 +15268,133 @@ mod tape_frame_goldens {
                 (66, 6),
                 (67, 6),
                 (68, 6),
+                (3, 28),
+                (4, 28),
+                (5, 28),
+                (6, 28),
+                (7, 28),
+                (8, 28),
+                (10, 28),
+                (11, 28),
+                (12, 28),
+                (13, 28),
+                (14, 28),
+                (15, 28),
+                (16, 28),
+                (17, 28),
+                (18, 28),
+                (20, 28),
+                (21, 28),
+                (22, 28),
+                (23, 28),
+                (24, 28),
+                (25, 28),
+                (27, 28),
+                (28, 28),
+                (29, 28),
+                (30, 28),
+                (31, 28),
+                (32, 28),
+                (33, 28),
+                (34, 28),
+                (35, 28),
+                (36, 28),
+                (38, 28),
+                (39, 28),
+                (40, 28),
+                (41, 28),
+                (42, 28),
+                (43, 28),
+                (44, 28),
+                (45, 28),
+                (46, 28),
+                (47, 28),
             ],
+        );
+    }
+
+    /// §3.5: below three finished runs of the document, the Run
+    /// End row's own ETA reads `—` with a plain `no history yet`,
+    /// never blank -- no shipped frame exercises this (every one
+    /// has `demo.yml`'s own three `hist/run-h*` runs to go on), so
+    /// this builds the same run with a brand new, empty history
+    /// directory instead of `demo_history`'s populated one.
+    #[test]
+    fn run_end_reads_no_history_yet_without_three_finished_runs() {
+        let plan = demo_plan();
+        let empty_history_dir = tempfile::tempdir().unwrap();
+        let history = crate::history_io::HistoryHandle::for_run(
+            Some(empty_history_dir.path().to_path_buf()),
+            "demo.yml".to_string(),
+        );
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        let run_end = tape_screen
+            .items
+            .iter()
+            .find_map(|item| match item {
+                oscilloscope_core::screens::TapeItem::RunEnd {
+                    usual_total_tokens, ..
+                } => Some(*usual_total_tokens),
+                _ => None,
+            })
+            .expect("a Normal-head Tape always carries a Run End item");
+        assert_eq!(
+            run_end, None,
+            "an empty history directory gives no usual total"
+        );
+
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.gate.reply".to_string());
+        app.follow = false;
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_tape(
+                    f,
+                    f.area(),
+                    &tape_screen,
+                    &_rendered.header,
+                    &mut app,
+                    &ctx,
+                    0,
+                    now,
+                )
+            })
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            text.contains("ETA — · no history yet"),
+            "Run End's own row must read the §3.5 fallback text without history"
         );
     }
 }
