@@ -388,7 +388,7 @@ def _ollama_request_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for spec in specs:
-        adapter = OllamaAdapter(base_url="http://localhost:11434")
+        adapter = OllamaAdapter(base_url="http://localhost:11434", streams=False)
         options = _options_from_json(spec["options"])
         captured, _result = _call_generate(
             "circuitry.adapters.ollama",
@@ -432,7 +432,7 @@ def _ollama_outcome_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
-        adapter = OllamaAdapter(base_url="http://localhost:11434")
+        adapter = OllamaAdapter(base_url="http://localhost:11434", streams=False)
         _captured, result = _call_generate(
             "circuitry.adapters.ollama",
             lambda a=adapter: a.generate(model="m", prompt="hi", timeout_seconds=30),
@@ -490,7 +490,7 @@ def _openai_compat_request_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for spec in specs:
-        adapter = LMStudioAdapter(base_url="http://localhost:1234/v1")
+        adapter = LMStudioAdapter(base_url="http://localhost:1234/v1", streams=False)
         options = _options_from_json(spec["options"])
         captured, _result = _call_generate(
             "circuitry.adapters._openai_compat",
@@ -534,7 +534,7 @@ def _openai_compat_outcome_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
-        adapter = LMStudioAdapter(base_url="http://localhost:1234/v1")
+        adapter = LMStudioAdapter(base_url="http://localhost:1234/v1", streams=False)
         _captured, result = _call_generate(
             "circuitry.adapters._openai_compat",
             lambda a=adapter: a.generate(model="m", prompt="hi", timeout_seconds=30),
@@ -590,7 +590,7 @@ def _openai_request_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for spec in specs:
-        adapter = OpenAIAdapter(base_url="https://api.openai.com/v1")
+        adapter = OpenAIAdapter(base_url="https://api.openai.com/v1", streams=False)
         options = _options_from_json(spec["options"])
         with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "circuitry-test-fake-key"}):
             captured, _result = _call_generate(
@@ -638,7 +638,7 @@ def _openai_outcome_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
-        adapter = OpenAIAdapter(base_url="https://api.openai.com/v1")
+        adapter = OpenAIAdapter(base_url="https://api.openai.com/v1", streams=False)
         with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "circuitry-test-fake-key"}):
             _captured, result = _call_generate(
                 "circuitry.adapters.openai",
@@ -683,7 +683,7 @@ def _anthropic_request_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for spec in specs:
-        adapter = AnthropicAdapter(base_url="https://api.anthropic.com", max_tokens=4096)
+        adapter = AnthropicAdapter(base_url="https://api.anthropic.com", max_tokens=4096, streams=False)
         options = _options_from_json(spec["options"])
         with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "circuitry-test-fake-key"}):
             captured, _result = _call_generate(
@@ -725,7 +725,7 @@ def _anthropic_outcome_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
-        adapter = AnthropicAdapter(base_url="https://api.anthropic.com", max_tokens=4096)
+        adapter = AnthropicAdapter(base_url="https://api.anthropic.com", max_tokens=4096, streams=False)
         with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "circuitry-test-fake-key"}):
             _captured, result = _call_generate(
                 "circuitry.adapters.anthropic",

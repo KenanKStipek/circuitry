@@ -470,9 +470,13 @@ fn body_error_outcome(err: SendError, partial_body: &[u8]) -> CurlOutcome {
 /// curl exit codes a failed request can retry on (`adapters/_retry.py::
 /// RETRYABLE_CURL_EXIT_CODES`) -- shared here so every adapter's own
 /// retry-info construction reads the same set this module's own exit
-/// mapping produces, rather than re-listing it.
+/// mapping produces, rather than re-listing it. Includes 18 (a
+/// premature EOF partway through the body, fewer bytes delivered than
+/// promised): this transport can reach it today on a non-streaming
+/// request too (`a_short_body_against_content_length_maps_to_exit_18`),
+/// and the Python engine's own set must stay exactly in step (#674).
 pub fn is_retryable_exit(returncode: i32) -> bool {
-    matches!(returncode, 6 | 7 | 28 | 35 | 52 | 56)
+    matches!(returncode, 6 | 7 | 18 | 28 | 35 | 52 | 56)
 }
 
 // ---------------------------------------------------------------------
@@ -872,6 +876,9 @@ mod tests {
         // empty the way `http_client`'s own urllib-parity clearing (for
         // the `http` tool) would otherwise make it.
         assert_eq!(outcome.stdout, "12345");
+        // #674: retryable in both engines (`adapters/_retry.py::
+        // RETRYABLE_CURL_EXIT_CODES`).
+        assert!(is_retryable_exit(18));
     }
 
     #[tokio::test]

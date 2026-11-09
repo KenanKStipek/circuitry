@@ -4899,6 +4899,40 @@ mod tests {
         assert_eq!(rendered.token_bar.agents_running, 1);
     }
 
+    /// Issue #674: a streamed prompt effect's own `meta.live` (which
+    /// always carries `adapter`, never `tools`/`current_tool`) must
+    /// never count toward `agents_running` the way an agent tool's
+    /// `meta.live` heartbeat does -- it already counts toward
+    /// `prompts_running` through the ordinary running-prompt path.
+    #[test]
+    fn a_streamed_prompt_meta_live_does_not_count_as_an_agent_in_flight() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "p": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                    "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:52:54Z",
+                    "streaming": true, "first_token_at": "2026-10-08T11:46:44Z",
+                    "tokens_sent": null, "tokens_sent_estimate": 3, "tokens_received": null,
+                    "tokens_received_estimate": 2, "chars_received": 11,
+                    "tokens_per_second": null}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:52:55Z",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.agents_running, 0);
+        assert_eq!(rendered.token_bar.prompts_running, 1);
+    }
+
     /// An interrupted run's own leftover `meta.live` (DESIGN.md) must
     /// never count as an agent in flight once its own heartbeat has
     /// gone stale, even though the node itself still has no

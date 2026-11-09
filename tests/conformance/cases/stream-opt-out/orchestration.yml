@@ -1,0 +1,6 @@
+name: stream-opt-out
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

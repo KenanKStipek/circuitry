@@ -40,6 +40,7 @@ class AzureOpenAIAdapter:
     endpoint: str = ""  # e.g. "https://my-resource.openai.azure.com"
     api_version: str = "2024-10-21"
     default_model: str = ""  # deployment name
+    streams: bool = True
 
     def _resolve_endpoint(self) -> str:
         return self.endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT", "")
@@ -53,6 +54,7 @@ class AzureOpenAIAdapter:
             base_url=endpoint,
             api_key_env="",
             default_model=self.default_model,
+            streams=self.streams,
             chat_completions_path=(
                 "/openai/deployments/{model}/chat/completions"
                 f"?api-version={self.api_version}"

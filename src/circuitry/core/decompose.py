@@ -83,6 +83,8 @@ from .use import (
     _clean_yaml_fences,
     _grafted_snapshot,
     _namespaced_effect_cb,
+    _namespaced_open_instance_id_cb,
+    _namespaced_progress_cb,
     _namespaced_report_cb,
     _record_children_enabled,
     _resolve_dot_path,
@@ -903,6 +905,10 @@ def _build_child_store(
             parent_store.effect_complete, node_path
         ),
         report=_namespaced_report_cb(parent_store.report, node_path),
+        progress=_namespaced_progress_cb(parent_store.progress, node_path),
+        open_instance_id=_namespaced_open_instance_id_cb(
+            parent_store.open_instance_id, node_path
+        ),
         _lock=parent_store._lock,
     )
 

@@ -2,7 +2,8 @@
   "runtime": {
     "adapters": {
       "lmstudio": {
-        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__"
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__",
+        "stream": false
       }
     }
   }
