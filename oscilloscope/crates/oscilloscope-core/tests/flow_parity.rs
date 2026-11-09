@@ -121,7 +121,6 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
     );
     let flat = flatten_state(&state);
     build_flow(
-        &rendered.rows,
         &rendered.unfolded_rows,
         &flat,
         &plan,
@@ -134,6 +133,28 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
         rendered.header.run_end_ts.as_deref(),
         "2026-01-01T00:10:00Z",
     )
+}
+
+/// Finds the station named `name`, anywhere in the rail (recursing
+/// into open lanes).
+fn find_station<'a>(
+    items: &'a [RailItem],
+    name: &str,
+) -> Option<&'a oscilloscope_core::rail::Station> {
+    for item in items {
+        match item {
+            RailItem::Station(s) if s.name == name => return Some(s),
+            RailItem::Fork(fork) => {
+                for lane in &fork.lanes {
+                    if let Some(found) = find_station(&lane.items, name) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Finds the decision fork whose own station is named `name`,
@@ -229,7 +250,13 @@ fn assert_gate_decision(
         ghost.contains(expect_untaken),
         "{case}: untaken ghost name was {ghost:?}"
     );
-    let _ = expect_branch;
+    let gate_station = find_station(&screen.rail.items, "gate")
+        .unwrap_or_else(|| panic!("{case}: no 'gate' station"));
+    assert_eq!(
+        gate_station.headline,
+        oscilloscope_core::rail::Headline::Branch(Some(expect_branch.to_string())),
+        "{case}: gate's own branch"
+    );
 }
 
 /// The story has a run-start line, the decision, and a run-end line,

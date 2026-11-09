@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::model::{NodeMeta, StatusKind, subtree_tokens};
-use crate::plan::{PlanEntryKind, PlanTree, UnnamedIfDecision};
+use crate::plan::{Flow, PlanEntryKind, PlanTree, UnnamedIfDecision};
 use crate::render::{Header, LoopProgress, Row, RowKind};
 
 /// A connector's or glyph's own place on the run's own timeline
@@ -132,6 +132,11 @@ pub struct Station {
 pub enum ForkKind {
     Decision,
     Loop,
+    /// A parallel `dynamic` (`Flow::Tree`): one lane per named child,
+    /// every lane real (never a loop's own synthetic ahead lane, and
+    /// never a decision's own untaken ghost) -- the plan fixes the
+    /// lane count, so there is nothing to fold or to open with `+`.
+    Parallel,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,12 +172,12 @@ pub struct Rail {
 struct Ctx<'a> {
     flat: &'a BTreeMap<String, NodeMeta>,
     plan: &'a PlanTree,
-    // An unnamed `if`'s own branch evidence is read from here, never
-    // the (possibly folded) `rows` the rest of this module walks --
-    // quick-step folding or a breadcrumb can make a branch's own
-    // first step vanish from `rows` well before the branch itself
-    // stops being real (`render::RenderState::unfolded_rows`'s own
-    // doc).
+    // An unnamed `if`'s own branch evidence is read from here --
+    // always the same, unfolded rows the rest of this module walks
+    // too (`build_rail`'s own doc: quick-step folding or a
+    // breadcrumb would otherwise make a loop pass, or a branch's own
+    // first step, vanish from the rail well before either stops
+    // being real).
     unfolded_rows: &'a [Row],
     header: &'a Header,
     state: Option<&'a Value>,
@@ -439,6 +444,24 @@ fn build_level(
                 items.push(RailItem::Fork(fork));
                 i = next;
             }
+            RowKind::Dynamic if dynamic_is_parallel(&row.path, ctx) => {
+                items.push(RailItem::Station(plain_station(row, ctx)));
+                let (fork, next) = build_parallel_fork(rows, i, ctx);
+                items.push(RailItem::Fork(fork));
+                i = next;
+            }
+            // A sequential container (`use`, a chain-flow `dynamic`,
+            // a `try`/`finally`) runs its own children one after
+            // another in the same lane its own station sits in --
+            // never a fork of their own, so its children are just
+            // inlined straight after it, the same as any other
+            // plain station's own sibling.
+            RowKind::Use | RowKind::TryFinally | RowKind::Dynamic => {
+                items.push(RailItem::Station(plain_station(row, ctx)));
+                let (children, next) = build_level(rows, i + 1, depth + 1, &row.path, ctx);
+                items.extend(children);
+                i = next;
+            }
             _ => {
                 items.push(RailItem::Station(plain_station(row, ctx)));
                 i += 1;
@@ -699,6 +722,64 @@ fn build_decision_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     )
 }
 
+/// Whether `path` is a parallel `dynamic` (`Flow::Tree`, a
+/// `Region::Parallel` -- DESIGN.md is silent on a bare container,
+/// but its children genuinely run concurrently, the same reason a
+/// loop's own passes get one lane each): `false` for a chain-flow
+/// one, which runs its own children in the one lane its own station
+/// already sits in, same as any other plain sequence.
+fn dynamic_is_parallel(path: &str, ctx: &Ctx<'_>) -> bool {
+    ctx.plan.match_path(path).is_some_and(|m| {
+        m.entries
+            .iter()
+            .any(|e| matches!(&e.kind, PlanEntryKind::Dynamic { flow: Flow::Tree }))
+    })
+}
+
+/// A parallel `dynamic`'s own fork: one lane per named child, each
+/// holding that child's own whole subtree -- never folded, never
+/// padded with an ahead lane, since the plan already names every
+/// child there will ever be.
+fn build_parallel_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
+    let row = &rows[i];
+    let depth = row.depth;
+    let mut lanes = Vec::new();
+    let mut j = i + 1;
+    while j < rows.len() && rows[j].depth > depth {
+        if rows[j].depth == depth + 1 {
+            let mut end = j + 1;
+            while end < rows.len() && rows[end].depth > depth + 1 {
+                end += 1;
+            }
+            let (items, _) = build_level(&rows[..end], j, depth + 1, &row.path, ctx);
+            let running = items.iter().any(
+                |it| matches!(it, RailItem::Station(s) if edge_style(s.status) == EdgeStyle::Live),
+            );
+            let waiting = items.iter().all(|it| {
+                matches!(it, RailItem::Station(s) if matches!(s.status, StatusKind::Pending | StatusKind::Skipped))
+            });
+            lanes.push(Lane {
+                items,
+                ghost: None,
+                running,
+                waiting,
+            });
+            j = end;
+        } else {
+            j += 1;
+        }
+    }
+    (
+        Fork {
+            path: row.path.clone(),
+            kind: ForkKind::Parallel,
+            source_status: row.status.kind,
+            lanes,
+        },
+        j,
+    )
+}
+
 /// `path`'s own slot count (DESIGN.md §2.3: "a loop forks into one
 /// lane per slot (`max_concurrency` or the pass count when
 /// unbounded)") -- the loop's own known total pass count wins once
@@ -751,6 +832,42 @@ pub(crate) fn pass_each_value(
         .get(index as usize)?
         .as_str()
         .map(str::to_string)
+}
+
+/// A loop's own body, read straight from the plan (never from any
+/// observed pass): every leaf under `loop_path`'s own `iter_*`
+/// placeholder, in declaration order, each standing in for
+/// [`ahead_pass_lane`]'s own per-station mapping below (which reads
+/// only a template station's `row_kind` and `path`, never its
+/// headline or detail) -- used only once a loop hasn't produced a
+/// single real pass yet, so [`build_loop_fork`] has no observed
+/// lane of its own to shape the rest off instead.
+fn loop_body_template(loop_path: &str, ctx: &Ctx<'_>) -> Vec<RailItem> {
+    let prefix = format!("{loop_path}.iter_*.");
+    ctx.plan
+        .leaf_paths()
+        .iter()
+        .filter(|p| p.starts_with(&prefix))
+        .map(|p| {
+            let path = p.replacen("iter_*", "iter_0", 1);
+            let row_kind = ctx
+                .plan
+                .match_path(p)
+                .and_then(|m| m.entries.first())
+                .map(|e| RowKind::from_plan_entry(&e.kind))
+                .unwrap_or(RowKind::Unknown);
+            RailItem::Station(Station {
+                path,
+                selectable: false,
+                is_edge: false,
+                row_kind,
+                status: StatusKind::Pending,
+                name: step_label(p),
+                headline: Headline::Blank,
+                detail: Detail::Blank,
+            })
+        })
+        .collect()
 }
 
 /// An ahead pass's own lane (DESIGN.md §2.3's folded loop example,
@@ -874,7 +991,10 @@ fn build_loop_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
         }
     }
     let lane_count = loop_lane_count(&row.path, row.loop_progress, observed, ctx);
-    let template: Vec<RailItem> = lanes.first().map(|l| l.items.clone()).unwrap_or_default();
+    let template: Vec<RailItem> = match lanes.first() {
+        Some(first) => first.items.clone(),
+        None => loop_body_template(&row.path, ctx),
+    };
     let mut index = observed;
     while index < lane_count {
         lanes.push(ahead_pass_lane(&template, &row.path, index, ctx));
@@ -929,10 +1049,15 @@ fn end_station(header: &Header) -> Station {
 
 /// Builds the Flow screen's own rail (issue #691): `rows[0]` is
 /// always the document root (`render::build`'s own convention); its
-/// children, in plan order, become the rail's own items.
+/// children, in plan order, become the rail's own items. `rows` is
+/// always the unfolded tree -- the tree screen's own breadcrumb and
+/// quick-steps folding ([`crate::fold`]) never applies here (a
+/// single-step loop pass losing its own `Pass` row to a breadcrumb
+/// would make [`build_loop_fork`] below find no passes at all);
+/// callers pass [`crate::render::RenderState::unfolded_rows`], never
+/// `rows`.
 pub fn build_rail(
     rows: &[Row],
-    unfolded_rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     header: &Header,
@@ -942,7 +1067,7 @@ pub fn build_rail(
     let ctx = Ctx {
         flat,
         plan,
-        unfolded_rows,
+        unfolded_rows: rows,
         header,
         state,
     };
@@ -1040,7 +1165,6 @@ mod tests {
         let flat = crate::model::flatten_state(state);
         let zone = chrono::FixedOffset::east_opt(0).unwrap();
         build_rail(
-            &rendered.rows,
             &rendered.unfolded_rows,
             &flat,
             plan,

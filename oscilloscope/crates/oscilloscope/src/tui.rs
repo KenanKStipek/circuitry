@@ -8859,7 +8859,6 @@ mod golden_tests {
             path: Some("prime".to_string()),
         }];
         let flow_screen = oscilloscope_core::screens::build_flow(
-            &rendered.rows,
             &rendered.unfolded_rows,
             &oscilloscope_core::model::flatten_state(&state),
             &plan,
@@ -9157,7 +9156,6 @@ mod golden_tests {
             &[],
         );
         let flow_screen = oscilloscope_core::screens::build_flow(
-            &rendered.rows,
             &rendered.unfolded_rows,
             &oscilloscope_core::model::flatten_state(state.unwrap_or(&Value::Null)),
             plan,
@@ -11951,7 +11949,6 @@ mod tape_frame_goldens {
         crate::history_io::apply_history_eta(history, &mut rendered.header, Some(state), plan, now);
         let flat = oscilloscope_core::model::flatten_state(state);
         let flow_screen = oscilloscope_core::screens::build_flow(
-            &rendered.rows,
             &rendered.unfolded_rows,
             &flat,
             plan,

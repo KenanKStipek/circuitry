@@ -1758,7 +1758,6 @@ fn build_flow_screen_if_active(
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     let selected_path = details_selection_path(app);
     Some(oscilloscope_core::screens::build_flow(
-        &render_state.rows,
         &render_state.unfolded_rows,
         &flat,
         plan,
@@ -4122,7 +4121,6 @@ mod tests {
             "2026-01-01T00:00:01Z",
         );
         let flow_screen = oscilloscope_core::screens::build_flow(
-            &rendered.rows,
             &rendered.unfolded_rows,
             &flat,
             &plan,

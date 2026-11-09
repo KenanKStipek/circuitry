@@ -3608,14 +3608,12 @@ fn build_selected_pass(
     })
 }
 
+/// `rows` is always `render::RenderState::unfolded_rows`, never
+/// `RenderState::rows` -- the tree screen's own folding plays no
+/// part in the rail (`rail::build_rail`'s own doc comment).
 #[allow(clippy::too_many_arguments)]
 pub fn build_flow(
     rows: &[Row],
-    // An unnamed `if`'s own branch evidence (`rail::build_rail`'s
-    // own use) reads this, never the possibly-folded `rows` above --
-    // `render::RenderState::unfolded_rows` is always this, same
-    // instant.
-    unfolded_rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
@@ -3627,7 +3625,7 @@ pub fn build_flow(
     run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
-    let rail = crate::rail::build_rail(rows, unfolded_rows, flat, plan, header, state, zone);
+    let rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
     let largest_usual_step = header
         .history_step_usual
         .values()
@@ -4646,7 +4644,6 @@ mod tests {
         let elapsed_at = |now: &str| {
             let screen = build_flow(
                 &rows,
-                &rows,
                 &flat,
                 &plan,
                 &model,
@@ -4822,7 +4819,6 @@ mod tests {
             None,
         );
         let screen = build_flow(
-            &rows,
             &rows,
             &flat,
             &plan,
