@@ -2167,21 +2167,36 @@ cost). Flow/Time/Cost keep their own inner panels and their own keys
 exactly as shipped; `tui::draw`'s own outer `Layout` just gives them
 4 fewer rows of body than before to draw them in.
 
-**Not yet shipped.** The Starting/Ended/Failed head states draw
-their own full-width rule and status line, but the detail pane's own
-Engine/Plan/Shape (Starting), Outcome/Tokens/Effects/Decision/
-Largest (Ended) and Outcome/Step/Tokens/Usual/Error/Not Reached
-(Failed) content from `design/tui-design.md` §2.1 is not built; the
-pane reads "nothing selected" in those three states instead. The
-unit's own upfront count (§3.5: a loop whose `each.in` is a document
-literal counts its eventual passes from the plan before any of them
-runs) is not built either -- `effects_planned` still only learns a
-loop's own total once the engine's own `progress.total` says so, the
-same rule every other screen's own effects count already used. The
-`.mock` goldens (`tui::tape_frame_goldens`) cover only the too-small
-screen so far; the other eight need the three detail panes above
-and a run state frozen to a fixed instant mid-run, neither of which
-exists yet.
+**Goldens and allow-listed cells.** Every `tape--*` frame in
+`design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
+symbol, fg, bg, bold and dim per cell). The design's fixture run
+(`design/fixtures/run2`) is replayed to the frames' frozen instant,
+3.62 s after its `run_start`, in the frames' zone, with history built
+from `design/fixtures/hist/run-h1..3`, for the Normal, Usual, Help,
+80×24 and 60×24 frames; the Starting state, the Ended state (`run2`
+at its end) and the Failed state (`design/fixtures/run`) have their
+own frames, as does the too-small screen. The three states' detail
+panes are built: Engine, Plan, Shape, Usual, ETA and the first step
+before the first event; Outcome, Tokens, Usual, Effects, Decision,
+Largest, the handled failure and the run's summary at the end; the
+error in full and what was not reached after a failure. A loop whose
+`each.in` is a document literal counts its passes from the plan
+before any of them runs (`plan::resolve_each_len`), so the effects
+count reads `/14` from the first frame. A few cells are skipped by
+coordinate, each documented at the test's call site: the median wall
+time of the three history runs (5.0565 s) rounds to `5.1s` under
+`format_duration`'s round-half-up rule while the frames read `5.0s`,
+one figure in each of the Starting, Ended, Normal and Usual frames;
+the Help overlay's `0 1 2 3` row, where the frames name the Signal
+and Store screens that parts 2 and 4 of the design introduce while
+this build still has Time and Cost; and the last column of the header
+and key bar in the Help frame, where the mockup's trailing blank
+carries another foreground. Everything else matches exactly.
+
+**Not yet shipped.** The Totals row's cost figure reads `—` on every
+screen until a run reports one (`meta.cost_usd`,
+`runtime.last_run.totals.cost_usd`); the frames' scripted adapter
+never does, so every frame reads `—` too.
 
 ### 6.4 Tests
 
