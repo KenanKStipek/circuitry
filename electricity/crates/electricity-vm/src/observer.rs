@@ -191,6 +191,43 @@ pub trait RunObserver {
     /// other hook here -- only `electricity` (lib)'s own `Observer`
     /// implements it for real.
     fn record_totals(&self, _meta: &Value) {}
+
+    /// A streamed `prompt` attempt's own throttled live-progress
+    /// publish (`cli/events.py::EventLog.on_progress`'s own backing
+    /// notification, #674/#676) -- fired only from a delta-driven
+    /// publish (never the write that starts or clears `meta.live`
+    /// itself), at most once a second, by `exec::prompt`'s own
+    /// per-attempt live-state bookkeeping. *instance* is the
+    /// [`InstanceId`] this effect's own [`RunObserver::effect_start`]
+    /// call returned -- one `start`/`end` pair covers every retry of
+    /// a streamed prompt, so every attempt's own progress line
+    /// carries the same id; *attempt* numbers the attempt within that
+    /// span (`meta.live.attempt`), so a listener can tell a new
+    /// attempt's own first delta apart from the previous attempt's
+    /// last one. Default no-op, like every other hook here; only
+    /// `electricity` (lib)'s own `Observer` implements it for real.
+    fn progress(
+        &self,
+        _path: &EffectPath,
+        _instance: InstanceId,
+        _attempt: u32,
+        _data: &ProgressData,
+    ) {
+    }
+}
+
+/// The fields a streamed prompt's own throttled live-progress publish
+/// carries, beyond the path/instance/attempt [`RunObserver::progress`]
+/// already takes directly -- `cli/events.py`'s own `progress` line's
+/// data half (`cli/events.py::EventLog.on_progress`), minus `id`/`ms`/
+/// `first_token_ms`, which the event writer derives itself from
+/// *instance*'s own start time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgressData {
+    pub tokens_received_estimate: i64,
+    pub chars_received: i64,
+    pub tokens_sent: Option<i64>,
+    pub tokens_sent_estimate: i64,
 }
 
 /// A [`RunObserver`] that does nothing -- every lane A test (and any

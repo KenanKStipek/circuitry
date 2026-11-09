@@ -667,6 +667,134 @@
       }
     }
   ],
+  "ollama_streaming_outcome_cases": [
+    {
+      "returncode": 0,
+      "stdout": "{\"message\": {\"content\": \"hi \"}}\n{\"message\": {\"content\": \"there\"}, \"done\": true, \"prompt_eval_count\": 3, \"eval_count\": 5, \"done_reason\": \"stop\"}\n",
+      "stderr": "",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": true,
+        "text": "hi there",
+        "raw": {
+          "message": {
+            "content": "there"
+          },
+          "done": true,
+          "prompt_eval_count": 3,
+          "eval_count": 5,
+          "done_reason": "stop"
+        },
+        "tokens_sent": 3,
+        "tokens_received": 5,
+        "finish_reason": "stop",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"message\": {\"content\": \"hi\"}}\n{\"message\": {\"content\": \"\"}, \"done\": true, \"prompt_eval_count\": 3, \"eval_count\": 2, \"done_reason\": \"length\"}\n",
+      "stderr": "",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "message": {
+            "content": ""
+          },
+          "done": true,
+          "prompt_eval_count": 3,
+          "eval_count": 2,
+          "done_reason": "length"
+        },
+        "tokens_sent": 3,
+        "tokens_received": 2,
+        "finish_reason": "length",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": \"model \\\"m\\\" not found, try pulling it first\"}",
+      "stderr": "curl: (22) The requested URL returned error: 404",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "ollama request failed (curl exit 22) model='m' url=http://localhost:11434/api/generate: model \"m\" not found, try pulling it first Try `ollama pull m` first.",
+        "retry": {
+          "retryable": false,
+          "status": 404,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 18,
+      "stdout": "{\"message\": {\"content\": \"hi \"}}\n{\"message\": {\"content\": \"there\"}}\n",
+      "stderr": "curl: (18) transfer closed with outstanding read data remaining",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "ollama request failed (curl exit 18) model='m' url=http://localhost:11434/api/generate: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"message\": {\"content\": \"hi\"}}\n{\"message\": {\"content\": \" there\"}}\n",
+      "stderr": "",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "ollama request failed (curl exit 18) model='m' url=http://localhost:11434/api/generate: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 28,
+      "stdout": "",
+      "stderr": "",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://localhost:11434",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "ollama request failed (curl exit 28) model='m' url=http://localhost:11434/api/generate: no response body The model didn't finish within 30s. Raise `runtime.adapters.ollama.timeout_seconds` in your config (a prompt's `timeout_ms` can only shorten it), or use a smaller/faster model.",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    }
+  ],
   "openai_compat_request_cases": [
     {
       "spec": {
@@ -881,6 +1009,132 @@
       }
     }
   ],
+  "openai_compat_streaming_outcome_cases": [
+    {
+      "returncode": 0,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi \"}}]}\ndata: {\"choices\": [{\"delta\": {\"content\": \"there\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 5}}\ndata: [DONE]\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi there",
+        "raw": {
+          "choices": [
+            {
+              "message": {
+                "content": "hi there"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 5
+          }
+        },
+        "tokens_sent": 3,
+        "tokens_received": 5,
+        "finish_reason": "stop",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\ndata: {\"choices\": [{\"delta\": {\"content\": \"\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 2}}\ndata: [DONE]\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "choices": [
+            {
+              "message": {
+                "content": "hi"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 2
+          }
+        },
+        "tokens_sent": 3,
+        "tokens_received": 2,
+        "finish_reason": "length",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": {\"message\": \"Invalid API Key\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 401",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "OpenAI-compatible request failed (curl exit 22) model='m' url=http://localhost:1234/v1/chat/completions: Invalid API Key",
+        "retry": {
+          "retryable": false,
+          "status": 401,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 18,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi \"}}]}\ndata: {\"choices\": [{\"delta\": {\"content\": \"there\"}}]}\n",
+      "stderr": "curl: (18) transfer closed with outstanding read data remaining",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "OpenAI-compatible request failed (curl exit 18) model='m' url=http://localhost:1234/v1/chat/completions: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "OpenAI-compatible request failed (curl exit 18) model='m' url=http://localhost:1234/v1/chat/completions: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 28,
+      "stdout": "",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "OpenAI-compatible request failed (curl exit 28) model='m' url=http://localhost:1234/v1/chat/completions: no response body",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    }
+  ],
   "openai_request_cases": [
     {
       "spec": {
@@ -1057,6 +1311,132 @@
           "status": 400,
           "retry_after": null,
           "error_code": "context_length_exceeded"
+        }
+      }
+    }
+  ],
+  "openai_streaming_outcome_cases": [
+    {
+      "returncode": 0,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi \"}}]}\ndata: {\"choices\": [{\"delta\": {\"content\": \"there\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 5}}\ndata: [DONE]\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi there",
+        "raw": {
+          "choices": [
+            {
+              "message": {
+                "content": "hi there"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 5
+          }
+        },
+        "tokens_sent": 3,
+        "tokens_received": 5,
+        "finish_reason": "stop",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\ndata: {\"choices\": [{\"delta\": {\"content\": \"\"}, \"finish_reason\": \"length\"}], \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 2}}\ndata: [DONE]\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "choices": [
+            {
+              "message": {
+                "content": "hi"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 2
+          }
+        },
+        "tokens_sent": 3,
+        "tokens_received": 2,
+        "finish_reason": "length",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"error\": {\"message\": \"bad key\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 401",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "openai request failed (curl exit 22) model='m' url=https://api.openai.com/v1/chat/completions: bad key",
+        "retry": {
+          "retryable": false,
+          "status": 401,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 18,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi \"}}]}\ndata: {\"choices\": [{\"delta\": {\"content\": \"there\"}}]}\n",
+      "stderr": "curl: (18) transfer closed with outstanding read data remaining",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "openai request failed (curl exit 18) model='m' url=https://api.openai.com/v1/chat/completions: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "openai request failed (curl exit 18) model='m' url=https://api.openai.com/v1/chat/completions: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 28,
+      "stdout": "",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "openai request failed (curl exit 28) model='m' url=https://api.openai.com/v1/chat/completions: no response body",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
         }
       }
     }
@@ -1251,6 +1631,130 @@
           "status": 529,
           "retry_after": null,
           "error_code": "overloaded_error"
+        }
+      }
+    }
+  ],
+  "anthropic_streaming_outcome_cases": [
+    {
+      "returncode": 0,
+      "stdout": "data: {\"type\": \"message_start\", \"message\": {\"usage\": {\"input_tokens\": 3}}}\ndata: {\"type\": \"content_block_delta\", \"delta\": {\"text\": \"hi \"}}\ndata: {\"type\": \"content_block_delta\", \"delta\": {\"text\": \"there\"}}\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\"}, \"usage\": {\"output_tokens\": 5}}\ndata: {\"type\": \"message_stop\"}\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi there",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "hi there"
+            }
+          ],
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 5
+          },
+          "stop_reason": "end_turn"
+        },
+        "tokens_sent": 3,
+        "tokens_received": 5,
+        "finish_reason": "end_turn",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "data: {\"type\": \"message_start\", \"message\": {\"usage\": {\"input_tokens\": 3}}}\ndata: {\"type\": \"content_block_delta\", \"delta\": {\"text\": \"hi\"}}\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"max_tokens\"}, \"usage\": {\"output_tokens\": 2}}\ndata: {\"type\": \"message_stop\"}\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ],
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 2
+          },
+          "stop_reason": "max_tokens"
+        },
+        "tokens_sent": 3,
+        "tokens_received": 2,
+        "finish_reason": "max_tokens",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 22,
+      "stdout": "{\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}",
+      "stderr": "curl: (22) The requested URL returned error: 529",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "anthropic request failed (curl exit 22) model='m' url=https://api.anthropic.com/v1/messages: Overloaded",
+        "retry": {
+          "retryable": true,
+          "status": 529,
+          "retry_after": null,
+          "error_code": "overloaded_error"
+        }
+      }
+    },
+    {
+      "returncode": 18,
+      "stdout": "data: {\"type\": \"content_block_delta\", \"delta\": {\"text\": \"hi \"}}\ndata: {\"type\": \"content_block_delta\", \"delta\": {\"text\": \"there\"}}\n",
+      "stderr": "curl: (18) transfer closed with outstanding read data remaining",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "anthropic request failed (curl exit 18) model='m' url=https://api.anthropic.com/v1/messages: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "data: {\"type\": \"content_block_delta\", \"delta\": {\"text\": \"hi\"}}\n",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "anthropic request failed (curl exit 18) model='m' url=https://api.anthropic.com/v1/messages: curl: (18) transfer closed with outstanding read data remaining",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 28,
+      "stdout": "",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "anthropic request failed (curl exit 28) model='m' url=https://api.anthropic.com/v1/messages: no response body",
+        "retry": {
+          "retryable": true,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
         }
       }
     }

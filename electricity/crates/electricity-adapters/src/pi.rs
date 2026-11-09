@@ -136,6 +136,7 @@ mod tests {
             path,
             timeout_seconds: 5,
             token,
+            on_progress: None,
         }
     }
 
@@ -470,6 +471,7 @@ mod tests {
             // file even on a loaded machine; it hangs far longer.
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("", "hi", &GenerateOptions::default(), &call)

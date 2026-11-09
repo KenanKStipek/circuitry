@@ -222,6 +222,7 @@ async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
                     path: &effect_path,
                     timeout_seconds: 30,
                     token: &token,
+                    on_progress: None,
                 };
                 let result = adapter
                     .generate("m", "p", &GenerateOptions::default(), &ctx)

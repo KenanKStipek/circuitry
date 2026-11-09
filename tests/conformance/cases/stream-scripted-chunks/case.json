@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #674: the scripted adapter's chunks makes progress deterministic",
-  "description": "A reply's `chunks` delivers each piece as one delta before the reply completes; the final state (value, tokens, finish_reason) is byte-identical to the same reply without `chunks` -- `tests/adapters/test_scripted_chunks.py::test_chunks_reply_final_state_matches_the_same_reply_without_chunks` asserts that equality directly. Python only: electricity's own scripted adapter does not know the `chunks` key yet (electricity/docs/spec/scripted-replies.md, issue #676).",
-  "engines": ["python"],
+  "description": "A reply's `chunks` delivers each piece as one delta before the reply completes; the final state (value, tokens, finish_reason) is byte-identical to the same reply without `chunks` -- `tests/adapters/test_scripted_chunks.py::test_chunks_reply_final_state_matches_the_same_reply_without_chunks` asserts that equality directly.",
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success"
 }

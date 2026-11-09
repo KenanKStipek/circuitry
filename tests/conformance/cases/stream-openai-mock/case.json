@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #674: the OpenAI-compatible family streams by default",
-  "description": "lmstudio's default `stream: true` request against a mock HTTP server answering with server-sent events; `stream_options.include_usage` is pinned on the request, and the assembled reply/tokens/finish_reason equal what a non-streamed body would give. Python only: electricity keeps sending a non-streamed request and cannot answer this fixture's SSE body (issue #676, electricity streaming parity).",
-  "engines": ["python"],
+  "description": "lmstudio's default `stream: true` request against a mock HTTP server answering with server-sent events; `stream_options.include_usage` is pinned on the request, and the assembled reply/tokens/finish_reason equal what a non-streamed body would give.",
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml"

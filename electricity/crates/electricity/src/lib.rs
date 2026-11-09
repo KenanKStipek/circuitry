@@ -897,6 +897,18 @@ impl RunObserver for Observer<'_> {
     fn record_totals(&self, meta: &Value) {
         self.totals.observe_meta(meta);
     }
+
+    fn progress(
+        &self,
+        path: &EffectPath,
+        instance: electricity_vm::observer::InstanceId,
+        attempt: u32,
+        data: &electricity_vm::observer::ProgressData,
+    ) {
+        if let Some(log) = self.events {
+            log.on_progress(&path.to_string(), instance, attempt, data);
+        }
+    }
 }
 
 /// Whether the report console line may use ANSI color, mirroring Rich's

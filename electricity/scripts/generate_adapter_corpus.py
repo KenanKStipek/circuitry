@@ -161,6 +161,59 @@ def _call_generate(
     return captured, result_json
 
 
+def _call_generate_streaming(
+    module_path: str,
+    build_call: Any,
+    *,
+    returncode: int = 0,
+    stdout: str = "{}",
+    stderr: str = "",
+) -> dict[str, Any]:
+    """Like [`_call_generate`], but patches `<module_path>.
+    run_curl_streaming` instead of `run_curl` -- each adapter's own
+    streaming entry point parses its *final* result from the complete
+    scripted *stdout* the exact same way the non-streamed path parses
+    its one JSON object (`on_line`'s only job is a progress callback
+    this corpus never drives), so the result this returns is directly
+    comparable with what the non-streamed path would give the same
+    adapter for the same scripted body.
+    """
+
+    def fake_run_curl_streaming(**kwargs: Any) -> CompletedProcess[str]:
+        # `chat_completion`'s own `StreamAssembly.saw_data_line` (the
+        # OpenAI-compatible family's/`openai`'s own flag for "answered
+        # with SSE at all, vs. one plain JSON body") is set only by
+        # `on_line`, never derived from the final body after the fact --
+        # so a scripted SSE body has to be replayed through it line by
+        # line here, the same way a real streaming call would deliver it.
+        on_line = kwargs.get("on_line")
+        if on_line is not None:
+            for line in stdout.splitlines():
+                on_line(line)
+        return _fake_completed(returncode, stdout, stderr)
+
+    with mock.patch(f"{module_path}.run_curl_streaming", fake_run_curl_streaming):
+        try:
+            result = build_call()
+            result_json: dict[str, Any] = {
+                "ok": True,
+                "text": result.text,
+                "raw": result.raw,
+                "tokens_sent": result.tokens_sent,
+                "tokens_received": result.tokens_received,
+                "finish_reason": result.finish_reason,
+                "warnings": list(result.warnings),
+            }
+        except Exception as exc:
+            result_json = {
+                "ok": False,
+                "class": type(exc).__name__,
+                "message": str(exc),
+                "retry": _retry_info_json(exc),
+            }
+    return result_json
+
+
 # ---------------------------------------------------------------------
 # 1. Pure helpers (`curl_support.py`).
 # ---------------------------------------------------------------------
@@ -454,6 +507,73 @@ def _ollama_outcome_cases() -> list[dict[str, Any]]:
     return cases
 
 
+def _ollama_streaming_outcome_cases() -> list[dict[str, Any]]:
+    """Issue #676: the streaming entry point's own outcome handling --
+    same scripted shapes as [`_ollama_outcome_cases`], fed through
+    `_curl_json_streaming` (`streams=True`) instead, so a case here
+    whose final text/tokens/finish_reason match a same-named case
+    there pins that the two parsing paths agree.
+    """
+    scripted = [
+        # success: two NDJSON deltas, then the final `done: true` line.
+        (
+            0,
+            (
+                '{"message": {"content": "hi "}}\n'
+                '{"message": {"content": "there"}, "done": true, '
+                '"prompt_eval_count": 3, "eval_count": 5, "done_reason": "stop"}\n'
+            ),
+            "",
+        ),
+        # length: Ollama's own `done_reason` for a budget cutoff.
+        (
+            0,
+            (
+                '{"message": {"content": "hi"}}\n'
+                '{"message": {"content": ""}, "done": true, '
+                '"prompt_eval_count": 3, "eval_count": 2, "done_reason": "length"}\n'
+            ),
+            "",
+        ),
+        # an HTTP error body -- curl's own generic HTTP-failure exit.
+        (22, '{"error": "model \\"m\\" not found, try pulling it first"}', "curl: (22) The requested URL returned error: 404"),
+        # a disconnect after two deltas: curl's own mid-stream drop exit,
+        # whatever the model had already answered still in stdout.
+        (
+            18,
+            '{"message": {"content": "hi "}}\n{"message": {"content": "there"}}\n',
+            "curl: (18) transfer closed with outstanding read data remaining",
+        ),
+        # an incomplete stream: curl exited 0, but no line ever carried
+        # `done: true` -- classified the same as the disconnect above.
+        (0, '{"message": {"content": "hi"}}\n{"message": {"content": " there"}}\n', ""),
+        # a timeout: curl's own `--max-time` exit, nothing received yet.
+        (28, "", ""),
+    ]
+    cases = []
+    for returncode, stdout, stderr in scripted:
+        adapter = OllamaAdapter(base_url="http://localhost:11434", streams=True)
+        result = _call_generate_streaming(
+            "circuitry.adapters.ollama",
+            lambda a=adapter: a.generate(model="m", prompt="hi", timeout_seconds=30),
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        cases.append(
+            {
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "model": "m",
+                "timeout_seconds": 30,
+                "base_url": "http://localhost:11434",
+                "result": result,
+            }
+        )
+    return cases
+
+
 # ---------------------------------------------------------------------
 # 3. The OpenAI-compatible family (via `lmstudio`, no API key, so the
 #    request/response shapes are isolated from the key-env precheck).
@@ -550,6 +670,64 @@ def _openai_compat_outcome_cases() -> list[dict[str, Any]]:
                 "model": "m",
                 "result": result,
             }
+        )
+    return cases
+
+
+def _openai_compat_streaming_outcome_cases() -> list[dict[str, Any]]:
+    """Issue #676: the SSE streaming entry point's own outcome handling,
+    the OpenAI-compatible family's own version of
+    [`_ollama_streaming_outcome_cases`].
+    """
+    scripted = [
+        (
+            0,
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 5}}\n'
+                "data: [DONE]\n"
+            ),
+            "",
+        ),
+        (
+            0,
+            (
+                'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
+                'data: {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n'
+                "data: [DONE]\n"
+            ),
+            "",
+        ),
+        (
+            22,
+            '{"error": {"message": "Invalid API Key"}}',
+            "curl: (22) The requested URL returned error: 401",
+        ),
+        (
+            18,
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}}]}\n'
+            ),
+            "curl: (18) transfer closed with outstanding read data remaining",
+        ),
+        (0, 'data: {"choices": [{"delta": {"content": "hi"}}]}\n', ""),
+        (28, "", ""),
+    ]
+    cases = []
+    for returncode, stdout, stderr in scripted:
+        adapter = LMStudioAdapter(base_url="http://localhost:1234/v1", streams=True)
+        result = _call_generate_streaming(
+            "circuitry.adapters._openai_compat",
+            lambda a=adapter: a.generate(model="m", prompt="hi", timeout_seconds=30),
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        cases.append(
+            {"returncode": returncode, "stdout": stdout, "stderr": stderr, "model": "m", "result": result}
         )
     return cases
 
@@ -653,6 +831,61 @@ def _openai_outcome_cases() -> list[dict[str, Any]]:
     return cases
 
 
+def _openai_streaming_outcome_cases() -> list[dict[str, Any]]:
+    """Issue #676: `openai`'s own `stream_options.include_usage` SSE
+    stream, the same shapes [`_openai_compat_streaming_outcome_cases`]
+    exercises for the rest of the family.
+    """
+    scripted = [
+        (
+            0,
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 5}}\n'
+                "data: [DONE]\n"
+            ),
+            "",
+        ),
+        (
+            0,
+            (
+                'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
+                'data: {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], '
+                '"usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n'
+                "data: [DONE]\n"
+            ),
+            "",
+        ),
+        (22, '{"error": {"message": "bad key"}}', "curl: (22) The requested URL returned error: 401"),
+        (
+            18,
+            (
+                'data: {"choices": [{"delta": {"content": "hi "}}]}\n'
+                'data: {"choices": [{"delta": {"content": "there"}}]}\n'
+            ),
+            "curl: (18) transfer closed with outstanding read data remaining",
+        ),
+        (0, 'data: {"choices": [{"delta": {"content": "hi"}}]}\n', ""),
+        (28, "", ""),
+    ]
+    cases = []
+    for returncode, stdout, stderr in scripted:
+        adapter = OpenAIAdapter(base_url="https://api.openai.com/v1", streams=True)
+        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "circuitry-test-fake-key"}):
+            result = _call_generate_streaming(
+                "circuitry.adapters.openai",
+                lambda a=adapter: a.generate(model="m", prompt="hi", timeout_seconds=30),
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        cases.append(
+            {"returncode": returncode, "stdout": stdout, "stderr": stderr, "model": "m", "result": result}
+        )
+    return cases
+
+
 # ---------------------------------------------------------------------
 # 5. `anthropic` -- system hoisting, image-before-text, token coercion.
 # ---------------------------------------------------------------------
@@ -728,6 +961,70 @@ def _anthropic_outcome_cases() -> list[dict[str, Any]]:
         adapter = AnthropicAdapter(base_url="https://api.anthropic.com", max_tokens=4096, streams=False)
         with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "circuitry-test-fake-key"}):
             _captured, result = _call_generate(
+                "circuitry.adapters.anthropic",
+                lambda a=adapter: a.generate(model="m", prompt="hi"),
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        cases.append(
+            {"returncode": returncode, "stdout": stdout, "stderr": stderr, "model": "m", "result": result}
+        )
+    return cases
+
+
+def _anthropic_streaming_outcome_cases() -> list[dict[str, Any]]:
+    """Issue #676: Anthropic's own SSE event stream (`message_start`/
+    `content_block_delta`/`message_delta`/`message_stop`), the same
+    shapes [`_ollama_streaming_outcome_cases`] exercises for NDJSON.
+    """
+    scripted = [
+        (
+            0,
+            (
+                'data: {"type": "message_start", "message": {"usage": {"input_tokens": 3}}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "hi "}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "there"}}\n'
+                'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
+                '"usage": {"output_tokens": 5}}\n'
+                'data: {"type": "message_stop"}\n'
+            ),
+            "",
+        ),
+        (
+            0,
+            (
+                'data: {"type": "message_start", "message": {"usage": {"input_tokens": 3}}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "hi"}}\n'
+                'data: {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, '
+                '"usage": {"output_tokens": 2}}\n'
+                'data: {"type": "message_stop"}\n'
+            ),
+            "",
+        ),
+        (
+            22,
+            '{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}',
+            "curl: (22) The requested URL returned error: 529",
+        ),
+        (
+            18,
+            (
+                'data: {"type": "content_block_delta", "delta": {"text": "hi "}}\n'
+                'data: {"type": "content_block_delta", "delta": {"text": "there"}}\n'
+            ),
+            "curl: (18) transfer closed with outstanding read data remaining",
+        ),
+        (0, 'data: {"type": "content_block_delta", "delta": {"text": "hi"}}\n', ""),
+        (28, "", ""),
+    ]
+    cases = []
+    for returncode, stdout, stderr in scripted:
+        adapter = AnthropicAdapter(
+            base_url="https://api.anthropic.com", max_tokens=4096, streams=True
+        )
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "circuitry-test-fake-key"}):
+            result = _call_generate_streaming(
                 "circuitry.adapters.anthropic",
                 lambda a=adapter: a.generate(model="m", prompt="hi"),
                 returncode=returncode,
@@ -818,12 +1115,16 @@ def build_corpus() -> dict[str, Any]:
         "config_size_cases": _config_size_cases(),
         "ollama_request_cases": _ollama_request_cases(),
         "ollama_outcome_cases": _ollama_outcome_cases(),
+        "ollama_streaming_outcome_cases": _ollama_streaming_outcome_cases(),
         "openai_compat_request_cases": _openai_compat_request_cases(),
         "openai_compat_outcome_cases": _openai_compat_outcome_cases(),
+        "openai_compat_streaming_outcome_cases": _openai_compat_streaming_outcome_cases(),
         "openai_request_cases": _openai_request_cases(),
         "openai_outcome_cases": _openai_outcome_cases(),
+        "openai_streaming_outcome_cases": _openai_streaming_outcome_cases(),
         "anthropic_request_cases": _anthropic_request_cases(),
         "anthropic_outcome_cases": _anthropic_outcome_cases(),
+        "anthropic_streaming_outcome_cases": _anthropic_streaming_outcome_cases(),
         "replicate_request_cases": _replicate_request_cases(),
         "replicate_outcome_cases": _replicate_outcome_cases(),
     }

@@ -601,11 +601,45 @@ pub async fn send(
 ) -> Result<RawResponse, SendError> {
     match timeout {
         TimeoutModel::Total(d) => {
-            tokio::time::timeout(d, send_inner(client, target, request, timeout))
+            tokio::time::timeout(d, send_inner(client, target, request, timeout, None))
                 .await
                 .unwrap_or(Err(SendError::Timeout))
         }
-        TimeoutModel::PerOperation(_) => send_inner(client, target, request, timeout).await,
+        TimeoutModel::PerOperation(_) => send_inner(client, target, request, timeout, None).await,
+    }
+}
+
+/// Like [`send`], but calls *on_chunk* with each piece of the response
+/// body as it arrives off the wire, in addition to returning the
+/// complete response exactly as [`send`] would -- electricity's own
+/// in-process equivalent of a streaming `curl` read: the body is never
+/// held back for a caller that wants to drive progress off it, but
+/// the authoritative [`RawResponse`] is still assembled in full, the
+/// same way, so a caller that parses the complete body for its real
+/// result (never the incremental chunks) can't drift from [`send`]'s
+/// own non-streaming callers.
+/// A streaming call's own chunk-arrived callback -- a type alias so
+/// [`send_inner`]'s own parameter list doesn't trip clippy's
+/// `type_complexity` lint.
+type OnChunk<'a> = &'a mut dyn FnMut(&[u8]);
+
+pub async fn send_streaming(
+    client: &HttpClient,
+    target: &ConnectTarget,
+    request: &RawRequest,
+    timeout: TimeoutModel,
+    on_chunk: OnChunk<'_>,
+) -> Result<RawResponse, SendError> {
+    match timeout {
+        TimeoutModel::Total(d) => tokio::time::timeout(
+            d,
+            send_inner(client, target, request, timeout, Some(on_chunk)),
+        )
+        .await
+        .unwrap_or(Err(SendError::Timeout)),
+        TimeoutModel::PerOperation(_) => {
+            send_inner(client, target, request, timeout, Some(on_chunk)).await
+        }
     }
 }
 
@@ -614,6 +648,7 @@ async fn send_inner(
     target: &ConnectTarget,
     request: &RawRequest,
     timeout: TimeoutModel,
+    mut on_chunk: Option<OnChunk<'_>>,
 ) -> Result<RawResponse, SendError> {
     let (connect_deadline, response_deadline, body_deadline) = match timeout {
         TimeoutModel::PerOperation(d) => (d, d, d),
@@ -749,6 +784,9 @@ async fn send_inner(
             None => break,
             Some(Ok(frame)) => {
                 if let Some(chunk) = frame.data_ref() {
+                    if let Some(on_chunk) = on_chunk.as_mut() {
+                        on_chunk(chunk);
+                    }
                     body_bytes.extend_from_slice(chunk);
                 }
             }

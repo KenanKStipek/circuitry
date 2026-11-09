@@ -108,17 +108,12 @@ reply that reports none. Python's own `int` is unbounded; electricity's token co
 `i64`-bounded, a documented divergence — a count beyond that range is a load-time error
 there, with a message Python has no equivalent of, rather than a silent truncation.
 
-**`chunks` is a python-only key (issue #674).** A text reply may carry a `chunks: [str,
-...]` list instead of (or alongside) `text`; Python's own adapter delivers each entry as
-one delta through the calling prompt's `on_progress` before the reply completes, so
+**`chunks` (issue #674/#676).** A text reply may carry a `chunks: [str, ...]` list instead
+of (or alongside) `text`; both engines' own scripted adapter deliver each entry as one
+delta through the calling prompt's `on_progress` before the reply completes, so
 `meta.live`/`--events`' own `progress` line have something deterministic to show. `text`,
 when also given, must equal the concatenation of `chunks`; omitted, it defaults to that
-concatenation. electricity's own scripted adapter accepts `chunks` and folds it into `text`
-the same way (`chunks: null` is absent, exactly as it is for Python) -- it just never
-delivers the pieces as deltas, since this engine doesn't stream at all (issue #676). A
-conformance case that relies on the deltas themselves (the resulting `progress` line, or a
-case pinning more than one HTTP response chunk) therefore still runs on the Python engine
-only, not because `chunks` itself is refused.
+concatenation (`chunks: null` is absent, exactly like a missing key, on both engines).
 
 ### 4.2 An error reply
 
