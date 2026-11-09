@@ -6292,7 +6292,7 @@ fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) 
 // The Flow rail (screen 2, issue #691, part 3 of #677)
 // ---------------------------------------------------------------------
 
-use oscilloscope_core::rail::{self, EdgeStyle, Fork, ForkKind, RailItem, Station};
+use oscilloscope_core::rail::{self, EdgeStyle, Fork, ForkKind, Lane, RailItem, Station};
 
 fn flow_edge_color(style: EdgeStyle, theme: &Theme) -> Color {
     match style {
@@ -6314,6 +6314,38 @@ fn flow_fork_folded(fork: &Fork, app: &App, area_width: u16) -> bool {
         return open == 0;
     }
     fork.lanes.len() >= 4 || area_width < 100
+}
+
+/// The at most three lanes an open loop fork actually draws at
+/// once (#677 §9.3's settled "`↑↓` scrolls them"): a decision's two
+/// lanes and a parallel dynamic's own, usually few, lanes always
+/// draw in full -- only a loop's lanes can run past three, so only
+/// a loop fork ever needs a window. The window slides to keep
+/// whichever lane holds the current selection in view, the same
+/// way the rail itself slides to keep Now in view; with nothing of
+/// this fork's own selected, it slides to the first running lane
+/// instead, falling back to the very first lane once nothing in it
+/// is running either.
+fn flow_lane_window<'a>(fork: &'a Fork, app: &App) -> &'a [Lane] {
+    const VISIBLE: usize = 3;
+    if fork.kind != ForkKind::Loop || fork.lanes.len() <= VISIBLE {
+        return &fork.lanes;
+    }
+    let anchor = app
+        .selected_path
+        .as_deref()
+        .and_then(|selected| {
+            fork.lanes.iter().position(|lane| {
+                lane.items
+                    .iter()
+                    .any(|it| matches!(it, RailItem::Station(s) if s.path == selected))
+            })
+        })
+        .or_else(|| fork.lanes.iter().position(|l| l.running))
+        .unwrap_or(0);
+    let max_start = fork.lanes.len() - VISIBLE;
+    let start = anchor.saturating_sub(VISIBLE - 1).min(max_start);
+    &fork.lanes[start..start + VISIBLE]
 }
 
 fn flow_item_width(item: &RailItem, app: &App, area_width: u16) -> usize {
@@ -6596,8 +6628,15 @@ fn flow_headline_spans(
             vec![(text, default_text.add_modifier(Modifier::BOLD))]
         }
         Headline::PassLabel(label) => vec![(label.clone(), faint)],
-        Headline::ToolAhead(cmd) => vec![(format!("tool · {cmd}"), faint)],
+        Headline::ToolAhead(cmd) => {
+            if cmd.is_empty() {
+                vec![("tool".to_string(), faint)]
+            } else {
+                vec![(format!("tool · {cmd}"), faint)]
+            }
+        }
         Headline::QueuedCommand(cmd) => vec![(cmd.clone(), faint)],
+        Headline::ContainerAhead(kind) => vec![(kind.clone(), faint)],
         Headline::UsualTokens(usual) => {
             let text = match usual {
                 Some(u) => format!("usual {u}"),
@@ -7005,9 +7044,10 @@ fn flow_paint_fork(
     let right_wall_x = tail_x + 1;
     let mut final_headline_style = faint;
     let mut final_detail_style = faint;
-    for (k, lane) in fork.lanes.iter().enumerate() {
+    let visible_lanes = flow_lane_window(fork, app);
+    for (k, lane) in visible_lanes.iter().enumerate() {
         let row_y = y0 + 3 * k as u16;
-        let is_last = k == fork.lanes.len() - 1;
+        let is_last = k == visible_lanes.len() - 1;
         let (lane_end, h_last, d_last) = match &lane.ghost {
             Some(name) => {
                 flow_paint_ghost(

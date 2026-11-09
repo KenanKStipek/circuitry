@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::format::{ClockZone, format_clock_time};
 use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind};
 use crate::observe::duration_seconds;
-use crate::plan::{LeafEffectKind, PlanEntryKind, PlanTree};
+use crate::plan::{Flow, LeafEffectKind, PlanEntryKind, PlanTree};
 use crate::render::{Header, Row, RowKind, TokenBlock, details_for};
 
 /// Which of the four screens is on display (issue #650: all four
@@ -1539,7 +1539,27 @@ fn tape_row_label(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree)
         .match_path(parent_path)
         .and_then(|m| m.entries.first())
         .is_some_and(|entry| matches!(entry.kind, crate::plan::PlanEntryKind::If { .. }));
-    if is_pass || parent_is_if {
+    // A sequential container (`use`, a chain-flow `dynamic`, a
+    // `try`/`finally`) inlines its own children straight onto the
+    // rail (`rail::build_level`'s own doc comment) -- its child
+    // still carries this same parent breadcrumb everywhere a plain
+    // step's own name is shown on its own, the Flow screen's
+    // Selected pane and status line included. The document root
+    // itself compiles to the very same `Dynamic { flow: Chain }`
+    // shape its own top-level block is, so it's excluded here by
+    // its own path having no parent of its own -- otherwise every
+    // top-level step in every document would read "prime › x".
+    let parent_is_sequential_container = parent_path.contains('.')
+        && plan
+            .match_path(parent_path)
+            .and_then(|m| m.entries.first())
+            .is_some_and(|entry| {
+                matches!(
+                    entry.kind,
+                    PlanEntryKind::Leaf(LeafEffectKind::Use) | PlanEntryKind::TryFinally
+                ) || matches!(&entry.kind, PlanEntryKind::Dynamic { flow: Flow::Chain })
+            });
+    if is_pass || parent_is_if || parent_is_sequential_container {
         format!("{parent_name} › {own_name}")
     } else {
         row.label.clone()
@@ -3669,15 +3689,14 @@ pub fn build_flow(
                     answer,
                 });
             } else {
-                selected_step = Some(build_focused_step(
-                    row,
-                    flat,
-                    plan,
-                    model,
-                    state,
-                    now,
-                    run_ended_at,
-                ));
+                let mut step = build_focused_step(row, flat, plan, model, state, now, run_ended_at);
+                // A sequential container's own child keeps its own
+                // ten-cell station name on the rail, but the Selected
+                // pane's own title still says which container it's
+                // inside (`gate › reply`), the same breadcrumb the
+                // status line already reads through `tape_row_label`.
+                step.breadcrumb = tape_row_label(row, flat, plan);
+                selected_step = Some(step);
             }
         }
     }

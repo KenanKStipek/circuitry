@@ -86,6 +86,11 @@ pub enum Headline {
     /// the pass's label already marks it as a preview, so unlike
     /// `ToolAhead` there's no room left for a `tool ·` prefix too.
     QueuedCommand(String),
+    /// A container whose own children aren't known yet (a `use`
+    /// before its child document loads, a `dynamic` before it runs):
+    /// its own type (`use`, `dynamic`), standing in for a child it
+    /// has none of yet.
+    ContainerAhead(String),
     /// An ahead, top-level prompt: `usual 402`/`usual —`.
     UsualTokens(Option<u64>),
     /// The untaken branch's own ghost station, second line.
@@ -260,6 +265,41 @@ fn plain_station(row: &Row, ctx: &Ctx<'_>) -> Station {
         name: row.label.clone(),
         headline,
         detail,
+    }
+}
+
+/// A container's own station once it has no child to show at all
+/// yet -- its own type stands in for a headline (`use`, `dynamic`),
+/// and whatever the run already knows about which child it will be
+/// (a `use`'s own resolved orchestration, a `dynamic`'s own `flow`)
+/// stands in for a detail, empty when even that isn't known yet.
+fn container_ahead_station(row: &Row, ctx: &Ctx<'_>) -> Station {
+    let detail = ctx
+        .flat
+        .get(&row.path)
+        .and_then(|n| {
+            n.meta
+                .get("resolved_path")
+                .and_then(Value::as_str)
+                .or_else(|| n.meta.get("orchestration").and_then(Value::as_str))
+                .map(str::to_string)
+                .or_else(|| {
+                    n.meta
+                        .get("flow")
+                        .and_then(Value::as_str)
+                        .map(|f| format!("flow: {f}"))
+                })
+        })
+        .unwrap_or_default();
+    Station {
+        path: row.path.clone(),
+        selectable: true,
+        is_edge: false,
+        row_kind: row.kind,
+        status: row.status.kind,
+        name: row.label.clone(),
+        headline: Headline::ContainerAhead(row.kind.label().to_string()),
+        detail: Detail::Command(detail),
     }
 }
 
@@ -445,8 +485,13 @@ fn build_level(
                 i = next;
             }
             RowKind::Dynamic if dynamic_is_parallel(&row.path, ctx) => {
-                items.push(RailItem::Station(plain_station(row, ctx)));
                 let (fork, next) = build_parallel_fork(rows, i, ctx);
+                let station = if fork.lanes.is_empty() {
+                    container_ahead_station(row, ctx)
+                } else {
+                    plain_station(row, ctx)
+                };
+                items.push(RailItem::Station(station));
                 items.push(RailItem::Fork(fork));
                 i = next;
             }
@@ -455,10 +500,18 @@ fn build_level(
             // another in the same lane its own station sits in --
             // never a fork of their own, so its children are just
             // inlined straight after it, the same as any other
-            // plain station's own sibling.
+            // plain station's own sibling. With no child at all yet
+            // (its own child document hasn't loaded, or it hasn't
+            // run), the station stands in for the child it has none
+            // of, rather than drawing a blank one.
             RowKind::Use | RowKind::TryFinally | RowKind::Dynamic => {
-                items.push(RailItem::Station(plain_station(row, ctx)));
                 let (children, next) = build_level(rows, i + 1, depth + 1, &row.path, ctx);
+                let station = if children.is_empty() {
+                    container_ahead_station(row, ctx)
+                } else {
+                    plain_station(row, ctx)
+                };
+                items.push(RailItem::Station(station));
                 items.extend(children);
                 i = next;
             }
@@ -780,12 +833,20 @@ fn build_parallel_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     )
 }
 
-/// `path`'s own slot count (DESIGN.md §2.3: "a loop forks into one
-/// lane per slot (`max_concurrency` or the pass count when
-/// unbounded)") -- the loop's own known total pass count wins once
-/// it has one (a bounded `each` loop, or a `while`/dynamic loop that
-/// has finished), `max_concurrency` next, and failing both, however
-/// many passes are actually observed so far.
+/// A loop's own lane count -- one lane per *pass*, never per
+/// concurrency slot (DESIGN.md §2.3 reads "one lane per slot
+/// (`max_concurrency` or the pass count when unbounded)", but the
+/// frames draw a lane per pass throughout, and the folded band's own
+/// `● n run · m wait` reading only makes sense that way: a lane that
+/// *waits* is a pass that hasn't started, never an idle concurrency
+/// slot). The loop's own known total pass count wins once it has one
+/// -- from `progress.total` once there's been an event at all, or
+/// (DESIGN.md's own "Starting" state, before any event) from a named
+/// `each` loop's own input, the same resolution `pass_each_value`
+/// itself reads. Failing both (an unbounded loop still running, with
+/// nothing resolved yet either), however many passes are actually
+/// observed so far -- there is no later pass to preview ahead of
+/// time either way.
 fn loop_lane_count(
     path: &str,
     progress: Option<LoopProgress>,
@@ -795,18 +856,13 @@ fn loop_lane_count(
     if let Some(total) = progress.and_then(|p| p.total) {
         return total.max(observed);
     }
-    let max_concurrency = ctx.plan.match_path(path).and_then(|m| {
-        m.entries.iter().find_map(|e| match &e.kind {
-            PlanEntryKind::Loop {
-                max_concurrency, ..
-            } => *max_concurrency,
-            _ => None,
-        })
-    });
-    max_concurrency
-        .map(u64::from)
-        .unwrap_or(observed)
-        .max(observed)
+    if let Some(total) = ctx
+        .state
+        .and_then(|state| ctx.plan.resolve_each_len(path, state))
+    {
+        return total.max(observed);
+    }
+    observed
 }
 
 /// A pass's own `each.in` value (DESIGN.md §2.3's `cats`/`dogs`/

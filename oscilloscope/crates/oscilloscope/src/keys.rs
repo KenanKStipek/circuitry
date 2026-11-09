@@ -310,45 +310,64 @@ impl App {
         self.select_tree_path(Some(paths[next].to_string()));
     }
 
-    /// `+` (issue #691, §2.3): opens every loop's own lanes three at
-    /// a time, up to its own real lane count (the loop's own known
-    /// total, or however many passes are observed so far without
-    /// one) -- scoped to every loop on the rail at once, since the
-    /// rail draws at most one loop's own lanes open simultaneously
-    /// in every fixture this screen has today.
-    pub fn flow_open_lanes(&mut self, rows: &[&Row]) {
-        for loop_row in rows
-            .iter()
-            .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-        {
-            let observed = rows
+    /// The loop `+`/`-` act on (issue #677 §9.3's "the selected
+    /// fork's own lanes"): the loop a selected pass belongs to, or
+    /// the selected loop station itself, falling back to the first
+    /// loop on the rail once nothing is selected at all.
+    fn selected_loop_path(&self, rows: &[&Row]) -> Option<String> {
+        if let Some(selected) = self.selected_path.as_deref() {
+            if let Some((loop_path, last)) = selected.rsplit_once('.') {
+                if last.starts_with("iter_")
+                    && rows.iter().any(|r| {
+                        r.kind == oscilloscope_core::render::RowKind::Loop && r.path == loop_path
+                    })
+                {
+                    return Some(loop_path.to_string());
+                }
+            }
+            if rows
                 .iter()
-                .filter(|r| {
-                    r.kind == oscilloscope_core::render::RowKind::Pass
-                        && r.path.starts_with(&format!("{}.iter_", loop_row.path))
-                })
-                .count() as u64;
-            let lane_count = loop_row
-                .loop_progress
-                .and_then(|p| p.total)
-                .unwrap_or(observed)
-                .max(observed);
-            let entry = self
-                .flow_lanes_open
-                .entry(loop_row.path.clone())
-                .or_insert(0);
-            *entry = ((*entry as u64 + 3).min(lane_count)) as usize;
+                .any(|r| r.kind == oscilloscope_core::render::RowKind::Loop && r.path == selected)
+            {
+                return Some(selected.to_string());
+            }
         }
+        rows.iter()
+            .find(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
+            .map(|r| r.path.clone())
     }
 
-    /// `-` (issue #691): folds every loop's own lanes back into its
-    /// own band.
-    pub fn flow_fold_lanes(&mut self, rows: &[&Row]) {
-        for loop_row in rows
+    /// `+` (issue #691, §2.3): opens the selected fork's own lanes
+    /// three at a time, up to its own real lane count (the loop's
+    /// own known total, or however many passes are observed so far
+    /// without one).
+    pub fn flow_open_lanes(&mut self, rows: &[&Row]) {
+        let Some(loop_path) = self.selected_loop_path(rows) else {
+            return;
+        };
+        let observed = rows
             .iter()
-            .filter(|r| r.kind == oscilloscope_core::render::RowKind::Loop)
-        {
-            self.flow_lanes_open.insert(loop_row.path.clone(), 0);
+            .filter(|r| {
+                r.kind == oscilloscope_core::render::RowKind::Pass
+                    && r.path.starts_with(&format!("{loop_path}.iter_"))
+            })
+            .count() as u64;
+        let lane_count = rows
+            .iter()
+            .find(|r| r.path == loop_path)
+            .and_then(|r| r.loop_progress)
+            .and_then(|p| p.total)
+            .unwrap_or(observed)
+            .max(observed);
+        let entry = self.flow_lanes_open.entry(loop_path).or_insert(0);
+        *entry = ((*entry as u64 + 3).min(lane_count)) as usize;
+    }
+
+    /// `-` (issue #691): folds the selected fork's own lanes back
+    /// into its own band.
+    pub fn flow_fold_lanes(&mut self, rows: &[&Row]) {
+        if let Some(loop_path) = self.selected_loop_path(rows) {
+            self.flow_lanes_open.insert(loop_path, 0);
         }
     }
 
