@@ -458,13 +458,19 @@ class PromptRuntime:
 
     ``decomposition`` is the other conditional key, and unlike ``complexity``
     it is written *at* dispatch, because it records a dispatch decision: it
-    appears only when ``runtime.complexity.decomposition`` is enabled and this
-    effect's score strictly exceeded the threshold. It carries the attempt's
-    whole story — ``{decomposed, outcome, reason, score, threshold, depth,
-    max_depth, plan?, chunk_count?, yaml?, result_path?, fallback_model?,
-    error?}`` — whether the effect was actually replaced by the planned
-    fan-out (``value`` then holds the child's merged result), routed up to a
-    more capable model, run as-is, or failed under ``on_failure: fail``. See
+    appears when either trigger acts — the size trigger (the estimated input
+    strictly exceeds a configured budget) or the score trigger
+    (``runtime.complexity.decomposition`` is enabled and this effect's score
+    strictly exceeded the threshold), size checked first. ``trigger``
+    (``"score"``/``"size"``) is the one key that tells the two apart; both
+    share ``{decomposed, trigger, outcome, reason, depth, max_depth,
+    chunk_count?, yaml?, result_path?, error?}``. The score trigger adds
+    ``{score, threshold, plan?, fallback_model?}``; the size trigger adds
+    ``{estimated_tokens, budget, merge?, split?}`` and never sets
+    ``fallback_model`` (there is no route-up for size). Whichever trigger
+    acted, the effect was either actually replaced by the fan-out (``value``
+    then holds the child's merged result), routed up to a more capable model
+    (score only), run as-is, or failed under ``on_failure: fail``. See
     :mod:`circuitry.core.decompose`.
     """
 
@@ -703,9 +709,14 @@ class PromptRuntime:
                     if self.verbose:
                         elapsed = time.monotonic() - t0
                         chunk_count = decomposition.meta.get("chunk_count")
+                        verb = (
+                            f"split · {chunk_count} parts"
+                            if decomposition.meta.get("trigger") == "size"
+                            else f"decomposed · {chunk_count} chunks"
+                        )
                         line = (
                             f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
-                            f" [dim]decomposed · {chunk_count} chunks"
+                            f" [dim]{verb}"
                             f" | {_elapsed_str(elapsed)}[/dim]"
                         )
                         if self.cb_done is not None:
