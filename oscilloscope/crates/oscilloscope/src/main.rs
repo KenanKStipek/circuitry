@@ -85,8 +85,8 @@ struct RunArgs {
     /// line. Can't be combined with `--log`.
     #[arg(long)]
     glance: bool,
-    /// Switches off the update highlights and the scope icon's
-    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's own trace: the header draws a
+    /// still frame in its place instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
@@ -137,8 +137,8 @@ struct WatchArgs {
     /// own command on a timer instead of leaving one process attached.
     #[arg(long)]
     once: bool,
-    /// Switches off the update highlights and the scope icon's
-    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's own trace: the header draws a
+    /// still frame in its place instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
@@ -2572,17 +2572,17 @@ fn run_tui(
         }
 
         // Issue #535's own redraw rule: while any highlight is
-        // fading, or the run is live with animation on (so the scope
-        // icon's own trace keeps moving), mark the frame dirty every
-        // tick -- the existing `REDRAW_INTERVAL` cap still paces the
-        // actual draw. With neither, this adds no redraws beyond what
-        // was already dirty. Finding 1: this sets only `needs_draw`,
-        // never `needs_rebuild` -- an animation-only tick has nothing
-        // new to rebuild from.
+        // While the run is live, with animation on, the scope icon's
+        // own trace keeps moving -- mark the frame dirty every tick
+        // so it does, the existing `REDRAW_INTERVAL` cap still pacing
+        // the actual draw; once the run has ended, this adds no
+        // redraws beyond what was already dirty. This sets only
+        // `needs_draw`, never `needs_rebuild` -- an animation-only
+        // tick has nothing new to rebuild from.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
-            if highlights.has_active(highlight_now) || exit_status.is_none() {
+            if exit_status.is_none() {
                 needs_draw = true;
             }
         }
@@ -3804,11 +3804,11 @@ fn run_tui_watch(
             break 'tui;
         }
 
-        // Finding 1: this sets only `needs_draw`, same as `run_tui`.
+        // This sets only `needs_draw`, same as `run_tui`.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
-            if highlights.has_active(highlight_now) || !ended {
+            if !ended {
                 needs_draw = true;
             }
         }
@@ -4780,7 +4780,7 @@ mod tests {
         assert!(rendered.contains("Puts the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
         assert!(rendered.contains("Shows only the header line"));
-        assert!(rendered.contains("Switches off the update highlights"));
+        assert!(rendered.contains("Switches off the scope icon's own trace"));
         assert!(rendered.contains("The colour theme"));
         assert!(rendered.contains("Turns run history off"));
         // Finding 10: `--theme`'s possible values (a derived

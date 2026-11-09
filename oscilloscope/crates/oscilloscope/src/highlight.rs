@@ -42,11 +42,13 @@ impl Tracker {
             .retain(|_, &mut t| now.saturating_duration_since(t) < FADE_DURATION);
     }
 
-    /// `true` while any key is still fading — the redraw loop marks
-    /// the frame dirty every tick exactly while this holds (issue
-    /// #535's own redraw rule), so the existing `REDRAW_INTERVAL` cap
-    /// paces the fade instead of a busy loop.
-    pub fn has_active(&self, now: Instant) -> bool {
+    /// `true` while any key is still fading -- test-only, since no
+    /// screen draws a fade from this any more ([`Tracker`]'s own doc
+    /// comment), and the redraw loop no longer uses this to force an
+    /// extra tick either (a fade nothing draws is not a reason to
+    /// redraw).
+    #[cfg(test)]
+    pub(crate) fn has_active(&self, now: Instant) -> bool {
         self.triggered_at
             .values()
             .any(|&t| now.saturating_duration_since(t) < FADE_DURATION)
