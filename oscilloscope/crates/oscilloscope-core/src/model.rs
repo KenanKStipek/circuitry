@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::observe::Event;
+use crate::observe::{Event, duration_seconds};
 use crate::plan::{Flow, PlanTree};
 
 /// A tool name's own `{calls, ms}` entry under `meta.live.tools`.
@@ -178,6 +178,188 @@ impl AgentLive {
     }
 }
 
+/// A streamed prompt effect's own `meta.live` (issue #674's own
+/// shape, `docs/orchestration-reference.md`'s "Streaming adapters
+/// and a prompt's live progress" table) -- told apart from
+/// [`AgentLive`] by the one key only this shape ever carries,
+/// `adapter` (the opposite of [`AgentLive::from_value`]'s own check).
+/// Every field is read permissively, same reason as `AgentLive`'s:
+/// this is read every redraw from a live, still-being-written
+/// process, and a wrong-typed or missing field must never panic or
+/// freeze the display, only leave that one field `None`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PromptLive {
+    pub attempt: u64,
+    pub adapter: String,
+    pub model: Option<String>,
+    pub started_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub streaming: bool,
+    pub first_token_at: Option<String>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_sent_estimate: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub tokens_received_estimate: Option<u64>,
+    pub chars_received: Option<u64>,
+    pub tokens_per_second: Option<f64>,
+}
+
+impl PromptLive {
+    /// `None` for anything that isn't a prompt's own live record --
+    /// in particular, for the agent tool's own `meta.live` (no
+    /// `adapter` key at all) and for anything that isn't an object.
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        let adapter = obj.get("adapter").and_then(Value::as_str)?.to_string();
+        let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
+        let u64_field = |k: &str| obj.get(k).and_then(Value::as_u64);
+        Some(PromptLive {
+            attempt: u64_field("attempt").unwrap_or(0),
+            adapter,
+            model: str_field("model"),
+            started_at: str_field("started_at"),
+            updated_at: str_field("updated_at"),
+            streaming: obj
+                .get("streaming")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            first_token_at: str_field("first_token_at"),
+            tokens_sent: u64_field("tokens_sent"),
+            tokens_sent_estimate: u64_field("tokens_sent_estimate"),
+            tokens_received: u64_field("tokens_received"),
+            tokens_received_estimate: u64_field("tokens_received_estimate"),
+            chars_received: u64_field("chars_received"),
+            tokens_per_second: obj.get("tokens_per_second").and_then(Value::as_f64),
+        })
+    }
+}
+
+/// A running prompt's live figures (issue #675), read either from
+/// state's own `meta.live` ([`PromptLive`]) or, when no live state is
+/// available at all (`osi watch` on `--events` alone), from the
+/// latest `progress` line [`RunModel`] has seen for `path`
+/// ([`RunModel::progress_at`]) -- a front end asks for this once per
+/// running prompt row and reads the same shape regardless of which
+/// source actually backed it. `None` when neither source has
+/// anything for `path` at all.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PromptLiveFigures {
+    /// `false` only for a state-backed, non-streaming adapter --
+    /// always `true` from a `progress` line alone, since that line is
+    /// only ever emitted for a streaming adapter's own delta.
+    pub streaming: bool,
+    /// This attempt's index, `0` for the first -- `None` from a
+    /// `progress` line alone, which carries no attempt of its own.
+    pub attempt: Option<u64>,
+    /// Time since the attempt started, `now`'s own reading of it --
+    /// the row and detail pane's own elapsed figure.
+    pub elapsed_s: Option<f64>,
+    /// Time from the attempt's start to its first delta, once there
+    /// has been one.
+    pub first_token_elapsed_s: Option<f64>,
+    pub waiting_for_first_token: bool,
+    pub tokens_sent: Option<u64>,
+    pub tokens_sent_estimate: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub tokens_received_estimate: Option<u64>,
+    pub tokens_per_second: Option<f64>,
+}
+
+impl PromptLiveFigures {
+    /// Received so far: the provider's own exact count once it has
+    /// reported one, else the running estimate, marked live by the
+    /// caller whenever it came from here rather than from `tokens`
+    /// -- `None` before the first delta.
+    pub fn tokens_received_or_estimate(&self) -> Option<(u64, bool)> {
+        match (self.tokens_received, self.tokens_received_estimate) {
+            (Some(exact), _) => Some((exact, false)),
+            (None, Some(estimate)) => Some((estimate, true)),
+            (None, None) => None,
+        }
+    }
+
+    /// Sent so far, the same exact-or-estimate rule as
+    /// [`Self::tokens_received_or_estimate`] -- always `Some` once
+    /// there is a live record at all, since the estimate
+    /// (`ceil(prompt_chars / 4)`) is known from the very first
+    /// publish.
+    pub fn tokens_sent_or_estimate(&self) -> Option<(u64, bool)> {
+        match (self.tokens_sent, self.tokens_sent_estimate) {
+            (Some(exact), _) => Some((exact, false)),
+            (None, Some(estimate)) => Some((estimate, true)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// [`PromptLiveFigures`] for `path`, from `node`'s own `meta.live`
+/// when it has one, else from the latest `progress` line `model` has
+/// seen for `path` -- `None` when neither source has anything, which
+/// a caller reads the same way it already reads a node whose `meta.
+/// live` never existed or failed to parse (shown as today, §4 of
+/// issue #675).
+pub fn prompt_live_figures(
+    node: Option<&NodeMeta>,
+    path: &str,
+    model: &RunModel,
+    now: &str,
+) -> Option<PromptLiveFigures> {
+    if let Some(live) = node.and_then(|n| n.prompt_live.as_ref()) {
+        let started = live
+            .started_at
+            .as_deref()
+            .or_else(|| node.and_then(|n| n.created_at.as_deref()));
+        let elapsed_s = started.and_then(|s| duration_seconds(s, now));
+        let first_token_elapsed_s = match (started, live.first_token_at.as_deref()) {
+            (Some(s), Some(ft)) => duration_seconds(s, ft),
+            _ => None,
+        };
+        return Some(PromptLiveFigures {
+            streaming: live.streaming,
+            attempt: Some(live.attempt),
+            elapsed_s,
+            first_token_elapsed_s,
+            waiting_for_first_token: live.first_token_at.is_none(),
+            tokens_sent: live.tokens_sent,
+            tokens_sent_estimate: live.tokens_sent_estimate,
+            tokens_received: live.tokens_received,
+            tokens_received_estimate: live.tokens_received_estimate,
+            tokens_per_second: live.tokens_per_second,
+        });
+    }
+    let progress = model.progress_at(path)?;
+    let elapsed_s = progress.ms.map(|ms| ms as f64 / 1000.0);
+    let first_token_elapsed_s = progress.first_token_ms.map(|ms| ms as f64 / 1000.0);
+    // The events-only line carries no `tokens_per_second` of its own
+    // (`docs/orchestration-reference.md`'s `--events` table) --
+    // derived here the same way `meta.live`'s own figure is (received
+    // over time since the first delta), gated the same 500ms a real
+    // second delta needs to have arrived by for the figure to mean
+    // anything rather than dividing by noise.
+    let tokens_per_second = match (
+        progress.tokens_received_estimate,
+        progress.ms,
+        progress.first_token_ms,
+    ) {
+        (Some(tokens), Some(ms), Some(first)) if ms > first && (ms - first) >= 500 => {
+            Some(tokens as f64 / ((ms - first) as f64 / 1000.0))
+        }
+        _ => None,
+    };
+    Some(PromptLiveFigures {
+        streaming: true,
+        attempt: None,
+        elapsed_s,
+        first_token_elapsed_s,
+        waiting_for_first_token: progress.first_token_ms.is_none(),
+        tokens_sent: progress.tokens_sent,
+        tokens_sent_estimate: progress.tokens_sent_estimate,
+        tokens_received: None,
+        tokens_received_estimate: progress.tokens_received_estimate,
+        tokens_per_second,
+    })
+}
+
 /// One effect node's `{value, meta}` shape, flattened to its dotted
 /// state path (DESIGN.md §1.2-§1.3).
 #[derive(Debug, Clone)]
@@ -199,6 +381,11 @@ pub struct NodeMeta {
     /// removed once the attempt ends, success or failure, except when
     /// the run itself was interrupted).
     pub live: Option<AgentLive>,
+    /// `meta.live` again, read as a streamed prompt's own live record
+    /// instead (issue #675) -- mutually exclusive with `live` above:
+    /// a given `meta.live` object parses as at most one of the two,
+    /// told apart by its own `adapter` key.
+    pub prompt_live: Option<PromptLive>,
     pub value: Value,
     pub meta: Value,
 }
@@ -226,6 +413,7 @@ impl NodeMeta {
             progress_total: meta.pointer("/progress/total").and_then(Value::as_u64),
             progress_eta_s: meta.pointer("/progress/eta_s").and_then(Value::as_f64),
             live: meta.get("live").and_then(AgentLive::from_value),
+            prompt_live: meta.get("live").and_then(PromptLive::from_value),
             value: value.clone(),
             meta: meta.clone(),
         }
@@ -815,6 +1003,11 @@ pub struct RunModel {
     /// session never observed running at all (a finished run opened
     /// fresh, or a watch that started after it ended).
     agent_token_observations: BTreeMap<String, Vec<(String, u64, u64)>>,
+    /// The latest `progress` line seen for each path (issue #675's
+    /// events-only attach) -- cleared at the path's next `start`
+    /// (a retry, or an unnamed loop's next pass reusing it), so a
+    /// stale reading from an earlier attempt never outlives it.
+    progress: BTreeMap<String, ProgressSample>,
 }
 
 /// [`RunModel`]'s own `interval_offset_cache` field: the run start
@@ -856,6 +1049,21 @@ pub struct ReportSighting {
     pub data_truncated: bool,
 }
 
+/// The latest `progress` line seen for a path (issue #675's events-
+/// only attach), as last observed -- `RunModel::progress` keeps only
+/// one per path, since a front end only ever wants the current
+/// attempt's own latest reading, never a history of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProgressSample {
+    pub id: Option<i64>,
+    pub ms: Option<u64>,
+    pub tokens_received_estimate: Option<u64>,
+    pub chars_received: Option<u64>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_sent_estimate: Option<u64>,
+    pub first_token_ms: Option<u64>,
+}
+
 impl RunModel {
     pub fn new() -> Self {
         RunModel {
@@ -887,6 +1095,7 @@ impl RunModel {
             overflowed_total_passes: 0,
             interval_offset_cache: std::cell::RefCell::new((None, Vec::new())),
             agent_token_observations: BTreeMap::new(),
+            progress: BTreeMap::new(),
         }
     }
 
@@ -1002,6 +1211,7 @@ impl RunModel {
                 // it is open again now, so a stale `ended` entry must
                 // not keep answering for it.
                 self.ended.remove(path);
+                self.progress.remove(path);
                 match id {
                     Some(id) => {
                         self.open_by_id.insert(*id, path.clone());
@@ -1129,7 +1339,38 @@ impl RunModel {
                 self.reports_by_path.insert(path.clone(), sighting);
                 self.report_event_paths.insert(path.clone());
             }
+            Event::Progress {
+                id,
+                path,
+                ms,
+                tokens_received_estimate,
+                chars_received,
+                tokens_sent,
+                tokens_sent_estimate,
+                first_token_ms,
+                ..
+            } => {
+                self.progress.insert(
+                    path.clone(),
+                    ProgressSample {
+                        id: *id,
+                        ms: *ms,
+                        tokens_received_estimate: *tokens_received_estimate,
+                        chars_received: *chars_received,
+                        tokens_sent: *tokens_sent,
+                        tokens_sent_estimate: *tokens_sent_estimate,
+                        first_token_ms: *first_token_ms,
+                    },
+                );
+            }
         }
+    }
+
+    /// The latest `progress` line seen for `path` (issue #675's
+    /// events-only attach) -- `None` until one has arrived, or once
+    /// the path has since restarted.
+    pub fn progress_at(&self, path: &str) -> Option<&ProgressSample> {
+        self.progress.get(path)
     }
 
     /// The latest report seen on any path (#610's header status
@@ -2031,6 +2272,256 @@ mod tests {
             "chars_received": 11, "tokens_per_second": null
         });
         assert_eq!(AgentLive::from_value(&value), None);
+    }
+
+    fn prompt_live_value() -> Value {
+        json!({
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:44Z",
+            "tokens_sent": null, "tokens_sent_estimate": 3,
+            "tokens_received": null, "tokens_received_estimate": 2,
+            "chars_received": 11, "tokens_per_second": null
+        })
+    }
+
+    #[test]
+    fn a_prompts_own_live_record_parses_as_prompt_live() {
+        let live = PromptLive::from_value(&prompt_live_value()).unwrap();
+        assert_eq!(live.adapter, "ollama");
+        assert_eq!(live.attempt, 0);
+        assert!(live.streaming);
+        assert_eq!(live.tokens_sent_estimate, Some(3));
+        assert_eq!(live.tokens_received_estimate, Some(2));
+        assert_eq!(live.tokens_sent, None);
+    }
+
+    /// The agent tool's own live summary (no `adapter` key at all)
+    /// parses as neither a prompt's own record.
+    #[test]
+    fn an_agent_live_record_parses_as_none_for_prompt_live() {
+        let value = json!({"turns": 2, "tools": {}, "updated_at": "t"});
+        assert_eq!(PromptLive::from_value(&value), None);
+    }
+
+    #[test]
+    fn a_non_object_meta_live_value_parses_as_no_prompt_live_either() {
+        assert_eq!(PromptLive::from_value(&Value::Null), None);
+        assert_eq!(PromptLive::from_value(&json!([1, 2])), None);
+    }
+
+    /// A node whose `meta.live` is malformed (an object with neither
+    /// shape's own telling key, or missing fields entirely) parses as
+    /// neither `AgentLive` nor `PromptLive` -- read as today, never a
+    /// crash (issue #675's own acceptance).
+    #[test]
+    fn a_malformed_meta_live_crashes_neither_parse() {
+        let value = json!({"something": "else"});
+        assert!(AgentLive::from_value(&value).is_some());
+        assert_eq!(PromptLive::from_value(&value), None);
+    }
+
+    fn prompt_node(meta_extra: Value) -> NodeMeta {
+        let mut meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+            "adapter": "ollama", "model": "m", "prompt_chars": 40
+        });
+        for (k, v) in meta_extra.as_object().unwrap() {
+            meta.as_object_mut().unwrap().insert(k.clone(), v.clone());
+        }
+        NodeMeta::from_object(&Value::Null, &meta)
+    }
+
+    #[test]
+    fn prompt_live_figures_reads_a_running_prompts_own_state_before_the_first_token() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:43Z",
+            "streaming": true, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": null,
+            "chars_received": 0, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:44Z").unwrap();
+        assert!(live.waiting_for_first_token);
+        assert!(live.streaming);
+        assert_eq!(live.elapsed_s, Some(1.0));
+        assert_eq!(live.tokens_sent_or_estimate(), Some((10, true)));
+        assert_eq!(live.tokens_received_or_estimate(), None);
+    }
+
+    #[test]
+    fn prompt_live_figures_reads_estimates_mid_stream_the_ollama_shape() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44.200Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.600Z",
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": 41,
+            "chars_received": 160, "tokens_per_second": 68.0
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:44.200Z")
+                .unwrap();
+        assert!(!live.waiting_for_first_token);
+        assert_eq!(live.tokens_received_or_estimate(), Some((41, true)));
+        assert_eq!(live.tokens_per_second, Some(68.0));
+    }
+
+    /// Anthropic reports its own input tokens at `message_start`, so
+    /// `tokens_sent` is already exact mid-stream, never an estimate
+    /// -- the one shape where sent reads without `≈` while running.
+    #[test]
+    fn prompt_live_figures_reads_an_exact_sent_count_mid_stream_the_anthropic_shape() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "anthropic", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.700Z",
+            "tokens_sent": 348, "tokens_sent_estimate": 350,
+            "tokens_received": null, "tokens_received_estimate": 5,
+            "chars_received": 20, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:44Z").unwrap();
+        assert_eq!(live.tokens_sent_or_estimate(), Some((348, false)));
+        assert_eq!(live.tokens_received_or_estimate(), Some((5, true)));
+    }
+
+    #[test]
+    fn prompt_live_figures_reads_a_non_streaming_adapter_as_streaming_false() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "litellm", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": false, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": null,
+            "chars_received": null, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:45Z").unwrap();
+        assert!(!live.streaming);
+    }
+
+    #[test]
+    fn prompt_live_figures_carries_a_retrys_own_attempt_number() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 1, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:50Z", "updated_at": "2026-10-08T11:46:51Z",
+            "streaming": true, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": null,
+            "chars_received": 0, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:51Z").unwrap();
+        assert_eq!(live.attempt, Some(1));
+    }
+
+    /// Issue #675's events-only attach: `osi watch` on `--events`
+    /// alone has no `meta.live` at all, only the latest `progress`
+    /// line `RunModel` has seen for the path -- the same received
+    /// estimate, rate and first-token figures, derived without ever
+    /// reading state.
+    #[test]
+    fn prompt_live_figures_falls_back_to_the_latest_progress_line_with_no_state_at_all() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Progress {
+            ts: "2026-10-08T11:46:44Z".to_string(),
+            id: Some(1),
+            path: "prime.ask".to_string(),
+            ms: Some(1200),
+            tokens_received_estimate: Some(41),
+            chars_received: Some(160),
+            tokens_sent: None,
+            tokens_sent_estimate: Some(10),
+            first_token_ms: Some(600),
+        });
+        let live = prompt_live_figures(None, "prime.ask", &model, "now").unwrap();
+        assert!(live.streaming);
+        assert_eq!(live.attempt, None);
+        assert_eq!(live.elapsed_s, Some(1.2));
+        assert_eq!(live.first_token_elapsed_s, Some(0.6));
+        assert_eq!(live.tokens_received_or_estimate(), Some((41, true)));
+        // `(1200 - 600) / 1000 == 0.6s`, under the 500ms-since-the-
+        // first-delta gate `tokens_per_second` needs cleared, so
+        // 41 tokens over 0.6s -- a real rate, not a divide-by-noise.
+        assert!(live.tokens_per_second.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn prompt_live_figures_is_none_with_neither_state_nor_a_progress_line() {
+        let model = RunModel::new();
+        assert_eq!(prompt_live_figures(None, "prime.ask", &model, "now"), None);
+    }
+
+    /// A fresh `start` at a path clears any progress line left over
+    /// from an earlier attempt -- a stale reading must never outlive
+    /// its own attempt.
+    #[test]
+    fn a_fresh_start_event_clears_the_paths_own_progress_sample() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Progress {
+            ts: "t0".to_string(),
+            id: Some(1),
+            path: "prime.ask".to_string(),
+            ms: Some(500),
+            tokens_received_estimate: Some(10),
+            chars_received: Some(40),
+            tokens_sent: None,
+            tokens_sent_estimate: Some(5),
+            first_token_ms: Some(200),
+        });
+        assert!(model.progress_at("prime.ask").is_some());
+        model.observe_event(&Event::Start {
+            ts: "t1".to_string(),
+            id: Some(2),
+            path: "prime.ask".to_string(),
+        });
+        assert!(model.progress_at("prime.ask").is_none());
+    }
+
+    /// Issue #675's "no double counting": a prompt that ends between
+    /// two polls contributes its exact tokens through `node_tokens`
+    /// once it has `completed_at`, never both that and the live
+    /// estimate -- `prompt_live_figures` reads `None` for a node that
+    /// has already finished, since `is_running_prompt`'s own gate
+    /// (`completed_at.is_none()`) is what every caller filters on
+    /// before ever asking for the live figures at all.
+    #[test]
+    fn a_node_that_finishes_between_two_polls_is_never_counted_as_both_running_and_done() {
+        let running = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.600Z",
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": 8,
+            "chars_received": 30, "tokens_per_second": null
+        }}));
+        assert!(is_running_prompt(&running));
+        let model = RunModel::new();
+        assert!(
+            prompt_live_figures(Some(&running), "prime.ask", &model, "2026-10-08T11:46:44Z")
+                .is_some()
+        );
+
+        let mut finished_meta = running.meta.clone();
+        finished_meta.as_object_mut().unwrap().remove("live");
+        finished_meta["completed_at"] = json!("2026-10-08T11:46:45Z");
+        finished_meta["tokens_sent"] = json!(10);
+        finished_meta["tokens_received"] = json!(12);
+        let finished = NodeMeta::from_object(&json!("ok"), &finished_meta);
+        assert!(!is_running_prompt(&finished));
+        assert_eq!(node_tokens(&finished.meta), (10, 12));
+        assert_eq!(
+            prompt_live_figures(Some(&finished), "prime.ask", &model, "2026-10-08T11:46:46Z"),
+            None
+        );
     }
 
     /// Table-driven: every branch of `run_status` (DESIGN.md §2.1
