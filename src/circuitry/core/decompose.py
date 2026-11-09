@@ -438,16 +438,27 @@ def _planner_path(runtime_config: Mapping[str, Any]) -> Path:
 
 
 def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
-    """The planner's runtime: the caller's, with decomposition switched off.
+    """The planner's runtime: the caller's, with both decomposition triggers
+    switched off.
 
     The planner's own planning prompt scores off the chart by construction —
     left on, decomposition would recurse into itself before the first plan
-    ever came back. Scoring and routing are left as configured.
+    ever came back. Its rendered input is also enormous by construction (the
+    source template plus the planning instructions), so splitting needs the
+    same shield: a size-triggered split would hand the planner a plan built
+    from a slice of its own instructions rather than the planner itself, and
+    under ``splitting.on_failure: fail`` would turn every over-threshold
+    decomposition attempt into a planner failure. Scoring and routing are
+    left as configured.
     """
     out = dict(runtime_config)
     complexity = runtime_config.get("complexity")
     if isinstance(complexity, Mapping):
-        out["complexity"] = {**complexity, "decomposition": {"enabled": False}}
+        out["complexity"] = {
+            **complexity,
+            "decomposition": {"enabled": False},
+            "splitting": {"enabled": False},
+        }
     return out
 
 
@@ -1015,12 +1026,32 @@ class _MergeInvalidError(ValueError):
 
 @dataclass(frozen=True)
 class _SplitPrep:
-    """Everything :func:`_prepare_split` worked out about *how* to split."""
+    """Everything :func:`_prepare_split` worked out about *how* to split.
+
+    *template_text*/*message_texts* are the source's own template/messages
+    text, already run through ``{{> name}}`` composition expansion (#672
+    R2) — what :func:`_generate_split_plan` rewrites the split reference's
+    tags in, instead of the raw, unexpanded ``defn.template``/``defn.messages``:
+    a declared prompt spliced in by the parent's own composition is spliced
+    in here too, so the generated plan's child, which declares no
+    ``prompts:`` of its own, never needs to resolve a ``{{> name}}`` tag at
+    all. *message_texts* is ``None`` entry-for-entry where the original
+    message is a dispatch-time file (nothing to expand or rewrite there;
+    :func:`_generate_split_plan` re-serializes the file source instead).
+    *extra_state* is the composition expansion's own resolved-effect-
+    reference fragments (the synthetic ``__circuitry_partial_N__`` keys
+    :func:`circuitry.core.prompt_compose._expand` mints) that the rewritten
+    text's own tags still read — seeded into the child's state so they
+    resolve exactly the same literal text there.
+    """
 
     ref_path: str
     kind: str  # "list" | "mapping" | "string"
     parts: list[Any]
     sizes: list[int]
+    template_text: str | None = None
+    message_texts: list[str | None] | None = None
+    extra_state: dict[str, str] = field(default_factory=dict)
 
 
 def _resolve_split_budget(
@@ -1183,7 +1214,7 @@ def _maybe_split(
     node_path = store.effect_path(defn.name)
     parts_key, plan_dict, result_path = _generate_split_plan(
         defn,
-        ref_path=prep.ref_path,
+        prep=prep,
         merge_mode=merge_mode,
         split_def=split_def,
         n_parts=n_parts,
@@ -1219,6 +1250,7 @@ def _maybe_split(
             depth=depth,
             parts_key=parts_key,
             parts=prep.parts,
+            extra_state=prep.extra_state,
             result_path=result_path,
             timeout_seconds=timeout_seconds,
             verbose=verbose,
@@ -1269,30 +1301,44 @@ def _template_sources(defn: PromptDefinition) -> list[tuple[str, str, str | None
     ]
 
 
-def _expand_composition(
-    template: str, ctx: Mapping[str, Any], runtime_config: Mapping[str, Any], *, label: str
-) -> tuple[str, dict[str, str]]:
-    """*template* with every ``{{> name}}`` expanded — the same expansion
+def _expand_sources(
+    sources: Sequence[tuple[str, str, str | None]],
+    ctx: Mapping[str, Any],
+    runtime_config: Mapping[str, Any],
+) -> tuple[list[str], dict[str, str]]:
+    """Every *sources* text with ``{{> name}}`` expanded — the same expansion
     :func:`circuitry.core.prompt_compose.render_with_composition` performs
-    (#672 R2) — returning the rewritten text and the resolved-fragment extras
-    it needs merged into the render context.
+    (#672 R2) — sharing one synthetic-key counter and one ``extra`` dict
+    across every source, so a resolved-effect-reference fragment in one
+    ``messages[]`` entry never mints the same key as one in a sibling entry.
+    This expansion feeds both the split measurement (below) and the
+    generated plan's own template/messages (:func:`_generate_split_plan`),
+    so the keys it mints must resolve to the same literal text wherever they
+    end up.
     """
     import itertools
 
     from .prompt_compose import _expand, declared_prompts, known_effect_names
 
     extra: dict[str, str] = {}
-    expanded = _expand(
-        template,
-        ctx=ctx,
-        declared=declared_prompts(runtime_config),
-        known_names=known_effect_names(runtime_config),
-        label=label,
-        seen=frozenset(),
-        counter=itertools.count(),
-        extra=extra,
-        budget=[0],
-    )
+    counter = itertools.count()
+    budget = [0]
+    declared = declared_prompts(runtime_config)
+    known_names = known_effect_names(runtime_config)
+    expanded = [
+        _expand(
+            raw,
+            ctx=ctx,
+            declared=declared,
+            known_names=known_names,
+            label=label,
+            seen=frozenset(),
+            counter=counter,
+            extra=extra,
+            budget=budget,
+        )
+        for label, raw, _role in sources
+    ]
     return expanded, extra
 
 
@@ -1335,7 +1381,7 @@ def _tag_occurrences_and_extensions(
     prefix = f"{reference}."
     for text in expanded_sources:
         for sigil, name in _TAG_RE.findall(text):
-            if sigil in ("!", ">"):
+            if sigil in ("!", ">", "/"):
                 continue
             cleaned = name.strip()
             if cleaned == reference:
@@ -1343,6 +1389,42 @@ def _tag_occurrences_and_extensions(
             elif cleaned.startswith(prefix):
                 extending.append(cleaned)
     return count, extending
+
+
+def _file_message_fixed_tokens(defn: PromptDefinition, ctx: Mapping[str, Any]) -> int:
+    """The token cost of every ``messages[].content: {file: ...}`` entry
+    (#672 R2) — excluded from ``_template_sources`` (nothing in it to
+    split), but still sent on every part, so it belongs in the fixed-text
+    budget alongside the template's own fixed text.
+    """
+    if defn.template is not None:
+        return 0
+    from .prompt_files import read_dispatch_file
+
+    total = 0
+    for index, msg in enumerate(defn.messages or ()):
+        if msg.file is None:
+            continue
+        read = read_dispatch_file(
+            msg.file,
+            ctx,
+            field=f"messages[{index}].content",
+            effect_label=f"Prompt effect '{defn.name}'",
+        )
+        total += _estimate_tokens(f"{msg.role}: {read.text}")
+    return total
+
+
+def _serialize_message_file(source: Any) -> dict[str, Any]:
+    """The generated map prompt's own copy of a ``content: {file: ...}``
+    message (#672 R4): the file's text was never the split reference, so
+    every part still reads the same file, at its own dispatch time — the
+    same :class:`~circuitry.core.prompt_files.DispatchFileSource` the source
+    prompt compiled, written back out in the one shape the grammar accepts.
+    """
+    out: dict[str, Any] = {"file": {"from": source.path_from}}
+    out["within"] = source.within if source.within is not None else {"from": source.within_from}
+    return out
 
 
 def _set_dotted_copy(ctx: Mapping[str, Any], path: Sequence[str], value: Any) -> dict[str, Any]:
@@ -1399,10 +1481,7 @@ def _prepare_split(
     if not sources:
         raise _NoSplitPointError("the prompt has no template text to split")
 
-    expanded: list[tuple[str, dict[str, str]]] = [
-        _expand_composition(raw, ctx, runtime_config, label=label) for label, raw, _role in sources
-    ]
-    expanded_texts = [text for text, _extra in expanded]
+    expanded_texts, extra_state = _expand_sources(sources, ctx, runtime_config)
 
     references = _candidate_references(expanded_texts)
     if not references:
@@ -1447,19 +1526,30 @@ def _prepare_split(
     from .templates import render_template
 
     fixed_ctx = _set_dotted_copy(ctx, reference.split("."), empty)
-    rendered_fixed: list[str] = []
-    for (label, _raw, _role), (expanded_text, extra) in zip(sources, expanded, strict=True):
-        rendered_fixed.append(
-            render_template(expanded_text, {**fixed_ctx, **extra}, label=label, escape=False)
-        )
+    rendered_fixed: list[str] = [
+        render_template(text, {**fixed_ctx, **extra_state}, label=label, escape=False)
+        for (label, _raw, _role), text in zip(sources, expanded_texts, strict=True)
+    ]
     if defn.template is not None:
         fixed_text = rendered_fixed[0]
+        template_text: str | None = expanded_texts[0]
+        message_texts: list[str | None] | None = None
     else:
         fixed_text = "\n\n".join(
             f"{role}: {text}"
             for (_label, _raw, role), text in zip(sources, rendered_fixed, strict=True)
         )
-    fixed_tokens = _estimate_tokens(fixed_text)
+        template_text = None
+        expanded_iter = iter(expanded_texts)
+        message_texts = [
+            None if msg.file is not None else next(expanded_iter)
+            for msg in (defn.messages or ())
+        ]
+    # A dispatch-time file message's text never varies with the split
+    # reference, but it is still sent on every part, so it counts toward
+    # the fixed text the budget must leave room beside (#672 R2) — even
+    # though it is excluded from `sources` above (nothing in it to split).
+    fixed_tokens = _estimate_tokens(fixed_text) + _file_message_fixed_tokens(defn, ctx)
 
     room = (budget - fixed_tokens) // occurrences
     if room < 1:
@@ -1483,7 +1573,15 @@ def _prepare_split(
         _estimate_tokens(str(part)) if not isinstance(part, str) else _estimate_tokens(part)
         for part in parts
     ]
-    return _SplitPrep(ref_path=reference, kind=kind, parts=parts, sizes=sizes)
+    return _SplitPrep(
+        ref_path=reference,
+        kind=kind,
+        parts=parts,
+        sizes=sizes,
+        template_text=template_text,
+        message_texts=message_texts,
+        extra_state=extra_state,
+    )
 
 
 # --- plan generation --------------------------------------------------------
@@ -1554,6 +1652,25 @@ def _pick_parts_key(ctx: Mapping[str, Any]) -> str:
     return key
 
 
+def _pick_effect_name(base: str, ctx: Mapping[str, Any]) -> str:
+    """*base* (``"parts"``/``"merge"``), with ``_`` appended until it
+    collides with no key already written under the parent's own ``prime``
+    namespace.
+
+    The generated plan's loop/reduce effect is named after *base*; a source
+    template that happens to read some unrelated, already-existing effect by
+    that same name (never the split reference) would otherwise see the
+    split machinery's own, still-in-flight node instead — silently, since
+    that read renders empty rather than raising.
+    """
+    prime_ns = ctx.get("prime") if isinstance(ctx, Mapping) else None
+    existing = set(prime_ns.keys()) if isinstance(prime_ns, Mapping) else set()
+    name = base
+    while name in existing:
+        name += "_"
+    return name
+
+
 def _serialize_timeout_ms(timeout_ms: Any) -> Any:
     from .timeout_ref import TimeoutFrom
 
@@ -1600,10 +1717,34 @@ def _copy_source_fields(defn: PromptDefinition) -> dict[str, Any]:
     return out
 
 
+def _forwarded_split_config(split_def: SplitDef | None) -> dict[str, Any] | None:
+    """The source's own ``split`` block, forwarded onto both generated
+    prompts (#672 R4's hierarchical reduce): every field the source set,
+    unchanged. ``merge.template`` keeps its original, unrewritten form
+    (every level rewrites its own copy against its own loop's collected
+    value, in :func:`_generate_split_plan` itself) — so a part that is
+    itself still over budget, or a reduce whose own input is, splits again,
+    bounded by the same ``max_depth`` every part already shares. ``None``
+    when the source carried no ``split:`` block worth forwarding at all.
+    """
+    if split_def is None:
+        return None
+    out: dict[str, Any] = {}
+    if split_def.merge is not None:
+        out["merge"] = {"template": split_def.merge.template}
+    if split_def.separator is not None:
+        out["separator"] = split_def.separator
+    if split_def.max_parts is not None:
+        out["max_parts"] = split_def.max_parts
+    if split_def.budget_tokens is not None:
+        out["budget_tokens"] = split_def.budget_tokens
+    return out or None
+
+
 def _generate_split_plan(
     defn: PromptDefinition,
     *,
-    ref_path: str,
+    prep: _SplitPrep,
     merge_mode: str,
     split_def: SplitDef | None,
     n_parts: int,
@@ -1611,31 +1752,43 @@ def _generate_split_plan(
     ctx: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any], str]:
     """The generated plan (#672 R4): ``(parts_key, plan dict, result_path)``."""
+    ref_path = prep.ref_path
     parts_key = _pick_parts_key(ctx)
+    # The loop (and, for a reduce, the merge prompt) is named after the
+    # parent's own already-written effects, never the other way around
+    # (#672 R4) — a source template that reads some unrelated existing
+    # effect called "parts"/"merge" (not the split reference) keeps reading
+    # it rather than silently seeing this split's own in-flight node.
+    loop_name = _pick_effect_name("parts", ctx)
 
     map_prompt: dict[str, Any] = {"type": "prompt", "name": "map"}
     map_prompt.update(_copy_source_fields(defn))
     if defn.template is not None:
-        map_prompt["template"] = _rewrite_exact(defn.template, ref_path, "part")
+        assert prep.template_text is not None
+        map_prompt["template"] = _rewrite_exact(prep.template_text, ref_path, "part")
     elif defn.template_file is not None:
         map_prompt["template"] = "{{{part}}}"
     else:
+        assert prep.message_texts is not None
         map_prompt["messages"] = [
             {
                 "role": msg.role,
                 "content": (
-                    _rewrite_exact(msg.content, ref_path, "part")
-                    if msg.file is None
-                    else msg.content
+                    _rewrite_exact(text, ref_path, "part")
+                    if msg.file is None and text is not None
+                    else _serialize_message_file(msg.file)
                 ),
             }
-            for msg in (defn.messages or ())
+            for msg, text in zip(defn.messages or (), prep.message_texts, strict=True)
         ]
     map_prompt["on_error"] = "fail"
+    forwarded_split = _forwarded_split_config(split_def)
+    if forwarded_split is not None:
+        map_prompt["split"] = dict(forwarded_split)
 
     loop_effect: dict[str, Any] = {
         "type": "loop",
-        "name": "parts",
+        "name": loop_name,
         "flow": "tree",
         "each": {"in": f"input.{parts_key}", "as": "part"},
         "max_iterations": n_parts,
@@ -1650,16 +1803,23 @@ def _generate_split_plan(
     if merge_mode == "reduce":
         if split_def is None or split_def.merge is None:
             raise AssertionError("merge_mode == 'reduce' without split.merge.template")
-        merge_prompt: dict[str, Any] = {"type": "prompt", "name": "merge"}
+        merge_name = _pick_effect_name("merge", ctx)
+        merge_prompt: dict[str, Any] = {"type": "prompt", "name": merge_name}
         merge_prompt.update(_copy_source_fields(defn))
         merge_prompt["template"] = _rewrite_prefix(
-            split_def.merge.template, "parts", "prime.parts.collected.value"
+            split_def.merge.template, "parts", f"prime.{loop_name}.collected.value"
         )
         merge_prompt["on_error"] = "fail"
+        # A hierarchical reduce (#672 R4): the merge prompt's own input
+        # (the collected parts) can itself be over budget, so it keeps the
+        # same split configuration the source carried, same as the map
+        # prompt above.
+        if forwarded_split is not None:
+            merge_prompt["split"] = dict(forwarded_split)
         effects.append(merge_prompt)
-        result_path = "prime.merge.value"
+        result_path = f"prime.{merge_name}.value"
     else:
-        result_path = "prime.parts.collected.value"
+        result_path = f"prime.{loop_name}.collected.value"
 
     plan: dict[str, Any] = {
         "interface": {"inputs": {parts_key: {"type": "array", "required": True}}},
@@ -1685,6 +1845,7 @@ def _execute_split_plan(
     depth: int,
     parts_key: str,
     parts: list[Any],
+    extra_state: Mapping[str, str],
     result_path: str,
     timeout_seconds: int,
     verbose: bool,
@@ -1721,19 +1882,26 @@ def _execute_split_plan(
         input_ns = {}
         child_state["input"] = input_ns
     input_ns[parts_key] = copy.deepcopy(parts)
-
-    result_parts = result_path.split(".")
-    copied_prime = child_state.get("prime")
-    if isinstance(copied_prime, dict) and len(result_parts) >= 2:
-        copied_prime.pop(result_parts[1], None)
-    # The loop is always named "parts"; a reduce plan's merge prompt result
-    # path points at "merge" instead — either way the one top-level key the
-    # child's own effects write under is cleared above, so the merged value
-    # can only ever be something this child dispatch actually produced.
-    if isinstance(copied_prime, dict) and result_parts[1:2] != ["parts"]:
-        copied_prime.pop("parts", None)
+    # The resolved-effect-reference fragments `{{> name}}` composition
+    # expansion minted while measuring the split (#672 R2) — the generated
+    # map/merge template's own tags still read these synthetic top-level
+    # keys, so they must resolve here to the same literal text they did
+    # when the budget was measured.
+    child_state.update(extra_state)
 
     declared_names = _declared_effect_names(plan_dict)
+    # Every name this child's own generated plan declares is cleared from
+    # the copied `prime` first (#672 R4/R12): the loop/merge effect names
+    # are chosen not to collide with the parent's own already-written
+    # effects, but clearing them here too means the merged value, at
+    # whichever of them `result_path` points into, can only ever be
+    # something this child dispatch actually produced — never stale parent
+    # state read back.
+    copied_prime = child_state.get("prime")
+    if isinstance(copied_prime, dict):
+        for name in declared_names:
+            copied_prime.pop(name, None)
+
     child_store = _build_child_store(
         child_state, parent_store=store, node=node, node_path=node_path
     )
