@@ -1461,6 +1461,7 @@ mod tests {
             effects_done: 0,
             effects_planned: None,
             effects_planned_is_lower_bound: false,
+            effects_planned_full: None,
             tokens_sent: 0,
             tokens_received: 0,
             innermost_loop_eta_s: None,

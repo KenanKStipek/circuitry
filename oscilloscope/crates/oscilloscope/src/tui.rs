@@ -304,6 +304,11 @@ fn status_style(kind: StatusKind, theme: &Theme) -> Style {
 /// `StatusKind` alone.
 fn tape_glyph(kind: oscilloscope_core::render::RowKind, status: StatusKind) -> char {
     use oscilloscope_core::render::RowKind;
+    // §3.7: ahead/queued/skipped reads `·` regardless of kind -- a
+    // decision or loop not yet reached never shows its own `◆`/`⟳`.
+    if matches!(status, StatusKind::Pending | StatusKind::Skipped) {
+        return '·';
+    }
     match kind {
         RowKind::If => '◆',
         RowKind::Loop => '⟳',
@@ -326,15 +331,18 @@ fn tape_glyph_style(
     theme: &Theme,
 ) -> Style {
     use oscilloscope_core::render::RowKind;
+    if matches!(status, StatusKind::Pending | StatusKind::Skipped) {
+        return Style::default().fg(theme.dim);
+    }
     match kind {
         RowKind::If | RowKind::Loop => Style::default()
             .fg(theme.accent_secondary)
             .add_modifier(Modifier::BOLD),
         _ => match status {
             StatusKind::Done => Style::default().fg(theme.status_done),
-            StatusKind::Failed | StatusKind::Cancelled | StatusKind::Aborted => {
-                Style::default().fg(theme.status_failed)
-            }
+            StatusKind::Failed | StatusKind::Cancelled | StatusKind::Aborted => Style::default()
+                .fg(theme.status_failed)
+                .add_modifier(Modifier::BOLD),
             StatusKind::FailedHandled => Style::default().fg(theme.warning),
             StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
                 Style::default()
@@ -437,7 +445,10 @@ fn draw_tape_header_band(
         + clock_text.chars().count()
         + 1;
     let pad = (area.width as usize).saturating_sub(left_width + right_width);
-    left.push(Span::styled(" ".repeat(pad), base));
+    left.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(ctx.theme.text).bg(bg),
+    ));
     if !banner_text.is_empty() {
         left.push(Span::styled(
             banner_text,
@@ -448,8 +459,7 @@ fn draw_tape_header_band(
         chip_text,
         Style::default()
             .fg(ctx.theme.on_accent)
-            .bg(ctx.theme.accent_secondary)
-            .add_modifier(Modifier::BOLD),
+            .bg(ctx.theme.accent_secondary),
     ));
     left.push(Span::styled(format!("  {clock_text} "), base));
     frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
@@ -469,17 +479,17 @@ fn draw_tape_status_line(
     use oscilloscope_core::screens::{TapeHead, TapeItem};
     match &screen.head {
         TapeHead::Starting => {
-            let text = format!(
-                "engine launching · waiting for the first event · {}",
-                header.engine
-            );
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    format!(" {text}"),
-                    Style::default().fg(ctx.theme.fg_muted),
-                ))),
-                area,
-            );
+            let spans = vec![
+                Span::styled(
+                    " engine launching · waiting for the first event ",
+                    Style::default().fg(ctx.theme.text),
+                ),
+                Span::styled(
+                    format!("· {}", header.engine),
+                    Style::default().fg(ctx.theme.dim),
+                ),
+            ];
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
             return;
         }
         TapeHead::Ended {
@@ -487,15 +497,10 @@ fn draw_tape_status_line(
         } => {
             let total = header.tokens_sent + header.tokens_received;
             let mut spans = vec![
-                Span::styled(
-                    " ✓ run ok ",
-                    Style::default()
-                        .fg(ctx.theme.status_done)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(" ✓ ", Style::default().fg(ctx.theme.status_done)),
                 Span::styled(
                     format!(
-                        "· {} t · {}",
+                        "run ok · {} t · {} ",
                         oscilloscope_core::format::format_tokens_thousands(total),
                         oscilloscope_core::format::format_duration(header.elapsed_s)
                     ),
@@ -504,8 +509,8 @@ fn draw_tape_status_line(
             ];
             if let Some((label, _)) = handled_failure {
                 spans.push(Span::styled(
-                    format!(" · 1 handled failure · {label}"),
-                    Style::default().fg(ctx.theme.warning),
+                    format!("· 1 handled failure · {label}"),
+                    Style::default().fg(ctx.theme.dim),
                 ));
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -519,17 +524,19 @@ fn draw_tape_status_line(
                 .as_deref()
                 .map(|p| p.rsplit('.').next().unwrap_or(p).to_string())
                 .unwrap_or_default();
+            // The status line reads one line; a structured dump
+            // after the engine's own prose (a Python-style `[...]`
+            // repr of an allowlist, say) isn't part of it -- the
+            // detail pane's own Error block still quotes `error` in
+            // full.
+            let summary = error.split('[').next().unwrap_or(error).trim_end();
             let spans = vec![
+                Span::styled(" ✗ ", Style::default().fg(ctx.theme.status_failed)),
                 Span::styled(
-                    " ✗ run failed ",
-                    Style::default()
-                        .fg(ctx.theme.status_failed)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("· {label} · {error}"),
+                    format!("run failed · {label} "),
                     Style::default().fg(ctx.theme.text),
                 ),
+                Span::styled(format!("· {summary}"), Style::default().fg(ctx.theme.dim)),
             ];
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
             return;
@@ -632,8 +639,61 @@ fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     items
 }
 
+/// The Tape's own key bar (§3.2): unlike every other screen's
+/// (`draw_key_bar`'s own uniform " {key} {desc}  " pattern, two
+/// spaces between items), the Tape's own `?`/`q` pair sits flush
+/// against the bar's right edge, with whatever the left items don't
+/// use as a plain run of background-only cells in between -- the
+/// same shape `draw_tape_too_small`'s own bare `q Quit` already
+/// draws by hand.
 fn draw_tape_key_bar(frame: &mut Frame, area: Rect, wide: bool, ctx: &DrawCtx) {
-    draw_key_bar(frame, area, &tape_key_bar_items(wide), ctx);
+    let items = tape_key_bar_items(wide);
+    let bg = ctx.theme.statusbar_bg;
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc).bg(bg);
+    let split = items.len().saturating_sub(2);
+    let (left, right) = items.split_at(split);
+
+    let mut spans = Vec::new();
+    let mut used = 0usize;
+    for (i, (key, desc)) in left.iter().enumerate() {
+        let key_text = if i == 0 {
+            format!(" {key} ")
+        } else {
+            format!("{key} ")
+        };
+        used += key_text.chars().count();
+        spans.push(Span::styled(key_text, key_style));
+        let desc_text = format!("{desc}  ");
+        used += desc_text.chars().count();
+        spans.push(Span::styled(desc_text, desc_style));
+    }
+
+    let mut right_spans = Vec::new();
+    let mut right_width = 0usize;
+    for (i, (key, desc)) in right.iter().enumerate() {
+        let key_text = format!("{key} ");
+        right_width += key_text.chars().count();
+        right_spans.push(Span::styled(key_text, key_style));
+        let desc_text = if i + 1 == right.len() {
+            format!("{desc} ")
+        } else {
+            format!("{desc}  ")
+        };
+        right_width += desc_text.chars().count();
+        right_spans.push(Span::styled(desc_text, desc_style));
+    }
+
+    let pad = (area.width as usize).saturating_sub(used + right_width);
+    spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
+    spans.extend(right_spans);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        area,
+    );
 }
 
 /// Flow/Time/Cost's own keys (§9's shared chrome around their own,
@@ -670,7 +730,13 @@ fn tape_token_bar(total: u64, unit: u64, bold: bool, ctx: &DrawCtx) -> Vec<Span<
             "▰".repeat(filled),
             Style::default().fg(ctx.theme.accent_primary),
         ),
-        Span::styled("▱".repeat(8 - filled), Style::default().fg(ctx.theme.dim)),
+        // The 3-cell gap before the count reads as the empty bar's
+        // own colour (`design/frames/`'s own span grouping), not the
+        // count's.
+        Span::styled(
+            format!("{}   ", "▱".repeat(8 - filled)),
+            Style::default().fg(ctx.theme.dim),
+        ),
     ];
     let count_style = if bold {
         Style::default()
@@ -680,7 +746,7 @@ fn tape_token_bar(total: u64, unit: u64, bold: bool, ctx: &DrawCtx) -> Vec<Span<
         Style::default().fg(ctx.theme.text)
     };
     spans.push(Span::styled(
-        format!("   {}", oscilloscope_core::format::format_tokens_t(total)),
+        oscilloscope_core::format::format_tokens_t(total),
         count_style,
     ));
     spans
@@ -712,6 +778,39 @@ fn tape_rule_line(
         Span::styled(suffix_text, inner_style),
         Span::styled("━".repeat(fill), Style::default().fg(outer)),
     ])
+}
+
+/// A Tape pane's own block title (§2.1): the border's own top-left
+/// rule shows through as `─` for one cell before the title text
+/// starts (`╰─ Tape · ... ────╯`) -- `Block::title`'s own left
+/// alignment places a title flush against the border with no gap of
+/// its own, so this is the title [`Line`] itself, not a block option.
+fn tape_block_title(text: &str, border: Color, ctx: &DrawCtx) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("─ ", Style::default().fg(border)),
+        Span::styled(
+            format!("{text} "),
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+/// Pre-fills `area` with `border`, plain spaces (issue #678's own
+/// Tape and detail panes): a row nothing else draws over reads as a
+/// border-coloured blank in `design/frames/*.mock`, never the
+/// frame's own base fill -- real content, drawn on top right after
+/// this, covers every cell it actually uses.
+fn fill_border_rows(frame: &mut Frame, area: Rect, border: Color) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let line = " ".repeat(area.width as usize);
+    let lines: Vec<Line> = (0..area.height)
+        .map(|_| Line::styled(line.clone(), Style::default().fg(border)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// §3.6's deviation colour band.
@@ -815,9 +914,26 @@ fn tape_row_line(
     name_width: usize,
     what_width: usize,
     token_width: usize,
+    border_color: Color,
     ctx: &DrawCtx,
 ) -> Line<'static> {
-    let name_style = if row.bold {
+    // A selected row's own background changes (§2.1's "Selected"),
+    // but every span keeps its own foreground -- only the name span
+    // switches to `selection.fg` -- so this never uses a line-level
+    // `patch_style` with its own `fg`, which would patch every span
+    // uniformly and erase the glyph's and token bar's own colours.
+    let bg = |s: Style| {
+        if selected {
+            s.bg(ctx.theme.selection_bg)
+        } else {
+            s
+        }
+    };
+    let name_style = if selected {
+        Style::default()
+            .fg(ctx.theme.selection_fg)
+            .add_modifier(Modifier::BOLD)
+    } else if row.bold {
         Style::default()
             .fg(ctx.theme.text)
             .add_modifier(Modifier::BOLD)
@@ -834,65 +950,80 @@ fn tape_row_line(
     // §5: 60–79 columns drops the clock column entirely, not just
     // its text -- the Tape's own 18-cell name field moves 9 columns
     // to the left to fill the space.
+    // A row ahead with no timestamp of its own (§3.4) leaves this
+    // gap as the pane's own border-coloured fill (`design/frames/`'s
+    // own blank convention), never a dim-coloured run of spaces --
+    // only a row that has a real clock reading paints over it.
     let ts_text = if narrow {
-        String::new()
+        None
     } else {
         row.ts
             .as_deref()
             .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
             .map(|t| format!("{t} "))
-            .unwrap_or_else(|| " ".repeat(9))
     };
+    let ts_style = if ts_text.is_some() {
+        Style::default().fg(ctx.theme.dim)
+    } else {
+        Style::default().fg(border_color)
+    };
+    let ts_width = if narrow { 0 } else { 9 };
     let mut spans = vec![
-        Span::styled(ts_text, Style::default().fg(ctx.theme.dim)),
+        Span::styled(
+            format!("{:<ts_width$}", ts_text.unwrap_or_default()),
+            bg(ts_style),
+        ),
         Span::styled(
             format!("{} ", tape_glyph(row.kind, row.status.kind)),
-            tape_glyph_style(row.kind, row.status.kind, ctx.theme),
+            bg(tape_glyph_style(row.kind, row.status.kind, ctx.theme)),
         ),
         Span::styled(
             format!("{:<name_width$}", truncate_text(&row.label, name_width)),
-            name_style,
+            bg(name_style),
         ),
         Span::styled(
-            format!("{:<what_width$}", truncate_text(&row.what, what_width)),
-            what_style,
+            format!(
+                "{:<what_width$}",
+                truncate_text(&row.what, what_width.saturating_sub(1))
+            ),
+            bg(what_style),
         ),
     ];
-    if let Some(token_line) = tape_token_column(&row.tokens, unit, tokens_view_usual, ctx) {
-        // The token column is right-aligned flush to the pane's own
-        // inner edge (§3.5: "numbers are always printed next to a
-        // bar"), not left-padded by a fixed gap -- a bar and a loop's
-        // own sparkline end up the same number of printed characters
-        // apart from the right border even though the bar is always
-        // 8 cells and a sparkline is as wide as its own pass count.
-        let printed: usize = token_line
-            .spans
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum();
-        if token_width > printed {
-            spans.push(Span::raw(" ".repeat(token_width - printed)));
+    match tape_token_column(&row.tokens, unit, tokens_view_usual, ctx) {
+        Some(token_line) => {
+            // The token column is right-aligned flush to the pane's
+            // own inner edge (§3.5: "numbers are always printed next
+            // to a bar"), not left-padded by a fixed gap -- a bar and
+            // a loop's own sparkline end up the same number of
+            // printed characters apart from the right border even
+            // though the bar is always 8 cells and a sparkline is as
+            // wide as its own pass count. The gap itself reads as the
+            // row's own "what" colour (§3.4: the whole row is one span
+            // in `design/frames/` when there's nothing to show there
+            // yet), not a bare default.
+            let printed: usize = token_line
+                .spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum();
+            if token_width > printed {
+                spans.push(Span::styled(
+                    " ".repeat(token_width - printed),
+                    bg(what_style),
+                ));
+            }
+            spans.extend(
+                token_line
+                    .spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content, bg(s.style))),
+            );
         }
-        spans.extend(token_line.spans);
+        None => {
+            spans.push(Span::styled(" ".repeat(token_width), bg(what_style)));
+        }
     }
-    let mut line = Line::from(spans);
-    if selected {
-        // A span's own foreground always wins over a line-level
-        // `patch_style`'s colour (ratatui patches a span's `Some`
-        // fields over the line's), so the background/foreground pair
-        // above never actually reaches a row ahead's own dim text --
-        // `REVERSED` is a modifier, not a colour, and modifiers from
-        // a line's own patch always combine into every span
-        // regardless, which is what makes the selection visible on
-        // every row in every theme and under `NO_COLOR` alike.
-        line = line.patch_style(
-            Style::default()
-                .bg(ctx.theme.selection_bg)
-                .fg(ctx.theme.selection_fg)
-                .add_modifier(Modifier::REVERSED),
-        );
-    }
-    line
+    Line::from(spans)
 }
 
 fn truncate_text(text: &str, max_chars: usize) -> String {
@@ -902,7 +1033,7 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
         String::new()
     } else {
         let truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-        format!("{truncated}…")
+        format!("{truncated}⋯")
     }
 }
 
@@ -944,40 +1075,42 @@ fn draw_tape_list(
         } else {
             format!("▰ = {} t", screen.unit)
         };
-        let previews = if wide_detail {
-            if app.tape_previews_on {
-                " · Previews On"
+        let previews =
+            if wide_detail && matches!(screen.head, oscilloscope_core::screens::TapeHead::Normal) {
+                if app.tape_previews_on {
+                    " · Previews On"
+                } else {
+                    " · Previews Off"
+                }
             } else {
-                " · Previews Off"
-            }
-        } else {
-            ""
-        };
+                ""
+            };
         format!(
             "Tape · {} Done · {} Running · {} Ahead · {suffix}{previews}",
             screen.done, screen.running, screen.ahead
         )
     };
-    let border_style = if app.pane == Pane::Tree {
-        Style::default().fg(ctx.theme.border_focused)
+    let border_color = if app.pane == Pane::Tree {
+        ctx.theme.border_focused
     } else {
-        Style::default().fg(ctx.theme.border)
+        ctx.theme.border
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
-        .title(Span::styled(
-            format!(" {title} "),
-            Style::default()
-                .fg(ctx.theme.text)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .border_style(border_style);
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 {
         return;
     }
+    // A row neither the list nor the rule/totals row below ever
+    // draws into (the design's own frames: a blank row inside the
+    // Tape's own border reads as a plain border-coloured blank, not
+    // the frame's own base fill) -- filled first, so every real
+    // widget below draws over it undisturbed.
+    fill_border_rows(frame, inner, border_color);
 
     // §5: 60-79 columns drops the clock and the what column
     // entirely and gives the name whatever's left after a fixed 16-
@@ -988,7 +1121,7 @@ fn draw_tape_list(
     let name_width = if narrow {
         (inner.width as usize).saturating_sub(2 + 16)
     } else {
-        18
+        19
     };
     let what_width = if narrow {
         0
@@ -1027,8 +1160,11 @@ fn draw_tape_list(
                     Style::default().fg(ctx.theme.fg_muted),
                 ));
                 if !narrow {
+                    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                    let text = format!("{document} · {engine}");
+                    let width = (inner.width as usize).saturating_sub(used);
                     spans.push(Span::styled(
-                        format!("{document} · {engine}"),
+                        format!("{text:<width$}"),
                         Style::default().fg(ctx.theme.dim),
                     ));
                 }
@@ -1047,6 +1183,7 @@ fn draw_tape_list(
                         name_width,
                         what_width,
                         token_width,
+                        border_color,
                         ctx,
                     ),
                 ));
@@ -1057,12 +1194,23 @@ fn draw_tape_list(
                 // threshold that `wide_detail` names.
                 if let Some(preview) = &row.preview {
                     if wide_detail {
+                        let preview_style = if selected {
+                            Style::default()
+                                .fg(ctx.theme.dim)
+                                .bg(ctx.theme.selection_bg)
+                        } else {
+                            Style::default().fg(ctx.theme.dim)
+                        };
+                        let text = format!("             {preview}");
+                        let padded = if selected {
+                            let width = inner.width as usize;
+                            format!("{text:<width$}")
+                        } else {
+                            text
+                        };
                         lines.push((
                             Some(row.path.clone()),
-                            Line::from(Span::styled(
-                                format!("             {preview}"),
-                                Style::default().fg(ctx.theme.dim),
-                            )),
+                            Line::from(Span::styled(padded, preview_style)),
                         ));
                     }
                 }
@@ -1113,19 +1261,23 @@ fn draw_tape_list(
                         true,
                         format!("Starting · {} launching · no events yet", header.engine),
                     ),
-                    oscilloscope_core::screens::TapeHead::Ended { duration_s, .. } => {
+                    oscilloscope_core::screens::TapeHead::Ended { ok, duration_s, .. } => {
                         let end = header
                             .run_end_ts
                             .as_deref()
                             .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
                             .unwrap_or_default();
+                        let outcome_word = if *ok {
+                            "OK"
+                        } else {
+                            tape_status_text(header.status)
+                        };
                         (
                             ctx.theme.status_done,
                             ctx.theme.status_done,
                             true,
                             format!(
-                                "Run Ended · {} · {} · {end}",
-                                tape_status_text(header.status),
+                                "Run Ended · {outcome_word} · {} · {end}",
                                 oscilloscope_core::format::format_duration(*duration_s)
                             ),
                         )
@@ -1181,6 +1333,10 @@ fn draw_tape_list(
                         .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
                     {
                         text.push_str(&format!("   ETA {eta}"));
+                    }
+                    let width = inner.width as usize;
+                    if text.chars().count() < width {
+                        text = format!("{text:<width$}");
                     }
                 }
                 lines.push((
@@ -1244,7 +1400,16 @@ fn draw_tape_list(
             width: inner.width,
             height: 1,
         };
-        draw_totals_row(frame, totals_area, header, narrow, ctx);
+        draw_totals_row(
+            frame,
+            totals_area,
+            header,
+            narrow,
+            header.effects_planned_full,
+            screen.usual_so_far_tokens,
+            Some(border_color),
+            ctx,
+        );
     }
 }
 
@@ -1254,15 +1419,26 @@ fn draw_tape_list(
 /// wired to a real figure) the run's own cost -- shared by every
 /// screen, pinned above the Tape's own bottom border and, on every
 /// other screen, its own outer row below the body.
+#[allow(clippy::too_many_arguments)]
 fn draw_totals_row(
     frame: &mut Frame,
     area: Rect,
     header: &oscilloscope_core::render::Header,
     compact: bool,
+    effects_planned_override: Option<u64>,
+    usual_so_far_tokens: Option<u64>,
+    gutter_color: Option<Color>,
     ctx: &DrawCtx,
 ) {
-    let usual_pct = header
-        .history_usual_total_tokens
+    let effects_planned = effects_planned_override.or(header.effects_planned);
+    // §3.3's own deviation: the sum of every row that has run so far,
+    // its own usual tokens (the Tape's `usual_so_far_tokens`) --
+    // comparing against the *whole run's* eventual usual instead
+    // would read wildly low on any partial run. Every other screen,
+    // with no rows of its own to sum, falls back to the whole run's
+    // usual total, same as before.
+    let usual_pct = usual_so_far_tokens
+        .or(header.history_usual_total_tokens)
         .filter(|_| header.tokens_sent + header.tokens_received > 0)
         .map(|usual| {
             let total = header.tokens_sent + header.tokens_received;
@@ -1273,42 +1449,70 @@ fn draw_totals_row(
         // Effects/Cost words and (since the Tape's own Run End row
         // already dropped it) keeps only the ETA.
         let total = header.tokens_sent + header.tokens_received;
-        let mut spans = vec![Span::styled(
-            format!(
-                " Totals {} t",
-                oscilloscope_core::format::format_tokens_thousands(total)
+        let mut spans = vec![
+            Span::styled(
+                " ",
+                Style::default().fg(gutter_color.unwrap_or(ctx.theme.text)),
             ),
+            Span::styled(
+                "Totals ",
+                Style::default()
+                    .fg(ctx.theme.text)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        let mut headline = oscilloscope_core::format::format_tokens_t(total);
+        if let Some(pct) = usual_pct {
+            headline.push_str(&format!(" {pct:+.0}%"));
+        }
+        headline.push(' ');
+        spans.push(Span::styled(
+            headline,
             Style::default()
                 .fg(ctx.theme.text)
                 .add_modifier(Modifier::BOLD),
-        )];
-        if let Some(pct) = usual_pct {
-            spans.push(Span::styled(
-                format!(" {pct:+.0}%"),
-                tape_deviation_style(pct, ctx.theme),
-            ));
-        }
-        let effects_text = header
-            .effects_planned
+        ));
+        let effects_text = effects_planned
             .map(|p| format!("{}/{p}", header.effects_done))
             .unwrap_or_else(|| header.effects_done.to_string());
+        spans.push(Span::styled(
+            format!("· {effects_text} "),
+            Style::default().fg(ctx.theme.text),
+        ));
         let eta_text = header
             .history_eta_ts
             .as_deref()
             .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
         spans.push(Span::styled(
-            format!(
-                " · {effects_text} · ETA {}",
-                eta_text.as_deref().unwrap_or("—")
-            ),
+            "· ETA ",
             Style::default().fg(ctx.theme.fg_muted),
+        ));
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let width = area.width as usize;
+        let eta_value = eta_text.as_deref().unwrap_or("—");
+        let padded_eta = if used + eta_value.chars().count() < width {
+            format!("{eta_value:<width$}", width = width - used)
+        } else {
+            eta_value.to_string()
+        };
+        spans.push(Span::styled(
+            padded_eta,
+            if eta_text.is_some() {
+                Style::default().fg(ctx.theme.text)
+            } else {
+                Style::default().fg(ctx.theme.dim)
+            },
         ));
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
     let mut spans = vec![
         Span::styled(
-            " Totals ",
+            " ",
+            Style::default().fg(gutter_color.unwrap_or(ctx.theme.text)),
+        ),
+        Span::styled(
+            "Totals ",
             Style::default()
                 .fg(ctx.theme.text)
                 .add_modifier(Modifier::BOLD),
@@ -1334,9 +1538,11 @@ fn draw_totals_row(
         ),
     ];
     if let Some(pct) = usual_pct {
+        // §3.6: the 0-25% band is bold here even though a row's own
+        // deviation isn't -- every other band is already bold.
         spans.push(Span::styled(
             format!("  {pct:+.0}% "),
-            tape_deviation_style(pct, ctx.theme),
+            tape_deviation_style(pct, ctx.theme).add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(
             "Usual  ",
@@ -1345,8 +1551,7 @@ fn draw_totals_row(
     } else {
         spans.push(Span::raw("  "));
     }
-    let effects_text = header
-        .effects_planned
+    let effects_text = effects_planned
         .map(|p| format!("{}/{p}", header.effects_done))
         .unwrap_or_else(|| header.effects_done.to_string());
     spans.push(Span::styled(
@@ -1367,70 +1572,729 @@ fn draw_totals_row(
     ));
     spans.push(Span::styled(
         format!("{}  ", eta_text.as_deref().unwrap_or("—")),
-        Style::default().fg(ctx.theme.text),
+        if eta_text.is_some() || gutter_color.is_none() {
+            Style::default().fg(ctx.theme.text)
+        } else {
+            Style::default().fg(ctx.theme.dim)
+        },
     ));
     spans.push(Span::styled(
         "Cost ",
         Style::default().fg(ctx.theme.fg_muted),
     ));
-    spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim)));
+    // The Tape's own Totals row fills the rest of the pane with this
+    // dash's own colour (§2.1's own blank-row convention); every
+    // other screen keeps its pre-§678 shape, a single bare dash with
+    // whatever's behind it showing through.
+    if gutter_color.is_some() {
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let width = area.width as usize;
+        let dash = if used < width {
+            format!("—{}", " ".repeat(width - used - 1))
+        } else {
+            "—".to_string()
+        };
+        spans.push(Span::styled(dash, Style::default().fg(ctx.theme.dim)));
+    } else {
+        spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim)));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// The detail pane (§2.1): the selected row's own Status, Type,
 /// Tokens, Usual, Share, then the prompt sent and the reply in full.
+/// A detail-pane line, padded to `width` with the style of its own
+/// last span (issue #678's §2.1 detail pane: a line with real
+/// content fills the rest of its own row with that content's own
+/// colour, never the pane's border fill, which stays only where
+/// nothing draws at all -- `draw_tape_detail`'s own gutter column
+/// and every wholly blank row).
+fn tape_detail_line(mut spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if used < width {
+        let fill_style = spans.last().map(|s| s.style).unwrap_or_default();
+        spans.push(Span::styled(" ".repeat(width - used), fill_style));
+    }
+    Line::from(spans)
+}
+
+/// Greedy word-wrap at `width` columns (issue #678's §2.1 detail
+/// pane: a prompt sent or a reply, shown in full, never truncated
+/// with `⋯`) -- whitespace collapsed first, same as a preview
+/// line's own text; a single word wider than `width` is hard-cut
+/// rather than left overflowing.
+fn tape_word_wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in collapsed.split(' ') {
+        let mut word = word;
+        if current.is_empty() && word.chars().count() > width {
+            while word.chars().count() > width {
+                let (head, rest) = {
+                    let mut chars = word.chars();
+                    let head: String = chars.by_ref().take(width).collect();
+                    (head, chars.as_str().to_string())
+                };
+                lines.push(head);
+                word = Box::leak(rest.into_boxed_str());
+            }
+        }
+        let extra = if current.is_empty() { 0 } else { 1 };
+        if current.chars().count() + extra + word.chars().count() > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            current.push_str(word);
+        } else {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// The Status line's own glyph, word and style (issue #678's §2.1
+/// detail pane) -- not [`tape_glyph`]/[`tape_glyph_style`], which
+/// both need a row's own [`oscilloscope_core::render::RowKind`] that
+/// [`oscilloscope_core::screens::FocusedStep`] doesn't carry.
+fn tape_status_glyph_word_style(kind: StatusKind, theme: &Theme) -> (char, &'static str, Style) {
+    match kind {
+        StatusKind::Done => ('✓', "Done", Style::default().fg(theme.status_done)),
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => (
+            '●',
+            "Running",
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        StatusKind::Failed => ('✗', "Failed", Style::default().fg(theme.status_failed)),
+        StatusKind::FailedHandled => ('✗', "Handled", Style::default().fg(theme.warning)),
+        StatusKind::Pending | StatusKind::Skipped => {
+            ('·', "Pending", Style::default().fg(theme.dim))
+        }
+        StatusKind::Cancelled => ('✗', "Cancelled", Style::default().fg(theme.status_failed)),
+        StatusKind::Aborted => ('✗', "Aborted", Style::default().fg(theme.status_failed)),
+    }
+}
+
+/// The Normal/Usual states' own detail pane (§2.1): the selected
+/// row's Status, Type, Tokens, Usual, Share, then the prompt sent and
+/// the reply in full, each headed with its own token count.
+fn tape_normal_detail_lines(
+    screen: &oscilloscope_core::screens::TapeScreen,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let Some(step) = &screen.selected else {
+        return vec![tape_detail_line(
+            vec![Span::styled("nothing selected", default)],
+            width,
+        )];
+    };
+    let detail = screen.selected_detail.clone().unwrap_or_default();
+    let mut lines = Vec::new();
+
+    let (glyph, word, glyph_style) = tape_status_glyph_word_style(step.status.kind, ctx.theme);
+    let finished_clock = detail
+        .finished_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let mut status_value = String::new();
+    if let Some(secs) = step.elapsed_s {
+        status_value.push_str(&oscilloscope_core::format::format_duration(secs));
+    }
+    if let Some(clock) = finished_clock {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(&clock);
+    }
+    lines.push(tape_detail_line(
+        vec![
+            Span::styled("Status  ", muted),
+            Span::styled(format!("{glyph} {word}  "), glyph_style),
+            Span::styled(status_value, default),
+        ],
+        width,
+    ));
+
+    let type_text = match &step.provider_or_model {
+        Some(m) => format!("{} · {m}", step.kind_label),
+        None => step.kind_label.to_string(),
+    };
+    lines.push(tape_detail_line(
+        vec![
+            Span::styled("Type    ", muted),
+            Span::styled(type_text, default),
+        ],
+        width,
+    ));
+
+    if let (Some(sent), Some(received)) = (detail.tokens_sent, detail.tokens_received) {
+        let total = sent + received;
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Tokens  ", muted),
+                Span::styled(
+                    format!(
+                        "↑{} ↓{} ",
+                        oscilloscope_core::format::format_tokens_thousands(sent),
+                        oscilloscope_core::format::format_tokens_thousands(received)
+                    ),
+                    default,
+                ),
+                Span::styled("· ", muted),
+                Span::styled(
+                    oscilloscope_core::format::format_tokens_t(total),
+                    default.add_modifier(Modifier::BOLD),
+                ),
+            ],
+            width,
+        ));
+    }
+
+    if let Some((usual, count)) = screen.selected_usual {
+        let dev = step
+            .tokens
+            .filter(|_| usual > 0)
+            .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
+        let mut spans = vec![
+            Span::styled("Usual   ", muted),
+            Span::styled(
+                format!(
+                    "{} t  ",
+                    oscilloscope_core::format::format_tokens_thousands(usual)
+                ),
+                default,
+            ),
+        ];
+        if let Some(d) = dev {
+            spans.push(Span::styled(
+                format!("{d:+.0}% "),
+                tape_deviation_style(d, ctx.theme).add_modifier(Modifier::BOLD),
+            ));
+        }
+        spans.push(Span::styled(format!("· median of {count} runs"), muted));
+        lines.push(tape_detail_line(spans, width));
+    }
+
+    if let Some(pct) = screen.selected_share_pct {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Share   ", muted),
+                Span::styled(format!("{pct}% of this run so far"), default),
+            ],
+            width,
+        ));
+    }
+
+    if let Some(prompt_sent) = &detail.prompt_sent {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Prompt Sent ", title_bold),
+                Span::styled(
+                    format!(
+                        "· {} t",
+                        oscilloscope_core::format::format_tokens_thousands(
+                            detail.prompt_sent_tokens.unwrap_or(0)
+                        )
+                    ),
+                    muted,
+                ),
+            ],
+            width,
+        ));
+        for line in tape_word_wrap(prompt_sent, width) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+
+    if let Some(reply) = &detail.reply {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Reply ", title_bold),
+                Span::styled(
+                    format!(
+                        "· {} t",
+                        oscilloscope_core::format::format_tokens_thousands(
+                            detail.reply_tokens.unwrap_or(0)
+                        )
+                    ),
+                    muted,
+                ),
+            ],
+            width,
+        ));
+        for line in tape_word_wrap(reply, width) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+
+    lines
+}
+
+/// The Starting state's own detail pane (§2.1): Engine, Plan, Shape,
+/// Usual, ETA, and the first step.
+fn tape_starting_detail_lines(
+    detail: &oscilloscope_core::screens::TapeStartingDetail,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        tape_detail_line(
+            vec![
+                Span::styled("Engine ", muted),
+                Span::styled(format!("{} · launching", detail.engine), default),
+            ],
+            width,
+        ),
+        tape_detail_line(
+            vec![
+                Span::styled("Plan   ", muted),
+                Span::styled(detail.plan_text.clone(), default),
+            ],
+            width,
+        ),
+        tape_detail_line(
+            vec![
+                Span::styled("Shape  ", muted),
+                Span::styled(detail.shape_text.clone(), default),
+            ],
+            width,
+        ),
+    ];
+    let mut usual_spans = vec![Span::styled("Usual  ", muted)];
+    match (
+        detail.usual_total_tokens,
+        detail.usual_total_s,
+        detail.usual_count,
+    ) {
+        (Some(tokens), Some(wall_s), Some(count)) => {
+            usual_spans.push(Span::styled(
+                format!(
+                    "{} t ",
+                    oscilloscope_core::format::format_tokens_thousands(tokens)
+                ),
+                default.add_modifier(Modifier::BOLD),
+            ));
+            usual_spans.push(Span::styled(
+                format!(
+                    "· {} · median of {count} runs",
+                    oscilloscope_core::format::format_duration(wall_s)
+                ),
+                muted,
+            ));
+        }
+        _ => usual_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
+    }
+    lines.push(tape_detail_line(usual_spans, width));
+    let mut eta_spans = vec![Span::styled("ETA    ", muted)];
+    match detail
+        .eta_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+    {
+        Some(eta) => {
+            eta_spans.push(Span::styled(
+                format!("{eta} "),
+                default.add_modifier(Modifier::BOLD),
+            ));
+            eta_spans.push(Span::styled("if usual", muted));
+        }
+        None => eta_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
+    }
+    lines.push(tape_detail_line(eta_spans, width));
+    lines.push(Line::from(""));
+    lines.push(tape_detail_line(
+        vec![Span::styled("First Step", title_bold)],
+        width,
+    ));
+    let first_step_text = match detail.first_step_type.is_empty() {
+        true => detail.first_step_label.clone(),
+        false => format!("{} · {}", detail.first_step_label, detail.first_step_type),
+    };
+    lines.push(tape_detail_line(
+        vec![Span::styled(first_step_text, default)],
+        width,
+    ));
+    if let Some(usual) = detail.first_step_usual {
+        lines.push(tape_detail_line(
+            vec![Span::styled(
+                format!(
+                    "usually {} t",
+                    oscilloscope_core::format::format_tokens_thousands(usual)
+                ),
+                muted,
+            )],
+            width,
+        ));
+    }
+    lines
+}
+
+/// The Ended state's own detail pane (§2.1): Outcome, Tokens, Usual,
+/// Effects, Decision, Largest, the handled failure's error and the
+/// run's summary value.
+fn tape_ended_detail_lines(
+    detail: &oscilloscope_core::screens::TapeEndedDetail,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let outcome_style = if detail.ok {
+        Style::default()
+            .fg(ctx.theme.status_done)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(ctx.theme.status_failed)
+            .add_modifier(Modifier::BOLD)
+    };
+    let outcome_word = if detail.ok { "OK" } else { "Failed" };
+    let outcome_glyph = if detail.ok { "✓" } else { "✗" };
+    let start = detail
+        .start_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let end = detail
+        .end_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let range = match (start, end) {
+        (Some(s), Some(e)) => format!("{s} → {e}"),
+        _ => String::new(),
+    };
+    let mut lines = vec![
+        tape_detail_line(
+            vec![
+                Span::styled("Outcome  ", muted),
+                Span::styled(format!("{outcome_glyph} {outcome_word}  "), outcome_style),
+                Span::styled(
+                    format!(
+                        "{} · {range}",
+                        oscilloscope_core::format::format_duration(detail.duration_s)
+                    ),
+                    default,
+                ),
+            ],
+            width,
+        ),
+        tape_detail_line(
+            vec![
+                Span::styled("Tokens   ", muted),
+                Span::styled(
+                    format!(
+                        "↑{} ↓{} · ",
+                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_sent),
+                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_received)
+                    ),
+                    default,
+                ),
+                Span::styled(
+                    oscilloscope_core::format::format_tokens_t(
+                        detail.tokens_sent + detail.tokens_received,
+                    ),
+                    default.add_modifier(Modifier::BOLD),
+                ),
+            ],
+            width,
+        ),
+    ];
+    let mut usual_spans = vec![Span::styled("Usual    ", muted)];
+    match (detail.usual_total_tokens, detail.usual_dev_pct) {
+        (Some(tokens), Some(dev)) => {
+            usual_spans.push(Span::styled(
+                format!(
+                    "{} t ",
+                    oscilloscope_core::format::format_tokens_thousands(tokens)
+                ),
+                default,
+            ));
+            usual_spans.push(Span::styled(
+                format!("{dev:+.0}% "),
+                tape_deviation_style(dev, ctx.theme).add_modifier(Modifier::BOLD),
+            ));
+            let wall = detail
+                .usual_total_s
+                .map(|s| format!("· {} usual", oscilloscope_core::format::format_duration(s)))
+                .unwrap_or_default();
+            usual_spans.push(Span::styled(wall, muted));
+        }
+        _ => usual_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
+    }
+    lines.push(tape_detail_line(usual_spans, width));
+    let mut effects_spans = vec![Span::styled("Effects  ", muted)];
+    let planned_text = detail
+        .effects_planned
+        .map(|p| format!("{} of {p}", detail.effects_done))
+        .unwrap_or_else(|| detail.effects_done.to_string());
+    let handled_text = if detail.handled_count > 0 {
+        format!(
+            " · {} handled failure{}",
+            detail.handled_count,
+            if detail.handled_count == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
+    effects_spans.push(Span::styled(
+        format!("{planned_text}{handled_text}"),
+        default,
+    ));
+    lines.push(tape_detail_line(effects_spans, width));
+    if let Some(decision) = &detail.decision_text {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Decision ", muted),
+                Span::styled(decision.clone(), default),
+            ],
+            width,
+        ));
+    }
+    if let (Some(label), Some(tokens)) = (&detail.largest_label, detail.largest_tokens) {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Largest  ", muted),
+                Span::styled(format!("{label} "), default),
+                Span::styled(
+                    oscilloscope_core::format::format_tokens_t(tokens),
+                    default.add_modifier(Modifier::BOLD),
+                ),
+            ],
+            width,
+        ));
+    }
+    if let Some(handled) = &detail.handled_failure {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("Handled Failure ", title_bold),
+                Span::styled(format!("· {}", handled.label), muted),
+            ],
+            width,
+        ));
+        lines.push(tape_detail_line(
+            vec![Span::styled(handled.what.clone(), default)],
+            width,
+        ));
+        for line in tape_word_wrap(&handled.exit_on_error, width) {
+            lines.push(tape_detail_line(vec![Span::styled(line, muted)], width));
+        }
+        for line in tape_word_wrap(&handled.error, width) {
+            lines.push(tape_detail_line(vec![Span::styled(line, muted)], width));
+        }
+    }
+    if let Some(summary) = &detail.summary {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Summary", title_bold)],
+            width,
+        ));
+        for line in tape_word_wrap(summary, width) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+    lines
+}
+
+/// The Failed state's own detail pane (§2.1): the error in full and
+/// the list of what was not reached.
+fn tape_failed_detail_lines(
+    detail: &oscilloscope_core::screens::TapeFailedDetail,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let start = detail
+        .start_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let mut lines = vec![
+        tape_detail_line(
+            vec![
+                Span::styled("Outcome ", muted),
+                Span::styled(
+                    "✗ Failed  ",
+                    Style::default()
+                        .fg(ctx.theme.status_failed)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "{} · {}",
+                        oscilloscope_core::format::format_duration(detail.duration_s),
+                        start.unwrap_or_default()
+                    ),
+                    default,
+                ),
+            ],
+            width,
+        ),
+        tape_detail_line(
+            vec![
+                Span::styled("Step    ", muted),
+                Span::styled(
+                    format!("{} · {}", detail.failing_label, detail.failing_type),
+                    default,
+                ),
+            ],
+            width,
+        ),
+        tape_detail_line(
+            vec![
+                Span::styled("Tokens  ", muted),
+                Span::styled(
+                    format!(
+                        "↑{} ↓{} · ",
+                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_sent),
+                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_received)
+                    ),
+                    default,
+                ),
+                Span::styled(
+                    oscilloscope_core::format::format_tokens_t(
+                        detail.tokens_sent + detail.tokens_received,
+                    ),
+                    default.add_modifier(Modifier::BOLD),
+                ),
+            ],
+            width,
+        ),
+    ];
+    let mut usual_spans = vec![Span::styled("Usual   ", muted)];
+    match (detail.usual_tokens, detail.usual_dev_pct) {
+        (Some(tokens), Some(dev)) => {
+            usual_spans.push(Span::styled(
+                format!(
+                    "{} t ",
+                    oscilloscope_core::format::format_tokens_thousands(tokens)
+                ),
+                default,
+            ));
+            usual_spans.push(Span::styled(
+                format!("{dev:+.0}%"),
+                tape_deviation_style(dev, ctx.theme).add_modifier(Modifier::BOLD),
+            ));
+        }
+        _ => usual_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
+    }
+    lines.push(tape_detail_line(usual_spans, width));
+    lines.push(Line::from(""));
+    lines.push(tape_detail_line(
+        vec![Span::styled("Error", title_bold)],
+        width,
+    ));
+    for line in tape_word_wrap(&detail.error, width) {
+        lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+    }
+    lines.push(Line::from(""));
+    lines.push(tape_detail_line(
+        vec![Span::styled("Not Reached", title_bold)],
+        width,
+    ));
+    for item in &detail.not_reached {
+        lines.push(tape_detail_line(
+            vec![Span::styled(
+                format!("· {item}"),
+                Style::default().fg(ctx.theme.dim),
+            )],
+            width,
+        ));
+    }
+    lines
+}
+
 fn draw_tape_detail(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
     app: &App,
-    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
-    now: &str,
 ) {
-    let title = match &screen.selected {
-        Some(step) => format!(" {} · Selected ", step.breadcrumb),
-        None => " Tape ".to_string(),
+    use oscilloscope_core::screens::TapeHead;
+    let title = match &screen.head {
+        TapeHead::Starting => "Run · Starting".to_string(),
+        TapeHead::Ended { .. } => "Run · Ended".to_string(),
+        TapeHead::Failed { .. } => "Run · Failed".to_string(),
+        TapeHead::Normal => match &screen.selected {
+            Some(step) => format!("{} · Selected", step.breadcrumb),
+            None => "Tape".to_string(),
+        },
     };
-    let border_style = if app.pane == Pane::Details {
-        Style::default().fg(ctx.theme.border_focused)
+    let border_color = if app.pane == Pane::Details {
+        ctx.theme.border_focused
     } else {
-        Style::default().fg(ctx.theme.border)
+        ctx.theme.border
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(ctx.theme.text)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .border_style(border_style);
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let lines = match &screen.selected {
-        Some(step) => {
-            let mut lines = flow_selected_step_lines(step, transcript_view, ctx, now);
-            if let Some((usual, count)) = screen.selected_usual {
-                let dev = step
-                    .tokens
-                    .filter(|_| usual > 0)
-                    .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
-                let dev_text = dev.map(|d| format!("  {d:+.0}%")).unwrap_or_default();
-                lines.push(Line::from(format!(
-                    "Usual   {} t{dev_text} · median of {count} runs",
-                    oscilloscope_core::format::format_tokens_thousands(usual)
-                )));
-            }
-            if let Some(pct) = screen.selected_share_pct {
-                lines.push(Line::from(format!("Share   {pct}% of this run so far")));
-            }
-            lines
-        }
-        None => vec![Line::from("nothing selected")],
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
     };
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let width = content_area.width as usize;
+    let lines = match &screen.head {
+        TapeHead::Starting => screen
+            .starting_detail
+            .as_ref()
+            .map(|d| tape_starting_detail_lines(d, width, ctx))
+            .unwrap_or_default(),
+        TapeHead::Ended { .. } => screen
+            .ended_detail
+            .as_ref()
+            .map(|d| tape_ended_detail_lines(d, width, ctx))
+            .unwrap_or_default(),
+        TapeHead::Failed { .. } => screen
+            .failed_detail
+            .as_ref()
+            .map(|d| tape_failed_detail_lines(d, width, ctx))
+            .unwrap_or_default(),
+        TapeHead::Normal => tape_normal_detail_lines(screen, width, ctx),
+    };
+    frame.render_widget(Paragraph::new(lines), content_area);
 }
 
 /// The too-small screen (§5): below 60×24, the minimum and
@@ -1533,7 +2397,6 @@ fn draw_tape(
     screen: &oscilloscope_core::screens::TapeScreen,
     header: &oscilloscope_core::render::Header,
     app: &mut App,
-    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     icon_frame: u64,
     now: &str,
@@ -1565,7 +2428,7 @@ fn draw_tape(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_tape_detail(frame, body, screen, app, transcript_view, ctx, now);
+        draw_tape_detail(frame, body, screen, app, ctx);
         return;
     }
     if full_area.width >= 120 {
@@ -1586,7 +2449,7 @@ fn draw_tape(
             full_area.height >= 30,
             ctx,
         );
-        draw_tape_detail(frame, cols[1], screen, app, transcript_view, ctx, now);
+        draw_tape_detail(frame, cols[1], screen, app, ctx);
     } else {
         draw_tape_list(
             frame,
@@ -3048,7 +3911,6 @@ pub fn draw(
                 tape_screen,
                 &state.header,
                 app,
-                transcript_view,
                 ctx,
                 icon_frame,
                 now,
@@ -3151,7 +4013,16 @@ pub fn draw(
         }
     }
 
-    draw_totals_row(frame, sections[2], &state.header, false, ctx);
+    draw_totals_row(
+        frame,
+        sections[2],
+        &state.header,
+        false,
+        None,
+        None,
+        None,
+        ctx,
+    );
     draw_status_line_generic(frame, sections[3], &state.header, log_lines, ctx);
     draw_key_bar(frame, sections[4], &screen_key_bar_items(app.screen), ctx);
 
@@ -12321,6 +13192,7 @@ mod highlight_tests {
                 effects_done: 1,
                 effects_planned: Some(1),
                 effects_planned_is_lower_bound: false,
+                effects_planned_full: None,
                 tokens_sent: 0,
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
@@ -12746,6 +13618,62 @@ mod tape_frame_goldens {
         chrono::FixedOffset::west_opt(8 * 3600).unwrap()
     }
 
+    fn fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../design/fixtures")
+    }
+
+    fn load_json(path: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("couldn't read {path:?}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{path:?}: invalid JSON: {e}"))
+    }
+
+    fn demo_plan() -> oscilloscope_core::plan::PlanTree {
+        let doc = fixtures_dir().join("demo.yml");
+        let program = oscilloscope_core::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .unwrap_or_else(|e| panic!("demo.yml doesn't compile: {e}"));
+        oscilloscope_core::plan::PlanTree::from_program(&program)
+    }
+
+    /// A real, disk-backed [`crate::history_io::HistoryHandle`] over
+    /// `design/fixtures/hist/run-h1..3` (issue #678's own "usual"
+    /// figures): each recorded with the real recorder (`history::
+    /// build_record`, unmodified, the same one `design_fixture_
+    /// history_medians_match_the_builders_own_summary` already checks
+    /// against `hist/history.json`), then written under `demo.yml`'s
+    /// own key so [`crate::history_io::apply_history_eta`] finds them
+    /// exactly the way a real run would. The returned [`tempfile::
+    /// TempDir`] must outlive the handle.
+    fn demo_history() -> (tempfile::TempDir, crate::history_io::HistoryHandle) {
+        let plan = demo_plan();
+        let dir = tempfile::tempdir().unwrap();
+        for run in ["hist/run-h1", "hist/run-h2", "hist/run-h3"] {
+            let state = load_json(&fixtures_dir().join(run).join("state.live.json"));
+            let mut model = oscilloscope_core::model::RunModel::new();
+            model.observe(
+                &state,
+                &plan,
+                oscilloscope_core::model::ProcessState::exited(false),
+            );
+            let record = oscilloscope_core::history::build_record(
+                "demo.yml",
+                Some("cof"),
+                &state,
+                &model,
+                &plan,
+            )
+            .unwrap_or_else(|| panic!("{run}: not a finished, recordable run"));
+            oscilloscope_core::history::append_record(dir.path(), "demo.yml", &record).unwrap();
+        }
+        let handle = crate::history_io::HistoryHandle::for_run(
+            Some(dir.path().to_path_buf()),
+            "demo.yml".to_string(),
+        );
+        (dir, handle)
+    }
+
     #[derive(Clone, Copy, PartialEq, Debug)]
     struct MockCellStyle {
         fg: Color,
@@ -12976,6 +13904,7 @@ mod tape_frame_goldens {
                 effects_done: 0,
                 effects_planned: None,
                 effects_planned_is_lower_bound: false,
+                effects_planned_full: None,
                 tokens_sent: 0,
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
@@ -13043,5 +13972,114 @@ mod tape_frame_goldens {
             })
             .unwrap();
         assert_matches_mock(terminal.backend().buffer(), &mock, "tape--toosmall--60x16");
+    }
+
+    fn load_events(path: &std::path::Path) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("couldn't read {path:?}: {e}"))
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+            .collect()
+    }
+
+    fn observe_all_events(
+        model: &mut oscilloscope_core::model::RunModel,
+        events: &[serde_json::Value],
+    ) {
+        for raw in events {
+            if let Some(event) = oscilloscope_core::observe::parse_event(raw) {
+                model.observe_event(&event);
+            }
+        }
+    }
+
+    #[test]
+    fn tape_failed_120x30_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("tape--failed--120x30", &theme);
+        let zone = frame_zone();
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+
+        let run_dir = fixtures_dir().join("run");
+        let state = load_json(&run_dir.join("state.live.json"));
+        let events = load_events(&run_dir.join("events.jsonl"));
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, &events);
+        let process = oscilloscope_core::model::ProcessState::exited(false);
+        let now = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string();
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            process,
+            0.0,
+            &now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(
+            &history,
+            &mut rendered.header,
+            Some(&state),
+            &plan,
+            &now,
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            Some("prime.tests"),
+            true,
+            &now,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.tests".to_string());
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    Some(&state),
+                    &ctx,
+                    0,
+                    &now,
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        assert_matches_mock(terminal.backend().buffer(), &mock, "tape--failed--120x30");
     }
 }

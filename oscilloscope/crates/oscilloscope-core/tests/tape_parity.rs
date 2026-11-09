@@ -96,6 +96,18 @@ fn normalize(mut tape: TapeScreen) -> TapeScreen {
     if let TapeHead::Ended { duration_s, .. } = &mut tape.head {
         *duration_s = 0.0;
     }
+    if let Some(detail) = &mut tape.ended_detail {
+        detail.duration_s = 0.0;
+        detail.start_ts = None;
+        detail.end_ts = None;
+    }
+    if let Some(detail) = &mut tape.failed_detail {
+        detail.duration_s = 0.0;
+        detail.start_ts = None;
+    }
+    if let Some(detail) = &mut tape.starting_detail {
+        detail.eta_ts = None;
+    }
     tape
 }
 

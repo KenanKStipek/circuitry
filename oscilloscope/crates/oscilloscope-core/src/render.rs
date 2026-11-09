@@ -76,7 +76,7 @@ impl RowKind {
         }
     }
 
-    fn from_plan_entry(kind: &PlanEntryKind) -> Self {
+    pub(crate) fn from_plan_entry(kind: &PlanEntryKind) -> Self {
         match kind {
             PlanEntryKind::Leaf(LeafEffectKind::Tool) => RowKind::Tool,
             PlanEntryKind::Leaf(LeafEffectKind::Prompt) => RowKind::Prompt,
@@ -243,6 +243,13 @@ pub struct Header {
     /// shows it with a trailing `+` (`3/3+`) rather than as if it
     /// were exact.
     pub effects_planned_is_lower_bound: bool,
+    /// The compiled plan's own full size (issue #678's Tape Totals
+    /// row), never collapsed to `effects_done` once a run has ended
+    /// early (`effects_planned`'s own rule for every other screen's
+    /// "done of planned") -- a failed or cancelled run's own Totals
+    /// row still reads the document's real size, `3/14`, not `3/3`.
+    /// `None` under the same conditions `effects_planned` is.
+    pub effects_planned_full: Option<u64>,
     pub tokens_sent: u64,
     pub tokens_received: u64,
     pub innermost_loop_eta_s: Option<f64>,
@@ -1412,7 +1419,7 @@ fn build_header(
         (None, _) => fallback_elapsed_s,
     };
 
-    let (effects_planned, effects_planned_is_lower_bound) = if plan.has_plan() {
+    let (effects_planned_full, effects_planned_full_is_lower_bound) = if plan.has_plan() {
         let countable_paths: std::collections::BTreeSet<&String> =
             plan.countable_paths().iter().collect();
         let mut total = 0u64;
@@ -1441,7 +1448,7 @@ fn build_header(
                 lower_bound |= use_lower_bound;
                 continue;
             }
-            let (passes, path_lower_bound) = leaf_pass_count(path, plan, flat);
+            let (passes, path_lower_bound) = leaf_pass_count(path, plan, flat, state);
             total = total.saturating_add(passes);
             lower_bound |= path_lower_bound;
         }
@@ -1449,6 +1456,8 @@ fn build_header(
     } else {
         (None, false)
     };
+    let effects_planned = effects_planned_full;
+    let effects_planned_is_lower_bound = effects_planned_full_is_lower_bound;
     let effects_done_raw = statuses
         .iter()
         .filter(|(path, status)| {
@@ -1612,6 +1621,7 @@ fn build_header(
         effects_done,
         effects_planned,
         effects_planned_is_lower_bound,
+        effects_planned_full,
         tokens_sent,
         tokens_received,
         innermost_loop_eta_s,
@@ -1659,17 +1669,26 @@ fn build_header(
 /// (its body's path is reused verbatim across passes, DESIGN.md
 /// §2.3), so without this, a leaf under one was silently counted as
 /// exactly one pass forever, with no `+` to say otherwise.
-fn leaf_pass_count(
+pub(crate) fn leaf_pass_count(
     leaf_path: &str,
     plan: &PlanTree,
     flat: &BTreeMap<String, NodeMeta>,
+    state: Option<&Value>,
 ) -> (u64, bool) {
     let mut multiplier: u64 = 1;
     let mut lower_bound = false;
     let mut container = String::new();
     for segment in leaf_path.split('.') {
         if segment == "iter_*" {
-            match flat.get(container.as_str()).and_then(|n| n.progress_total) {
+            let total = flat
+                .get(container.as_str())
+                .and_then(|n| n.progress_total)
+                // Issue #678's Starting state: no node has run yet,
+                // so nothing in `flat` has a `progress.total` of its
+                // own, but a plain `each.in` path (`"input.topics"`)
+                // already resolves against the run's own input.
+                .or_else(|| state.and_then(|root| plan.resolve_each_len(&container, root)));
+            match total {
                 Some(total) if total > 0 => multiplier = multiplier.saturating_mul(total),
                 _ => lower_bound = true,
             }
@@ -2007,7 +2026,7 @@ fn all_observed_paths(
         // See `RunModel::observe`'s own matching guard: `prime` is
         // never treated as report-only, and the no-plan fallback only
         // trusts `--events`' own report paths where the plan has no
-        // real entry there and the node's value has the report shape.
+        // real entry there and the node's own value has the report shape.
         let fallback_report = flat
             .get(path)
             .is_some_and(|node| model.is_report_event_path(path, plan, &node.value));
@@ -3505,6 +3524,34 @@ mod tests {
         // #620) alongside the body leaf's own lower bound: 2 + 1.
         assert_eq!(rendered.header.effects_planned, Some(3));
         assert!(rendered.header.effects_planned_is_lower_bound);
+    }
+
+    #[test]
+    fn effects_planned_resolves_a_loops_each_in_before_any_event_at_all() {
+        // Issue #678's Starting state: a named loop's own `each.in`
+        // (a plain dotted path, never a node's `progress.total`,
+        // which doesn't exist before the loop's own first event) is
+        // already enough to know its pass count with no state node
+        // at all -- `effects_planned` must read it as a known total,
+        // not a lower bound.
+        let plan = PlanTree::from_program(&named_loop_with_one_leaf_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"items": ["a", "b", "c", "d"]}});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        // The root and `fan`'s own container both count (issue
+        // #620) alongside the body leaf's own now-known total: 2 + 4.
+        assert_eq!(rendered.header.effects_planned, Some(6));
+        assert!(!rendered.header.effects_planned_is_lower_bound);
     }
 
     #[test]
