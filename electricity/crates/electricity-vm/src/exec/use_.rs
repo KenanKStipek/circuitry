@@ -478,8 +478,11 @@ fn known_concurrency_group_names(runtime_config: &Value) -> BTreeSet<String> {
 }
 
 /// `runtime.state.record_children` (config), off the same
-/// `runtime_config` value.
-fn record_children_enabled(runtime_config: &Value) -> bool {
+/// `runtime_config` value. `pub(crate)`: `decompose::maybe_decompose`
+/// reads the same setting for its own child graft (issue #672 R9),
+/// the same reuse `core/decompose.py` makes of `core/use.py`'s own
+/// `_record_children_enabled`.
+pub(crate) fn record_children_enabled(runtime_config: &Value) -> bool {
     runtime_config
         .as_dict()
         .and_then(|d| d.get(&Value::Str("state".to_string())))
