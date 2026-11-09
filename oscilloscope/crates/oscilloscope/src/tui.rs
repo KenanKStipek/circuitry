@@ -7545,26 +7545,31 @@ fn draw_flow_rail_pane(
         width: inner.width,
         height: 1,
     };
-    let arrow_x = flow_now_arrow_x(&screen.rail.items, app, frame_width).unwrap_or(0);
-    let mut now_text = flow_now_text(header, now, ctx);
-    let now_style = Style::default()
-        .fg(ctx.theme.accent_primary)
-        .add_modifier(Modifier::BOLD);
-    let end_x = scroll + visible_width;
-    let now_end = arrow_x + now_text.chars().count();
-    if now_end < end_x {
-        now_text.push_str(&" ".repeat(end_x - now_end));
+    // Nothing is running at all (every station is either past or
+    // still ahead): there is no live edge for the arrow to point at,
+    // so the line stays blank rather than pointing at the rail's own
+    // left edge, which nothing there is actually live.
+    if let Some(arrow_x) = flow_now_arrow_x(&screen.rail.items, app, frame_width) {
+        let mut now_text = flow_now_text(header, now, ctx);
+        let now_style = Style::default()
+            .fg(ctx.theme.accent_primary)
+            .add_modifier(Modifier::BOLD);
+        let end_x = scroll + visible_width;
+        let now_end = arrow_x + now_text.chars().count();
+        if now_end < end_x {
+            now_text.push_str(&" ".repeat(end_x - now_end));
+        }
+        flow_put(
+            frame.buffer_mut(),
+            now_row,
+            scroll,
+            visible_width,
+            arrow_x,
+            0,
+            &now_text,
+            now_style,
+        );
     }
-    flow_put(
-        frame.buffer_mut(),
-        now_row,
-        scroll,
-        visible_width,
-        arrow_x,
-        0,
-        &now_text,
-        now_style,
-    );
 
     let rail_body_rows = inner.height.saturating_sub(5);
     let rail_area = Rect {
@@ -7677,6 +7682,9 @@ fn draw_flow(
         app.screen = oscilloscope_core::screens::Screen::Tape;
         return;
     }
+    app.flow_has_selection = screen.selected_pass.is_some()
+        || screen.selected_step.is_some()
+        || screen.selected_decision.is_some();
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

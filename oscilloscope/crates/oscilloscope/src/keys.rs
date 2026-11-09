@@ -184,6 +184,12 @@ pub struct App {
     /// for the full-screen view to show yet, only to spring open
     /// once a step finally appears.
     pub signal_has_step: bool,
+    /// The Flow screen's own analogue of `signal_has_step`: whether
+    /// the latest redraw's own rail has anything selected at all
+    /// (a pass, a plain station, or a decision) -- `enter` on Flow
+    /// only toggles the fullscreen pane while this is true, for the
+    /// same reason.
+    pub flow_has_selection: bool,
     /// The Tape's own previews toggle (issue #678, §4's `p`): on by
     /// default at 120 columns and up (§9's settled point 4).
     pub tape_previews_on: bool,
@@ -228,6 +234,7 @@ impl App {
             signal_column_ms: 100,
             signal_now_col: None,
             signal_has_step: false,
+            flow_has_selection: false,
             tape_previews_on: true,
             tape_tokens_view: false,
             tape_fullscreen_step: false,
@@ -532,8 +539,20 @@ impl App {
             // `RowKind::Pass` the run has, in plan order -- never
             // `move_or_scroll`'s own tree-shaped walk, which the
             // rail replaces entirely.
-            KeyCode::Up if self.screen == Screen::Flow => self.flow_select_lane(rows, -1),
-            KeyCode::Down if self.screen == Screen::Flow => self.flow_select_lane(rows, 1),
+            KeyCode::Up | KeyCode::Char('k') if self.screen == Screen::Flow => {
+                self.flow_select_lane(rows, -1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.screen == Screen::Flow => {
+                self.flow_select_lane(rows, 1)
+            }
+            // PageUp/PageDown/Home/End/g/G have no tree to page or
+            // jump through on the Flow screen (the rail replaces it
+            // entirely) -- a no-op there, never `move_or_scroll`'s
+            // or `jump`'s own tree-shaped walk, and never touching
+            // follow either.
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+                if self.screen == Screen::Flow => {}
+            KeyCode::Char('g') | KeyCode::Char('G') if self.screen == Screen::Flow => {}
             KeyCode::Up | KeyCode::Char('k') => self.move_or_scroll(rows, state_rows, -1),
             KeyCode::Down | KeyCode::Char('j') => self.move_or_scroll(rows, state_rows, 1),
             KeyCode::PageUp => {
@@ -629,8 +648,11 @@ impl App {
             KeyCode::Char('-') if self.screen == Screen::Flow => self.flow_fold_lanes(rows),
             // Issue #691: ⏎ opens the selected station or pass
             // full-screen, the same toggle the Tape and Signal
-            // already share.
-            KeyCode::Enter if self.screen == Screen::Flow => {
+            // already share -- only while something actually is
+            // selected (`flow_has_selection`, the same guard Signal's
+            // own `signal_has_step` is), or it would arm with
+            // nothing to open yet and spring open later, unasked.
+            KeyCode::Enter if self.screen == Screen::Flow && self.flow_has_selection => {
                 self.tape_fullscreen_step = !self.tape_fullscreen_step;
             }
             // Issue #678 (design v1 §4): ⏎ on the Tape, or on Signal,
@@ -1870,6 +1892,52 @@ mod tests {
         );
     }
 
+    /// `j`/`k` select a lane on the Flow screen the same way `↑↓`
+    /// do -- never the generic tree walk, which has no rail of its
+    /// own to walk.
+    #[test]
+    fn flow_j_k_select_lanes_the_same_way_up_down_do() {
+        let mut pass0 = row("prime.drafts.iter_0", 2, StatusKind::Running);
+        pass0.kind = RowKind::Pass;
+        let mut pass1 = row("prime.drafts.iter_1", 2, StatusKind::Running);
+        pass1.kind = RowKind::Pass;
+        let rows = [pass0, pass1];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.handle_key(key(KeyCode::Char('j')), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
+        app.handle_key(key(KeyCode::Char('j')), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_1"));
+        app.handle_key(key(KeyCode::Char('k')), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.drafts.iter_0"));
+    }
+
+    /// PageUp/PageDown/Home/End/`g`/`G` have no tree to page or jump
+    /// through on the Flow screen -- a no-op, leaving both the
+    /// selection and follow untouched.
+    #[test]
+    fn flow_page_and_jump_keys_are_no_ops_and_never_touch_follow() {
+        let mut pass0 = row("prime.drafts.iter_0", 2, StatusKind::Running);
+        pass0.kind = RowKind::Pass;
+        let rows = [pass0];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        for code in [
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::Char('g'),
+            KeyCode::Char('G'),
+        ] {
+            app.handle_key(key(code), &visible, &[], true, false, &[]);
+            assert_eq!(app.selected_path, None, "{code:?}");
+            assert!(app.follow, "{code:?}");
+        }
+    }
+
     #[test]
     fn flow_left_right_scroll_and_turn_follow_off() {
         let mut app = App::new(false);
@@ -1907,9 +1975,23 @@ mod tests {
     fn flow_enter_toggles_fullscreen_the_same_as_tape_and_signal() {
         let mut app = App::new(false);
         app.screen = Screen::Flow;
+        app.flow_has_selection = true;
         assert!(!app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
         assert!(app.tape_fullscreen_step);
+    }
+
+    /// Issue #691's own follow-up: `enter` on the Flow screen is a
+    /// no-op with nothing actually selected, the same guard Signal's
+    /// own `signal_has_step` already is -- never arming the toggle
+    /// to spring open, unasked, once a selection finally appears.
+    #[test]
+    fn flow_enter_is_a_no_op_with_nothing_selected() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        assert!(!app.flow_has_selection);
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
+        assert!(!app.tape_fullscreen_step);
     }
 
     #[test]
