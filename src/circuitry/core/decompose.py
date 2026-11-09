@@ -638,7 +638,7 @@ def _validate_generated_yaml(
     """The four checks every generated plan — planned (score trigger) or
     deterministically generated (size trigger) — must pass before it runs:
     the schema, the allowlists, the capability ceiling, and the merge
-    contract (#672 R4). Shared so the size trigger's own, never-planned plan
+    contract (#672). Shared so the size trigger's own, never-planned plan
     runs through exactly the same gate as the score trigger's planner output.
     """
     ok, errors = _validate_inline_yaml(yaml_text)
@@ -821,7 +821,7 @@ def _execute_plan(
                 display_depth=display_depth,
             )
     finally:
-        # Grafted on both success and failure (#672 R9) — whatever the
+        # Grafted on both success and failure (#672) — whatever the
         # child got to, even mid-way through a raised exception; the decomposed
         # node's own `value` stays all-or-nothing regardless (nothing below
         # this reads a partial result on the failure path, since the `raise`
@@ -858,7 +858,7 @@ def _declared_effect_names(parsed: Mapping[str, Any]) -> list[str]:
 def _graft_declared_children(
     node: dict[str, Any], child_state: Mapping[str, Any], declared_names: Sequence[str]
 ) -> None:
-    """``runtime.state.record_children`` (#672 R9): keep the child's own
+    """``runtime.state.record_children`` (#672): keep the child's own
     declared effects under the decomposing node, beside ``value``/``meta``,
     in the shape live state already shows them — the same posture
     :func:`circuitry.core.use._graft_child_record` gives a ``use`` child.
@@ -1029,8 +1029,8 @@ class _SplitPrep:
     """Everything :func:`_prepare_split` worked out about *how* to split.
 
     *template_text*/*message_texts* are the source's own template/messages
-    text, already run through ``{{> name}}`` composition expansion (#672
-    R2) — what :func:`_generate_split_plan` rewrites the split reference's
+    text, already run through ``{{> name}}`` composition expansion (#672)
+    — what :func:`_generate_split_plan` rewrites the split reference's
     tags in, instead of the raw, unexpanded ``defn.template``/``defn.messages``:
     a declared prompt spliced in by the parent's own composition is spliced
     in here too, so the generated plan's child, which declares no
@@ -1058,7 +1058,7 @@ def _resolve_split_budget(
     defn: PromptDefinition, sset: SplittingSettings, resolved_model: str
 ) -> int | None:
     """The token budget this effect splits against, or ``None`` when size
-    does not apply at all (#672 R6's precedence: the effect's own
+    does not apply at all (#672's precedence: the effect's own
     ``split.budget_tokens`` first — splitting even with the runtime switch
     off — then ``splitting.models.<resolved model>``, then
     ``splitting.max_input_tokens``, the last two read only when the runtime
@@ -1077,7 +1077,7 @@ def _resolve_split_budget(
 
 def _native_merge_mode(defn: PromptDefinition) -> str | None:
     """The merge rule by output type alone — ``None`` means the type needs
-    ``split.merge.template`` (#672 R5)."""
+    ``split.merge.template`` (#672)."""
     if defn.prompt_type == "text":
         return "join"
     if defn.prompt_type == "array":
@@ -1094,7 +1094,7 @@ def _native_merge_mode(defn: PromptDefinition) -> str | None:
 def _split_failure(
     base: dict[str, Any], sset: SplittingSettings, reason: str, error: str
 ) -> DecompositionResult:
-    """Size-trigger failure posture (#672 R10): never a route-up — there is
+    """Size-trigger failure posture (#672): never a route-up — there is
     no bigger context window — so ``fallback_model`` is never set at all
     (unlike the score trigger's own failure helper, :func:`_failure`).
     """
@@ -1166,7 +1166,7 @@ def _maybe_split(
 
     # Checked before anything else — no planner here to skip calling, but a
     # ceiling hit still costs nothing beyond the budget comparison above
-    # (#672 R8).
+    # (#672).
     if depth >= sset.max_depth:
         return _split_failure(base, sset, "max_depth", "max depth reached before splitting")
 
@@ -1308,7 +1308,7 @@ def _expand_sources(
 ) -> tuple[list[str], dict[str, str]]:
     """Every *sources* text with ``{{> name}}`` expanded — the same expansion
     :func:`circuitry.core.prompt_compose.render_with_composition` performs
-    (#672 R2) — sharing one synthetic-key counter and one ``extra`` dict
+    (#672) — sharing one synthetic-key counter and one ``extra`` dict
     across every source, so a resolved-effect-reference fragment in one
     ``messages[]`` entry never mints the same key as one in a sibling entry.
     This expansion feeds both the split measurement (below) and the
@@ -1372,7 +1372,7 @@ def _tag_occurrences_and_extensions(
 ) -> tuple[int, list[str]]:
     """How many tags read exactly *reference*, and any tag that reaches
     further into it (``{{reference.sub}}``) — the latter is always a refusal
-    (#672 R3).
+    (#672).
     """
     from .complexity import _TAG_RE
 
@@ -1393,7 +1393,7 @@ def _tag_occurrences_and_extensions(
 
 def _file_message_fixed_tokens(defn: PromptDefinition, ctx: Mapping[str, Any]) -> int:
     """The token cost of every ``messages[].content: {file: ...}`` entry
-    (#672 R2) — excluded from ``_template_sources`` (nothing in it to
+    (#672) — excluded from ``_template_sources`` (nothing in it to
     split), but still sent on every part, so it belongs in the fixed-text
     budget alongside the template's own fixed text.
     """
@@ -1417,7 +1417,7 @@ def _file_message_fixed_tokens(defn: PromptDefinition, ctx: Mapping[str, Any]) -
 
 def _serialize_message_file(source: Any) -> dict[str, Any]:
     """The generated map prompt's own copy of a ``content: {file: ...}``
-    message (#672 R4): the file's text was never the split reference, so
+    message (#672): the file's text was never the split reference, so
     every part still reads the same file, at its own dispatch time — the
     same :class:`~circuitry.core.prompt_files.DispatchFileSource` the source
     prompt compiled, written back out in the one shape the grammar accepts.
@@ -1459,7 +1459,7 @@ def _prepare_split(
 
     if defn.template_file is not None:
         # A dispatch-time file template has no references: the file text
-        # itself is split (#672 R2).
+        # itself is split (#672).
         from .prompt_files import read_dispatch_file
 
         read = read_dispatch_file(
@@ -1547,7 +1547,7 @@ def _prepare_split(
         ]
     # A dispatch-time file message's text never varies with the split
     # reference, but it is still sent on every part, so it counts toward
-    # the fixed text the budget must leave room beside (#672 R2) — even
+    # the fixed text the budget must leave room beside (#672) — even
     # though it is excluded from `sources` above (nothing in it to split).
     fixed_tokens = _estimate_tokens(fixed_text) + _file_message_fixed_tokens(defn, ctx)
 
@@ -1600,7 +1600,7 @@ _SIGIL_TAG_FORMATS: tuple[tuple[str, str], ...] = (
 def _rewrite_exact(text: str, old_path: str, new_name: str) -> str:
     """Rewrite every tag reading exactly *old_path*, every sigil
     (``{{x}}``/``{{{x}}}``/``{{&x}}``/``{{#x}}``/``{{^x}}``/``{{/x}}``), to
-    *new_name* (#672 R4). Extensions were already refused before generation
+    *new_name* (#672). Extensions were already refused before generation
     ever runs, so none remain to worry about here.
     """
     escaped = re.escape(old_path)
@@ -1614,7 +1614,7 @@ def _rewrite_exact(text: str, old_path: str, new_name: str) -> str:
 def _rewrite_prefix(text: str, old_prefix: str, new_prefix: str) -> str:
     """Rewrite every tag whose name is exactly *old_prefix*, or extends it
     with a further dotted path, replacing just the leading segment with
-    *new_prefix* — every sigil, extensions kept verbatim (#672 R4's merge-
+    *new_prefix* — every sigil, extensions kept verbatim (#672's merge-
     template rewrite is the one case an extension is rewritten, not refused).
     """
     from .complexity import _TAG_RE
@@ -1640,7 +1640,7 @@ def _rewrite_prefix(text: str, old_prefix: str, new_prefix: str) -> str:
 
 def _pick_parts_key(ctx: Mapping[str, Any]) -> str:
     """``split_parts``, with ``_`` appended until it collides with no key of
-    the parent's declared inputs (#672 R4).
+    the parent's declared inputs (#672).
     """
     from .state_ns import INPUT_NS
 
@@ -1684,7 +1684,7 @@ def _serialize_timeout_ms(timeout_ms: Any) -> Any:
 
 def _copy_source_fields(defn: PromptDefinition) -> dict[str, Any]:
     """The source prompt's own fields a generated part/merge prompt copies
-    verbatim (#672 R4) — every optional one only when the source actually
+    verbatim (#672) — every optional one only when the source actually
     set it.
     """
     out: dict[str, Any] = {"prompt_type": defn.prompt_type}
@@ -1719,7 +1719,7 @@ def _copy_source_fields(defn: PromptDefinition) -> dict[str, Any]:
 
 def _forwarded_split_config(split_def: SplitDef | None) -> dict[str, Any] | None:
     """The source's own ``split`` block, forwarded onto both generated
-    prompts (#672 R4's hierarchical reduce): every field the source set,
+    prompts (#672's hierarchical reduce): every field the source set,
     unchanged. ``merge.template`` keeps its original, unrewritten form
     (every level rewrites its own copy against its own loop's collected
     value, in :func:`_generate_split_plan` itself) — so a part that is
@@ -1751,12 +1751,12 @@ def _generate_split_plan(
     max_concurrency: int | None,
     ctx: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any], str]:
-    """The generated plan (#672 R4): ``(parts_key, plan dict, result_path)``."""
+    """The generated plan (#672): ``(parts_key, plan dict, result_path)``."""
     ref_path = prep.ref_path
     parts_key = _pick_parts_key(ctx)
     # The loop (and, for a reduce, the merge prompt) is named after the
     # parent's own already-written effects, never the other way around
-    # (#672 R4) — a source template that reads some unrelated existing
+    # (#672) — a source template that reads some unrelated existing
     # effect called "parts"/"merge" (not the split reference) keeps reading
     # it rather than silently seeing this split's own in-flight node.
     loop_name = _pick_effect_name("parts", ctx)
@@ -1810,7 +1810,7 @@ def _generate_split_plan(
             split_def.merge.template, "parts", f"prime.{loop_name}.collected.value"
         )
         merge_prompt["on_error"] = "fail"
-        # A hierarchical reduce (#672 R4): the merge prompt's own input
+        # A hierarchical reduce (#672): the merge prompt's own input
         # (the collected parts) can itself be over budget, so it keeps the
         # same split configuration the source carried, same as the map
         # prompt above.
@@ -1873,7 +1873,7 @@ def _execute_split_plan(
     # A *copy* of the effect's own render context, exactly like the score
     # trigger's child — plus the parts themselves, seeded only into the
     # child's `input` namespace: the parts never appear in the plan YAML
-    # itself (#672 R4), only here, in scratch state the parent never sees.
+    # itself (#672), only here, in scratch state the parent never sees.
     child_state = copy.deepcopy(
         {key: value for key, value in ctx.items() if isinstance(key, str)}
     )
@@ -1883,7 +1883,7 @@ def _execute_split_plan(
         child_state["input"] = input_ns
     input_ns[parts_key] = copy.deepcopy(parts)
     # The resolved-effect-reference fragments `{{> name}}` composition
-    # expansion minted while measuring the split (#672 R2) — the generated
+    # expansion minted while measuring the split (#672) — the generated
     # map/merge template's own tags still read these synthetic top-level
     # keys, so they must resolve here to the same literal text they did
     # when the budget was measured.
@@ -1891,7 +1891,7 @@ def _execute_split_plan(
 
     declared_names = _declared_effect_names(plan_dict)
     # Every name this child's own generated plan declares is cleared from
-    # the copied `prime` first (#672 R4/R12): the loop/merge effect names
+    # the copied `prime` first (#672/R12): the loop/merge effect names
     # are chosen not to collide with the parent's own already-written
     # effects, but clearing them here too means the merged value, at
     # whichever of them `result_path` points into, can only ever be
@@ -1932,7 +1932,7 @@ def _execute_split_plan(
 def _apply_native_merge(
     merge_mode: str, parts_value: Any, *, defn: PromptDefinition, separator: str | None
 ) -> Any:
-    """``join``/``concat`` (#672 R5) — ``reduce`` never reaches here, its own
+    """``join``/``concat`` (#672) — ``reduce`` never reaches here, its own
     merge prompt already wrote the final value.
     """
     if not isinstance(parts_value, list):

@@ -361,7 +361,7 @@ async fn a_successful_decomposition_writes_the_merged_value_and_the_record() {
     assert_eq!(bigs_own_totals, 1, "{events:?}");
 }
 
-/// `runtime.state.record_children` (issue #672 R9): the score trigger's
+/// `runtime.state.record_children` (issue #672): the score trigger's
 /// child grafts its own declared effects (`a`/`b`/`merge`, the plan's own
 /// top-level names) under the decomposing node, alongside `value`/`meta` --
 /// the same posture a `use` child's own `record_children` gives, ported to

@@ -1077,7 +1077,7 @@ pub(crate) async fn execute_prompt(
     let mut dispatch_model = resolved_model.clone();
     if let Some(result) = decomposition {
         set_leaf(store, &meta_node, "decomposition", result.meta);
-        // `runtime.state.record_children` (issue #672 R9):
+        // `runtime.state.record_children` (issue #672):
         // `decompose::maybe_decompose` already filtered this to the
         // child's own declared effects; grafted here, once `value` is
         // written, the same `Slot`-preserving copy a `use` child's own

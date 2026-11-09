@@ -93,7 +93,7 @@ pub struct DecompositionResult {
     pub meta: Value,
     pub posture: Posture,
     /// `runtime.state.record_children`'s own filtered copy of the
-    /// child's declared effects (issue #672 R9, `core/decompose.py::
+    /// child's declared effects (issue #672, `core/decompose.py::
     /// _graft_declared_children`): empty unless the setting is on AND
     /// the plan actually ran and succeeded (never set on a `max_depth`
     /// route-up/run-as-is, or any failure path, which never leaves a
@@ -1049,7 +1049,7 @@ pub(crate) async fn maybe_decompose(
     }
 
     let mut result = success_result(base, value);
-    // `runtime.state.record_children` (issue #672 R9): the child's own
+    // `runtime.state.record_children` (issue #672): the child's own
     // declared effects, grafted alongside `value`/`meta` on the
     // decomposing node -- the caller (`exec::prompt::execute_prompt`)
     // does the actual graft, once it knows `value` is being written.
