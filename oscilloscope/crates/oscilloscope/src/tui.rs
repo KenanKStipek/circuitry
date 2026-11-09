@@ -6168,10 +6168,17 @@ fn decision_detail_lines(
             }
             lines.push(Line::from(text));
         }
+        None if decision.nothing_ran => lines.push(Line::from("→ none  (inferred)")),
         None => lines.push(Line::styled(
             "not yet evaluated",
             Style::default().fg(ctx.theme.dim),
         )),
+    }
+    if let Some(evidence) = &decision.inferred_evidence {
+        lines.push(Line::styled(
+            evidence.clone(),
+            Style::default().fg(ctx.theme.dim),
+        ));
     }
     if let Some(answer) = &decision.answer {
         lines.push(Line::from(format!("answer  {answer}")));

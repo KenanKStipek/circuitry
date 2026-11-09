@@ -3425,6 +3425,11 @@ pub struct SelectedDecision {
     pub inferred: bool,
     pub nothing_ran: bool,
     pub answer: Option<String>,
+    /// Why an *inferred* decision read the branch it did (`None` for
+    /// a named one, whose `meta.branch` is exact and needs no
+    /// explaining) -- an unnamed `if` has no event of its own to
+    /// point at, only which side's own steps actually started.
+    pub inferred_evidence: Option<String>,
 }
 
 /// One named step inside the selected pass (DESIGN.md §2.3's
@@ -3703,6 +3708,7 @@ pub fn build_flow(
                     inferred: false,
                     nothing_ran: false,
                     answer,
+                    inferred_evidence: None,
                 });
             } else {
                 let mut step = build_focused_step(row, flat, plan, model, state, now, run_ended_at);
@@ -3713,6 +3719,45 @@ pub fn build_flow(
                 // status line already reads through `tape_row_label`.
                 step.breadcrumb = tape_row_label(row, flat, plan);
                 selected_step = Some(step);
+            }
+        } else if let Some(path) = selected_path {
+            // An unnamed `if`'s own inferred decision has no row at
+            // all in `rows` (DESIGN.md §1.3: it writes no node and
+            // fires no event) -- its own synthetic `.__if` station
+            // lives only on the rail itself.
+            if let Some(station) = crate::rail::find_station(&rail.items, path) {
+                if station.row_kind == RowKind::If {
+                    let branch = match &station.headline {
+                        crate::rail::Headline::Branch(b) => b.clone(),
+                        _ => None,
+                    };
+                    let nothing_ran = branch.as_deref() == Some("none");
+                    let condition = match &station.detail {
+                        crate::rail::Detail::Condition(c) if !c.is_empty() => {
+                            Some(crate::plan::ConditionInfo {
+                                mode: crate::plan::ConditionMode::Cel,
+                                text: c.clone(),
+                            })
+                        }
+                        _ => None,
+                    };
+                    let inferred_evidence = if nothing_ran {
+                        Some("neither branch's own steps ever started".to_string())
+                    } else {
+                        branch
+                            .as_deref()
+                            .map(|b| format!("{b}'s own steps started running"))
+                    };
+                    selected_decision = Some(SelectedDecision {
+                        label: station.name.clone(),
+                        condition,
+                        branch: if nothing_ran { None } else { branch },
+                        inferred: true,
+                        nothing_ran,
+                        answer: None,
+                        inferred_evidence,
+                    });
+                }
             }
         }
     }
@@ -4870,6 +4915,116 @@ mod tests {
         let decision = screen.selected_decision.expect("a decision selection");
         assert_eq!(decision.branch.as_deref(), Some("then"));
         assert!(!decision.inferred);
+        assert_eq!(
+            decision.condition,
+            Some(crate::plan::ConditionInfo {
+                mode: crate::plan::ConditionMode::Cel,
+                text: "true".to_string()
+            })
+        );
+    }
+
+    fn program_with_an_unnamed_if() -> electricity_bytecode::Program {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "osi-screens-unnamed-if-test-{}-{call}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("doc.yml");
+        std::fs::write(
+            &path,
+            r#"effects:
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: taken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["ok"]
+    else:
+      - name: untaken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["no"]
+"#,
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
+        std::fs::remove_dir_all(&tmp).ok();
+        program
+    }
+
+    /// Issue #691's own follow-up (ported from the removed tree
+    /// screen's own `build_flow_screen_selected_inferred_decision_
+    /// reads_the_condition_and_branch`): selecting an unnamed `if`'s
+    /// own inferred decision station -- no row of its own, since it
+    /// writes no node at all -- gives the Selected pane the same
+    /// condition/branch detail a named one's does, resolved against
+    /// the rail rather than `rows`.
+    #[test]
+    fn build_flow_screen_selected_inferred_decision_reads_the_condition_and_branch() {
+        let plan = PlanTree::from_program(&program_with_an_unnamed_if());
+        let state = json!({
+            "prime": {
+                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
+                "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:05Z"}}
+            }
+        });
+        let flat = flat_from(state.clone());
+        let mut model = RunModel::new();
+        let statuses = model.observe(&state, &plan, ProcessState::Running);
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
+        let rail =
+            crate::rail::build_rail(&rows, &flat, &plan, &base_header(), Some(&state), &utc());
+        let inferred_path = rail
+            .items
+            .iter()
+            .find_map(|it| match it {
+                crate::rail::RailItem::Station(s) if s.path.contains(".__if") => {
+                    Some(s.path.clone())
+                }
+                _ => None,
+            })
+            .expect("an inferred decision station");
+        let screen = build_flow(
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &base_header(),
+            Some(&state),
+            &[],
+            Some(inferred_path.as_str()),
+            &utc(),
+            None,
+            "2026-10-08T11:00:10Z",
+        );
+        assert!(screen.selected_step.is_none());
+        let decision = screen.selected_decision.expect("a decision selection");
+        assert_eq!(decision.branch.as_deref(), Some("then"));
+        assert!(decision.inferred);
         assert_eq!(
             decision.condition,
             Some(crate::plan::ConditionInfo {
