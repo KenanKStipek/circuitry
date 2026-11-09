@@ -1,0 +1,10 @@
+name: split-no-split-point-fixed-text
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    template: "This fixed instruction text alone is already longer than the whole token budget by itself, well before the reference: {{input.doc}}"

@@ -1,0 +1,12 @@
+name: split-no-merge-run-as-is
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    prompt_type: object
+    schema: {type: object, properties: {summary: {type: string}}, required: [summary]}
+    template: "Summarize: {{input.doc}}"

@@ -1,0 +1,14 @@
+prime.big.parts.iter_0.map:
+  - text: "part0 summary"
+prime.big.parts.iter_1.map:
+  - text: "part1 summary"
+prime.big.parts.iter_2.map:
+  - text: "part2 summary"
+prime.big.parts.iter_3.map:
+  - text: "part3 summary"
+prime.big.parts.iter_4.map:
+  - text: "part4 summary"
+prime.big.parts.iter_5.map:
+  - text: "part5 summary"
+prime.big.merge:
+  - text: "combined summary"

@@ -4,8 +4,9 @@ The picker lists local orchestration files and the bundled curation
 library. Selecting one reads its ``interface.inputs`` and generates a typed
 form — one box per declared input, required ones marked, descriptions used
 as hints. Adapter and model dropdowns override resolution for this run
-only, as do the three tri-state Scoring/Routing/Decomposition dropdowns —
-the same switches ``cof run --scoring/--routing/--decompose`` flip, left on
+only, as do the four tri-state Scoring/Routing/Decomposition/Splitting
+dropdowns — the same switches
+``cof run --scoring/--routing/--decompose/--split`` flip, left on
 their "— default" sentinel a launch behaves exactly as the resolved config
 says.
 
@@ -413,6 +414,8 @@ class RunScreen(ViewScreen):
             Select(_switch_options(), value=NO_OVERRIDE, allow_blank=False, id="run-routing"),
             Label("Decomposition", classes="form-label"),
             Select(_switch_options(), value=NO_OVERRIDE, allow_blank=False, id="run-decompose"),
+            Label("Splitting", classes="form-label"),
+            Select(_switch_options(), value=NO_OVERRIDE, allow_blank=False, id="run-split"),
             Horizontal(
                 Button("Launch", variant="primary", id="run-launch"),
                 Button("Cancel run", id="run-cancel", disabled=True),
@@ -481,7 +484,7 @@ class RunScreen(ViewScreen):
             event.stop()
             self._set_custom_model(event.value == CUSTOM_MODEL)
             return
-        if event.select.id in ("run-scoring", "run-routing", "run-decompose"):
+        if event.select.id in ("run-scoring", "run-routing", "run-decompose", "run-split"):
             # Nothing to react to until launch — the chosen value is read
             # straight off the widget in action_launch, same as adapter/model.
             event.stop()
@@ -704,6 +707,7 @@ class RunScreen(ViewScreen):
             scoring_override=_switch_value(self.query_one("#run-scoring", Select)),
             routing_override=_switch_value(self.query_one("#run-routing", Select)),
             decompose_override=_switch_value(self.query_one("#run-decompose", Select)),
+            split_override=_switch_value(self.query_one("#run-split", Select)),
             skip_preflight=False,
             profile_name=self.profile_name,
             trust_document=self._trust_for(self._form.choice),
@@ -1099,7 +1103,7 @@ def _override_value(select: Select[str]) -> str | None:
 
 #: Options for the three complexity-switch dropdowns (Scoring/Routing/
 #: Decomposition): leave the resolved config alone, or force the switch on
-#: or off for this run — the TUI equivalent of --scoring/--routing/--decompose.
+#: or off for this run — the TUI equivalent of --scoring/--routing/--decompose/--split.
 def _switch_options() -> list[tuple[str, str]]:
     return [(f"{NO_OVERRIDE} default", NO_OVERRIDE), ("on", "on"), ("off", "off")]
 

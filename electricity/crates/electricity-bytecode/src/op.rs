@@ -153,6 +153,7 @@ mod python_type_name_tests {
                 retries: None,
                 description: None,
                 group: None,
+                split_budget_tokens: None,
             }))))
             .python_type_name(),
             "PromptDefinition"

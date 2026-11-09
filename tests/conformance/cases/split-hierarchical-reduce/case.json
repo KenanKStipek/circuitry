@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 5: a reduce prompt over budget splits again (hierarchical reduce), bounded by max_depth",
+  "description": "The top-level split's own reduce prompt (split.merge.template) renders long enough, once every part's own reply is combined, to cross the same budget again -- the generated merge prompt carries the source's own split.merge.template forwarded onto it, so it splits again over its own `parts` collected value and reduces one more time, at depth 1 (bounded by splitting.max_depth: 3).",
+  "engines": ["python"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

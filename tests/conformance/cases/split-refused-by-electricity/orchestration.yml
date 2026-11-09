@@ -1,0 +1,7 @@
+name: split-refused-by-electricity
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: greet
+    template: "hello"

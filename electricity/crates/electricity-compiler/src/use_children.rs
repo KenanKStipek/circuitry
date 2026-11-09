@@ -345,6 +345,7 @@ pub fn first_refused_child(
     document: &Value,
     entry_path: Option<&Path>,
     decomposition_enabled: bool,
+    splitting_enabled: bool,
     supported: &electricity_bytecode::Supported<'_>,
 ) -> Option<String> {
     for (label, child) in iter_use_path_children(document, entry_path) {
@@ -359,9 +360,12 @@ pub fn first_refused_child(
         let Ok(program) = crate::compile::compile_document(&child, &origin) else {
             continue;
         };
-        if let Some(refusal) =
-            electricity_bytecode::first_unsupported(&program, decomposition_enabled, supported)
-        {
+        if let Some(refusal) = electricity_bytecode::first_unsupported(
+            &program,
+            decomposition_enabled,
+            splitting_enabled,
+            supported,
+        ) {
             return Some(electricity_bytecode::format_refused_child(&label, &refusal));
         }
     }
@@ -713,9 +717,14 @@ mod tests {
         let entry = dir.join("root.yaml");
         let document = doc_with_effects(vec![use_effect("child", "child.yaml")]);
 
-        let refusal =
-            first_refused_child(&document, Some(&entry), false, &supported_with_use_only())
-                .expect("the child's own shell tool must be refused");
+        let refusal = first_refused_child(
+            &document,
+            Some(&entry),
+            false,
+            false,
+            &supported_with_use_only(),
+        )
+        .expect("the child's own shell tool must be refused");
         assert!(refusal.contains("child.yaml"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -728,7 +737,13 @@ mod tests {
         let document = doc_with_effects(vec![use_effect("child", "child.yaml")]);
 
         assert_eq!(
-            first_refused_child(&document, Some(&entry), false, &supported_with_use_only()),
+            first_refused_child(
+                &document,
+                Some(&entry),
+                false,
+                false,
+                &supported_with_use_only()
+            ),
             None
         );
         let _ = fs::remove_dir_all(&dir);

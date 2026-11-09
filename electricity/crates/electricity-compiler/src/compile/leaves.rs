@@ -388,6 +388,20 @@ pub(crate) fn compile_prompt(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
+    // Only `budget_tokens` is read (issue #672): the rest of `split:` is
+    // never compiled, since the preview refusal fires before anything
+    // else about it would matter.
+    let split_budget_tokens = match effect.get(&Value::Str("split".to_string())) {
+        Some(Value::Dict(split_dict)) => {
+            match split_dict.get(&Value::Str("budget_tokens".to_string())) {
+                Some(Value::Int(i)) => Some(i.to_f64() as i64),
+                Some(Value::Float(f)) if f.fract() == 0.0 => Some(*f as i64),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
     let op = PromptOp {
         content,
         prompt_type,
@@ -404,6 +418,7 @@ pub(crate) fn compile_prompt(
         retries,
         description,
         group,
+        split_budget_tokens,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Prompt(op), on_error))
 }

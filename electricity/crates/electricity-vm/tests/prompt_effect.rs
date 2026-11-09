@@ -43,6 +43,7 @@ fn template_prompt(template: &str) -> PromptOp {
         retries: None,
         description: None,
         group: None,
+        split_budget_tokens: None,
     }
 }
 
@@ -563,6 +564,7 @@ async fn messages_flatten_into_the_prompt_sent_role_content_form() {
         retries: None,
         description: None,
         group: None,
+        split_budget_tokens: None,
     };
     let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
     let adapters = registry_with_scripted();

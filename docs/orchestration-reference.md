@@ -109,6 +109,19 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the final pass's chain survives into `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier pass's own attempts, and its classification, are gone once a retry starts a fresh one |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
+| `split` | object | no | — | `{enabled?: bool, budget_tokens?: int, max_parts?: int, separator?: string, merge?: {template: string}}` — the size trigger's per-effect overlay (see [Complexity Configuration](./complexity-config.md#splitting)). `budget_tokens` splits this effect even with `runtime.complexity.splitting.enabled: false`; `enabled: false` always opts it out. `merge.template` is required for any `prompt_type` other than `text` or an array (`array`, or `json` with an array schema), whose parts the runtime joins/concatenates natively |
+
+When the rendered input exceeds its token budget, the runtime replaces the
+single call with a deterministic fan-out — run through the exact same
+validate/execute path a complexity-decomposed chunk plan does, merged back
+at this effect's own path. The attempt lands at `meta.decomposition`, the
+same key the score trigger (`runtime.complexity.decomposition`) uses,
+distinguished by `trigger: "score"` or `"size"`: a size record carries
+`{decomposed, trigger, estimated_tokens, budget, depth, max_depth, merge,
+split: {path, kind, parts, sizes}, chunk_count, result_path, yaml, outcome,
+reason, error}` and never has `plan`, `fallback_model` or `threshold`. See
+[Complexity Configuration](./complexity-config.md#splitting) for the full
+behaviour and failure semantics.
 
 **Example — text output:**
 ```yaml

@@ -17,10 +17,12 @@ use std::rc::Rc;
 
 use crate::exec::prompt::prompt_type_str;
 use crate::exec::use_::{
-    allowlist_names, resolve_dot_path, run_isolated, sha256_hex, validate_inline_yaml,
+    allowlist_names, record_children_enabled, resolve_dot_path, run_isolated, sha256_hex,
+    validate_inline_yaml,
 };
 use crate::exec::{CtxChain, live_ctx};
-use crate::{CancellationToken, Frame, RunContext, RunObserver, Store, VmError};
+use crate::store::Slot;
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::effects::{PromptContent, PromptOp};
 use electricity_bytecode::{EffectPath, Op, first_unsupported};
 use electricity_compiler::DocumentOrigin;
@@ -86,10 +88,21 @@ pub enum Posture {
 /// `core/decompose.py::DecompositionResult`, reshaped (this module's
 /// own doc comment): `meta` always lands at `meta.decomposition` on
 /// the effect node.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct DecompositionResult {
     pub meta: Value,
     pub posture: Posture,
+    /// `runtime.state.record_children`'s own filtered copy of the
+    /// child's declared effects (issue #672, `core/decompose.py::
+    /// _graft_declared_children`): empty unless the setting is on AND
+    /// the plan actually ran and succeeded (never set on a `max_depth`
+    /// route-up/run-as-is, or any failure path, which never leaves a
+    /// child's effects on the node at all). The caller
+    /// (`exec::prompt::execute_prompt`) grafts these onto the
+    /// decomposing effect's own node once it writes `value`, the same
+    /// `Slot`-preserving copy `exec::use_::graft_child_record` gives a
+    /// `use` child.
+    pub child_record: Vec<(Value, Slot)>,
 }
 
 /// `core/decompose.py::_route_up_model`.
@@ -393,9 +406,16 @@ pub fn validate_plan(
 }
 
 /// `core/decompose.py::maybe_decompose`'s own `base` dict (`:171-180`).
+/// `trigger` (issue #672) always reads `"score"` here — this is the score
+/// trigger's own record construction; the size trigger is a Python-only
+/// preview feature electricity refuses up front rather than running.
 pub fn base_meta(score: f64, settings: &DecompositionSettings, depth: u32) -> Dict {
     let mut dict = Dict::new();
     dict.insert(Value::Str("decomposed".to_string()), Value::Bool(false));
+    dict.insert(
+        Value::Str("trigger".to_string()),
+        Value::Str("score".to_string()),
+    );
     dict.insert(Value::Str("score".to_string()), Value::Float(score));
     dict.insert(
         Value::Str("threshold".to_string()),
@@ -466,6 +486,7 @@ pub fn max_depth_result(mut base: Dict, fallback_model: Option<String>) -> Decom
     DecompositionResult {
         meta: Value::Dict(base),
         posture: Posture::Dispatch { fallback_model },
+        child_record: Vec::new(),
     }
 }
 
@@ -520,6 +541,7 @@ pub fn failure_result(
     DecompositionResult {
         meta: Value::Dict(base),
         posture,
+        child_record: Vec::new(),
     }
 }
 
@@ -538,6 +560,7 @@ pub fn success_result(mut base: Dict, value: Value) -> DecompositionResult {
     DecompositionResult {
         meta: Value::Dict(base),
         posture: Posture::Decomposed(value),
+        child_record: Vec::new(),
     }
 }
 
@@ -586,6 +609,49 @@ pub fn child_seed_state(ctx: &Value, result_path: &str) -> Value {
         }
     }
     Value::Dict(seed)
+}
+
+/// `core/decompose.py::_declared_effect_names`: the plan's own
+/// top-level effect names, in document order, read straight off the
+/// parsed YAML dict (the child can hold sibling effects its own
+/// *copied* render context carried in for template resolution, never
+/// actually run by this dispatch -- only the generated/planned
+/// document's own effects belong on the decomposing node).
+fn declared_effect_names(parsed: &Value) -> Vec<String> {
+    let Some(effects) = parsed
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("effects".to_string())))
+        .and_then(Value::as_list)
+    else {
+        return Vec::new();
+    };
+    effects
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .as_dict()
+                .and_then(|d| d.get(&Value::Str("name".to_string())))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// `core/decompose.py::_graft_declared_children`: every *declared_names*
+/// key the child's own `prime` node holds, as `(key, Slot)` pairs ready
+/// to insert onto the decomposing effect's own node -- filtered, unlike
+/// `exec::use_::graft_child_record`'s blanket copy, for the reason
+/// [`declared_effect_names`]'s own doc comment gives.
+fn declared_children_entries(
+    child_prime: &NodeRef,
+    declared_names: &[String],
+) -> Vec<(Value, Slot)> {
+    child_prime
+        .borrow()
+        .iter()
+        .filter(|(key, _)| matches!(key, Value::Str(s) if declared_names.iter().any(|n| n == s)))
+        .map(|(key, slot)| (key.clone(), slot.clone()))
+        .collect()
 }
 
 /// `core/decompose.py::_execute_plan`'s own missing-result text
@@ -915,7 +981,7 @@ pub(crate) async fn maybe_decompose(
     // absorbed by `on_error`/`on_failure`, nothing written to
     // `meta.decomposition` at all. Checked before anything below ever
     // touches *base* again.
-    if let Some(refusal) = first_unsupported(&plan_program, false, &run_ctx.supported) {
+    if let Some(refusal) = first_unsupported(&plan_program, false, false, &run_ctx.supported) {
         return Err(VmError::Refused {
             refusal,
             child_label: Some(format!("decomposition plan of '{name}'")),
@@ -982,7 +1048,20 @@ pub(crate) async fn maybe_decompose(
         )));
     }
 
-    Ok(Some(success_result(base, value)))
+    let mut result = success_result(base, value);
+    // `runtime.state.record_children` (issue #672): the child's own
+    // declared effects, grafted alongside `value`/`meta` on the
+    // decomposing node -- the caller (`exec::prompt::execute_prompt`)
+    // does the actual graft, once it knows `value` is being written.
+    if record_children_enabled(run_ctx.runtime_config) {
+        if let Ok(Some(child_prime)) =
+            child_store.child(&child_store.root, &Value::Str("prime".to_string()))
+        {
+            let declared = declared_effect_names(&parsed);
+            result.child_record = declared_children_entries(&child_prime, &declared);
+        }
+    }
+    Ok(Some(result))
 }
 
 #[cfg(test)]
@@ -1009,7 +1088,7 @@ mod tests {
         );
         let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
             .expect("the copy compiles");
-        assert!(first_unsupported(&program, false, &Supported::current(&[])).is_none());
+        assert!(first_unsupported(&program, false, false, &Supported::current(&[])).is_none());
     }
 
     #[test]
@@ -1403,7 +1482,14 @@ mod tests {
         let keys: Vec<&str> = base.keys().filter_map(Value::as_str).collect();
         assert_eq!(
             keys,
-            vec!["decomposed", "score", "threshold", "depth", "max_depth"]
+            vec![
+                "decomposed",
+                "trigger",
+                "score",
+                "threshold",
+                "depth",
+                "max_depth"
+            ]
         );
     }
 
@@ -1649,6 +1735,7 @@ mod tests {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
         }
     }
 
