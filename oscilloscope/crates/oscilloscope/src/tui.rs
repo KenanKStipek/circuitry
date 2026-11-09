@@ -372,7 +372,7 @@ fn draw_tape_header_band(
     // `RunStatus`'s own "Running" (true only once it's actually
     // under way) -- the same `run_start_ts.is_none()` the Tape's own
     // head rule already keys off of.
-    // Scoped to the Tape itself: Flow/Time/Cost's own existing
+    // Scoped to the Tape itself: Flow/Signal/Cost's own existing
     // "Running" reading, even before any state has arrived at all
     // (a state-only poll's very first frame), is unrelated to issue
     // #678's own Starting state and keeps its pre-existing meaning.
@@ -721,9 +721,10 @@ fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     items
 }
 
-/// Flow/Time/Cost's own keys (§9's shared chrome around their own,
+/// Flow/Cost's own keys (§9's shared chrome around their own,
 /// unchanged panels): each screen's own existing keys, kept exactly
-/// as before, plus the globals every key bar now carries.
+/// as before, plus the globals every key bar now carries -- the
+/// Tape and Signal draw their own dedicated key bars instead.
 fn screen_key_bar_items(
     screen: oscilloscope_core::screens::Screen,
 ) -> Vec<(&'static str, &'static str)> {
@@ -2931,7 +2932,16 @@ fn draw_signal(
         draw_too_small(frame, full_area, ctx);
         return;
     }
+    // §4: below 80 columns only the Tape is offered -- a resize (or
+    // a stale `1` from a wider terminal) bounces straight back to
+    // it rather than drawing a screen with no key left to leave it
+    // from.
+    if full_area.width < 80 {
+        app.screen = oscilloscope_core::screens::Screen::Tape;
+        return;
+    }
     app.signal_now_col = screen.now_col;
+    app.signal_has_step = screen.selected.is_some();
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2955,11 +2965,20 @@ fn draw_signal(
         draw_signal_detail(frame, body, screen, ctx);
         return;
     }
-    let wide = full_area.width >= 120;
-    let now_pane_rows = signal_now_pane_rows(screen, wide);
+    // §5: the full layout (chart beside/above the Now pane and
+    // Readings) needs 120 columns and 30 rows both -- rows 24-29
+    // drop Readings the same way columns 80-119 do, even at full
+    // width.
+    let wide = full_area.width >= 120 && full_area.height >= 30;
+    let chart_min_rows = (SIGNAL_SENT_ROWS + 1 + SIGNAL_RECEIVED_ROWS) as u16 + 4;
+    let now_pane_max = body.height.saturating_sub(chart_min_rows).max(3);
+    let now_pane_rows = signal_now_pane_rows(screen, wide).min(now_pane_max);
     let rows_split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(now_pane_rows)])
+        .constraints([
+            Constraint::Min(chart_min_rows),
+            Constraint::Length(now_pane_rows),
+        ])
         .split(body);
     draw_signal_chart(frame, rows_split[0], screen, header, wide, ctx);
     if wide {
@@ -3039,9 +3058,10 @@ fn draw_signal_status_line(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The Now pane's own interior height (border included): the full
-/// tier (R6's own 120x30) shows every row the Now pane has; the
-/// 80-119 tier (R6) shows the running rows alone.
+/// The Now pane's own interior height (border included), before its
+/// caller clamps it to whatever the chart can spare: the full tier
+/// (120x30 and up) shows every row the Now pane has; the 80-119
+/// tier shows the running rows alone.
 fn signal_now_pane_rows(screen: &oscilloscope_core::screens::SignalScreen, wide: bool) -> u16 {
     let running = screen.now_pane.running.len();
     if !wide {
@@ -3107,8 +3127,8 @@ fn signal_received_partial_glyph(frac: f64) -> char {
     }
 }
 
-/// One column's own sent bar (R3): `rows` cells, index 0 the
-/// topmost (farthest from the axis), index `rows-1` adjacent to it.
+/// One column's own sent bar: `rows` cells, index 0 the topmost
+/// (farthest from the axis), index `rows-1` adjacent to it.
 fn signal_sent_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<char>> {
     let mut out = vec![None; rows];
     if value == 0 || axis_top == 0 || rows == 0 {
@@ -3126,8 +3146,8 @@ fn signal_sent_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<char
     out
 }
 
-/// One column's own received bar (R3): `rows` cells, index 0
-/// adjacent to the axis, index `rows-1` the farthest from it.
+/// One column's own received bar: `rows` cells, index 0 adjacent to
+/// the axis, index `rows-1` the farthest from it.
 fn signal_received_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<char>> {
     let mut out = vec![None; rows];
     if value == 0 || axis_top == 0 || rows == 0 {
@@ -3147,12 +3167,16 @@ fn signal_received_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<
 
 const SIGNAL_SENT_ROWS: usize = 5;
 const SIGNAL_RECEIVED_ROWS: usize = 2;
-/// The label field's own width (`600 t`, `300 t`, `    0`, ` 80 t`),
-/// plus the one blank gutter column before the trace itself starts
-/// (R1's own "from the frames": the design text never states the
-/// gutter's own width).
-const SIGNAL_LABEL_WIDTH: u16 = 5;
-const SIGNAL_GUTTER: u16 = SIGNAL_LABEL_WIDTH + 1;
+
+/// The visible window's own leftmost column: `focus_col` (the scrub
+/// cursor, or Now while following it) stays on screen, with up to a
+/// quarter of `data_width` still ahead of it once the trace has run
+/// longer than the pane is wide -- a run that still fits inside
+/// `data_width` columns never scrolls at all, column 0 stays the
+/// left edge.
+fn signal_window_start(focus_col: usize, data_width: usize) -> usize {
+    focus_col.saturating_sub(data_width * 3 / 4)
+}
 
 fn draw_signal_chart(
     frame: &mut Frame,
@@ -3181,34 +3205,45 @@ fn draw_signal_chart(
         return;
     }
     let axis_row_y = inner.y + SIGNAL_SENT_ROWS as u16;
-    let data_x = inner.x + SIGNAL_GUTTER;
-    let data_width = (inner.width as usize).saturating_sub(SIGNAL_GUTTER as usize);
+
+    // The label field's own width: wide enough for the widest of the
+    // four axis labels (`1,200 t`, past three digits on a long or
+    // history-heavy run, not just `600 t`), plus the one blank
+    // gutter column before the trace itself starts.
+    let sent_top_label = oscilloscope_core::format::format_tokens_t(screen.sent_axis_top);
+    let sent_half_label = oscilloscope_core::format::format_tokens_t(screen.sent_axis_top / 2);
+    let received_top_label = oscilloscope_core::format::format_tokens_t(screen.received_axis_top);
+    let label_width = [
+        "0",
+        sent_top_label.as_str(),
+        sent_half_label.as_str(),
+        received_top_label.as_str(),
+    ]
+    .iter()
+    .map(|s| s.chars().count())
+    .max()
+    .unwrap_or(1) as u16;
+    let gutter = label_width + 1;
+    let data_x = inner.x + gutter;
+    let data_width = (inner.width as usize).saturating_sub(gutter as usize);
     let buf = frame.buffer_mut();
 
     let dim = Style::default().fg(ctx.theme.dim);
     let border_style = Style::default().fg(border_color);
-    // A label right-aligned in the 5-char field: the padding before
-    // it stays border-coloured, only the text itself is `fg.faint`
-    // (R1's own "from the frames": `80 t`, one char short of the
-    // field, is not drawn with a dim leading space).
+    // A label right-aligned in its own field: the padding before it
+    // stays border-coloured, only the text itself is `fg.faint`
+    // (from the frames: `80 t`, shorter than `600 t`, is not drawn
+    // with a dim leading space).
     let axis_label = |buf: &mut ratatui::buffer::Buffer, y: u16, text: &str| {
-        let pad = (SIGNAL_LABEL_WIDTH as usize).saturating_sub(text.chars().count());
+        let pad = (label_width as usize).saturating_sub(text.chars().count());
         buf.set_string(inner.x, y, " ".repeat(pad), border_style);
         buf.set_string(inner.x + pad as u16, y, text, dim);
     };
-    axis_label(buf, inner.y, &format!("{} t", screen.sent_axis_top));
-    axis_label(
-        buf,
-        inner.y + SIGNAL_SENT_ROWS as u16 / 2,
-        &format!("{} t", screen.sent_axis_top / 2),
-    );
+    axis_label(buf, inner.y, &sent_top_label);
+    axis_label(buf, inner.y + SIGNAL_SENT_ROWS as u16 / 2, &sent_half_label);
     axis_label(buf, axis_row_y, "0");
     buf.set_string(data_x - 1, axis_row_y, " ", dim);
-    axis_label(
-        buf,
-        inner.y + chart_rows as u16 - 1,
-        &format!("{} t", screen.received_axis_top),
-    );
+    axis_label(buf, inner.y + chart_rows as u16 - 1, &received_top_label);
 
     let sent_style = Style::default().fg(ctx.theme.accent_primary);
     let received_style = Style::default().fg(ctx.theme.status_done);
@@ -3218,18 +3253,39 @@ fn draw_signal_chart(
         .fg(ctx.theme.accent_primary)
         .add_modifier(Modifier::BOLD);
 
+    // The trace's own visible window: a run that outgrows the pane's
+    // own width keeps scrolling so the scrub cursor (or Now, while
+    // following it) never runs off the right edge -- every bucket,
+    // mark, step row and seconds label below reads at `start_col +
+    // col`, never the bare column index on its own.
+    let now_col_abs = screen.now_col.unwrap_or(0);
+    let focus_col = screen.cursor_col.unwrap_or(now_col_abs);
+    let start_col = signal_window_start(focus_col, data_width);
+    // `None` (no run started yet) must stay sweep-less, never fall
+    // back to column 0 the way `now_col_abs`'s own window-math
+    // default does.
+    let sweep_col = screen
+        .now_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width)
+        .unwrap_or(usize::MAX);
+    let cursor_col = screen
+        .cursor_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width);
+
     // Two passes: first every column's own glyphs (if any), so the
     // second pass can tell each sent/received row's own blank cells
     // apart by whether they come before or after that row's own
-    // first real glyph (R1's own "from the frames": a row with two
-    // separate bars stays accent/received-tinted across the gap
-    // between them, not just at the bars themselves).
+    // first real glyph (from the frames: a row with two separate
+    // bars stays accent/received-tinted across the gap between
+    // them, not just at the bars themselves).
     let mut sent_glyphs = vec![vec![None; data_width]; SIGNAL_SENT_ROWS];
     let mut received_glyphs = vec![vec![None; data_width]; SIGNAL_RECEIVED_ROWS];
     let mut sent_live_cols = vec![false; data_width];
     let mut received_live_cols = vec![false; data_width];
     for col in 0..data_width {
-        let bucket = screen.buckets.get(col);
+        let bucket = screen.buckets.get(start_col + col);
         let (sent, sent_live) = bucket.map(|b| (b.sent, b.sent_live)).unwrap_or((0, false));
         let (received, received_live) = bucket
             .map(|b| (b.received, b.received_live))
@@ -3250,7 +3306,6 @@ fn draw_signal_chart(
             received_glyphs[i][col] = cell;
         }
     }
-    let sweep_col = screen.now_col.unwrap_or(usize::MAX);
     for (i, row) in sent_glyphs.iter().enumerate() {
         let labeled = i == 0 || i == SIGNAL_SENT_ROWS / 2;
         let first_filled = row.iter().position(Option::is_some).unwrap_or(usize::MAX);
@@ -3263,20 +3318,22 @@ fn draw_signal_chart(
         buf.set_string(data_x - 1, y, " ", gutter_style);
         for col in 0..data_width {
             let x = data_x + col as u16;
-            if col == sweep_col {
-                let text = row[col]
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "\u{2503}".to_string());
-                buf.set_string(x, y, text, now_sweep_style);
-            } else if col > sweep_col {
+            if col > sweep_col {
                 buf.set_string(x, y, " ", now_sweep_style);
             } else if let Some(ch) = row[col] {
+                // A filled cell keeps its own sent/live colour even
+                // at the sweep -- only an empty one there draws the
+                // sweep's own rule instead (a running prompt's live
+                // estimate must still read `≈`, not the sweep's own
+                // bold accent, once it lands in the Now column).
                 let style = if sent_live_cols[col] {
                     dim_sent_style
                 } else {
                     sent_style
                 };
                 buf.set_string(x, y, ch.to_string(), style);
+            } else if col == sweep_col {
+                buf.set_string(x, y, "\u{2503}", now_sweep_style);
             } else if col >= first_filled {
                 buf.set_string(x, y, " ", sent_style);
             } else {
@@ -3301,12 +3358,7 @@ fn draw_signal_chart(
         buf.set_string(data_x - 1, y, " ", gutter_style);
         for col in 0..data_width {
             let x = data_x + col as u16;
-            if col == sweep_col {
-                let text = row[col]
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "\u{2503}".to_string());
-                buf.set_string(x, y, text, now_sweep_style);
-            } else if col > sweep_col {
+            if col > sweep_col {
                 buf.set_string(x, y, " ", now_sweep_style);
             } else if let Some(ch) = row[col] {
                 let style = if received_live_cols[col] {
@@ -3315,6 +3367,8 @@ fn draw_signal_chart(
                     received_style
                 };
                 buf.set_string(x, y, ch.to_string(), style);
+            } else if col == sweep_col {
+                buf.set_string(x, y, "\u{2503}", now_sweep_style);
             } else if col >= first_filled {
                 buf.set_string(x, y, " ", received_style);
             } else {
@@ -3334,11 +3388,11 @@ fn draw_signal_chart(
         screen.marks.iter().copied().collect();
     for col in 0..data_width {
         let x = data_x + col as u16;
-        let ahead = screen.now_col.is_some_and(|now_col| col > now_col);
-        let (ch, style) = if Some(col) == screen.now_col {
+        let ahead = col > sweep_col;
+        let (ch, style) = if col == sweep_col {
             ('\u{2503}', now_sweep_style)
         } else {
-            match marks.get(&col) {
+            match marks.get(&(start_col + col)) {
                 Some(oscilloscope_core::screens::SignalMark::Done) => {
                     ('\u{2713}', Style::default().fg(ctx.theme.status_done))
                 }
@@ -3355,7 +3409,25 @@ fn draw_signal_chart(
         buf.set_string(x, axis_row_y, ch.to_string(), style);
     }
 
-    draw_signal_seconds_row(frame, inner, data_x, data_width, screen, wide, ctx);
+    // The scrub cursor, once it differs from Now: a distinct
+    // selection tint down the whole chart's own height, never the
+    // sweep's own bold accent -- the two stay visually apart even
+    // when only one column separates them.
+    if let Some(c) = cursor_col {
+        if c != sweep_col {
+            let cursor_rect = Rect {
+                x: data_x + c as u16,
+                y: inner.y,
+                width: 1,
+                height: chart_rows as u16,
+            };
+            buf.set_style(cursor_rect, Style::default().bg(ctx.theme.selection_bg));
+        }
+    }
+
+    draw_signal_seconds_row(
+        frame, inner, data_x, data_width, start_col, screen, wide, ctx,
+    );
     let step_rows_y = axis_row_y + 1 + SIGNAL_RECEIVED_ROWS as u16 + 1;
     let step_rows_available = (inner.y + inner.height)
         .saturating_sub(step_rows_y)
@@ -3369,6 +3441,7 @@ fn draw_signal_chart(
             height: step_rows_available,
         },
         data_x,
+        start_col,
         screen,
         ctx,
     );
@@ -3398,30 +3471,38 @@ fn draw_signal_chart(
     );
 }
 
-/// The seconds-mark row (R3): ticks every ten columns at the
-/// default 100 ms per column (scaled with `column_ms` otherwise),
-/// replaced at the Now column by its own label and, at the full
-/// width tier, `Ahead · plan order · usually ends <clock>` after it.
+/// The seconds-mark row: ticks spaced at least about six columns
+/// apart (`cols_per_second`'s own interval at the default 100 ms per
+/// column, a wider few-second step once zoomed out enough that a
+/// one-second step would overlap its own labels), replaced at the
+/// Now column by its own label and, at the full width tier, `Ahead
+/// · plan order · usually ends <clock>` after it.
+#[allow(clippy::too_many_arguments)]
 fn draw_signal_seconds_row(
     frame: &mut Frame,
     inner: Rect,
     data_x: u16,
     data_width: usize,
+    start_col: usize,
     screen: &oscilloscope_core::screens::SignalScreen,
     wide: bool,
     ctx: &DrawCtx,
 ) {
     let y = inner.y + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
     let dim = Style::default().fg(ctx.theme.dim);
-    // The whole data region starts dim (R1's own "from the frames":
-    // the design text never says so, but every cell past the gutter
-    // on this row, ticks and the gaps between them alike, reads
-    // `fg.faint` in the frame, not a plain border-coloured blank).
+    // The whole data region starts dim (from the frames: the design
+    // text never says so, but every cell past the gutter on this
+    // row, ticks and the gaps between them alike, reads `fg.faint`
+    // in the frame, not a plain border-coloured blank).
     frame
         .buffer_mut()
         .set_string(data_x, y, " ".repeat(data_width), dim);
 
-    let now_label_col = screen.now_col.map(|c| c.saturating_sub(1));
+    let now_label_col = screen
+        .now_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width)
+        .map(|c| c.saturating_sub(1));
     let now_x = now_label_col.map(|c| data_x + c as u16);
     let now_style = Style::default()
         .fg(ctx.theme.accent_primary)
@@ -3463,25 +3544,35 @@ fn draw_signal_seconds_row(
         _ => now_label_col.map(|c| data_x + c as u16).unwrap_or(data_x),
     };
 
-    let cols_per_second = (1000.0 / screen.column_ms.max(1) as f64).round() as usize;
-    if cols_per_second > 0 {
-        let mut col = 0usize;
-        let mut seconds = 0u64;
-        while col < data_width {
-            let x = data_x + col as u16;
-            let text = format!("{seconds}s");
-            let text_end = x + text.chars().count() as u16;
-            let before_now = now_x.is_none_or(|n| text_end <= n);
-            let after_everything = wide && x >= occupied_end;
-            if before_now {
-                frame.buffer_mut().set_string(x, y, &text, dim);
-            } else if after_everything {
-                frame.buffer_mut().set_string(x, y, &text, dim);
-                break;
-            }
-            col += cols_per_second;
-            seconds += 1;
+    let cols_per_second = (1000.0 / screen.column_ms.max(1) as f64).round().max(1.0) as u64;
+    // At least six columns between tick labels: at 100 ms per
+    // column (ten columns a second) that's every second, same as
+    // always; past that, whichever whole number of seconds first
+    // keeps consecutive labels from overlapping.
+    let seconds_step = (6u64).div_ceil(cols_per_second).max(1);
+    let mut seconds = 0u64;
+    loop {
+        let abs_col = seconds * cols_per_second;
+        if abs_col < start_col as u64 {
+            seconds += seconds_step;
+            continue;
         }
+        let col = (abs_col - start_col as u64) as usize;
+        if col >= data_width {
+            break;
+        }
+        let x = data_x + col as u16;
+        let text = format!("{seconds}s");
+        let text_end = x + text.chars().count() as u16;
+        let before_now = now_x.is_none_or(|n| text_end <= n);
+        let after_everything = wide && x >= occupied_end;
+        if before_now {
+            frame.buffer_mut().set_string(x, y, &text, dim);
+        } else if after_everything {
+            frame.buffer_mut().set_string(x, y, &text, dim);
+            break;
+        }
+        seconds += seconds_step;
     }
 
     if let (Some(x), Some(label)) = (now_x, &now_label) {
@@ -3494,7 +3585,11 @@ fn draw_signal_seconds_row(
 
 /// One step row's own styled fragments (§2.2's "step rows under the
 /// axis"), already positioned left to right -- the caller draws each
-/// in turn, clipping to the pane's own right edge.
+/// in turn, clipping to the pane's own right edge. Only ever called
+/// for a row whose own start column (`row.col`) is already inside
+/// the trace's own visible window; a tool bar that started before
+/// it but is still running draws its own plain continuation instead
+/// ([`draw_signal_step_rows`]'s own `clipped` branch).
 fn signal_step_row_spans(
     row: &oscilloscope_core::screens::SignalStepRow,
     screen: &oscilloscope_core::screens::SignalScreen,
@@ -3579,37 +3674,98 @@ fn signal_step_row_spans(
     spans
 }
 
+/// A step row visible in the trace's own current window: `visible_col`
+/// is where it actually starts drawing (never before the window's
+/// own left edge), `clipped` when that's later than the row's own
+/// real start column -- a tool bar already running when the window
+/// scrolled past its own start.
+struct SignalVisibleStepRow<'a> {
+    row: &'a oscilloscope_core::screens::SignalStepRow,
+    orig_index: usize,
+    visible_col: usize,
+    clipped: bool,
+}
+
 fn draw_signal_step_rows(
     frame: &mut Frame,
     area: Rect,
     data_x: u16,
+    start_col: usize,
     screen: &oscilloscope_core::screens::SignalScreen,
     ctx: &DrawCtx,
 ) {
+    use oscilloscope_core::screens::SignalStepKind;
     if area.height == 0 {
         return;
     }
     let last_idx = screen.step_rows.len().saturating_sub(1);
     let right_edge = area.x + area.width;
+
+    // Scrolled off the window's own left edge entirely: a plain
+    // point-in-time row (a finished prompt, a decision, a loop's own
+    // heading) just isn't there any more; a tool's own bar keeps
+    // showing, clipped to the window's own edge, for as long as it
+    // is still running past it.
+    let mut visible: Vec<SignalVisibleStepRow> = Vec::new();
     for (i, row) in screen.step_rows.iter().enumerate() {
-        if i as u16 >= area.height {
-            break;
+        match &row.kind {
+            SignalStepKind::Tool { end_col, .. } => {
+                if *end_col < start_col {
+                    continue;
+                }
+                let clipped = row.col < start_col;
+                visible.push(SignalVisibleStepRow {
+                    row,
+                    orig_index: i,
+                    visible_col: row.col.max(start_col),
+                    clipped,
+                });
+            }
+            _ => {
+                if row.col < start_col {
+                    continue;
+                }
+                visible.push(SignalVisibleStepRow {
+                    row,
+                    orig_index: i,
+                    visible_col: row.col,
+                    clipped: false,
+                });
+            }
         }
-        let y = area.y + i as u16;
-        let mut x = data_x + row.col as u16;
+    }
+    // More rows fit in the window than fit the pane's own height:
+    // the most recent ones win, the same way the trace itself keeps
+    // whichever end is actually in view on screen.
+    let shown_from = visible.len().saturating_sub(area.height as usize);
+    for (slot, v) in visible[shown_from..].iter().enumerate() {
+        let y = area.y + slot as u16;
+        let mut x = data_x + (v.visible_col - start_col) as u16;
         if x >= right_edge {
             continue;
         }
+        let spans: Vec<(String, Style)> = if v.clipped {
+            match &v.row.kind {
+                SignalStepKind::Tool { end_col, .. } => {
+                    let style = tape_glyph_style(v.row.row_kind, v.row.status, ctx.theme);
+                    let fill = end_col.saturating_add(1).saturating_sub(start_col);
+                    vec![("\u{2501}".repeat(fill), style)]
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            signal_step_row_spans(v.row, screen, v.orig_index == last_idx, ctx)
+        };
         let mut last_style = None;
-        for (text, style) in signal_step_row_spans(row, screen, i == last_idx, ctx) {
+        for (text, style) in spans {
             if x >= right_edge {
                 break;
             }
             let budget = (right_edge - x) as usize;
             // A plain hard cut, not truncate_text's own ellipsis
-            // marker (R1's own "from the frames": the design text
-            // names no such marker here, and the frame's own rows
-            // run right up to the border with a clean cut instead).
+            // marker (from the frames: the design text names no
+            // such marker here, and the frame's own rows run right
+            // up to the border with a clean cut instead).
             let clipped: String = text.chars().take(budget).collect();
             let width = clipped.chars().count() as u16;
             frame.buffer_mut().set_string(x, y, &clipped, style);
@@ -3617,9 +3773,9 @@ fn draw_signal_step_rows(
             last_style = Some(style);
         }
         // The row's own last span's style continues through its
-        // own trailing blanks to the pane's right edge (R1's own
-        // "from the frames": the design text never says this, the
-        // frame draws every step row's own tail this way).
+        // own trailing blanks to the pane's right edge (from the
+        // frames: the design text never says this, the frame draws
+        // every step row's own tail this way).
         if let Some(style) = last_style {
             if x < right_edge {
                 let fill = (right_edge - x) as usize;
@@ -3630,9 +3786,9 @@ fn draw_signal_step_rows(
 }
 
 /// Pads `spans` out to `width` columns with its own last span's
-/// style (R1's own "from the frames": the design text never says
-/// this, but every row in the Now pane and Readings draws its own
-/// trailing blanks in whichever style ended the row, not a plain
+/// style (from the frames: the design text never says this, but
+/// every row in the Now pane and Readings draws its own trailing
+/// blanks in whichever style ended the row, not a plain
 /// border-coloured blank).
 fn pad_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -5398,10 +5554,51 @@ fn tape_help_lines(ctx: &DrawCtx, unit: u64, history_runs: Option<usize>) -> Vec
 const HELP_OVERLAY_WIDTH: u16 = 72;
 const HELP_OVERLAY_HEIGHT: u16 = 18;
 
-/// Flow/Time/Cost's own Help (issue #678): unlike the Tape, these
-/// keep `s`/`l`/`z`/`v`/`Tab` live until their own part of the
-/// redesign, so their own Help lists them rather than the Tape's
-/// key bar.
+/// §4's own Signal keys, plus the globals every screen's key bar
+/// shares -- the only keys Signal's own key bar advertises, so the
+/// only ones its own Help lists.
+fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        (
+            "← →",
+            "scrub the cursor along the axis",
+            "+ -",
+            "zoom: 50 ms to 1 s a column",
+        ),
+        (
+            "n",
+            "cursor back to Now",
+            "enter",
+            "open the step under the cursor",
+        ),
+        ("0 1 2 3", "Tape Signal Flow Cost", "?", "this help"),
+        ("esc", "close · back", "q", "quit · confirms if running"),
+        ("c", "cancel · confirms", "", ""),
+    ];
+    let mut lines: Vec<Line<'static>> = ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    for _ in 0..7 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
+}
+
+/// Flow/Cost's own Help: unlike the Tape and Signal, these keep
+/// `s`/`l`/`z`/`v`/`Tab` live until their own part of the redesign,
+/// so their own Help lists them rather than those screens' own key
+/// bars.
 fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<&'static str>) {
     use oscilloscope_core::screens::Screen;
     let (title, screen_lines): (&str, &[&str]) = match screen {
@@ -5438,9 +5635,12 @@ fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<
 /// by every screen (replacing the old three-row one), then the
 /// screen currently on display (`app.screen`) — screen 2 (`Flow`,
 /// issue #635) is the tree as control flow, the selected step and the
-/// run's story; screen 1 (`Time`) isn't built yet and draws nothing.
-/// `overview`/`cost_screen`/`flow_screen` are screens 0, 3 and 2's own
-/// models, `Some` only while that screen is actually on display
+/// run's story; screen 1 (`Signal`) draws its own header, body and
+/// key bar entirely on its own, before this function's shared layout
+/// is even reached.
+/// `overview`/`cost_screen`/`flow_screen`/`signal_screen` are
+/// screens 0, 3, 2 and 1's own models, `Some` only while that screen
+/// is actually on display
 /// (issue #626's own performance rule: "models for screens not on
 /// display aren't built"); `cost_layout` is the Cost screen's own
 /// squarify-layout cache, re-laid out only when its own tree or area
@@ -5663,9 +5863,10 @@ pub fn draw(
     draw_dialog_overlay(frame, area, app, details, raw_state, ctx, 50, None);
 }
 
-/// Flow/Time/Cost's own status line (§3.2), until their own part of
-/// the redesign gives them a bespoke one the way the Tape has -- the
-/// run's own latest report, in the theme's own warning/error colour,
+/// Flow/Cost's own status line (§3.2), until their own part of the
+/// redesign gives them a bespoke one the way the Tape and Signal
+/// already have -- the run's own latest report, in the theme's own
+/// warning/error colour,
 /// collapsed to a bare `▸` when it would not fit (issue #610's
 /// behaviour, carried over from the one-line header this replaces),
 /// else the newest line already in the run's own log.
@@ -5800,6 +6001,37 @@ fn draw_dialog_overlay(
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
+        Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Signal => {
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
+            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Signal", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(signal_help_lines(ctx))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
+        }
         Dialog::Help => {
             let (title, lines) = screen_help_text(app.screen);
             let height = (lines.len() as u16 + 2).max(HELP_OVERLAY_HEIGHT);
@@ -5870,7 +6102,7 @@ fn flow_row_lines(
             // glyph is never replaced by `⟲` -- merged (a single
             // observed pass) or not (`loop_progress` still set, more
             // than one pass), it always shows both, the same order
-            // the Time screen's own loop rows already do.
+            // the Tape's own loop rows already do.
             let is_loop_row = row.merged_pass || row.loop_progress.is_some();
             let prefix = if is_loop_row {
                 format!("{indent}{} ⟲ ", status_glyph(row.status.kind))
@@ -12869,12 +13101,12 @@ mod tape_frame_goldens {
             //   elsewhere, matches exactly.
             // - (64,6)-(68,6): the help overlay's own `0 1 2 3`
             //   row names screen `3` `Store` (§2.4); this codebase
-            //   still calls it Cost (issue #678's R3: an unported
-            //   screen keeps its current chip name until its own
-            //   part lands), so matching the frame's own text here
-            //   would mean renaming it a part early, not fixing a
-            //   real bug. `Signal` (part 2) now matches the frame
-            //   exactly, so every other cell on this row does too.
+            //   still calls it Cost, since an unported screen keeps
+            //   its current chip name until its own part lands, so
+            //   matching the frame's own text here would mean
+            //   renaming it a part early, not fixing a real bug.
+            //   `Signal` (part 2) now matches the frame exactly, so
+            //   every other cell on this row does too.
             // - the status line's own row (y=28), below the modal:
             //   same reason as the Normal/Usual goldens' own
             //   (`STATUS_LINE_READS_AN_EARLIER_STEP_120X30`'s own
@@ -13059,6 +13291,103 @@ mod tape_frame_goldens {
         (rendered, signal_screen)
     }
 
+    /// Signal's own status line (§3.2's "newest finished step"):
+    /// `drafts.iter_1.draft` finishes 2 ms after `gate.reply`, but
+    /// the frame still reads `gate › reply finished` -- at the
+    /// 120x30 tier's own row (y=28).
+    const SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30: [(u16, u16); 42] = [
+        (3, 28),
+        (4, 28),
+        (5, 28),
+        (6, 28),
+        (7, 28),
+        (8, 28),
+        (10, 28),
+        (11, 28),
+        (12, 28),
+        (13, 28),
+        (14, 28),
+        (15, 28),
+        (16, 28),
+        (17, 28),
+        (18, 28),
+        (20, 28),
+        (21, 28),
+        (22, 28),
+        (23, 28),
+        (24, 28),
+        (25, 28),
+        (26, 28),
+        (27, 28),
+        (28, 28),
+        (29, 28),
+        (30, 28),
+        (31, 28),
+        (32, 28),
+        (33, 28),
+        (34, 28),
+        (35, 28),
+        (36, 28),
+        (38, 28),
+        (39, 28),
+        (40, 28),
+        (41, 28),
+        (42, 28),
+        (43, 28),
+        (44, 28),
+        (45, 28),
+        (46, 28),
+        (47, 28),
+    ];
+
+    /// Same reason as
+    /// [`SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30`], at the
+    /// 80x24 tier's own row (y=22).
+    const SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24: [(u16, u16); 42] = [
+        (3, 22),
+        (4, 22),
+        (5, 22),
+        (6, 22),
+        (7, 22),
+        (8, 22),
+        (10, 22),
+        (11, 22),
+        (12, 22),
+        (13, 22),
+        (14, 22),
+        (15, 22),
+        (16, 22),
+        (17, 22),
+        (18, 22),
+        (20, 22),
+        (21, 22),
+        (22, 22),
+        (23, 22),
+        (24, 22),
+        (25, 22),
+        (26, 22),
+        (27, 22),
+        (28, 22),
+        (29, 22),
+        (30, 22),
+        (31, 22),
+        (32, 22),
+        (33, 22),
+        (34, 22),
+        (35, 22),
+        (36, 22),
+        (38, 22),
+        (39, 22),
+        (40, 22),
+        (41, 22),
+        (42, 22),
+        (43, 22),
+        (44, 22),
+        (45, 22),
+        (46, 22),
+        (47, 22),
+    ];
+
     #[allow(clippy::too_many_arguments)]
     fn assert_signal_frame(
         name: &str,
@@ -13126,11 +13455,6 @@ mod tape_frame_goldens {
             "cof 0.1.0",
             100,
         );
-        // The status line's own row (y=28): same reason as the
-        // Tape's own `STATUS_LINE_READS_AN_EARLIER_STEP_120X30`
-        // (§3.2's "newest finished step" -- `drafts.iter_1.draft`
-        // finishes 2 ms after `gate.reply`, but the frame still
-        // reads `gate › reply finished`).
         assert_signal_frame(
             "signal--normal--120x30",
             120,
@@ -13138,7 +13462,7 @@ mod tape_frame_goldens {
             &rendered,
             &signal_screen,
             now,
-            &STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
         );
     }
 
@@ -13158,8 +13482,6 @@ mod tape_frame_goldens {
             "cof 0.1.0",
             100,
         );
-        // The status line's own row (y=22): same reason as the
-        // 120x30 golden's own.
         assert_signal_frame(
             "signal--normal--80x24",
             80,
@@ -13167,7 +13489,271 @@ mod tape_frame_goldens {
             &rendered,
             &signal_screen,
             now,
-            &STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
+        );
+    }
+
+    fn empty_header() -> oscilloscope_core::render::Header {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        oscilloscope_core::render::build_folded(
+            "demo.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+            true,
+            &std::collections::BTreeSet::new(),
+        )
+        .header
+    }
+
+    fn draw_chart_only(
+        screen: &oscilloscope_core::screens::SignalScreen,
+        width: u16,
+        height: u16,
+        wide: bool,
+    ) -> ratatui::buffer::Buffer {
+        let header = empty_header();
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                draw_signal_chart(f, area, screen, &header, wide, &ctx);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// A running prompt's own live estimate, landing in the Now
+    /// column exactly as the model already marks it, draws its own
+    /// bar in the faint live style -- never the sweep's own bold
+    /// accent, which would make `≈` indistinguishable from an
+    /// ordinary finished bar.
+    #[test]
+    fn the_live_column_draws_its_bar_faint_not_in_the_sweeps_own_bold_style() {
+        let mut screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(0),
+            cursor_col: Some(0),
+            ..Default::default()
+        };
+        screen
+            .buckets
+            .push(oscilloscope_core::screens::SignalBucket {
+                sent: 300,
+                sent_live: true,
+                ..Default::default()
+            });
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        // The block border takes the first row and column; the
+        // gutter (`600 t` etc., width 6) the next six, then the
+        // bottom-most sent row (index 4) is five rows down.
+        let y = buffer.area.y + 1 + (SIGNAL_SENT_ROWS as u16 - 1);
+        let x = buffer.area.x + 1 + 6;
+        let cell = &buffer[(x, y)];
+        assert_ne!(
+            cell.symbol(),
+            "\u{2503}",
+            "a filled live column keeps its own bar glyph"
+        );
+        assert!(
+            cell.modifier.contains(Modifier::DIM),
+            "a live column's own bar is faint"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::BOLD),
+            "never the sweep's own bold style"
+        );
+    }
+
+    /// A run many times longer than the pane is wide still keeps Now
+    /// on screen -- the trace scrolls rather than losing the sweep
+    /// (and everything after it) off the right edge.
+    #[test]
+    fn the_trace_scrolls_to_keep_now_in_view_on_a_long_run() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(300), // 30s at the default 100ms/column
+            cursor_col: Some(300),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 301],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let axis_row_y = buffer.area.y + SIGNAL_SENT_ROWS as u16;
+        let has_sweep =
+            (0..buffer.area.width).any(|x| buffer[(x, axis_row_y)].symbol() == "\u{2503}");
+        assert!(
+            has_sweep,
+            "Now's own sweep must still be drawn somewhere on screen"
+        );
+    }
+
+    /// The scrub cursor, once it differs from Now, is drawn with its
+    /// own distinct tint -- pressing ←→ must change something visible,
+    /// not just which step `enter` would open.
+    #[test]
+    fn a_scrubbed_cursor_is_drawn_distinctly_from_the_now_sweep() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(10),
+            cursor_col: Some(5),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 11],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let y = buffer.area.y + 1;
+        let cursor_x = buffer.area.x + 1 + 6 + 5;
+        let elsewhere_x = buffer.area.x + 1 + 6 + 2;
+        assert_eq!(
+            buffer[(cursor_x, y)].bg,
+            theme.selection_bg,
+            "the cursor's own column is tinted"
+        );
+        assert_ne!(
+            buffer[(elsewhere_x, y)].bg,
+            theme.selection_bg,
+            "only the cursor's own column is"
+        );
+    }
+
+    /// An axis top of 1,200 or more still fits its own label field,
+    /// with the thousands separator §3.8 asks for -- not cut down to
+    /// `1200` the way a fixed five-character field would.
+    #[test]
+    fn an_axis_top_in_the_thousands_is_never_cut() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 1200,
+            received_axis_top: 80,
+            now_col: Some(0),
+            cursor_col: Some(0),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default()],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let row: String = (0..7)
+            .map(|i| {
+                buffer[(buffer.area.x + 1 + i, buffer.area.y + 1)]
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(row, "1,200 t");
+    }
+
+    /// At a coarse zoom (1 s per column here), second marks keep at
+    /// least six columns between labels rather than printing one
+    /// every column and overlapping -- `0s` and `6s`, not `0s6s`.
+    #[test]
+    fn seconds_marks_stay_spaced_out_at_a_coarse_zoom() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            column_ms: 1000,
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 16, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+        let x0 = buffer.area.x + 1 + 6;
+        let row: Vec<String> = (0..16)
+            .map(|i| buffer[(x0 + i, y)].symbol().to_string())
+            .collect();
+        assert_eq!(row[0], "0", "{row:?}");
+        assert_eq!(row[1], "s", "{row:?}");
+        assert_eq!(row[6], "6", "{row:?}");
+        assert_eq!(row[7], "s", "{row:?}");
+        assert!(
+            row[2..6].iter().all(|c| c == " "),
+            "no overlap between labels: {row:?}"
+        );
+    }
+
+    /// The Help overlay on Signal lists its own keys (§4), not an
+    /// older generic list that has none of them.
+    #[test]
+    fn the_signal_help_overlay_lists_signals_own_keys() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, signal_screen) = build_signal_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            100,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Signal;
+        app.dialog = Dialog::Help;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &crate::highlight::Tracker::new(),
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&signal_screen),
+                    None,
+                    &mut CostLayoutCache::default(),
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Help") && text.contains("Signal"), "{text}");
+        assert!(text.contains("Scrub"), "{text}");
+        assert!(text.contains("Zoom"), "{text}");
+        assert!(text.contains("Now"), "{text}");
+        assert!(
+            !text.contains("fold on/off"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("errors only"),
+            "not the generic list:\n{text}"
         );
     }
 }
