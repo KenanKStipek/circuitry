@@ -746,20 +746,31 @@ fn screen_key_bar_items(
 /// §3.5's token bar: `▰▰▰▰▱▱▱▱   215 t`, eight cells at `unit`
 /// tokens each.
 fn tape_token_bar(total: u64, unit: u64, bold: bool, ctx: &DrawCtx) -> Vec<Span<'static>> {
-    let filled = ((total / unit.max(1)) as usize).min(8);
-    let mut spans = vec![
-        Span::styled(
-            "▰".repeat(filled),
+    // Rounded, not floored: 389 at a 50-token unit reads a full
+    // bar (▰×8), not 7 filled and one empty.
+    let filled = ((total as f64 / unit.max(1) as f64).round() as usize).min(8);
+    let empty = 8 - filled;
+    // The 3-cell gap before the count reads as the empty bar's own
+    // colour (`design/frames/`'s own span grouping) -- or, once the
+    // bar is full and has no empty cells of its own to lend it one,
+    // the filled bar's own colour instead.
+    let mut spans = if empty > 0 {
+        vec![
+            Span::styled(
+                "▰".repeat(filled),
+                Style::default().fg(ctx.theme.accent_primary),
+            ),
+            Span::styled(
+                format!("{}   ", "▱".repeat(empty)),
+                Style::default().fg(ctx.theme.dim),
+            ),
+        ]
+    } else {
+        vec![Span::styled(
+            "▰".repeat(filled) + "   ",
             Style::default().fg(ctx.theme.accent_primary),
-        ),
-        // The 3-cell gap before the count reads as the empty bar's
-        // own colour (`design/frames/`'s own span grouping), not the
-        // count's.
-        Span::styled(
-            format!("{}   ", "▱".repeat(8 - filled)),
-            Style::default().fg(ctx.theme.dim),
-        ),
-    ];
+        )]
+    };
     let count_style = if bold {
         Style::default()
             .fg(ctx.theme.text)
@@ -878,15 +889,24 @@ fn tape_token_column(
             .collect();
         let avg =
             tokens.loop_pass_tokens.iter().sum::<u64>() / tokens.loop_pass_tokens.len() as u64;
+        let suffix = format!(
+            "{} t/p",
+            oscilloscope_core::format::format_tokens_thousands(avg)
+        );
+        // The same 16-column token column the bar fills, with the
+        // suffix right-aligned in it rather than a fixed 3-space gap
+        // -- a run with more passes (a wider sparkline) needs a
+        // narrower gap to still land "t/p" in the same place.
+        let gap = 16usize
+            .saturating_sub(spark.chars().count())
+            .saturating_sub(suffix.chars().count())
+            .max(1);
         return Some(Line::from(vec![
-            Span::styled(spark, Style::default().fg(ctx.theme.accent_secondary)),
             Span::styled(
-                format!(
-                    "   {} t/p",
-                    oscilloscope_core::format::format_tokens_thousands(avg)
-                ),
-                Style::default().fg(ctx.theme.fg_muted),
+                format!("{spark}{}", " ".repeat(gap)),
+                Style::default().fg(ctx.theme.accent_secondary),
             ),
+            Span::styled(suffix, Style::default().fg(ctx.theme.fg_muted)),
         ]));
     }
     match tokens.total() {
@@ -1033,7 +1053,7 @@ fn tape_row_line(
             // own yet) reads left-aligned, its own padding trailing
             // -- only a real bar or a loop's own sparkline, each with
             // a count to line up, is right-aligned.
-            let trailing = row.tokens.total().is_none() && row.tokens.loop_pass_tokens.is_empty();
+            let trailing = row.tokens.total().is_none();
             if pad > 0 && !trailing {
                 spans.push(Span::styled(" ".repeat(pad), bg(what_style)));
             }
@@ -1442,6 +1462,11 @@ fn draw_tape_list(
             header.effects_planned_full,
             screen.usual_so_far_tokens,
             Some(border_color),
+            matches!(
+                screen.head,
+                oscilloscope_core::screens::TapeHead::Ended { .. }
+                    | oscilloscope_core::screens::TapeHead::Failed { .. }
+            ),
             ctx,
         );
     }
@@ -1462,6 +1487,10 @@ fn draw_totals_row(
     effects_planned_override: Option<u64>,
     usual_so_far_tokens: Option<u64>,
     gutter_color: Option<Color>,
+    // §2.1's Ended/Failed states: the run is already over, so there
+    // is no ETA left to show, whatever a stale history-anchored one
+    // might still compute to.
+    suppress_eta: bool,
     ctx: &DrawCtx,
 ) {
     let effects_planned = effects_planned_override.or(header.effects_planned);
@@ -1516,6 +1545,7 @@ fn draw_totals_row(
         let eta_text = header
             .history_eta_ts
             .as_deref()
+            .filter(|_| !suppress_eta)
             .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
         spans.push(Span::styled(
             "· ETA ",
@@ -1604,6 +1634,7 @@ fn draw_totals_row(
     let eta_text = header
         .history_eta_ts
         .as_deref()
+        .filter(|_| !suppress_eta)
         .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
     spans.push(Span::styled(
         "ETA ",
@@ -1861,7 +1892,7 @@ fn tape_normal_detail_lines(
             ],
             width,
         ));
-        for line in tape_word_wrap(prompt_sent, width) {
+        for line in tape_word_wrap(prompt_sent, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
     }
@@ -1883,7 +1914,7 @@ fn tape_normal_detail_lines(
             ],
             width,
         ));
-        for line in tape_word_wrap(reply, width) {
+        for line in tape_word_wrap(reply, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
     }
@@ -2160,10 +2191,14 @@ fn tape_ended_detail_lines(
             vec![Span::styled(handled.what.clone(), default)],
             width,
         ));
-        for line in tape_word_wrap(&handled.exit_on_error, width) {
-            lines.push(tape_detail_line(vec![Span::styled(line, muted)], width));
-        }
-        for line in tape_word_wrap(&handled.error, width) {
+        lines.push(tape_detail_line(
+            vec![Span::styled(
+                truncate_text(&handled.exit_on_error, width),
+                muted,
+            )],
+            width,
+        ));
+        for line in tape_word_wrap(&handled.error, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, muted)], width));
         }
     }
@@ -2173,7 +2208,7 @@ fn tape_ended_detail_lines(
             vec![Span::styled("Summary", title_bold)],
             width,
         ));
-        for line in tape_word_wrap(summary, width) {
+        for line in tape_word_wrap(summary, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
     }
@@ -2271,7 +2306,7 @@ fn tape_failed_detail_lines(
         vec![Span::styled("Error", title_bold)],
         width,
     ));
-    for line in tape_word_wrap(&detail.error, width) {
+    for line in tape_word_wrap(&detail.error, width.saturating_sub(1)) {
         lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
     }
     lines.push(Line::from(""));
@@ -4076,6 +4111,7 @@ pub fn draw(
         None,
         None,
         None,
+        false,
         ctx,
     );
     draw_status_line_generic(frame, sections[3], &state.header, log_lines, ctx);
@@ -14322,6 +14358,48 @@ mod tape_frame_goldens {
             |_| {},
             now,
             &allowed_cells,
+        );
+    }
+
+    #[test]
+    fn tape_ended_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let run_dir = fixtures_dir().join("run2");
+        let state = load_json(&run_dir.join("state.live.json"));
+        let events = load_events(&run_dir.join("events.jsonl"));
+        let now = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::exited(false),
+            &now,
+            "cof",
+            Some("prime.flaky"),
+            true,
+        );
+        // One cell allow-listed, the same rounding discrepancy as
+        // the Starting golden's own: the design's `hist/run-h1..3`
+        // give a real median wall time of ~5.0565s, which rounds to
+        // `5.1s` under this renderer's own round-half-up
+        // `format_duration`; the frame itself reads `5.0s` in the
+        // detail pane's own Usual line.
+        assert_tape_frame(
+            "tape--ended--120x30",
+            120,
+            30,
+            &rendered,
+            &tape_screen,
+            Some("prime.flaky"),
+            |_| {},
+            &now,
+            &[(103, 4)],
         );
     }
 }

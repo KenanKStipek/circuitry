@@ -1627,12 +1627,8 @@ fn build_tape_ended_detail(
     let decision_text = rows
         .iter()
         .find(|r| r.kind == RowKind::If)
-        .and_then(|r| {
-            flat.get(&r.path)
-                .and_then(|n| n.branch.clone())
-                .map(|b| (r, b))
-        })
-        .map(|(r, branch)| format!("{} → {branch}", tape_row_label(r, flat, plan)));
+        .filter(|r| flat.get(&r.path).is_some_and(|n| n.branch.is_some()))
+        .map(|r| tape_row_label(r, flat, plan));
     let largest = items.iter().find_map(|item| match item {
         TapeItem::Row(row) if row.tokens.is_largest => {
             Some((row.label.clone(), row.tokens.total().unwrap_or(0)))
@@ -1842,7 +1838,25 @@ pub fn build_tape(
             bucket1.push(row);
         }
     }
+    // Once the run is no longer live (Ended/Failed/Cancelled/
+    // Aborted), finished rows read in plan order, not real finish
+    // order: `rows` itself is already walked depth-first in exactly
+    // that order (`walk_rows`/`child_segments`, a pass grouped with
+    // its own every leaf before the next pass's), and a real finish
+    // order over this same run scrambles a loop's own passes by
+    // whichever of two near-simultaneous steps the engine happened
+    // to write first. Only while the run is actually running does
+    // "the order they finished" (§2.1) mean anything to show.
+    let row_order: BTreeMap<&str, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.path.as_str(), i))
+        .collect();
+    let finished_order = header.status == RunStatus::Running;
     let sort_key = |row: &&Row| -> f64 {
+        if !finished_order {
+            return *row_order.get(row.path.as_str()).unwrap_or(&usize::MAX) as f64;
+        }
         let node = flat.get(&row.path);
         let ts = node
             .and_then(|n| n.completed_at.as_deref())
