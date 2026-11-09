@@ -1,5 +1,5 @@
-"""`cof run --scoring/--routing/--decompose` — the CLI tier of the three
-complexity switches.
+"""`cof run --scoring/--routing/--decompose/--split` — the CLI tier of the
+four complexity switches.
 
 Mirrors `test_run_adapter_model_flags.py`'s shape: flags win over config in
 both directions, `--last` replays them, and the prerequisite error a flag
@@ -161,21 +161,70 @@ def test_no_decompose_flag_forces_decomposition_off_over_config(tmp_path: Path) 
     assert settings["sources"]["complexity.decomposition"] == "cli"
 
 
-def test_all_three_flags_together(tmp_path: Path) -> None:
+def test_split_flag_forces_splitting_on_over_config(tmp_path: Path) -> None:
     orch = _write_orch(tmp_path)
-    cfg = _write_config(tmp_path, complexity={"routing": {"bands": _BANDS}})
+    cfg = _write_config(
+        tmp_path,
+        complexity={"splitting": {"enabled": False, "max_input_tokens": 1000}},
+    )
+
+    settings = _run(tmp_path, str(orch), "--config", str(cfg), "--split")
+
+    assert settings["runtime"]["complexity"]["splitting"]["enabled"] is True
+    assert settings["sources"]["complexity.splitting"] == "cli"
+
+
+def test_no_split_flag_forces_splitting_off_over_config(tmp_path: Path) -> None:
+    orch = _write_orch(tmp_path)
+    cfg = _write_config(
+        tmp_path,
+        complexity={"splitting": {"enabled": True, "max_input_tokens": 1000}},
+    )
+
+    settings = _run(tmp_path, str(orch), "--config", str(cfg), "--no-split")
+
+    assert settings["runtime"]["complexity"]["splitting"]["enabled"] is False
+    assert settings["sources"]["complexity.splitting"] == "cli"
+
+
+def test_split_flag_needs_no_scoring_prerequisite(tmp_path: Path) -> None:
+    """Unlike --routing/--decompose, --split has no scoring prerequisite."""
+    orch = _write_orch(tmp_path)
+    cfg = _write_config(tmp_path, complexity={"splitting": {"max_input_tokens": 1000}})
+
+    settings = _run(tmp_path, str(orch), "--config", str(cfg), "--split")
+
+    assert settings["runtime"]["complexity"]["splitting"]["enabled"] is True
+    assert settings["sources"]["complexity.scoring"] == "default"
+
+
+def test_all_four_flags_together(tmp_path: Path) -> None:
+    orch = _write_orch(tmp_path)
+    cfg = _write_config(
+        tmp_path,
+        complexity={"routing": {"bands": _BANDS}, "splitting": {"max_input_tokens": 1000}},
+    )
 
     settings = _run(
-        tmp_path, str(orch), "--config", str(cfg), "--scoring", "--routing", "--decompose"
+        tmp_path,
+        str(orch),
+        "--config",
+        str(cfg),
+        "--scoring",
+        "--routing",
+        "--decompose",
+        "--split",
     )
 
     complexity = settings["runtime"]["complexity"]
     assert complexity["scoring"]["enabled"] is True
     assert complexity["routing"]["enabled"] is True
     assert complexity["decomposition"]["enabled"] is True
+    assert complexity["splitting"]["enabled"] is True
     assert settings["sources"]["complexity.scoring"] == "cli"
     assert settings["sources"]["complexity.routing"] == "cli"
     assert settings["sources"]["complexity.decomposition"] == "cli"
+    assert settings["sources"]["complexity.splitting"] == "cli"
 
 
 def test_no_flags_preserves_existing_complexity_precedence(tmp_path: Path) -> None:
@@ -252,16 +301,21 @@ def test_last_replays_the_complexity_flags(
         complexity={"scoring": {"enabled": True}, "routing": {"bands": _BANDS}},
     )
 
-    _run(tmp_path, str(orch), "--config", str(cfg), "--routing", "--no-decompose")
+    _run(
+        tmp_path, str(orch), "--config", str(cfg), "--routing", "--no-decompose", "--no-split"
+    )
 
     stashed = json.loads((fake_dir / "last-run.json").read_text(encoding="utf-8"))
     assert stashed["routing"] is True
     assert stashed["decompose"] is False
+    assert stashed["split"] is False
     assert stashed["scoring"] is None
 
     replayed = _run(tmp_path, "--last")
     complexity = replayed["runtime"]["complexity"]
     assert complexity["routing"]["enabled"] is True
     assert complexity["decomposition"]["enabled"] is False
+    assert complexity["splitting"]["enabled"] is False
     assert replayed["sources"]["complexity.routing"] == "cli"
     assert replayed["sources"]["complexity.decomposition"] == "cli"
+    assert replayed["sources"]["complexity.splitting"] == "cli"
