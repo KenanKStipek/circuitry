@@ -224,6 +224,11 @@ fn py_truthy(value: &Value) -> bool {
 enum Reply {
     Text {
         text: String,
+        /// `chunks`, when the reply had any -- delivered as deltas
+        /// before the reply completes (#676), each one a call to
+        /// `on_progress`. `text`, when also given, equals their
+        /// concatenation already (checked at load time below).
+        chunks: Option<Vec<String>>,
         tokens_sent: Option<i64>,
         tokens_received: Option<i64>,
         finish_reason: Option<String>,
@@ -235,10 +240,8 @@ enum Reply {
     },
 }
 
-/// `adapters/scripted.py::_TEXT_REPLY_KEYS`. `chunks` (issue #674) is a
-/// python-only *delivery* key -- this engine never streams, so it folds
-/// straight into `text` at load time (below) rather than ever being kept
-/// on `Reply::Text` itself.
+/// `adapters/scripted.py::_TEXT_REPLY_KEYS`. `chunks` (#674/#676)
+/// delivers each chunk as a progress delta before the reply completes.
 const TEXT_REPLY_KEYS: &[&str] = &[
     "text",
     "chunks",
@@ -494,7 +497,7 @@ fn parse_reply(
     // null`, `finish_reason: null`, ...) -- so `None`/`Value::None` share
     // one branch here too, distinct from a *present, wrong-type* value.
     let text = match dict.get(&key("text")) {
-        None | Some(Value::None) => match chunks {
+        None | Some(Value::None) => match &chunks {
             Some(chunks) => chunks.join(""),
             None => {
                 return Err(scripted_error(format!(
@@ -503,7 +506,7 @@ fn parse_reply(
             }
         },
         Some(Value::Str(s)) => {
-            if let Some(chunks) = chunks {
+            if let Some(chunks) = &chunks {
                 if *s != chunks.join("") {
                     return Err(scripted_error(format!(
                         "{prefix}: 'text' does not equal the concatenation of 'chunks'"
@@ -531,6 +534,7 @@ fn parse_reply(
     };
     Ok(Reply::Text {
         text,
+        chunks,
         tokens_sent,
         tokens_received,
         finish_reason,
@@ -812,10 +816,27 @@ impl Adapter for ScriptedAdapter {
             }
             Reply::Text {
                 text,
+                chunks,
                 tokens_sent,
                 tokens_received,
                 finish_reason,
             } => {
+                // `adapters/scripted.py::ScriptedAdapter.generate`: each
+                // `chunks` entry is one delta, delivered in order before
+                // the reply completes (#676) -- never when there is no
+                // `on_progress` wired for this call at all.
+                if let Some(chunks) = chunks {
+                    if let Some(on_progress) = call.on_progress {
+                        for chunk in chunks {
+                            on_progress(electricity_vm::adapter::GenerateProgress {
+                                delta_chars: chunk.chars().count(),
+                                delta_count: 1,
+                                tokens_sent: None,
+                                tokens_received: None,
+                            });
+                        }
+                    }
+                }
                 let mut raw = Dict::new();
                 raw.insert(key("path"), Value::Str(path));
                 Ok(GenerateResult {
@@ -829,6 +850,10 @@ impl Adapter for ScriptedAdapter {
                 })
             }
         }
+    }
+
+    fn streams(&self) -> bool {
+        true
     }
 
     /// `adapters/scripted.py::ScriptedAdapter.check` -- loads the file
@@ -1440,6 +1465,34 @@ mod tests {
             Reply::Text { text, .. } => assert_eq!(text, "ab"),
             Reply::Error { .. } => panic!("expected a text reply"),
         }
+    }
+
+    #[test]
+    fn streams_reports_true() {
+        let adapter = ScriptedAdapter::new("scripted", Value::Str("x.yaml".to_string()));
+        assert!(adapter.streams());
+    }
+
+    #[tokio::test]
+    async fn generate_delivers_each_chunk_as_a_progress_delta() {
+        let yaml = "prime.x:\n  - chunks: [\"a\", \"bc\"]\n";
+        let (_dir, file) = write_replies(yaml, ".yaml");
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
+        let token = CancellationToken::new();
+        let path = EffectPath::root().push_name("x");
+        let seen = std::cell::RefCell::new(Vec::new());
+        let on_progress = |p: electricity_vm::adapter::GenerateProgress| {
+            seen.borrow_mut().push(p.delta_chars)
+        };
+        let mut call = call_ctx(&path, &token);
+        call.on_progress = Some(&on_progress);
+        let result = adapter
+            .generate("m", "p", &GenerateOptions::default(), &call)
+            .await
+            .unwrap();
+        assert_eq!(result.text, "abc");
+        assert_eq!(*seen.borrow(), vec![1, 2]);
     }
 
     #[test]
