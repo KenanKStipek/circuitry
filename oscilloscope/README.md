@@ -97,7 +97,7 @@ osi watch ./run --plan do-thing.yml --config config.json -e key=value
 each step took, its tokens and cost, and how the run ended. From these
 records it works out what is usual for each step (p50/p90) and, once
 there are enough runs of the same version of a document, an ETA for the
-whole run -- shown in the header, `--glance`, and the overview.
+whole run -- shown in the header, `--glance`, and the Tape.
 
 - **Where:** `$XDG_STATE_HOME/circuitry/osi/history/` --
   `~/.local/state/circuitry/osi/history/` by default, on macOS as well as
@@ -134,51 +134,50 @@ On a TTY, `osi <doc>` and `osi watch <dir>` show the interactive terminal UI
 (DESIGN.md §6.3) instead of the plain-text stream. `--log`, or any non-TTY
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
-osi has four screens, switched with `0`-`3`: the overview (`0`, the
+osi has four screens, switched with `0`-`3`: the Tape (`0`, the
 default for both `osi <doc>` and `osi watch`), time (`1`, a clock-axis
 timeline, below), flow (`2`, the tree as control flow, below) and cost
 (`3`, below). Selection, follow, folding, filters and collapsed rows
 are shared across every screen.
 
-Every screen shares one header line: the scope icon's own animated
-trace (a static `◉` with `--no-animation`), the document, `♥` while
-the engine process is alive, the run's status and elapsed time, the
-current clock time, the innermost running loop's ETA, the latest report
-(#610, once one has arrived), and the screen tabs. When
-it's short of room: the tabs shrink to their own numbers first, then the
+Time, flow and cost share one header line: the scope icon's own
+animated trace (a static `◉` with `--no-animation`), the document, `♥`
+while the engine process is alive, the run's status and elapsed time,
+the current clock time, the innermost running loop's ETA, the latest
+report (#610, once one has arrived), and the screen tabs. When it's
+short of room: the tabs shrink to their own numbers first, then the
 report truncates (down to a bare `▸`), then the document (keeping its
 own tail), then the ETA goes — status, elapsed and the clock never
 truncate. `osi watch` names the document from the run's own
-`runtime.last_run.orchestration_path`.
+`runtime.last_run.orchestration_path`. The Tape draws its own header
+band instead (below).
 
-### The overview (`0`)
+### The Tape (`0`)
 
-A phase strip (the document's own top-level steps, with a single-child
-wrapper folded into one breadcrumb, each with its own status glyph,
-start time and duration); a now pane (the run's latest log lines next
-to whichever step follow selects — its breadcrumb, kind, provider or
-model, since/elapsed, and, for a prompt, its token estimate and a
-prompt snippet, for a tool its rendered command, for a running agent
-session its own live summary (engine, model, turn and tool-call
-counts, tokens sent/received and cost — a figure the CLI doesn't
-report live reads `—`, never `0` — context size against its window
-when known, files/lines changed, the last test command's own outcome
-worked out from the transcript, and a glyph strip plus a clock-timed
-line per recent tool call, both from the same transcript, tailed only
-while this step is on screen; with no transcript tailed yet, the same
-activity reads from `meta.live`'s own tool names and counts instead);
-the last finished step with nothing running (a finished agent reads
-the same way any other finished tool step does),
-or the run's own outcome, start-end and totals once it has ended); and
-three cards —
-time (start/end, elapsed, ETA, a bar of the top-level steps' own
-durations, the slowest finished one), flow (effects done out of
-planned, failures, the latest decisions or reports, loop progress, the
-next pending step, quick steps) and cost (tokens in/out, cost once any
-effect reports one, the store with the most tokens -- the same store
-the Cost screen's own table ranks first, what's in flight). The
-effects count that used to be in the header lives in the flow card
-now; the Flow screen's own flow pane title keeps it too.
+osi's own design document (`oscilloscope/design/tui-design.md`) is the
+intent this screen implements; this section is what has actually
+shipped of it.
+
+One time axis: finished rows in the order they finished, each
+prompt followed by its own faint preview line when previews are on
+(`p`); the Now band, holding its place as the list grows; the rows
+currently running, bold, with how long they've run; a slots rule while
+a loop is dispatching passes concurrently; the rows still ahead, faint,
+with what they'll do and (once there are three or more finished runs of
+the same document) `usually N t` from history; Run End. Every row's
+token column is a fixed-scale bar (`▰ = 50 t`, or finer once a run's
+own usual steps are small enough); `t` swaps it for each row's own
+deviation from its usual figure instead. The detail pane shows the
+selected row's status, type, tokens, its usual tokens and how this run
+compares, its share of the run's tokens so far, and the prompt sent and
+the reply in full; `enter` opens the same content full-screen. A
+Totals row (tokens, the run's own deviation from usual, effects done,
+ETA, cost) is pinned above the list's own bottom border.
+
+At 80–119 columns the detail pane drops; `enter` opens the step's
+details over the list instead. At 60–79 columns the list keeps only
+the glyph, the name and the token column. Below 60×24, a plain
+too-small notice names the minimum and points at `osi --log`.
 
 ### `--glance`
 
@@ -194,7 +193,7 @@ terminal, only that one final line is ever printed.
 ### Screen 1 (`time`): a clock-axis timeline
 
 The timeline (top) is one row per folded step (the same breadcrumbs,
-`pass N of M` and quick-steps folding the overview and Flow use) with a
+`pass N of M` and quick-steps folding the Tape and Flow use) with a
 bar on a shared clock axis, start and duration columns on the right. The
 axis runs from the run's own start to the later of now and the usual
 (p90) end while the run is going, plus a small margin, or start to end
@@ -287,7 +286,7 @@ prompt's text, a tool's rendered command, or an agent's own first line
 of prompt text (the file's own path, for a prompt read from one) under
 "asked", what it's doing right now (a running prompt's token estimate, a
 running tool's elapsed time, or a running agent's own live summary — the
-same one the overview's now pane shows, including its transcript's last
+same one the Tape's own detail pane shows, including its transcript's last
 few tool calls and the last test command's own outcome, tailed only while
 this step is selected), and, once it finishes, its
 value or reply, tokens, cost and any error under "produced" (a running step
@@ -345,12 +344,12 @@ filter or a resize. `--theme <name>` (or `OSI_THEME`) paints the whole
 screen in one of ten named colour themes (`dracula`, `nord`, `solarized-
 dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
 `tokyo-night`, `one-dark`) instead of the terminal's own default colours;
-`t` cycles through them live. `--no-animation` turns the highlight fade and
+`T` cycles through them live. `--no-animation` turns the highlight fade and
 the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 
 | Key | Action |
 |---|---|
-| `0` | the overview |
+| `0` | the Tape |
 | `2` | flow (this screen) |
 | `1` | time (above) |
 | `3` | cost (below) |
@@ -367,7 +366,7 @@ the scope icon's own trace off, both on `osi <doc>` and `osi watch`.
 | `e` | errors only |
 | `/` | filter |
 | `v` | show the full value; `v` again cycles between the prompt and the value when the row has both |
-| `t` | cycle the colour theme |
+| `T` | cycle the colour theme |
 | `c` | cancel, with a confirm (the same as a confirmed `q`) |
 | `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osi watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
 | Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osi watch` always just detaches |
@@ -396,9 +395,9 @@ full tree, and `⏎` expands a quick-steps row in place. A named `if`'s own
 row never folds into a breadcrumb, so its `◆` stays visible even with a
 single child. A loop pass with more than one step is labelled
 `pass N of M` there (the state pane keeps the real `iter_N` key). A
-running `agent` tool step counts in the overview's cost card's own
-in-flight line next to running prompts (`2 prompts · 1 agent in flight`),
-with no token estimate of its own. A step with a `meta.live` whose own
+running `agent` tool step counts next to running prompts in any in-flight
+line that shows one (`2 prompts · 1 agent in flight`), with no token
+estimate of its own. A step with a `meta.live` whose own
 `updated_at` is within 5 seconds of now counts as running there too,
 with no `--events` needed at all; an interrupted run's own leftover
 `meta.live`, whose `updated_at` has stopped moving, reads as stopped
@@ -419,7 +418,7 @@ a loop's single pass merged into one row, a quick-steps row folded with
 its own footer total, and the story:
 
 ```
-⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0 overview  [2 flow]  3 cost                           
+⠤⠤⠤⠤⠤⠤⠤⠤ do-thing.yml · ok 2.0s · 00:00:02   0 tape  [2 flow]  3 cost                           
 ┌ flow (do-thing · 8/8) ◆ decision ⟲ loop ▶ running ─────────┐┌ selected ──────────────────────────┐
 │✓ prime   2.0s                                              ││chosen                              │
 │  ✓ 2 quick steps   0.4s                                    ││tool · shell                        │
@@ -519,7 +518,7 @@ capture is `crates/oscilloscope/src/snapshots/osi__tui__golden_tests__
 cost_running_at_120x40.snap`):
 
 ```
-⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 overview  2 flow  [3 cost]                                       
+⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 tape  2 flow  [3 cost]                                       
 ┌ tokens by store · tokens ────────────────────────────────────────────────────────────────────────────────────────────┐
 │a 1.3 kt                                          ┌fan tokens when done─────────────────────────────┐b 450 t          │
 │                                                  │iter_0 › nap tokens when done                    │                 │

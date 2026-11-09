@@ -1805,11 +1805,11 @@ fn build_time_screen_if_active(
     ))
 }
 
-/// Issue #637 (extended by #650 to screen 1): the transcript path for
-/// whichever step is actually on screen right now -- the overview's
-/// own focused step (running, last-finished, or an ended run's own
-/// stopped agent) on screen 0, Flow's and Time's own selected step on
-/// screens 2 and 1 -- `None` on every other screen. Tails a finished
+/// Issue #637 (extended by #650 to screen 1, #678 to screen 0): the
+/// transcript path for whichever step is actually on screen right now
+/// -- the Tape's own selected step on screen 0, Flow's and Time's own
+/// selected step on screens 2 and 1 -- `None` on every other screen.
+/// Tails a finished
 /// agent's own `meta.raw.transcript` too, not just a running one's
 /// `meta.live.transcript` -- the Time screen's zoom pane (issue #650)
 /// is the first thing that ever shows a finished agent's own bands,
