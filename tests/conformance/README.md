@@ -376,7 +376,12 @@ order on the two engines (cof's real OS threads vs. electricity's
 single-threaded cooperative scheduler) — comparing their absolute values
 would assert an implementation detail neither engine commits to. What *is*
 checked: both streams open with `run_start` and close with `run_end`
-(compared directly); every path's own `start`/`dispatch`/`end` appear in a
+(compared directly, with one exception: `run_start`'s own `config` field is
+compared exactly only when `case.json` names a `config` -- a case that
+names none gives `cof` nothing (it writes `null`) but still has to give
+electricity's required config argument *something* (the runner's own
+placeholder config), so that side accepts either `null` or the placeholder's
+name, never a third value); every path's own `start`/`dispatch`/`end` appear in a
 container-before-child, child-before-container order; each path's own
 list of events (grouped by `path`) is compared *in stream order*, not as a
 multiset — a path's own events have exactly one valid order in M0-H

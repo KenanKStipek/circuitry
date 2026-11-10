@@ -1,16 +1,16 @@
-{"v":1,"seq":0,"ts":"2026-10-26T22:01:46.412Z","ev":"run_start","run_id":"37bb3a16-2811-45fe-b852-494ad6320051","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":79515}
-{"v":1,"seq":1,"ts":"2026-10-26T22:01:46.420Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-10-26T22:01:46.424Z","ev":"start","id":1,"path":"prime.missing_yaml"}
-{"v":1,"seq":3,"ts":"2026-10-26T22:01:46.446Z","ev":"start","id":2,"path":"prime.missing_yaml.plan"}
-{"v":1,"seq":4,"ts":"2026-10-26T22:01:46.448Z","ev":"end","id":2,"path":"prime.missing_yaml.plan","ok":false,"ms":2,"error":"Schema validation failed: 'yaml' is a required property"}
-{"v":1,"seq":5,"ts":"2026-10-26T22:01:46.451Z","ev":"end","id":1,"path":"prime.missing_yaml","ok":true,"ms":28}
-{"v":1,"seq":6,"ts":"2026-10-26T22:01:46.451Z","ev":"start","id":3,"path":"prime.non_json"}
-{"v":1,"seq":7,"ts":"2026-10-26T22:01:46.469Z","ev":"start","id":4,"path":"prime.non_json.plan"}
-{"v":1,"seq":8,"ts":"2026-10-26T22:01:46.469Z","ev":"end","id":4,"path":"prime.non_json.plan","ok":false,"ms":0,"error":"JSON schema validation failed: model returned None (JSON could not be parsed). Check the model's response format."}
-{"v":1,"seq":9,"ts":"2026-10-26T22:01:46.470Z","ev":"end","id":3,"path":"prime.non_json","ok":true,"ms":18}
-{"v":1,"seq":10,"ts":"2026-10-26T22:01:46.470Z","ev":"start","id":5,"path":"prime.server_error_case"}
-{"v":1,"seq":11,"ts":"2026-10-26T22:01:46.489Z","ev":"start","id":6,"path":"prime.server_error_case.plan"}
-{"v":1,"seq":12,"ts":"2026-10-26T22:01:46.489Z","ev":"end","id":6,"path":"prime.server_error_case.plan","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.server_error_case.plan'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
-{"v":1,"seq":13,"ts":"2026-10-26T22:01:46.490Z","ev":"end","id":5,"path":"prime.server_error_case","ok":true,"ms":20}
-{"v":1,"seq":14,"ts":"2026-10-26T22:01:46.490Z","ev":"end","id":0,"path":"prime","ok":true,"ms":71}
-{"v":1,"seq":15,"ts":"2026-10-26T22:01:46.491Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-10T03:32:20.695Z","ev":"run_start","run_id":"774fdad2-6fcd-4e05-9ae2-0f0f63bbbf22","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":14412}
+{"v":1,"seq":1,"ts":"2026-11-10T03:32:20.697Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-10T03:32:20.698Z","ev":"start","id":1,"path":"prime.missing_yaml"}
+{"v":1,"seq":3,"ts":"2026-11-10T03:32:20.720Z","ev":"start","id":2,"path":"prime.missing_yaml.plan"}
+{"v":1,"seq":4,"ts":"2026-11-10T03:32:20.723Z","ev":"end","id":2,"path":"prime.missing_yaml.plan","ok":false,"ms":2,"error":"Schema validation failed: 'yaml' is a required property"}
+{"v":1,"seq":5,"ts":"2026-11-10T03:32:20.725Z","ev":"end","id":1,"path":"prime.missing_yaml","ok":true,"ms":27}
+{"v":1,"seq":6,"ts":"2026-11-10T03:32:20.725Z","ev":"start","id":3,"path":"prime.non_json"}
+{"v":1,"seq":7,"ts":"2026-11-10T03:32:20.740Z","ev":"start","id":4,"path":"prime.non_json.plan"}
+{"v":1,"seq":8,"ts":"2026-11-10T03:32:20.741Z","ev":"end","id":4,"path":"prime.non_json.plan","ok":false,"ms":0,"error":"JSON schema validation failed: model returned None (JSON could not be parsed). Check the model's response format."}
+{"v":1,"seq":9,"ts":"2026-11-10T03:32:20.742Z","ev":"end","id":3,"path":"prime.non_json","ok":true,"ms":17}
+{"v":1,"seq":10,"ts":"2026-11-10T03:32:20.742Z","ev":"start","id":5,"path":"prime.server_error_case"}
+{"v":1,"seq":11,"ts":"2026-11-10T03:32:20.756Z","ev":"start","id":6,"path":"prime.server_error_case.plan"}
+{"v":1,"seq":12,"ts":"2026-11-10T03:32:20.757Z","ev":"end","id":6,"path":"prime.server_error_case.plan","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.server_error_case.plan'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
+{"v":1,"seq":13,"ts":"2026-11-10T03:32:20.758Z","ev":"end","id":5,"path":"prime.server_error_case","ok":true,"ms":16}
+{"v":1,"seq":14,"ts":"2026-11-10T03:32:20.758Z","ev":"end","id":0,"path":"prime","ok":true,"ms":61}
+{"v":1,"seq":15,"ts":"2026-11-10T03:32:20.758Z","ev":"run_end","ok":true}

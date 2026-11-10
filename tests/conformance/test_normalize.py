@@ -234,6 +234,7 @@ _RUN_START = _event(
     pid=1,
     engine="cof 0.0.0",
     orchestration="doc.yml",
+    config=None,
 )
 _RUN_END = _event("run_end")
 
@@ -248,6 +249,39 @@ def test_assert_events_equal_accepts_identical_streams() -> None:
     ]
     text = _events_text(events)
     assert_events_equal(text, text)
+
+
+def _run_start_with_config(config: str | None) -> dict:
+    return {**_RUN_START, "config": config}
+
+
+def test_assert_events_equal_compares_a_named_config_exactly() -> None:
+    """A case that names a `config` gives both engines that exact name --
+    the two sides' own `run_start.config` is compared exactly, like any
+    other field."""
+    expected = _events_text([_run_start_with_config("config.json"), _RUN_END])
+    actual = _events_text([_run_start_with_config("config.json"), _RUN_END])
+    assert_events_equal(actual, expected)
+
+    mismatched = _events_text([_run_start_with_config("other.json"), _RUN_END])
+    with pytest.raises(AssertionError):
+        assert_events_equal(mismatched, expected)
+
+
+def test_assert_events_equal_accepts_null_or_the_electricity_placeholder_for_no_config() -> None:
+    """A case that names no `config` gives `cof` nothing (`null`) but
+    still has to give electricity's required config argument *something*
+    -- the conformance electricity runner's own placeholder config. Either
+    is accepted against an expected `null`; nothing else is."""
+    expected = _events_text([_RUN_START, _RUN_END])
+    assert_events_equal(_events_text([_RUN_START, _RUN_END]), expected)
+
+    placeholder = _events_text([_run_start_with_config("default_config.json"), _RUN_END])
+    assert_events_equal(placeholder, expected)
+
+    bogus = _events_text([_run_start_with_config("something-else.json"), _RUN_END])
+    with pytest.raises(AssertionError):
+        assert_events_equal(bogus, expected)
 
 
 def test_assert_events_equal_detects_same_path_reordering() -> None:

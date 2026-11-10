@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.7",
+  "description": "run_start names the config file it was started with: `config.json` exactly as case.json names it, between `orchestration` and `engine`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

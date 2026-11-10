@@ -1,6 +1,6 @@
-{"v":1,"seq":0,"ts":"2026-10-12T05:07:24.735Z","ev":"run_start","run_id":"08b6b735-0b6a-44a8-adaa-9304714d3816","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":54858}
-{"v":1,"seq":1,"ts":"2026-10-12T05:07:24.738Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-10-12T05:07:24.739Z","ev":"start","id":1,"path":"prime.ask"}
-{"v":1,"seq":3,"ts":"2026-10-12T05:07:24.749Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":11,"error":"Schema validation failed: 5 is not of type 'string'"}
-{"v":1,"seq":4,"ts":"2026-10-12T05:07:24.749Z","ev":"end","id":0,"path":"prime","ok":true,"ms":11}
-{"v":1,"seq":5,"ts":"2026-10-12T05:07:24.749Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-10T03:33:22.413Z","ev":"run_start","run_id":"25409749-396d-432c-96a7-d1c07830f515","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":15523}
+{"v":1,"seq":1,"ts":"2026-11-10T03:33:22.414Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-10T03:33:22.415Z","ev":"start","id":1,"path":"prime.ask"}
+{"v":1,"seq":3,"ts":"2026-11-10T03:33:22.419Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":4,"error":"Schema validation failed: 5 is not of type 'string'"}
+{"v":1,"seq":4,"ts":"2026-11-10T03:33:22.419Z","ev":"end","id":0,"path":"prime","ok":true,"ms":5}
+{"v":1,"seq":5,"ts":"2026-11-10T03:33:22.419Z","ev":"run_end","ok":true}
