@@ -237,6 +237,14 @@ in place of the Tokens line, which has nothing exact to show yet.
 `osi watch` on `--events` alone drives the same figures from the
 latest `progress` line, with no live state to read at all.
 
+A running agent session's own tokens count everywhere too: the Tape
+row gets the same token column a prompt's does (faint while running,
+solid once finished), the Totals row and every share add the
+session's own live totals in, and the run summary's own Largest
+names it once it's the biggest step. A stale leftover from an
+interrupted session still shows its last known figures, just no
+longer faint.
+
 At 100 columns and up the detail pane shows beside the list, and
 preview rows are on by default (`p` toggles; off at 24–29 rows, to
 leave more height for the Now band, on again at 30 and up). At
@@ -299,6 +307,14 @@ and the next prompt in plan order with its usual tokens. Readings
 shows the run's own sent, received, their ratio, the largest column
 (tokens and clock), the single largest finished prompt, and how long
 since the last burst.
+
+A running agent session's own tokens plot on the trace too, one
+column per increase actually observed (sent above, received below),
+at the time each was seen -- not only in the Now column the way a
+running prompt's own estimate does -- so the sum of its own columns
+always equals its final tokens once it finishes. Readings' own Sent,
+Received, Ratio, Peak and Largest all read the trace's own columns,
+so a running agent's tokens count there too.
 
 `←`/`→` scrub a cursor along the axis, drawn distinctly from the Now
 sweep, turning follow off; `n` returns it to Now, and moves which
@@ -497,7 +513,10 @@ and deviation, with a cursor. Readings shows the table's own first
 row (Largest), how many stores have used tokens so far, the ratio of
 sent to received tokens, and the running loop's -- or the last one
 that ran's -- own `name · n of m passes have tokens`, absent with no
-loop in the document at all.
+loop in the document at all. A running agent session gets a tile
+from its own live totals the same way a running prompt's estimate
+does; every share here counts a running step's own live tokens too,
+so it never reads above 100%.
 
 `↑↓`/`j`/`k`/`PageUp`/`PageDown`/`Home`/`End`/`g`/`G` move the
 table's own cursor, sticking to its own path as the table's rows
