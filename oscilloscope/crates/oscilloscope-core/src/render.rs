@@ -1585,20 +1585,18 @@ fn build_header(
 
     // Issue #702's cancelled-run case: a leftover `meta.live` whose
     // own node never got a `completed_at` at all (the run ended
-    // while the session was still mid-attempt) stops reading
-    // `Running` the instant `statuses` does, but its own last known
-    // tokens never land in `run_totals`/`node_tokens` either --
-    // both need a finished attempt. Counted into the exact total
-    // here, never the live estimate below, since nothing is still
-    // updating them (rule 1: "not as live").
+    // while the session was still mid-attempt, or whose own
+    // heartbeat has simply gone stale while the rest of the run
+    // carries on) stops counting as live the moment it stops being
+    // recent, never mind whether `statuses` still calls its path
+    // `Running` -- counted into the exact total here, never the live
+    // estimate below, since nothing is still updating it (rule 1:
+    // "not as live").
     let (leftover_sent, leftover_received) = flat
         .iter()
-        .filter(|(path, node)| {
+        .filter(|(_, node)| {
             node.completed_at.is_none()
-                && node.live.is_some()
-                && !statuses
-                    .get(path.as_str())
-                    .is_some_and(|s| s.kind == StatusKind::Running)
+                && node.live.as_ref().is_some_and(|live| !live.is_recent(now))
         })
         .fold((0u64, 0u64), |(sent, recv), (_, node)| {
             let live = node.live.as_ref().expect("filtered above");
@@ -1654,6 +1652,11 @@ fn build_header(
             let Some(agent_live) = node.and_then(|n| n.live.as_ref()) else {
                 return (sent, recv);
             };
+            if !agent_live.is_recent(now) {
+                // Already folded into the exact total above (rule 1:
+                // a stale leftover is never flagged live).
+                return (sent, recv);
+            }
             (
                 sent + agent_live.tokens_sent.unwrap_or(0),
                 recv + agent_live.tokens_received.unwrap_or(0),
@@ -5320,6 +5323,39 @@ mod tests {
                 has_failure_reason: false,
                 exited_at: None,
             },
+            1.0,
+            "2026-10-08T11:46:55Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent, 2100);
+        assert_eq!(rendered.header.tokens_received, 40);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 0);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 0);
+    }
+
+    /// A still-running process's own agent whose `meta.live`
+    /// heartbeat has itself gone stale (no update in over 5s, issue
+    /// #637's recency rule) must count in the Totals row's exact
+    /// pair, never the live estimate -- rule 1's "not as live" holds
+    /// regardless of whether the process as a whole is still
+    /// running, not only once the whole run has ended.
+    #[test]
+    fn a_stale_agent_heartbeat_in_an_otherwise_running_process_lands_in_the_exact_total() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:44Z",
+                    "tokens_sent": 2100, "tokens_received": 40}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
             1.0,
             "2026-10-08T11:46:55Z",
             &[],
