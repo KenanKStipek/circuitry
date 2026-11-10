@@ -762,11 +762,14 @@ plain-text goldens for the new screens at their sizes once the widgets exist.
    and `+` opens three at a time, scrolling the lanes with `↑↓`. Not drawn.
 4. **Preview rows.** On by default at 120×30 (as in the frames) or on for the selected row only, which keeps
    the Tape denser on long runs.
-5. **Run colours in the Combined Signal.** Six runs needed six colours and the frames borrowed status hues
-   for four of them. A categorical set from each theme's extra hues (Mocha pink, peach, sapphire, flamingo)
-   keeps status hues for status.
-6. **More tiles than fit.** Paging (`… n more`) versus shrinking tiles to their header and Totals.
-7. **Where `osi watch` runs show up.** As Select rows like any other (they have a registry entry once watched).
+5. **Run colours.** Settled (issue #698): the frames' own six roles, read off roles each theme already
+   carries for other things (`accent.primary`, `status.warning`, `accent.secondary`, `status.info`,
+   `status.success`, `fg.default`), repeating past the sixth run -- not a new categorical set of their own.
+   A later categorical palette (a theme's own extra hues) stays a one-table change to that list.
+6. **More tiles than fit.** Settled (issue #698): paging, with `… n more` in the grid's own last slot and
+   `PageUp`/`PageDown` to turn the page, never shrinking tiles below their own 56×20 floor.
+7. **Where `osi watch` runs show up.** Settled (issue #698): as Select rows like any other, with a registry
+   entry of their own (`launcher: "osi <version> watch"`) for exactly as long as the watch is live.
 
 ---
 
