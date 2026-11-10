@@ -2118,6 +2118,40 @@ fn focused_attempts_lines(
     lines
 }
 
+/// Issue #704 rule 4's own Asked section for a tool step, for the
+/// Tape's own append-only renderer (`tape_normal_detail_lines`)
+/// alone -- every other screen's own Asked already shows a tool's
+/// own command line inline (`focused_step_full_lines`'s and `flow_
+/// selected_step_lines`'s own `asked` match), but the Tape's own
+/// detail pane never had an Asked section for anything but a
+/// prompt's own "Prompt Sent" at all.
+fn focused_tool_asked_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Tool {
+        command: Some(command),
+        ..
+    } = &step.detail
+    else {
+        return Vec::new();
+    };
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Asked", title_bold)], width),
+    ];
+    for line in tape_word_wrap(command, width.saturating_sub(1)) {
+        lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+    }
+    lines
+}
+
 /// Issue #704 rule 4's own Tool section, shared by every screen: the
 /// exit code and full stdout/stderr -- the command line itself is
 /// each screen's own Asked section already, never repeated here.
@@ -2647,6 +2681,7 @@ fn tape_normal_detail_lines(
             ));
         }
     }
+    lines.extend(focused_tool_asked_lines(step, width, ctx));
     lines.extend(focused_attempts_lines(step, width, ctx));
     lines.extend(focused_tool_lines(step, width, ctx));
     lines.extend(focused_decision_lines(step, width, ctx));
@@ -4632,14 +4667,34 @@ fn focused_step_full_lines(
         FocusDetail::Tool { command, .. } => command.clone(),
         _ => None,
     };
-    if let Some(asked) = asked {
+    if asked.is_some() || step.params_rendered_full.is_some() {
         lines.push(Line::from(""));
         lines.push(tape_detail_line(
             vec![Span::styled("Asked", title_bold)],
             width,
         ));
-        for line in tape_word_wrap(&asked, width.saturating_sub(1)) {
-            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        if let Some(asked) = &asked {
+            for line in tape_word_wrap(asked, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+        // Issue #704 rule 4's own "rendered params": the whole
+        // `meta.params_rendered` object, not only the `command`/
+        // `args` a tool's own command line above already read out of
+        // it -- shown even when it duplicates that line, since a non-
+        // shell tool's own rendered params have no command line at
+        // all to stand in for them.
+        if let Some(params) = &step.params_rendered_full {
+            if asked.is_some() {
+                lines.push(Line::from(""));
+            }
+            lines.push(tape_detail_line(
+                vec![Span::styled("params ", muted)],
+                width,
+            ));
+            for line in tape_word_wrap(params, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
         }
     }
 
@@ -9700,6 +9755,7 @@ mod golden_tests {
             cost_usd: None,
             value_full: None,
             prompt_sent_full: None,
+            params_rendered_full: None,
             usual_tokens: None,
             share_pct: None,
             attempts: Vec::new(),
@@ -10172,6 +10228,85 @@ mod golden_tests {
         ));
         assert!(text.contains("Error"), "{text}");
         assert!(text.contains("json: parse failed"), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Asked section: the Tape's own detail
+    /// pane (and so its own full-screen step, the same renderer)
+    /// shows a tool's own command line, against the recorded
+    /// each_tree_loop_concurrency fixture's own shell tool step.
+    #[test]
+    fn tape_detail_shows_the_tool_command_line_from_the_recorded_each_tree_loop_concurrency_fixture()
+     {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let leaf = "prime.each_tree.iter_0.nap";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "each_tree_loop_concurrency",
+            leaf,
+            ProcessState::exited(true),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Asked"), "{text}");
+        let oscilloscope_core::screens::FocusDetail::Tool {
+            command: Some(command),
+            ..
+        } = &tape_screen.selected.as_ref().unwrap().detail
+        else {
+            panic!("{leaf} must resolve its own tool command");
+        };
+        assert!(text.contains(command.as_str()), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Asked section, "rendered params":
+    /// the shared full-screen renderer shows the whole `params_
+    /// rendered` object, not only the command line built from its
+    /// own `command`/`args`, against the recorded parity_tool_
+    /// failed_continue_cof fixture's own tool step.
+    #[test]
+    fn fullscreen_asked_shows_rendered_params_from_the_recorded_parity_tool_failed_continue_fixture()
+     {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "parity_tool_failed_continue_cof",
+            "prime.flaky",
+            ProcessState::exited(false),
+            now,
+        );
+        let step = tape_screen.selected.as_ref().expect("prime.flaky resolves its own step");
+        assert!(
+            step.params_rendered_full.is_some(),
+            "a tool step must carry its own rendered params"
+        );
+        let text = agent_block_lines_text(&focused_step_full_lines(step, None, now, false, 80, &ctx));
+        assert!(text.contains("params"), "{text}");
+        assert!(
+            text.contains(step.params_rendered_full.as_deref().unwrap()),
+            "{text}"
+        );
     }
 
     /// Issue #704 rule 4's own Loop section, against the recorded

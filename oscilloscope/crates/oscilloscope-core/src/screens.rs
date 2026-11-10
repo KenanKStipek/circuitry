@@ -580,6 +580,14 @@ pub struct FocusedStep {
     /// `meta.prompt_sent` in full -- `None` for every other kind, or
     /// a prompt the engine never recorded the rendered text for.
     pub prompt_sent_full: Option<String>,
+    /// Issue #704's own Asked section, "rendered params": `meta.
+    /// params_rendered` in full, for any step kind that has one --
+    /// a tool's own command line (`FocusDetail::Tool::command`) is
+    /// built from this same object's `command`/`args`, but this
+    /// shows the whole thing, not only those two keys (a tool with
+    /// other rendered params, say). `None` for a step the engine
+    /// never rendered any params for at all.
+    pub params_rendered_full: Option<String>,
     /// Issue #704's own Tokens section: history's own median for
     /// this exact step and the run count behind it (§3.5's "usually"
     /// -- the Tape's own `selected_usual`, now shared) -- `None`
@@ -813,6 +821,10 @@ pub(crate) fn build_focused_step(
                 .map(str::to_string)
         })
         .flatten();
+    let params_rendered_full = node
+        .and_then(|n| n.meta.get("params_rendered"))
+        .filter(|v| !v.is_null())
+        .map(crate::render::display_value);
     let usual_tokens = crate::history::display_key(&row.path, plan)
         .and_then(|key| header.history_step_usual.get(&key))
         .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
@@ -848,6 +860,7 @@ pub(crate) fn build_focused_step(
         received: details.received.clone(),
         value_full,
         prompt_sent_full,
+        params_rendered_full,
         usual_tokens,
         share_pct,
         tokens,
