@@ -940,6 +940,15 @@ impl App {
                     // other's full-screen view too.
                     if screen != self.screen {
                         self.tape_fullscreen_step = false;
+                        // Issue #704 rule 4: the detail pane's own
+                        // scroll is shared state too (the Tape's
+                        // normal pane, the Flow's Selected pane, the
+                        // Signal's and Store's own full-screen step)
+                        // -- without this, a scroll left over from
+                        // one screen's own pane shows up, mid-
+                        // scroll, in whichever unrelated pane the
+                        // next screen draws.
+                        self.details_scroll = 0;
                     }
                     self.screen = screen;
                 }
@@ -2836,5 +2845,18 @@ mod tests {
             !app.tape_fullscreen_step,
             "the Tape's own open step view must not reappear as Signal's"
         );
+    }
+
+    /// Issue #704 rule 4: a scroll left over from one screen's own
+    /// detail pane must not show up, mid-scroll, in an unrelated
+    /// pane the next screen draws.
+    #[test]
+    fn switching_screens_resets_the_shared_details_scroll() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.details_scroll = 7;
+        app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &[]);
+        assert_eq!(app.screen, Screen::Tape);
+        assert_eq!(app.details_scroll, 0);
     }
 }
