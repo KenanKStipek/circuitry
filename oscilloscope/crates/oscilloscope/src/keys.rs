@@ -237,6 +237,13 @@ pub struct App {
     /// as readily, the same way any other selection shows its own
     /// details whenever the cursor lands back on it.
     pub tape_run_end_target: Option<String>,
+    /// Issue #704 rule 4's own "enter on a pass opens it": the
+    /// latest full-screen step draw's own Loop section, one `(line
+    /// index, pass path)` pair per pass (`tui::loop_pass_line_
+    /// paths`'s own output) -- empty whenever the open step's own
+    /// detail isn't a loop's at all. One frame stale at worst, the
+    /// same lifecycle `flow_lane_stations` already has.
+    pub loop_pass_line_paths: Vec<(usize, String)>,
 }
 
 impl App {
@@ -280,6 +287,7 @@ impl App {
             tape_fullscreen_step: false,
             tape_run_end_fired: false,
             tape_run_end_target: None,
+            loop_pass_line_paths: Vec::new(),
             step_meta_unfolded: false,
         }
     }
@@ -730,6 +738,27 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.tape_fullscreen_step = false;
+                    return Action::None;
+                }
+                // Issue #704 rule 4: `enter` on a pass opens it --
+                // the pass whose own line in the Loop section is at
+                // or just below the current scroll position, or the
+                // last one once scrolled past all of them. Consumed
+                // here only when the open step's own detail is
+                // actually a loop's; any other `enter` falls through
+                // unchanged to the per-screen toggle below, which
+                // closes the full-screen view.
+                KeyCode::Enter if !self.loop_pass_line_paths.is_empty() => {
+                    let target = self
+                        .loop_pass_line_paths
+                        .iter()
+                        .find(|(line, _)| *line >= self.details_scroll)
+                        .or_else(|| self.loop_pass_line_paths.last())
+                        .map(|(_, path)| path.clone());
+                    if let Some(target) = target {
+                        self.select_tree_path(Some(target));
+                        self.details_scroll = 0;
+                    }
                     return Action::None;
                 }
                 KeyCode::Char('[') => {

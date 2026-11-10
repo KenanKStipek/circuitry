@@ -936,18 +936,11 @@ fn loop_passes_for(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> Vec<LoopPass
             let pass_path = format!("{prefix}{i}");
             let (sent, received) = crate::model::subtree_tokens(&pass_path, flat);
             let total = sent + received;
-            let started = flat
-                .keys()
-                .any(|k| *k == pass_path || k.starts_with(&format!("{pass_path}.")));
             LoopPassSummary {
-                path: pass_path,
+                path: pass_path.clone(),
                 label: format!("pass {}", i + 1),
                 status: RowStatus {
-                    kind: if started {
-                        StatusKind::Done
-                    } else {
-                        StatusKind::Pending
-                    },
+                    kind: pass_status_kind(&pass_path, flat),
                     skip_reason: None,
                     retrying: false,
                 },
@@ -955,6 +948,50 @@ fn loop_passes_for(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> Vec<LoopPass
             }
         })
         .collect()
+}
+
+/// Issue #704's own Loop section: one pass's own real status --
+/// failed if any of its own leaves recorded an error, running if any
+/// has started but not finished, done once every leaf has, pending
+/// with no leaf at all yet (`loop_passes_for`'s own "ahead" pass,
+/// counted from the loop's own `loop_progress.total` with no node of
+/// its own in `flat` yet). Reads `flat` directly rather than a
+/// `Row`'s own status (no `Row` exists for most leaves under a
+/// pass, only for the loop and for whichever one the plan names
+/// directly), so every pass still reads correctly whichever list the
+/// caller's own rows came from.
+fn pass_status_kind(pass_path: &str, flat: &BTreeMap<String, NodeMeta>) -> StatusKind {
+    let prefix = format!("{pass_path}.");
+    let mut any_failed = false;
+    let mut any_running = false;
+    let mut any_unfinished = false;
+    let mut saw_any = false;
+    for (path, node) in flat {
+        if path != pass_path && !path.starts_with(&prefix) {
+            continue;
+        }
+        saw_any = true;
+        if node.error.is_some() {
+            any_failed = true;
+        } else if node.completed_at.is_none() {
+            if node.created_at.is_some() {
+                any_running = true;
+            } else {
+                any_unfinished = true;
+            }
+        }
+    }
+    if !saw_any {
+        StatusKind::Pending
+    } else if any_failed {
+        StatusKind::Failed
+    } else if any_running {
+        StatusKind::Running
+    } else if any_unfinished {
+        StatusKind::Pending
+    } else {
+        StatusKind::Done
+    }
 }
 
 /// Issue #704's own Attempts section: `meta.fallback_attempts`,
@@ -4473,6 +4510,48 @@ pub fn build_flow(
 
 #[cfg(test)]
 mod tests {
+
+    /// Issue #704 rule 4's own Loop section: a pass's own status is
+    /// read from its own leaves, never assumed "done" just because
+    /// it has a node at all -- a failed leaf fails the pass even
+    /// with an earlier one already finished, a running leaf with no
+    /// failure yet still reads running, and a pass with no node at
+    /// all (the loop's own `loop_progress.total` still counting it
+    /// as ahead) reads pending.
+    #[test]
+    fn loop_passes_read_each_passs_own_real_status() {
+        let loop_row = tape_row("prime.drafts", 1, "drafts", RowKind::Loop, StatusKind::Running);
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.drafts.iter_0.a".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        flat.insert(
+            "prime.drafts.iter_1.a".to_string(),
+            tape_node("2026-01-01T00:00:01Z", Some("2026-01-01T00:00:02Z")),
+        );
+        flat.insert(
+            "prime.drafts.iter_1.b".to_string(),
+            NodeMeta {
+                error: Some("boom".to_string()),
+                ..tape_node("2026-01-01T00:00:02Z", Some("2026-01-01T00:00:03Z"))
+            },
+        );
+        flat.insert(
+            "prime.drafts.iter_2.a".to_string(),
+            tape_node("2026-01-01T00:00:03Z", None),
+        );
+        let passes = loop_passes_for(&loop_row, &flat);
+        let status = |path: &str| {
+            passes
+                .iter()
+                .find(|p| p.path == path)
+                .map(|p| p.status.kind)
+        };
+        assert_eq!(status("prime.drafts.iter_0"), Some(StatusKind::Done));
+        assert_eq!(status("prime.drafts.iter_1"), Some(StatusKind::Failed));
+        assert_eq!(status("prime.drafts.iter_2"), Some(StatusKind::Running));
+    }
 
     /// A pass whose body is a single unnamed `if` carries the `if`'s
     /// kind and a `Pending` status on its own row; the default pass

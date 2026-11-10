@@ -2310,6 +2310,35 @@ fn focused_loop_lines(
     lines
 }
 
+/// Issue #704 rule 4's own "enter on a pass opens it": which of
+/// `lines` (already built, by `focused_loop_lines`'s own padded-
+/// label text, unique per pass) is which pass's own line -- `App::
+/// loop_pass_line_paths`' own source, so `enter` while the full-
+/// screen step is open can tell which pass the cursor is actually
+/// over without the Loop section's own line count (Status/Asked/
+/// Produced/.../Meta, each only present when the node has data for
+/// it) ever needing to be recomputed separately from what was
+/// already drawn.
+fn loop_pass_line_paths(
+    lines: &[Line<'static>],
+    step: &oscilloscope_core::screens::FocusedStep,
+) -> Vec<(usize, String)> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Loop(passes) = &step.detail else {
+        return Vec::new();
+    };
+    passes
+        .iter()
+        .filter_map(|pass| {
+            let label = format!("{:<16}", pass.label);
+            let idx = lines
+                .iter()
+                .position(|line| line.to_string().contains(&label))?;
+            Some((idx, pass.path.clone()))
+        })
+        .collect()
+}
+
 /// Issue #704 rule 4's own Meta section, shared by every screen:
 /// every other key the run recorded, folded by default (`m`
 /// unfolds).
@@ -3186,6 +3215,9 @@ fn draw_tape_detail(
             )
         }
     };
+    if let Some(step) = &screen.selected {
+        app.loop_pass_line_paths = loop_pass_line_paths(&lines, step);
+    }
     // Issue #704 rule 4: the full-screen step scrolls with ↑↓/PgUp/
     // PgDn/Home/End (`App::scroll_details`, the same shared scroll
     // position the Flow's own Selected pane already uses) -- a no-op
@@ -4609,6 +4641,7 @@ fn draw_focused_step_detail(
         width,
         ctx,
     );
+    app.loop_pass_line_paths = loop_pass_line_paths(&lines, step);
     let viewport = inner.height as usize;
     app.details_viewport = viewport;
     let total = lines.len();
@@ -10344,6 +10377,67 @@ mod golden_tests {
         }
     }
 
+    /// Issue #704 rule 4: `enter` on the Loop section's own pass line
+    /// opens that pass -- against the recorded each_tree_loop_
+    /// concurrency fixture's own finished loop, scrolling to each
+    /// pass's own line in turn and pressing `enter` lands the shared
+    /// selection on that exact pass.
+    #[test]
+    fn enter_on_a_loop_passs_own_line_opens_it() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "each_tree_loop_concurrency",
+            "prime.each_tree",
+            ProcessState::exited(true),
+            now,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.each_tree".to_string());
+        app.tape_fullscreen_step = true;
+        let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_focused_step_detail(
+                    f,
+                    f.area(),
+                    tape_screen.selected.as_ref(),
+                    None,
+                    now,
+                    &mut app,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        assert!(
+            !app.loop_pass_line_paths.is_empty(),
+            "the loop's own passes must each resolve a line"
+        );
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &[],
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.each_tree.iter_0"),
+            "enter with nothing scrolled opens the first pass's own line"
+        );
+        assert!(app.tape_fullscreen_step, "enter on a pass never closes the full-screen view");
+    }
 
     /// Issue #704's own snapshot of the full-screen step view against
     /// the recorded agent_live_pi fixture's own finished session, at
