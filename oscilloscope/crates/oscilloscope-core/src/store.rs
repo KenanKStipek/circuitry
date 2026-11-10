@@ -1067,12 +1067,16 @@ pub struct StoreScreen {
     /// shared chrome with the Tape/Signal/Flow.
     pub last_finished: Option<crate::screens::SignalLastFinished>,
     pub head: crate::screens::TapeHead,
-    /// The table's own cursor (`App::store_selected`, kept there
-    /// since it is UI state, not this screen's own model), resolved
-    /// to the same [`crate::screens::FocusedStep`] the Tape's,
-    /// Signal's and Flow's own full-screen step views already build
-    /// theirs from -- `None` with no row selected, or a selected path
-    /// no row in `rows` resolves to.
+    /// The table's own cursor (issue #704 rule 2): the one shared
+    /// `App::selected_path` itself when it names a store with tokens
+    /// of its own, else the nearest ancestor that is one, else (with
+    /// nothing in the whole run holding tokens yet) the table's own
+    /// first row -- `None` only with an empty table.
+    pub cursor_path: Option<String>,
+    /// `cursor_path` resolved to the same [`crate::screens::
+    /// FocusedStep`] the Tape's, Signal's and Flow's own full-screen
+    /// step views already build theirs from -- `None` only alongside
+    /// `cursor_path` itself.
     pub selected: Option<crate::screens::FocusedStep>,
     /// The Totals row's own deviation (§3.3), the same sum over every
     /// already-run-or-running row's own usual tokens the Tape's and
@@ -1121,7 +1125,10 @@ pub fn build_store(
         .max();
     let unit = crate::screens::tape_unit(largest_usual_step);
     let run_start = header.run_start_ts.as_deref();
-    let selected = selected_path
+    let cursor_path = store_cursor_path(selected_path, &table)
+        .or_else(|| table.first().map(|r| r.path.clone()));
+    let selected = cursor_path
+        .as_deref()
         .and_then(|path| rows.iter().find(|r| r.path == path))
         .map(|row| {
             crate::screens::build_focused_step(
@@ -1150,8 +1157,26 @@ pub fn build_store(
         unit,
         last_finished: crate::screens::last_finished_row(rows, flat, plan, run_start),
         head: crate::screens::build_run_head(run_start, header, rows, flat),
+        cursor_path,
         selected,
         usual_so_far_tokens,
+    }
+}
+
+/// Issue #704 rule 2: the Store's own table cursor for `selected_path`
+/// -- itself, when it names a row the table already has (a store
+/// with tokens of its own), else the nearest ancestor that is one.
+/// `None` for a `selected_path` with no ancestor in the table at all
+/// (nothing in its own lineage has used any tokens yet), which
+/// `build_store`'s own caller falls back from to the table's first
+/// row.
+fn store_cursor_path(selected_path: Option<&str>, table: &[StoreTableRow]) -> Option<String> {
+    let mut candidate = selected_path?;
+    loop {
+        if table.iter().any(|r| r.path == candidate) {
+            return Some(candidate.to_string());
+        }
+        candidate = candidate.rsplit_once('.')?.0;
     }
 }
 
@@ -1183,6 +1208,37 @@ mod tests {
             children_with_tokens,
             children_planned: children_with_tokens,
         })
+    }
+
+    fn table_row(path: &str, tokens: u64) -> StoreTableRow {
+        StoreTableRow {
+            path: path.to_string(),
+            label: path.to_string(),
+            tokens_sent: tokens,
+            tokens_received: 0,
+            share_pct: 0.0,
+            deviation_pct: None,
+        }
+    }
+
+    /// Issue #704 rule 2: a selected effect with no tokens of its
+    /// own resolves to the nearest ancestor that has some, never to
+    /// nothing at all just because the leaf itself never held any.
+    #[test]
+    fn store_cursor_path_climbs_to_the_nearest_ancestor_with_tokens() {
+        let table = vec![table_row("prime.gate", 10)];
+        assert_eq!(
+            store_cursor_path(Some("prime.gate.reply"), &table),
+            Some("prime.gate".to_string())
+        );
+        // Already in the table: itself, not an ancestor.
+        assert_eq!(
+            store_cursor_path(Some("prime.gate"), &table),
+            Some("prime.gate".to_string())
+        );
+        // No ancestor has tokens at all: no cursor.
+        assert_eq!(store_cursor_path(Some("prime.other.leaf"), &table), None);
+        assert_eq!(store_cursor_path(None, &table), None);
     }
 
     /// The frames' own geometry (issue #695): at 120x30 `kind`

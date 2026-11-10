@@ -5319,7 +5319,6 @@ fn draw_store_table(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::store::StoreScreen,
-    app: &App,
     max_rows: usize,
     wide: bool,
     ctx: &DrawCtx,
@@ -5363,8 +5362,8 @@ fn draw_store_table(
     // off, rather than always starting at row 0 and letting the
     // cursor itself disappear past the table's own bottom border.
     let total_rows = screen.table.len();
-    let selected_index = app
-        .store_selected
+    let selected_index = screen
+        .cursor_path
         .as_deref()
         .and_then(|path| screen.table.iter().position(|r| r.path == path));
     let max_start = total_rows.saturating_sub(max_rows);
@@ -5373,7 +5372,7 @@ fn draw_store_table(
         .unwrap_or(0)
         .min(max_start);
     for (i, row) in screen.table.iter().enumerate().skip(start).take(max_rows) {
-        let selected = app.store_selected.as_deref() == Some(row.path.as_str());
+        let selected = screen.cursor_path.as_deref() == Some(row.path.as_str());
         let bg = selected.then_some(theme.selection_bg);
         let label_fg = if selected {
             theme.selection_fg
@@ -5587,11 +5586,6 @@ fn draw_store(
         app.screen = oscilloscope_core::screens::Screen::Tape;
         return;
     }
-    // DESIGN.md §2.4's settled point 4: the cursor starts on the
-    // table's own first row.
-    if app.store_selected.is_none() {
-        app.store_selected = screen.table.first().map(|r| r.path.clone());
-    }
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -5633,7 +5627,7 @@ fn draw_store(
             .constraints([Constraint::Min(6), Constraint::Length(table_height)])
             .split(body);
         draw_store_chart(frame, rows_split[0], screen, header, title_full, ctx);
-        draw_store_table(frame, rows_split[1], screen, app, 3, false, ctx);
+        draw_store_table(frame, rows_split[1], screen, 3, false, ctx);
         return;
     }
     let show_readings = full_area.height >= 30;
@@ -5649,10 +5643,10 @@ fn draw_store(
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
             .split(rows_split[1]);
-        draw_store_table(frame, cols[0], screen, app, max_rows, true, ctx);
+        draw_store_table(frame, cols[0], screen, max_rows, true, ctx);
         draw_store_readings(frame, cols[1], screen, ctx);
     } else {
-        draw_store_table(frame, rows_split[1], screen, app, max_rows, true, ctx);
+        draw_store_table(frame, rows_split[1], screen, max_rows, true, ctx);
     }
 }
 
@@ -13231,7 +13225,7 @@ mod tape_frame_goldens {
         let zone = frame_zone();
         let mut app = crate::keys::App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Store;
-        app.store_selected = selected_path.map(str::to_string);
+        app.selected_path = selected_path.map(str::to_string);
         let ctx = DrawCtx {
             theme: &theme,
             theme_banner: None,
@@ -13873,6 +13867,11 @@ mod tape_frame_goldens {
                 deviation_pct: None,
             })
             .collect();
+        // `cursor_path` is this screen's own cursor now (issue #704
+        // rule 2) -- the override above replaced the table it was
+        // resolved against, so it's set here alongside it, the same
+        // as the override itself.
+        store_screen.cursor_path = Some("prime.n5".to_string());
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
         let zone = frame_zone();
         let ctx = DrawCtx {
@@ -13883,7 +13882,7 @@ mod tape_frame_goldens {
         };
         let mut app = crate::keys::App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Store;
-        app.store_selected = Some("prime.n5".to_string());
+        app.selected_path = Some("prime.n5".to_string());
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
             .draw(|f| {

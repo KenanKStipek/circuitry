@@ -1823,7 +1823,7 @@ fn build_store_screen_if_active(
         state,
         "prime",
         now,
-        app.store_selected.as_deref(),
+        app.selected_path.as_deref(),
     ))
 }
 

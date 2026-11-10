@@ -135,11 +135,6 @@ pub struct App {
     /// `pane == Pane::State` is only true while that pane itself has
     /// focus, never while scrolling its own selection's details.
     pub details_source: Pane,
-    /// The Store screen's own table cursor (issue #695), a path --
-    /// independent of `selected_path`/`state_selected_path`, same
-    /// reasoning as those two staying independent of each other.
-    /// Sticks to its own path as the table's own rows reorder.
-    pub store_selected: Option<String>,
     /// The rail's own horizontal scroll (issue #691, DESIGN.md
     /// §2.3's follow rule): a character offset from the run's own
     /// start, clamped to the rail's real width only at draw time
@@ -247,7 +242,6 @@ impl App {
             expanded_quick_steps: std::collections::BTreeSet::new(),
             details_source: Pane::Tree,
             screen: Screen::default(),
-            store_selected: None,
             flow_scroll: 0,
             flow_manual_scroll: false,
             flow_rows: Vec::new(),
@@ -832,11 +826,15 @@ impl App {
                 true
             }
             KeyCode::Home | KeyCode::Char('g') => {
-                self.store_selected = rows.first().cloned();
+                if let Some(first) = rows.first() {
+                    self.select_tree_path(Some(first.clone()));
+                }
                 true
             }
             KeyCode::End | KeyCode::Char('G') => {
-                self.store_selected = rows.last().cloned();
+                if let Some(last) = rows.last() {
+                    self.select_tree_path(Some(last.clone()));
+                }
                 true
             }
             // `⏎` opens the selected store's own step full-screen
@@ -845,12 +843,27 @@ impl App {
             // but consumed here either way so it never falls through
             // to the generic pane's own quick-steps expand below.
             KeyCode::Enter => {
-                if self.store_selected.is_some() {
+                if self.store_cursor_index(rows).is_some() {
                     self.tape_fullscreen_step = !self.tape_fullscreen_step;
                 }
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Issue #704 rule 2: the shared `selected_path`'s own index in
+    /// the table's own order, resolved the same way `store::
+    /// store_cursor_path` resolves a cursor for drawing -- itself
+    /// when it names a row the table already has, else the nearest
+    /// ancestor that is one.
+    fn store_cursor_index(&self, rows: &[String]) -> Option<usize> {
+        let mut candidate = self.selected_path.as_deref()?;
+        loop {
+            if let Some(idx) = rows.iter().position(|r| r == candidate) {
+                return Some(idx);
+            }
+            candidate = candidate.rsplit_once('.')?.0;
         }
     }
 
@@ -863,16 +876,13 @@ impl App {
         if rows.is_empty() {
             return;
         }
-        let current = self
-            .store_selected
-            .as_deref()
-            .and_then(|p| rows.iter().position(|r| r == p));
+        let current = self.store_cursor_index(rows);
         let next = match current {
             Some(idx) => (idx as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize,
             None if delta >= 0 => 0,
             None => rows.len() - 1,
         };
-        self.store_selected = Some(rows[next].clone());
+        self.select_tree_path(Some(rows[next].clone()));
     }
 
     /// Issue #678's own addition for the Tape: a manual move turns
@@ -2175,20 +2185,20 @@ mod tests {
         let mut app = store_app();
         let rows = vec!["prime.a".to_string(), "prime.b".to_string()];
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.b"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
         assert_eq!(
-            app.store_selected.as_deref(),
+            app.selected_path.as_deref(),
             Some("prime.b"),
             "clamped at the end"
         );
         app.handle_key(key(KeyCode::Up), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::Up), &[], &[], true, false, &rows);
         assert_eq!(
-            app.store_selected.as_deref(),
+            app.selected_path.as_deref(),
             Some("prime.a"),
             "clamped at the start"
         );
@@ -2203,21 +2213,21 @@ mod tests {
             "prime.c".to_string(),
         ];
         app.handle_key(key(KeyCode::Char('j')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::Char('G')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Char('g')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::End), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Home), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::PageDown), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Char('k')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.b"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::PageUp), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
     }
 
     #[test]
@@ -2229,7 +2239,8 @@ mod tests {
             !app.tape_fullscreen_step,
             "enter does nothing with no row selected"
         );
-        app.store_selected = Some("prime.a".to_string());
+        let rows = vec!["prime.a".to_string()];
+        app.selected_path = Some("prime.a".to_string());
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
         assert!(app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &rows);
@@ -2239,7 +2250,7 @@ mod tests {
     #[test]
     fn switching_screens_resets_the_shared_fullscreen_toggle_for_the_store_too() {
         let mut app = store_app();
-        app.store_selected = Some("prime.a".to_string());
+        app.selected_path = Some("prime.a".to_string());
         let rows = vec!["prime.a".to_string()];
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
         assert!(app.tape_fullscreen_step);
@@ -2254,7 +2265,7 @@ mod tests {
         assert_eq!(app.screen, Screen::Tape);
         let rows = vec!["prime.a".to_string()];
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected, None);
+        assert_eq!(app.selected_path, None);
     }
 
     #[test]
@@ -2275,7 +2286,7 @@ mod tests {
         ] {
             app.handle_key(key(code), &[], &[], true, false, &rows);
         }
-        assert_eq!(app.store_selected, None);
+        assert_eq!(app.selected_path, None);
         assert_eq!(app.pane, Pane::Tree);
         assert!(app.fold_enabled);
         assert!(!app.errors_only);
