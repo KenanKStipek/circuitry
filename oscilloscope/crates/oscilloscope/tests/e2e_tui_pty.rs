@@ -477,6 +477,91 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #704: once a run has ended, `↓` moves the selection to
+/// another finished row, `enter` opens it full-screen, and `]` steps
+/// to the next effect in plan order -- the full-screen title changes
+/// to name it, proving the key actually moved the selection rather
+/// than just redrawing the same step.
+#[test]
+fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    assert!(
+        screen.contains("alpha") && screen.contains("beta"),
+        "expected both rows on the ended Tape; screen:\n{screen}"
+    );
+
+    // The run's just ended: the selection starts on the Run End row
+    // (issue #704 rule 1) -- one ↓ lands it on a real row instead.
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[B");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Tape \u{b7} "),
+        "expected enter to open the full-screen step; screen:\n{screen}"
+    );
+    let opened_alpha = screen.contains("alpha \u{b7} Selected");
+    let opened_beta = screen.contains("beta \u{b7} Selected");
+    assert!(
+        opened_alpha || opened_beta,
+        "expected alpha or beta's own full-screen step; screen:\n{screen}"
+    );
+
+    // Step to the other effect, in whichever direction actually
+    // reaches it -- `]` from alpha (plan order's first effect) or
+    // `[` from beta (its last), the full-screen step's own ↑↓ across
+    // every effect the run recorded.
+    std::thread::sleep(SIGNAL_DELAY);
+    let (step_key, other_title): (&[u8], &str) = if opened_alpha {
+        (b"]", "beta \u{b7} Selected")
+    } else {
+        (b"[", "alpha \u{b7} Selected")
+    };
+    send_bytes(&mut master, step_key);
+    let screen = wait_for_screen_text(&captured_buf, other_title, Duration::from_secs(10));
+    assert!(
+        screen.contains(other_title),
+        "expected stepping to reach the other effect; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
 /// A run this `osi` launched has a registry entry while it's live --
 /// named by its own document and run directory in bare `osi`'s own
 /// non-TTY list too -- and that entry is gone once the run ends.
