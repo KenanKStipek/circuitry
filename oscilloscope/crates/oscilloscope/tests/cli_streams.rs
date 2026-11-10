@@ -49,9 +49,9 @@ fn a_usage_error_prints_to_stderr_not_stdout() {
 
 #[test]
 fn no_args_without_a_tty_lists_discovered_runs_on_stdout_and_exits_0() {
-    // Issue #698's "Settled 2": no orchestration, and `Command::
-    // output()` always pipes stdout (never a TTY) -- a usage error
-    // no longer applies here at all. `OSI_RUNS_DIR` is isolated
+    // No orchestration, and `Command::output()` always pipes stdout
+    // (never a TTY) -- a usage error no longer applies here at all.
+    // `OSI_RUNS_DIR` is isolated
     // above, but the process scan one of its three sources runs is
     // deliberately machine-wide (not just this test's own isolated
     // environment), so this only asserts the exit code and that

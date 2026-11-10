@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    e2e_electricity_enabled, e2e_enabled, scripted_config, wait_for_step_start, wait_with_timeout,
-    write_doc,
+    e2e_electricity_enabled, e2e_enabled, osi_command, scripted_config, wait_for_step_start,
+    wait_with_timeout, write_doc,
 };
 
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
@@ -435,11 +435,13 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #698's "Settled 1": a run this `osi` launched has a
-/// registry entry while it's live, and that entry is gone once the
-/// run ends -- every wait here (two 20s pattern waits, a 10s poll, a
-/// 10s wait for `Ended`, a 30s exit wait) is its own named step with
-/// its own cap, none of them a bare sleep.
+/// A run this `osi` launched has a registry entry while it's live --
+/// named by its own document and run directory in bare `osi`'s own
+/// non-TTY list too -- and that entry is gone once the run ends.
+/// Every wait here (two 20s pattern waits, a 10s poll, a 10s wait for
+/// `Ended`, a 30s exit wait) is its own named step with its own cap;
+/// none of them is a bare sleep, and none shares a cap with any
+/// other.
 #[test]
 fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits() {
     if !e2e_enabled() {
@@ -478,8 +480,9 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
 
     let runs_dir = home.path().join("runs");
     // The entry is written once `run_start` is known, not instantly
-    // at spawn (issue #698) -- polled rather than slept for a fixed
-    // delay, bounded well under this test's own hard cap.
+    // at spawn -- polled rather than slept for a fixed delay, capped
+    // at the 10s deadline just below (this step's own cap, not an
+    // overall one shared with any other wait in this test).
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut entries = Vec::new();
     while Instant::now() < deadline {
@@ -506,6 +509,37 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     assert_eq!(
         entry["launcher"].as_str().unwrap(),
         format!("osi {}", env!("CARGO_PKG_VERSION"))
+    );
+
+    // Bare `osi`, without a TTY, lists this same run while it's
+    // still live -- the content check the registry entry's own
+    // assertions above can't give: a liveness or process-scan defect
+    // that makes a real `cof` run look dead (or unmatched) would
+    // prune the entry above right out from under this list, or never
+    // list it via the scan either.
+    let discover = osi_command(&home)
+        .current_dir(work.path())
+        .output()
+        .expect("spawn bare osi");
+    assert!(discover.status.success());
+    let discover_stdout = String::from_utf8_lossy(&discover.stdout);
+    let discover_line = discover_stdout
+        .lines()
+        .find(|l| l.contains("do.yml"))
+        .unwrap_or_else(|| panic!("expected a line naming do.yml, got:\n{discover_stdout}"));
+    assert!(discover_line.contains("cof"));
+    assert!(
+        discover_line.contains(&out_dir.path().display().to_string())
+            || std::fs::canonicalize(out_dir.path())
+                .is_ok_and(|p| discover_line.contains(&p.display().to_string())),
+        "expected the run directory in: {discover_line}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.count())
+            .unwrap_or(0),
+        1,
+        "discovery must not have disturbed the still-live entry"
     );
 
     // `q` opens a confirm-cancel dialog instead of quitting outright
@@ -2061,6 +2095,109 @@ fn pressing_3_during_osi_watch_of_a_live_run_opens_the_cost_screen() {
     send_bytes(&mut master, b"q");
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi watch should exit 0, got {status:?}");
+
+    let _ = cof_child.kill();
+    let _ = cof_child.wait();
+
+    assert_no_leftover_process(work.path());
+}
+
+/// `osi watch` writes its own registry entry for a run it did not
+/// launch (a separate, still-running `cof` process this test spawns
+/// directly), and removes it again on detach -- while the watched
+/// run itself keeps running underneath.
+#[test]
+fn osi_watch_writes_its_own_registry_entry_and_removes_it_on_detach() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let events_path = run_dir.path().join("events.jsonl");
+
+    let mut cof = Command::new("cof");
+    cof.arg("run")
+        .arg(&doc)
+        .arg("--config")
+        .arg(&config)
+        .arg("--quiet")
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--events")
+        .arg(&events_path)
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        cof.env_remove(key);
+    }
+    let mut cof_child = cof.spawn().expect("spawn cof");
+
+    wait_for_step_start(&events_path, "prime.slow", Duration::from_secs(20));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let run_dir_arg = run_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+
+    let runs_dir = home.path().join("runs");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut entries = Vec::new();
+    while Instant::now() < deadline {
+        entries = std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.flatten().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !entries.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one registry entry while the watch is live, in {runs_dir:?}"
+    );
+    let entry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
+    assert_eq!(
+        entry["launcher"].as_str().unwrap(),
+        format!("osi {} watch", env!("CARGO_PKG_VERSION"))
+    );
+
+    // `q` under `osi watch` detaches immediately -- the watched
+    // `cof` process keeps running underneath, this test's own to
+    // kill and clean up after.
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi watch should exit 0, got {status:?}");
+
+    let remaining = std::fs::read_dir(&runs_dir)
+        .map(|rd| rd.count())
+        .unwrap_or(0);
+    assert_eq!(
+        remaining, 0,
+        "expected the watch's own registry entry to be gone once it detached"
+    );
 
     let _ = cof_child.kill();
     let _ = cof_child.wait();
