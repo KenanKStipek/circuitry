@@ -499,9 +499,9 @@ a `Header`, the plan tree flattened to depth-first `Row`s, the state pane's
 own `StateRow`s, the `TokenBar`'s totals and in-flight line, and a selected
 row's `Details` — no terminal code, so a GUI front end could lay the same
 `RenderState` out its own way. Only `oscilloscope`'s `tui.rs` imports
-`ratatui` widgets. The Cost screen's own by-store treemap (`treemap.rs`,
-§6.3b below) is deliberately not part of `RenderState` at all: it is
-built (and its squarified layout, `treemap::layout`, pure integer
+`ratatui` widgets. The Store screen's own by-store tree (`store.rs`,
+§6.3e below) is deliberately not part of `RenderState` at all: it is
+built (and its own layout, `store::layout_store`, pure integer
 geometry, computed in `oscilloscope-core` and only ever drawn, never
 computed, by `tui.rs`) only while that screen is actually on display,
 not on every redraw regardless of which screen is showing.
@@ -1131,20 +1131,17 @@ only when an observation, a key or a resize actually changed something
 elapsed time still visibly ticks while the run is otherwise quiet. The
 state pane is built from the one `flatten_state` call `render::build`
 already makes for the plan tree, not a second pass of its own; the
-Cost screen's own by-store tree (§6.3b) is a further, separate pass,
-built only while the screen that actually needs it (Cost itself, or
-the overview, whose own "top" line reads the same tree's first row,
-issue #641) is on display, never regardless of which screen is
-showing, the way screen 2's old treemap used to be. Measured against a
-synthetic 2,000-node state, one
+Store screen's own by-store tree (§6.3e) is a further, separate pass,
+built only while the Store itself is on display, never regardless of
+which screen is showing, the way screen 2's old treemap used to be.
+Measured against a synthetic 2,000-node state, one
 redraw stays well under `REDRAW_INTERVAL`
 (`render::tests::redraw_from_a_2000_node_state_stays_well_under_the_
 redraw_interval`). That measurement times `render::build` alone, which
-leaves out the ratatui draw itself;
-`tui::golden_tests::drawing_a_2000_node_state_stays_well_under_the_
-redraw_interval` times one `TestBackend` draw of the same state too,
-including building and drawing the Cost screen's own by-store tree and
-layout for it.
+leaves out the ratatui draw itself and the Store's own further pass;
+`store::tests::build_store_over_2000_leaves_stays_well_under_the_
+redraw_interval` times building the Store's own by-store tree and
+table over the same scale separately.
 
 The actual *draw* is a separate cap from the rebuild above
 (`REDRAW_INTERVAL`, 100ms, the same tick the icon's own trace moves by):
@@ -1175,10 +1172,10 @@ same either way; issue #632 gave `header:effects` its first real
 consumer, the overview's own flow card, and `header:tokens`/`tokenbar`
 their first ones since the token bar itself left screen 2 (also #632):
 the overview's own cost card tints its ↑/↓ line with the former and its
-in-flight line with the latter. The Cost screen's own by-store
-treemap (§6.3b) is built only while that screen is on display, so it
-is not part of `RenderState` at all and has no update-highlight key of
-its own here. The first observation (`old:
+in-flight line with the latter. The Store screen's own by-store tree
+(§6.3e) is built only while that screen is on display, so it is not
+part of `RenderState` at all and has no update-highlight key of its
+own here. The first observation (`old:
 None`) never reports anything, so `osi watch` attaching to an already-
 finished run opens on a calm screen; elapsed time, selection, scrolling,
 the filter, collapse sets and a resize are not part of `RenderState` at
@@ -2481,7 +2478,11 @@ plain container, named `iter_N`, once it has more than one. Nothing
 is drawn for a store, or a whole container, that has not used any
 tokens at all; a running container's own title carries `●` and the
 accent colour until the run itself ends, even if its own node never
-gets a `completed_at` at all (an aborted run). Children sort in plan
+gets a `completed_at` at all (an aborted run). A container whose own
+node carries tokens of its own -- a model-mode `if`'s or `while`'s
+own condition, evaluated by a model rather than CEL -- draws that as
+a further leaf alongside its real children, named `check` the same
+way the old Cost treemap's own `container_own_value_node` did. Children sort in plan
 order (`store::sort_in_plan_order`, built on `plan::
 normalize_pass_segments` and `PlanTree::all_paths`) -- `direct_
 children_of`'s own walk reads alphabetically by path, never the plan
@@ -2545,9 +2546,11 @@ own step full-screen, the same shared toggle the Tape's, Signal's and
 Flow's own already share, consumed either way so it never falls
 through to the generic pane's own quick-steps expand; `esc` closes
 it. `i`/`o`/`$` (Cost's own measures), `Tab`, `z`, `v`, `e`, `/` and
-`←→` are all excluded from the Store now too, same as §4 asks --
-which leaves every one of them with no screen left that still binds
-it at all (**not yet shipped**, below). The Store's own Help overlay
+`←→` are all excluded from the Store too, same as §4 asks. `i`/`o`/
+`$`, `Tab` and `z` are now bound on no screen at all; `v` still works
+on the Signal, `e` and `/` on the Tape, Signal and Flow, and `←→` on
+the Signal and Flow -- the Store alone has none of these
+(**not yet shipped**, below). The Store's own Help overlay
 (`tui::store_help_lines`) is the same fixed `2,5,72,18` overlay the
 Tape's, Signal's and Flow's own already are, listing exactly these
 keys.

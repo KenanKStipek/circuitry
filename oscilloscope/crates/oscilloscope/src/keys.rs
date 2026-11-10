@@ -867,7 +867,7 @@ impl App {
         }
     }
 
-    /// The Cost screen's own keys (issue #632), tried before any of
+    /// The Store screen's own keys (issue #695), tried before any of
     /// the generic panes' own bindings; `true` means the key was
     /// consumed here and `handle_key_normal`'s own match below must
     /// not also act on it.

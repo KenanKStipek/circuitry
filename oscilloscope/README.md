@@ -222,11 +222,12 @@ what's running, then what's ahead), not the plan's own tree order,
 and turn follow off unless the move lands the selection right back
 on the row follow would have picked itself -- `f` toggles follow by
 hand. `T` cycles the colour theme; `?` opens Help, listing exactly
-this screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
-Tape keys at all, nor any other screen's -- the Signal, the Flow and
-the Store each have their own keys entirely (below). Below 60×24,
-every screen -- not only the Tape -- shows the too-small notice
-instead.
+this screen's own keys. `Tab`, `z`, `s` and `l` are not Tape keys at
+all, nor any other screen's; `v`, `e`, `/` and `←`/`→` are not Tape
+keys either, but each still works on at least one of the Signal or
+the Flow (never the Store). The Signal, the Flow and the Store each
+have their own keys entirely (below). Below 60×24, every screen --
+not only the Tape -- shows the too-small notice instead.
 
 ### `--glance`
 
@@ -492,10 +493,11 @@ below 80 columns the Store isn't offered, bouncing back to the Tape
 on its own if the terminal shrinks below it while the Store is on
 screen. The title drops `Tokens by Store` below 120 columns.
 
-A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s
-own golden tests, `design/frames/store--normal--120x30.mock`'s
-cell-exact twin) of `design/fixtures/run2`, replayed to 3.62 s after
-its own start, the cursor on `gate › reply`:
+A `TestBackend` capture (`crates/oscilloscope/src/tui.rs`'s own golden
+tests, `design/frames/store--normal--120x30.mock`'s cell-exact twin,
+checked cell by cell rather than through `insta`) of `design/
+fixtures/run2`, replayed to 3.62 s after its own start, the cursor on
+`gate › reply`:
 
 ```
  osi  demo.yml · ● Running 3.6s                                                                       STORE    12:50:50 
