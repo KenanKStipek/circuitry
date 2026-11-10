@@ -1940,6 +1940,7 @@ pub async fn run_orchestration_with_config(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(""),
+            req.config_path.file_name().and_then(|n| n.to_str()),
         );
         log
     });

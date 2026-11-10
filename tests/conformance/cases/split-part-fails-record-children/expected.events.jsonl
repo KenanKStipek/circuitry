@@ -1,12 +1,12 @@
-{"v":1,"seq":0,"ts":"2026-11-09T14:38:10.959Z","ev":"run_start","run_id":"8717cfd6-64bf-46b6-8856-6c28f36ec7b9","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":98407}
-{"v":1,"seq":1,"ts":"2026-11-09T14:38:10.963Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-11-09T14:38:10.963Z","ev":"start","id":1,"path":"prime.big"}
-{"v":1,"seq":3,"ts":"2026-11-09T14:38:10.969Z","ev":"start","id":2,"path":"prime.big.parts"}
-{"v":1,"seq":4,"ts":"2026-11-09T14:38:10.969Z","ev":"start","id":3,"path":"prime.big.parts.iter_0.map"}
-{"v":1,"seq":5,"ts":"2026-11-09T14:38:10.970Z","ev":"start","id":4,"path":"prime.big.parts.iter_1.map"}
-{"v":1,"seq":6,"ts":"2026-11-09T14:38:10.970Z","ev":"end","id":4,"path":"prime.big.parts.iter_1.map","ok":false,"ms":1,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.big.parts.iter_1.map'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
-{"v":1,"seq":7,"ts":"2026-11-09T14:38:10.971Z","ev":"end","id":3,"path":"prime.big.parts.iter_0.map","ok":true,"ms":1}
-{"v":1,"seq":8,"ts":"2026-11-09T14:38:10.971Z","ev":"end","id":2,"path":"prime.big.parts","ok":false,"ms":2,"error":"loop 'parts' iteration [1]: map: All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.big.parts.iter_1.map'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
-{"v":1,"seq":9,"ts":"2026-11-09T14:38:10.974Z","ev":"end","id":1,"path":"prime.big","ok":true,"ms":10}
-{"v":1,"seq":10,"ts":"2026-11-09T14:38:10.974Z","ev":"end","id":0,"path":"prime","ok":true,"ms":11}
-{"v":1,"seq":11,"ts":"2026-11-09T14:38:10.974Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-11-10T03:33:32.470Z","ev":"run_start","run_id":"45be2bc1-3204-4e8e-abd5-90be19963c95","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":15886}
+{"v":1,"seq":1,"ts":"2026-11-10T03:33:32.472Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-10T03:33:32.472Z","ev":"start","id":1,"path":"prime.big"}
+{"v":1,"seq":3,"ts":"2026-11-10T03:33:32.478Z","ev":"start","id":2,"path":"prime.big.parts"}
+{"v":1,"seq":4,"ts":"2026-11-10T03:33:32.478Z","ev":"start","id":3,"path":"prime.big.parts.iter_0.map"}
+{"v":1,"seq":5,"ts":"2026-11-10T03:33:32.478Z","ev":"start","id":4,"path":"prime.big.parts.iter_1.map"}
+{"v":1,"seq":6,"ts":"2026-11-10T03:33:32.479Z","ev":"end","id":3,"path":"prime.big.parts.iter_0.map","ok":true,"ms":1}
+{"v":1,"seq":7,"ts":"2026-11-10T03:33:32.479Z","ev":"end","id":4,"path":"prime.big.parts.iter_1.map","ok":false,"ms":1,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.big.parts.iter_1.map'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
+{"v":1,"seq":8,"ts":"2026-11-10T03:33:32.479Z","ev":"end","id":2,"path":"prime.big.parts","ok":false,"ms":1,"error":"loop 'parts' iteration [1]: map: All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.big.parts.iter_1.map'\", 'tokens_sent': None, 'tokens_received': None, 'http_status': 500}]"}
+{"v":1,"seq":9,"ts":"2026-11-10T03:33:32.482Z","ev":"end","id":1,"path":"prime.big","ok":true,"ms":10}
+{"v":1,"seq":10,"ts":"2026-11-10T03:33:32.482Z","ev":"end","id":0,"path":"prime","ok":true,"ms":10}
+{"v":1,"seq":11,"ts":"2026-11-10T03:33:32.482Z","ev":"run_end","ok":true}

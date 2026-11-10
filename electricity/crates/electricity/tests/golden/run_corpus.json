@@ -171,6 +171,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
+          "config": "<CONFIG>",
           "engine": "<ENGINE>",
           "pid": "<PID>"
         },
@@ -569,6 +570,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
+          "config": "<CONFIG>",
           "engine": "<ENGINE>",
           "pid": "<PID>"
         },
@@ -941,6 +943,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
+          "config": "<CONFIG>",
           "engine": "<ENGINE>",
           "pid": "<PID>"
         },
@@ -1310,6 +1313,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
+          "config": "<CONFIG>",
           "engine": "<ENGINE>",
           "pid": "<PID>"
         },

@@ -571,6 +571,40 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
     assert!(lines.last().unwrap().contains("\"run_end\""));
 }
 
+/// `run_start.config` names only the config file's own file name, the
+/// same form `orchestration` already uses -- never the directory a
+/// `--config` naming a path under a subdirectory also carries, since
+/// that would differ between two runs of the exact same config file
+/// from two different cwds (issue #697).
+#[tokio::test]
+async fn run_start_names_only_the_config_files_own_file_name() {
+    let dir = temp_dir("config-subdirectory");
+    let config_dir = dir.join("some").join("dir");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = write(&config_dir, "config.json", "{}");
+    let doc = write(&dir, "doc.yml", "effects: []\n");
+    let events_path = dir.join("events.jsonl");
+    let req = RunRequest {
+        config_path: config,
+        orchestration_path: doc,
+        inputs: IndexMap::new(),
+        out_path: None,
+        pretty: false,
+        live_state_path: None,
+        events_path: Some(events_path.clone()),
+        profile_path: None,
+        armed: true,
+    };
+
+    let result = run(&req).await;
+    assert!(result.ok, "{:?}", result.error);
+
+    let events_text = fs::read_to_string(&events_path).unwrap();
+    let run_start: serde_json::Value =
+        serde_json::from_str(events_text.lines().next().unwrap()).unwrap();
+    assert_eq!(run_start["config"], serde_json::json!("config.json"));
+}
+
 /// A token already
 /// cancelled *before* `execute_root` ever starts -- possible today
 /// against the real interpreter (lane B2 has landed), unlike when this
