@@ -2279,6 +2279,63 @@ mod tests {
         assert_eq!(readings.loop_progress, Some(("drafts".to_string(), 0, 3)));
     }
 
+    /// Issue #704 rule 4: the full-screen step reads the exact
+    /// selected effect (`raw_selected`), never the ancestor `[`/`]`
+    /// substitutes for the table's own cursor/highlight (`selected`)
+    /// when the effect has no tokens of its own -- stepping to a
+    /// token-less tool must show that tool's own step, not whichever
+    /// store it happens to be nested under.
+    #[test]
+    fn raw_selected_is_the_exact_effect_never_the_cursors_own_nearest_ancestor() {
+        let plan = crate::plan::PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                "adapter": "scripted", "model": "m",
+                "tokens_sent_total": 20, "tokens_received_total": 15
+            }},
+            "check": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": "2026-01-01T00:00:02Z"
+            }}
+        }});
+        let rendered = crate::render::build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            crate::model::ProcessState::exited(false),
+            2.0,
+            "2026-01-01T00:00:02Z",
+            &[],
+        );
+        let flat = crate::model::flatten_state(&state);
+        let kinds: BTreeMap<String, RowKind> = BTreeMap::new();
+        let screen = build_store(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            "2026-01-01T00:00:02Z",
+            Some("prime.check"),
+        );
+        assert_ne!(
+            screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.check"),
+            "a token-less step's own cursor climbs to an ancestor, the same as ever"
+        );
+        assert_eq!(
+            screen.raw_selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.check"),
+            "but the full-screen step still reads the exact one"
+        );
+    }
+
     #[test]
     fn readings_absent_without_any_loop() {
         let tree = vec![leaf("prime.kind", "kind", 10)];

@@ -1701,6 +1701,27 @@ mod tests {
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
     }
 
+    /// Issue #704 rule 4: while the full-screen step is open, the
+    /// selection names an effect to show, resolved against the
+    /// unfolded rows, never a row to highlight in this (always
+    /// folded) list -- reassigning it to the row that absorbed it
+    /// would land the very next `]` back on the first effect, since
+    /// that absorbing row's own kind (`QuickSteps`) is excluded from
+    /// `App::fullscreen_step`'s own candidates.
+    #[test]
+    fn reconcile_folding_does_nothing_while_the_fullscreen_step_is_open() {
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a.b".to_string());
+        app.tape_fullscreen_step = true;
+        let folded_rows = [row("prime.a", 1, StatusKind::Done)];
+        app.reconcile_folding(&folded_rows);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.a.b"),
+            "the full-screen step's own selection must survive a row folding around it"
+        );
+    }
+
     #[test]
     fn enter_on_the_tape_toggles_the_fullscreen_step_view() {
         let mut app = App::new(false);
@@ -2149,6 +2170,25 @@ mod tests {
 
         app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
         assert!(!app.tape_fullscreen_step);
+    }
+
+    /// Issue #704 rule 4: `[`/`]` turns follow off, the same as
+    /// every other way of moving the shared selection -- a live
+    /// run's own next follow update would otherwise revert the step
+    /// before it is ever seen.
+    #[test]
+    fn fullscreen_step_turns_follow_off() {
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        app.flow_rows = vec![
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Done),
+        ];
+        app.selected_path = Some("prime.a".to_string());
+        assert!(app.follow);
+        app.handle_key(key(KeyCode::Char(']')), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        assert!(!app.follow);
     }
 
     #[test]

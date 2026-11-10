@@ -4828,6 +4828,56 @@ mod tests {
         assert_eq!(tape.ahead, 1);
     }
 
+    /// Issue #704 rule 4: `[`/`]` names any effect in plan order,
+    /// folded away or not (`App::fullscreen_step`'s own candidates
+    /// are always unfolded) -- a leaf a quick-steps summary has
+    /// absorbed (no row of its own left in the folded list at all)
+    /// must still resolve its own full-screen step, from the
+    /// unfolded rows `build_tape` falls back to.
+    #[test]
+    fn a_folded_away_leafs_own_selection_still_resolves_against_the_unfolded_rows() {
+        let unfolded_rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done),
+            tape_row("prime.b", 1, "b", RowKind::Tool, StatusKind::Done),
+        ];
+        // The folded list a quick-steps summary leaves behind: both
+        // rows absorbed into one, under `prime.a`'s own path (the
+        // first of the run, `fold::merge_quick_steps`'s own `rep_
+        // path`) -- `prime.b` has no row of its own here at all.
+        let folded_rows = vec![Row {
+            path: "prime.a".to_string(),
+            label: "2 quick steps".to_string(),
+            kind: RowKind::QuickSteps,
+            ..tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done)
+        }];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.b".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:00Z")),
+        );
+        let header = base_header();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let tape = build_tape(
+            &folded_rows,
+            &unfolded_rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            Some("prime.b"),
+            true,
+            "2026-01-01T00:00:01Z",
+        );
+        assert_eq!(
+            tape.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.b"),
+            "a folded-away leaf must still resolve its own full-screen step"
+        );
+        assert_eq!(tape.selected_breadcrumb.as_deref(), Some("b"));
+    }
+
     #[test]
     fn tape_row_is_under_a_queued_pass_matches_a_pass_or_its_own_leaf() {
         assert!(tape_row_is_under_a_queued_pass("prime.drafts.iter_2"));

@@ -10182,6 +10182,7 @@ mod golden_tests {
         }
     }
 
+
     /// Issue #704's own snapshot of the full-screen step view against
     /// the recorded agent_live_pi fixture's own finished session, at
     /// a given terminal size.
