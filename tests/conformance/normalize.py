@@ -594,17 +594,19 @@ _EVENT_FIELD_RULES = ("ts", "ms", "first_token_ms", "run_id", "pid", "engine")
 #: `run_start`'s own `config` field is not a `_EVENT_FIELD_RULES` entry --
 #: unlike `ts`/`ms`/`run_id`/`pid`/`engine`, it is not placeholdered the
 #: same way on both sides. A case that names a `config` in `case.json`
-#: gives both engines that exact name, so the two engines' own actual
-#: streams -- and the committed fixture -- all carry the identical string
-#: and are compared as-is. A case that names none gives `cof` nothing (it
-#: writes `null`, discovery never naming a single file) but still has to
-#: give electricity's required config argument *something*: the
-#: conformance electricity runner's own placeholder config
-#: (`test_electricity_runner.DEFAULT_CONFIG_PATH`, named by this file only
-#: through its fixed basename below, never a path). `_check_run_start_config`
-#: accepts either value on that side, rather than ever placeholdering
-#: `config` itself the way `engine` is -- that would leave this whole
-#: field untested.
+#: gives both engines that same name -- except a case run against the mock
+#: server, where `harness.materialize_config` hands both engines its own
+#: `materialized-<config>` instead (the port it substitutes is different on
+#: every run); either way, the two engines' own actual streams and the
+#: committed fixture all carry the identical string, compared as-is. A case
+#: that names none gives `cof` nothing (it writes `null`, discovery never
+#: naming a single file) but still has to give electricity's required
+#: config argument *something*: the conformance electricity runner's own
+#: placeholder config (`test_electricity_runner.DEFAULT_CONFIG_PATH`, named
+#: by this file only through its fixed basename below, never a path).
+#: `_check_run_start_config` accepts either value on that side, rather than
+#: ever placeholdering `config` itself the way `engine` is -- that would
+#: leave this whole field untested.
 _ELECTRICITY_RUNNER_DEFAULT_CONFIG_NAME = "default_config.json"
 
 #: `run_start.config` is always present (never omitted) on both engines --
