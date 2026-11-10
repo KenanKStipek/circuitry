@@ -168,11 +168,12 @@ pub fn normalize_event(event: &Value, root: &str) -> Value {
             // This harness's own `run_orchestration` call always has a
             // config_path (electricity's own is required, never
             // optional) -- a real temp file this test writes just to
-            // have one -- while the golden corpus was captured from a
-            // `cof` invocation with no `--config` at all. Blanked the
-            // same way `engine` is: this field's cross-engine value is
-            // pinned by the Python conformance suite instead (issue
-            // #697), not this internal corpus comparison.
+            // have one -- while the golden corpus's `cof` invocation
+            // was given `--config` only for the cases that ask for one,
+            // and none otherwise. Blanked the same way `engine` is:
+            // this field's cross-engine value is pinned by the Python
+            // conformance suite instead (issue #697), not this
+            // internal corpus comparison.
             out.insert(key.clone(), Value::String("<CONFIG>".to_string()));
         } else if matches!(key.as_str(), "pid" | "ts" | "ms") && looks_environment_dependent(value)
         {
