@@ -2149,6 +2149,34 @@ selected row's own Usual (history's median and the run count behind
 it) and Share (percent of the run's own tokens so far) lines, which
 neither of those two needs.
 
+**The list's own window** (issue #710). While the head is Starting or
+Normal, the Now area (the Now band through the last running row, with
+any preview lines under them, and the slots rule; in Starting, the
+Starting rule alone) sits at the list's own vertical centre whenever
+it is shorter than the list: `tui::tape_list_window_start` places the
+Now area's own middle row on the list's middle row, rounding down on
+an uneven split, by starting the window at `now_area_start - (L - h) /
+2` (`L` the list's own height, `h` the Now area's own) -- negative, or
+past the real content's own end, is exactly the window's own blank
+padding above or below, drawn from the frame's own blank-row
+convention; a preview line landing at the window's own top with its
+own row scrolled off above it draws blank there instead, never
+floating on its own. A Now area at least as tall as the list itself
+shows from its own first row. With follow on, this is recomputed on
+every draw; with it off, `App::tape_list_start` keeps the window
+where it last was across draws, moving only as far as the selection
+needs to stay in view (the same rule the selection already followed
+before this issue, just no longer the window's only rule) -- the one
+exception is the very first draw, before `tape_list_start` is ever
+set, which centres regardless of `follow`, the same as if it were on.
+Ended and Failed keep the list's own original rule: biased toward the
+tail, scrolling up only as far as it must to keep the anchor (the
+selection, or the last line while following) in view. Six of the nine
+`tape--*` frame goldens move their own rows to this rule (`tape--
+normal`'s own three sizes, `tape--usual`, `tape--help`, `tape--
+starting`, all at 120x30); `tape--ended`/`tape--failed`/`tape--
+toosmall` are unaffected.
+
 **A running prompt's own live figures** (issue #675, on top of #674's
 `meta.live`). `model::PromptLive::from_value` parses a streamed
 prompt's own live record -- told apart from the agent tool's
