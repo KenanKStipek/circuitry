@@ -204,6 +204,33 @@ def test_run_start_names_no_config_file_as_null(tmp_path: Path) -> None:
     assert run_start["config"] is None
 
 
+def test_run_start_names_only_the_config_files_own_file_name(tmp_path: Path) -> None:
+    """A `--config` naming a file under a subdirectory writes only that
+    file's own name, the same form `orchestration` already uses -- never
+    the directory, since that would differ between two runs of the exact
+    same config file from two different cwds."""
+    config_dir = tmp_path / "some" / "dir"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.json"
+    config_path.write_text(json.dumps({}), encoding="utf-8")
+    orch = _trivial_orch(tmp_path)
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(
+        orch,
+        out_path=out_path,
+        events_path=events_path,
+        extra_args=["--config", str(config_path)],
+    )
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    run_start = _events(events_path)[0]
+    assert run_start["ev"] == "run_start"
+    assert run_start["config"] == "config.json"
+
+
 def test_tree_dynamic_max_concurrency_dispatch_carries_both_numbers(
     tmp_path: Path,
 ) -> None:

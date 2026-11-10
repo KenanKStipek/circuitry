@@ -136,8 +136,9 @@ class RunRequest:
     # The ``--config`` path exactly as given on the command line (``None``
     # when the caller passed none and config was discovered instead) --
     # distinct from ``config`` above, which is the already-resolved
-    # ``CircuitryConfig``. Named in ``--events``' own ``run_start`` line,
-    # the same way ``orchestration_path`` is.
+    # ``CircuitryConfig``. Its file name (never the whole path) is named
+    # in ``--events``' own ``run_start`` line, the same way
+    # ``orchestration_path``'s own file name already is.
     config_path: Path | None = None
     live_state_path: Path | None = None
     # ``--events``: a JSONL stream of effect starts and ends, written by
