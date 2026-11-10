@@ -777,6 +777,48 @@ mod shared_run_chrome_status_spans_tests {
     }
 }
 
+#[cfg(test)]
+mod truncate_flow_spans_tests {
+    use super::*;
+
+    fn text_of(spans: &[(String, Style)]) -> String {
+        spans.iter().map(|(t, _)| t.as_str()).collect()
+    }
+
+    #[test]
+    fn a_headline_that_fits_exactly_is_left_untouched() {
+        let spans = vec![("0/3 passes".to_string(), Style::default())];
+        let out = truncate_flow_spans(spans.clone(), rail::STATION_WIDTH);
+        assert_eq!(out, spans);
+    }
+
+    #[test]
+    fn a_long_tool_command_is_cut_to_ten_cells_with_an_ellipsis() {
+        let spans = vec![(
+            "tool · ls /nonexistent-osi-demo".to_string(),
+            Style::default(),
+        )];
+        let out = truncate_flow_spans(spans, rail::STATION_WIDTH);
+        let text = text_of(&out);
+        assert_eq!(text.chars().count(), rail::STATION_WIDTH);
+        assert!(text.ends_with('…'), "{text:?}");
+        assert!(text.starts_with("tool · ls"), "{text:?}");
+    }
+
+    #[test]
+    fn a_multi_span_detail_keeps_each_spans_own_style_up_to_the_cut() {
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let spans = vec![
+            ("1,234,567 t ".to_string(), Style::default()),
+            ("+999%".to_string(), bold),
+        ];
+        let out = truncate_flow_spans(spans, rail::STATION_WIDTH);
+        let text = text_of(&out);
+        assert_eq!(text.chars().count(), rail::STATION_WIDTH);
+        assert!(text.ends_with('…'), "{text:?}");
+    }
+}
+
 /// §2.1's head rule: `━━ <label> ━━━━...`, filled to `width` -- the Now
 /// band, the slots rule and the Starting/Ended/Failed head rules all
 /// share this one full-width shape, differing only in colour and
@@ -6936,7 +6978,10 @@ fn flow_paint_station(
         visible_width,
         x,
         y0 + 1,
-        &flow_headline_spans(&station.headline, station.status, ctx),
+        &truncate_flow_spans(
+            flow_headline_spans(&station.headline, station.status, ctx),
+            rail::STATION_WIDTH,
+        ),
         rail::STATION_WIDTH,
     );
     let detail_last = flow_paint_row(
@@ -6946,10 +6991,46 @@ fn flow_paint_station(
         visible_width,
         x,
         y0 + 2,
-        &flow_detail_spans(&station.detail, station.status, unit, ctx),
+        &truncate_flow_spans(
+            flow_detail_spans(&station.detail, station.status, unit, ctx),
+            rail::STATION_WIDTH,
+        ),
         rail::STATION_WIDTH,
     );
     (headline_last, detail_last)
+}
+
+/// Cuts `spans`' own combined text to `max_chars`, the same
+/// character-safe, ellipsis-at-the-end truncation a station's own
+/// name already gets (`truncate_label`) -- a headline or detail row
+/// (`tool · <cmd>`, a queued command, a `use` path) otherwise spills
+/// past the station's own ten cells into whatever draws next, and on
+/// a fork's last lane nothing draws there to cover it back up.
+fn truncate_flow_spans(spans: Vec<(String, Style)>, max_chars: usize) -> Vec<(String, Style)> {
+    let total: usize = spans.iter().map(|(text, _)| text.chars().count()).sum();
+    if total <= max_chars {
+        return spans;
+    }
+    if max_chars == 0 {
+        return vec![(String::new(), Style::default())];
+    }
+    let mut budget = max_chars.saturating_sub(1);
+    let mut out = Vec::new();
+    for (text, style) in spans {
+        if budget == 0 {
+            break;
+        }
+        let count = text.chars().count();
+        if count <= budget {
+            budget -= count;
+            out.push((text, style));
+        } else {
+            out.push((text.chars().take(budget).collect(), style));
+            budget = 0;
+        }
+    }
+    out.push(("…".to_string(), Style::default()));
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
