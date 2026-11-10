@@ -275,6 +275,13 @@ pub enum TileScreen {
 pub struct TileRender {
     pub header: Header,
     pub screen: TileScreen,
+    /// The newest finished (or handled-failed) row in this one run
+    /// alone, whatever tile screen is actually showing (issue #698's
+    /// own status line, §3.2: "the newest finished step across
+    /// every run") -- independent of `screen_kind`, so a page of
+    /// Flow or Store tiles still has this to feed
+    /// [`newest_finished_across_runs`].
+    pub last_finished: Option<crate::screens::SignalLastFinished>,
 }
 
 /// Builds one tile's own [`TileRender`] (issue #698): no row
@@ -373,10 +380,46 @@ pub fn build_tile(
             ))
         }
     };
+    let last_finished = crate::screens::last_finished_row(
+        &rendered.rows,
+        &flat,
+        plan,
+        rendered.header.run_start_ts.as_deref(),
+    );
     TileRender {
         header: rendered.header,
         screen,
+        last_finished,
     }
+}
+
+/// The newest finished (or handled-failed) row across every run
+/// (issue #698, §3.2: "the status line shows the newest finished
+/// step across every run"), ties broken by run order (`entries`'
+/// own order, which the caller already keeps in launch order) then
+/// by plan order (already resolved inside each run's own
+/// [`crate::screens::last_finished_row`], whose `max_by` keeps the
+/// later of two exactly-tied rows in plan-walk order).
+pub fn newest_finished_across_runs(
+    entries: &[(String, Option<crate::screens::SignalLastFinished>)],
+) -> Option<(String, crate::screens::SignalLastFinished)> {
+    let mut best: Option<(i64, usize)> = None;
+    for (i, (_, lf)) in entries.iter().enumerate() {
+        let Some(lf) = lf else { continue };
+        let Some(ts) = lf.ts.as_deref() else { continue };
+        let Some(parsed) = crate::diff::parse_instant(ts) else {
+            continue;
+        };
+        let numeric = parsed.timestamp_millis();
+        let replace = match best {
+            Some((best_ts, _)) => numeric > best_ts,
+            None => true,
+        };
+        if replace {
+            best = Some((numeric, i));
+        }
+    }
+    best.map(|(_, i)| (entries[i].0.clone(), entries[i].1.clone().unwrap()))
 }
 
 #[cfg(test)]
@@ -582,6 +625,47 @@ mod tests {
         let first = shared_signal_axis_top(1_000, 0);
         let grown = shared_signal_axis_top(10_000, first);
         assert!(grown > first);
+    }
+
+    fn last_finished(label: &str, ts: &str) -> crate::screens::SignalLastFinished {
+        crate::screens::SignalLastFinished {
+            label: label.to_string(),
+            kind: RowKind::Tool,
+            status: StatusKind::Done,
+            tokens: None,
+            ts: Some(ts.to_string()),
+        }
+    }
+
+    #[test]
+    fn newest_finished_across_runs_picks_the_latest_ts() {
+        let entries = vec![
+            ("a.yml".to_string(), Some(last_finished("x", "2026-01-01T00:00:01Z"))),
+            ("b.yml".to_string(), Some(last_finished("y", "2026-01-01T00:00:02Z"))),
+        ];
+        let (doc, lf) = newest_finished_across_runs(&entries).unwrap();
+        assert_eq!(doc, "b.yml");
+        assert_eq!(lf.label, "y");
+    }
+
+    #[test]
+    fn newest_finished_across_runs_breaks_a_tie_by_run_order() {
+        let entries = vec![
+            ("a.yml".to_string(), Some(last_finished("x", "2026-01-01T00:00:01Z"))),
+            ("b.yml".to_string(), Some(last_finished("y", "2026-01-01T00:00:01Z"))),
+        ];
+        let (doc, _) = newest_finished_across_runs(&entries).unwrap();
+        assert_eq!(doc, "a.yml", "the earlier run order wins an exact tie");
+    }
+
+    #[test]
+    fn newest_finished_across_runs_skips_runs_with_nothing_finished_yet() {
+        let entries = vec![
+            ("a.yml".to_string(), None),
+            ("b.yml".to_string(), Some(last_finished("y", "2026-01-01T00:00:01Z"))),
+        ];
+        let (doc, _) = newest_finished_across_runs(&entries).unwrap();
+        assert_eq!(doc, "b.yml");
     }
 
     #[test]
