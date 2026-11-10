@@ -2893,20 +2893,18 @@ pub fn build_tape(
     // their own.
     let ahead = bucket3.len() as u64;
 
-    let selected = selected_path
-        .and_then(find_selected_row)
-        .map(|row| {
-            build_focused_step(
-                row,
-                flat,
-                plan,
-                model,
-                state,
-                now,
-                header.run_end_ts.as_deref(),
-                header,
-            )
-        });
+    let selected = selected_path.and_then(find_selected_row).map(|row| {
+        build_focused_step(
+            row,
+            flat,
+            plan,
+            model,
+            state,
+            now,
+            header.run_end_ts.as_deref(),
+            header,
+        )
+    });
 
     let selected_usual = selected_path
         .and_then(|p| crate::history::display_key(p, plan))
@@ -4534,7 +4532,13 @@ mod tests {
     /// as ahead) reads pending.
     #[test]
     fn loop_passes_read_each_passs_own_real_status() {
-        let loop_row = tape_row("prime.drafts", 1, "drafts", RowKind::Loop, StatusKind::Running);
+        let loop_row = tape_row(
+            "prime.drafts",
+            1,
+            "drafts",
+            RowKind::Loop,
+            StatusKind::Running,
+        );
         let mut flat = BTreeMap::new();
         flat.insert(
             "prime.drafts.iter_0.a".to_string(),

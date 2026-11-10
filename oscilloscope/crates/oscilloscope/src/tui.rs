@@ -3273,7 +3273,9 @@ fn draw_tape_detail(
     // Issue #704 rule 4: `End` lands on the last full page, not the
     // last single line with the rest of the viewport left blank --
     // the clamp is against a whole page's worth, never `total - 1`.
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(viewport.max(1)));
+    app.details_scroll = app
+        .details_scroll
+        .min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let visible: Vec<Line> = lines.into_iter().skip(start).collect();
     frame.render_widget(Paragraph::new(visible), content_area);
@@ -4693,7 +4695,9 @@ fn draw_focused_step_detail(
     let viewport = inner.height as usize;
     app.details_viewport = viewport;
     let total = lines.len();
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(viewport.max(1)));
+    app.details_scroll = app
+        .details_scroll
+        .min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let visible: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
     frame.render_widget(
@@ -6270,15 +6274,7 @@ fn draw_store(
     // through `app.selected_path`).
     let fullscreen_step = screen.raw_selected.as_ref().or(screen.selected.as_ref());
     if app.tape_fullscreen_step && fullscreen_step.is_some() {
-        draw_focused_step_detail(
-            frame,
-            body,
-            fullscreen_step,
-            transcript_view,
-            now,
-            app,
-            ctx,
-        );
+        draw_focused_step_detail(frame, body, fullscreen_step, transcript_view, now, app, ctx);
         return;
     }
     let title_full = full_area.width >= 120;
@@ -6839,7 +6835,9 @@ fn draw_flow_selected_pane(
     let border_color = ctx.theme.border;
     app.details_viewport = viewport;
     let total = lines.len();
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(viewport.max(1)));
+    app.details_scroll = app
+        .details_scroll
+        .min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -8512,7 +8510,14 @@ fn flow_key_bar_items(
     // Issue #704 rule 3: with follow off or the run ended, ←→ moves
     // the selected lane's own station cursor instead of scrolling --
     // the bar's own label follows whichever one actually happens.
-    let mut items = vec![("←→", if selecting_stations { "Select" } else { "Scroll" })];
+    let mut items = vec![(
+        "←→",
+        if selecting_stations {
+            "Select"
+        } else {
+            "Scroll"
+        },
+    )];
     // Below the three-pane threshold (DESIGN.md's own §5, 100×30,
     // the same one the Story pane itself drops below), `↑↓ Lane` goes
     // too -- there's no Story pane left for it to change the
@@ -9600,7 +9605,8 @@ fn draw_flow(
         );
         return;
     }
-    if app.tape_fullscreen_step && (screen.selected_pass.is_some() || screen.selected_decision.is_some())
+    if app.tape_fullscreen_step
+        && (screen.selected_pass.is_some() || screen.selected_decision.is_some())
     {
         draw_flow_selected_pane(frame, body, wide, screen, app, transcript_view, ctx, now);
         return;
@@ -10424,12 +10430,16 @@ mod golden_tests {
             ProcessState::exited(false),
             now,
         );
-        let step = tape_screen.selected.as_ref().expect("prime.flaky resolves its own step");
+        let step = tape_screen
+            .selected
+            .as_ref()
+            .expect("prime.flaky resolves its own step");
         assert!(
             step.params_rendered_full.is_some(),
             "a tool step must carry its own rendered params"
         );
-        let text = agent_block_lines_text(&focused_step_full_lines(step, None, now, false, 80, &ctx));
+        let text =
+            agent_block_lines_text(&focused_step_full_lines(step, None, now, false, 80, &ctx));
         assert!(text.contains("params"), "{text}");
         assert!(
             text.contains(step.params_rendered_full.as_deref().unwrap()),
@@ -10531,7 +10541,10 @@ mod golden_tests {
             Some("prime.each_tree.iter_0"),
             "enter with nothing scrolled opens the first pass's own line"
         );
-        assert!(app.tape_fullscreen_step, "enter on a pass never closes the full-screen view");
+        assert!(
+            app.tape_fullscreen_step,
+            "enter on a pass never closes the full-screen view"
+        );
     }
 
     /// Issue #704 rule 4: `End` lands on the last full page of the
@@ -13614,7 +13627,10 @@ mod tape_frame_goldens {
         // default row no longer matches `tape_run_end_target`, so
         // summary mode ends.
         assert_eq!(app.selected_path.as_deref(), Some("prime.summary"));
-        assert_ne!(app.tape_run_end_target.as_deref(), app.selected_path.as_deref());
+        assert_ne!(
+            app.tape_run_end_target.as_deref(),
+            app.selected_path.as_deref()
+        );
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
             &rendered.unfolded_rows,

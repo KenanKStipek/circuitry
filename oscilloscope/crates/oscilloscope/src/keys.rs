@@ -1115,11 +1115,9 @@ impl App {
             }
         }
         let plan_order: Vec<String> = self.flow_rows.iter().map(|r| r.path.clone()).collect();
-        if let Some(path) = oscilloscope_core::store::nearest_path_in_plan_order(
-            selected_path,
-            rows,
-            &plan_order,
-        ) {
+        if let Some(path) =
+            oscilloscope_core::store::nearest_path_in_plan_order(selected_path, rows, &plan_order)
+        {
             return rows.iter().position(|r| *r == path);
         }
         None

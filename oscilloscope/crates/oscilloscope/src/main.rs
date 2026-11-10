@@ -1864,16 +1864,17 @@ fn build_flow_screen_if_active(
     // actually is then, the same as every other screen already does
     // post-run.
     let still_running = render_state.header.status == RunStatus::Running;
-    let flow_selected_path = if (app.follow && still_running) || selected_path.as_deref() == root_path {
-        // Issue #703's rule 5: following lands on whichever step is
-        // actually running, not only on the default pass -- `None`
-        // (the default-pass fallback below) only when the running
-        // step is itself inside a loop pass, or nothing is running.
-        oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
-            .map(str::to_string)
-    } else {
-        selected_path
-    };
+    let flow_selected_path =
+        if (app.follow && still_running) || selected_path.as_deref() == root_path {
+            // Issue #703's rule 5: following lands on whichever step is
+            // actually running, not only on the default pass -- `None`
+            // (the default-pass fallback below) only when the running
+            // step is itself inside a loop pass, or nothing is running.
+            oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
+                .map(str::to_string)
+        } else {
+            selected_path
+        };
     Some(oscilloscope_core::screens::build_flow(
         &render_state.unfolded_rows,
         &render_state.rows,
@@ -2011,8 +2012,7 @@ fn tail_focused_transcript(
         return cache.view.clone();
     }
     let lines = tail_transcript_lines(Path::new(&path), bound);
-    let truncated =
-        oscilloscope_core::observe::transcript_tail_truncated(Path::new(&path), bound);
+    let truncated = oscilloscope_core::observe::transcript_tail_truncated(Path::new(&path), bound);
     let view = oscilloscope_core::transcript::build_transcript_view(&lines, truncated);
     cache.path = Some(path);
     cache.len = len;
