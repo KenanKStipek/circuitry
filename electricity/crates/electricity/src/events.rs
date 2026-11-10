@@ -166,7 +166,7 @@ impl EventLog {
         }
     }
 
-    pub fn run_start(&self, run_id: &str, orchestration: &str) {
+    pub fn run_start(&self, run_id: &str, orchestration: &str, config: Option<&str>) {
         if self.disabled.get() {
             return;
         }
@@ -188,6 +188,12 @@ impl EventLog {
         payload.insert(
             Value::Str("orchestration".to_string()),
             Value::Str(orchestration.to_string()),
+        );
+        payload.insert(
+            Value::Str("config".to_string()),
+            config
+                .map(|c| Value::Str(c.to_string()))
+                .unwrap_or(Value::None),
         );
         payload.insert(Value::Str("engine".to_string()), Value::Str(engine_label()));
         payload.insert(
@@ -526,17 +532,19 @@ mod tests {
     fn run_start_and_run_end_write_matching_lines() {
         let path = temp_path("basic");
         let log = EventLog::open(&path);
-        log.run_start("run-1", "doc.yml");
+        log.run_start("run-1", "doc.yml", None);
         log.run_end(true, None, None);
         assert!(!log.close());
         let lines = read_lines(&path);
         assert_eq!(lines.len(), 2);
+        let run_start = lines[0].as_dict().unwrap();
         assert_eq!(
-            lines[0]
-                .as_dict()
-                .unwrap()
-                .get(&Value::Str("ev".to_string())),
+            run_start.get(&Value::Str("ev".to_string())),
             Some(&Value::Str("run_start".to_string()))
+        );
+        assert_eq!(
+            run_start.get(&Value::Str("config".to_string())),
+            Some(&Value::None)
         );
         assert_eq!(
             lines[1]
@@ -544,6 +552,23 @@ mod tests {
                 .unwrap()
                 .get(&Value::Str("ev".to_string())),
             Some(&Value::Str("run_end".to_string()))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_start_names_the_config_file() {
+        let path = temp_path("run_start_config");
+        let log = EventLog::open(&path);
+        log.run_start("run-1", "doc.yml", Some("config.json"));
+        assert!(!log.close());
+        let lines = read_lines(&path);
+        assert_eq!(
+            lines[0]
+                .as_dict()
+                .unwrap()
+                .get(&Value::Str("config".to_string())),
+            Some(&Value::Str("config.json".to_string()))
         );
         fs::remove_file(&path).unwrap();
     }
@@ -749,7 +774,7 @@ mod tests {
     #[test]
     fn a_write_failure_disables_further_writes_without_panicking() {
         let log = EventLog::open(Path::new("/this/path/does/not/exist/events.jsonl"));
-        log.run_start("run-1", "doc.yml");
+        log.run_start("run-1", "doc.yml", None);
         assert!(log.close());
     }
 
