@@ -1691,56 +1691,49 @@ fn build_tape_if_active(
     ))
 }
 
-/// Screen 3's own model (issue #632), built only while it's actually
-/// on display -- the same performance rule `build_tape_if_active`
-/// follows, and rebuilt at the same points that one is (a rebuild, or
-/// a key that could have changed the screen, the measure or the
-/// zoom). `statuses` comes straight from `render_state.unfolded_rows`
-/// rather than a second `RunModel::observe` call: every path the
-/// by-store tree could ever ask about already has a row (and so a
-/// status) there, since `render::build_rows` walks the identical
-/// path universe.
-fn build_cost_screen_if_active(
+/// Screen 3's own model (issue #695, design v1 part 4, replacing
+/// Cost), built only while it's actually on display -- the same
+/// performance rule `build_tape_if_active` follows. `kinds` comes
+/// straight from `render_state.unfolded_rows` rather than a second
+/// `RunModel::observe` call: every path the store tree could ever
+/// ask about already has a row (and so a kind) there, since
+/// `render::build_rows` walks the identical path universe.
+fn build_store_screen_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
-    state: Option<&serde_json::Value>,
+    plan: &oscilloscope_core::plan::PlanTree,
     model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
     now: &str,
-) -> Option<oscilloscope_core::screens::CostScreen> {
-    if app.screen != oscilloscope_core::screens::Screen::Cost {
+) -> Option<oscilloscope_core::store::StoreScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Store {
         return None;
     }
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-    let statuses: std::collections::BTreeMap<String, oscilloscope_core::model::RowStatus> =
-        render_state
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.status.clone()))
-            .collect();
     let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
         render_state
             .unfolded_rows
             .iter()
             .map(|r| (r.path.clone(), r.kind))
             .collect();
-    Some(oscilloscope_core::screens::build_cost_screen(
-        &render_state.rows,
+    Some(oscilloscope_core::store::build_store(
+        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
-        &statuses,
         &kinds,
-        state,
-        app.cost_measure,
+        plan,
         model,
+        state,
+        "prime",
         now,
-        tui::PHASE_GLYPHS.len(),
+        app.store_selected.as_deref(),
     ))
 }
 
 /// Screen 2's own model (issue #635), built only while it's actually
 /// on display -- the same performance rule `build_tape_if_active`/
-/// `build_cost_screen_if_active` already follow.
+/// `build_store_screen_if_active` already follow.
 #[allow(clippy::too_many_arguments)]
 fn build_flow_screen_if_active(
     app: &App,
@@ -1983,7 +1976,6 @@ fn run_tui(
     let start = Instant::now();
 
     let mut app = App::new(false);
-    let mut cost_layout = tui::CostLayoutCache::default();
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
 
@@ -2122,11 +2114,12 @@ fn run_tui(
         current_state.as_ref(),
         &now_str,
     );
-    let mut cost_screen = build_cost_screen_if_active(
+    let mut store_screen = build_store_screen_if_active(
         &app,
         &render_state,
-        current_state.as_ref(),
+        &plan,
         &model,
+        current_state.as_ref(),
         &now_str,
     );
     let mut flow_screen = build_flow_screen_if_active(
@@ -2345,11 +2338,12 @@ fn run_tui(
                 current_state.as_ref(),
                 &now_str,
             );
-            cost_screen = build_cost_screen_if_active(
+            store_screen = build_store_screen_if_active(
                 &app,
                 &render_state,
-                current_state.as_ref(),
+                &plan,
                 &model,
+                current_state.as_ref(),
                 &now_str,
             );
             flow_screen = build_flow_screen_if_active(
@@ -2424,17 +2418,17 @@ fn run_tui(
                             )
                             .is_some()
                         });
-                        let cost_tree: &[oscilloscope_core::treemap::TreemapNode] = cost_screen
+                        let store_rows: Vec<String> = store_screen
                             .as_ref()
-                            .map(|c| c.tree.as_slice())
-                            .unwrap_or(&[]);
+                            .map(|s| s.table.iter().map(|r| r.path.clone()).collect())
+                            .unwrap_or_default();
                         match app.handle_key(
                             key,
                             &visible,
                             &state_visible,
                             running,
                             has_prompt_sent,
-                            cost_tree,
+                            &store_rows,
                         ) {
                             keys::Action::Cancel => {
                                 cancel_once(
@@ -2533,11 +2527,12 @@ fn run_tui(
                             current_state.as_ref(),
                             &now_str,
                         );
-                        cost_screen = build_cost_screen_if_active(
+                        store_screen = build_store_screen_if_active(
                             &app,
                             &render_state,
-                            current_state.as_ref(),
+                            &plan,
                             &model,
+                            current_state.as_ref(),
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -2629,11 +2624,10 @@ fn run_tui(
                     icon_frame,
                     &now_str,
                     tape_screen.as_ref(),
-                    cost_screen.as_ref(),
+                    store_screen.as_ref(),
                     flow_screen.as_ref(),
                     signal_screen.as_ref(),
                     transcript_view.as_ref(),
-                    &mut cost_layout,
                 );
             });
             last_draw = Instant::now();
@@ -3256,7 +3250,6 @@ fn run_tui_watch(
     let start = Instant::now();
 
     let mut app = App::new(true);
-    let mut cost_layout = tui::CostLayoutCache::default();
 
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
@@ -3374,8 +3367,14 @@ fn run_tui_watch(
         last_state.as_ref(),
         &now_str,
     );
-    let mut cost_screen =
-        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &model, &now_str);
+    let mut store_screen = build_store_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &now_str,
+    );
     let mut flow_screen = build_flow_screen_if_active(
         &app,
         &render_state,
@@ -3622,11 +3621,12 @@ fn run_tui_watch(
                 last_state.as_ref(),
                 &now_str,
             );
-            cost_screen = build_cost_screen_if_active(
+            store_screen = build_store_screen_if_active(
                 &app,
                 &render_state,
-                last_state.as_ref(),
+                &plan,
                 &model,
+                last_state.as_ref(),
                 &now_str,
             );
             flow_screen = build_flow_screen_if_active(
@@ -3699,17 +3699,17 @@ fn run_tui_watch(
                             )
                             .is_some()
                         });
-                        let cost_tree: &[oscilloscope_core::treemap::TreemapNode] = cost_screen
+                        let store_rows: Vec<String> = store_screen
                             .as_ref()
-                            .map(|c| c.tree.as_slice())
-                            .unwrap_or(&[]);
+                            .map(|s| s.table.iter().map(|r| r.path.clone()).collect())
+                            .unwrap_or_default();
                         match app.handle_key(
                             key,
                             &visible,
                             &state_visible,
                             false,
                             has_prompt_sent,
-                            cost_tree,
+                            &store_rows,
                         ) {
                             keys::Action::Quit => {
                                 // Finding 15: `q` while the watched
@@ -3771,11 +3771,12 @@ fn run_tui_watch(
                             last_state.as_ref(),
                             &now_str,
                         );
-                        cost_screen = build_cost_screen_if_active(
+                        store_screen = build_store_screen_if_active(
                             &app,
                             &render_state,
-                            last_state.as_ref(),
+                            &plan,
                             &model,
+                            last_state.as_ref(),
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -3856,11 +3857,10 @@ fn run_tui_watch(
                     icon_frame,
                     &now_str,
                     tape_screen.as_ref(),
-                    cost_screen.as_ref(),
+                    store_screen.as_ref(),
                     flow_screen.as_ref(),
                     signal_screen.as_ref(),
                     transcript_view.as_ref(),
-                    &mut cost_layout,
                 );
             });
             last_draw = Instant::now();
@@ -4197,7 +4197,7 @@ mod tests {
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
 
-        app.screen = oscilloscope_core::screens::Screen::Cost;
+        app.screen = oscilloscope_core::screens::Screen::Store;
         assert_eq!(
             focused_agent_transcript_path(
                 &app,

@@ -227,7 +227,9 @@ fn build_children(
 ) -> Vec<StoreNode> {
     direct_children_of(path, flat)
         .into_iter()
-        .flat_map(|child| build_node_or_splice(&child, flat, kinds, plan, header, model, now, run_ended))
+        .flat_map(|child| {
+            build_node_or_splice(&child, flat, kinds, plan, header, model, now, run_ended)
+        })
         .collect()
 }
 
@@ -429,7 +431,10 @@ pub enum StoreTileKind {
     /// sibling into one trailing tile sized by their combined
     /// tokens. Never selectable in the table (it names no single
     /// store), and never itself nested.
-    More { count: usize, tokens: u64 },
+    More {
+        count: usize,
+        tokens: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -551,18 +556,38 @@ fn layout_siblings(
             let mut cursor = if columns { x } else { y };
             for (node, &size) in kept.iter().zip(combined_sizes.iter()) {
                 let rect = if columns {
-                    StoreRect { x: cursor, y, w: size, h }
+                    StoreRect {
+                        x: cursor,
+                        y,
+                        w: size,
+                        h,
+                    }
                 } else {
-                    StoreRect { x, y: cursor, w, h: size }
+                    StoreRect {
+                        x,
+                        y: cursor,
+                        w,
+                        h: size,
+                    }
                 };
                 out.extend(layout_node(node, rect, depth));
                 cursor += size + 1;
             }
             let more_size = combined_sizes[kept.len()];
             let more_rect = if columns {
-                StoreRect { x: cursor, y, w: more_size, h }
+                StoreRect {
+                    x: cursor,
+                    y,
+                    w: more_size,
+                    h,
+                }
             } else {
-                StoreRect { x, y: cursor, w, h: more_size }
+                StoreRect {
+                    x,
+                    y: cursor,
+                    w,
+                    h: more_size,
+                }
             };
             out.push(StoreTile {
                 path: String::new(),
@@ -584,9 +609,19 @@ fn layout_siblings(
     let mut cursor = if columns { x } else { y };
     for (node, &size) in nodes.iter().zip(sizes.iter()) {
         let rect = if columns {
-            StoreRect { x: cursor, y, w: size, h }
+            StoreRect {
+                x: cursor,
+                y,
+                w: size,
+                h,
+            }
         } else {
-            StoreRect { x, y: cursor, w, h: size }
+            StoreRect {
+                x,
+                y: cursor,
+                w,
+                h: size,
+            }
         };
         out.extend(layout_node(node, rect, depth));
         cursor += size + 1;
@@ -660,9 +695,19 @@ fn layout_node(node: &StoreNode, rect: StoreRect, depth: u16) -> Vec<StoreTile> 
             let mut cursor = if columns { inner.x } else { inner.y };
             for (child, &size) in c.children.iter().zip(sizes.iter()) {
                 let child_rect = if columns {
-                    StoreRect { x: cursor, y: inner.y, w: size, h: inner.h }
+                    StoreRect {
+                        x: cursor,
+                        y: inner.y,
+                        w: size,
+                        h: inner.h,
+                    }
                 } else {
-                    StoreRect { x: inner.x, y: cursor, w: inner.w, h: size }
+                    StoreRect {
+                        x: inner.x,
+                        y: cursor,
+                        w: inner.w,
+                        h: size,
+                    }
                 };
                 out.extend(layout_node(child, child_rect, child_depth));
                 cursor += size + 1;
@@ -727,7 +772,11 @@ fn flatten_leaves(nodes: &[StoreNode], root_path: &str, out: &mut Vec<StoreTable
 /// ties broken in plan order (the tree's own child order, which
 /// `build_store_tree` already preserves) -- share is of the run's
 /// own tokens so far.
-pub fn build_store_table(nodes: &[StoreNode], root_path: &str, run_tokens: u64) -> Vec<StoreTableRow> {
+pub fn build_store_table(
+    nodes: &[StoreNode],
+    root_path: &str,
+    run_tokens: u64,
+) -> Vec<StoreTableRow> {
     let mut rows = Vec::new();
     flatten_leaves(nodes, root_path, &mut rows);
     let plan_order: BTreeMap<String, usize> = rows
@@ -808,18 +857,15 @@ pub fn build_store_readings(
     let ratio = (header.tokens_received > 0)
         .then(|| (header.tokens_sent as f64 / header.tokens_received as f64 * 10.0).round() / 10.0);
 
-    let loop_rows: Vec<&crate::render::Row> = rows
-        .iter()
-        .filter(|r| r.kind == RowKind::Loop)
-        .collect();
+    let loop_rows: Vec<&crate::render::Row> =
+        rows.iter().filter(|r| r.kind == RowKind::Loop).collect();
     let running_loop = loop_rows
         .iter()
         .find(|r| r.status.kind == crate::model::StatusKind::Running);
     let chosen = running_loop.or_else(|| {
         loop_rows
             .iter()
-            .filter(|r| r.status.kind == crate::model::StatusKind::Done)
-            .last()
+            .rfind(|r| r.status.kind == crate::model::StatusKind::Done)
     });
     let loop_progress = chosen.and_then(|row| {
         let total = row.loop_progress.as_ref().and_then(|p| p.total)?;
@@ -868,6 +914,17 @@ pub struct StoreScreen {
     /// shared chrome with the Tape/Signal/Flow.
     pub last_finished: Option<crate::screens::SignalLastFinished>,
     pub head: crate::screens::TapeHead,
+    /// The table's own cursor (`App::store_selected`, kept there
+    /// since it is UI state, not this screen's own model), resolved
+    /// to the same [`crate::screens::FocusedStep`] the Tape's,
+    /// Signal's and Flow's own full-screen step views already build
+    /// theirs from -- `None` with no row selected, or a selected path
+    /// no row in `rows` resolves to.
+    pub selected: Option<crate::screens::FocusedStep>,
+    /// The Totals row's own deviation (§3.3), the same sum over every
+    /// already-run-or-running row's own usual tokens the Tape's and
+    /// Signal's own `usual_so_far_tokens` is.
+    pub usual_so_far_tokens: Option<u64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -881,13 +938,17 @@ pub fn build_store(
     state: Option<&Value>,
     root_path: &str,
     now: &str,
+    selected_path: Option<&str>,
 ) -> StoreScreen {
     let run_ended = header.status != crate::model::RunStatus::Running;
     let tree = build_store_tree(root_path, flat, kinds, plan, header, model, now, run_ended);
     let run_tokens = state
         .and_then(crate::model::run_totals)
         .map(|totals| {
-            totals.get("tokens_sent").and_then(Value::as_u64).unwrap_or(0)
+            totals
+                .get("tokens_sent")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
                 + totals
                     .get("tokens_received")
                     .and_then(Value::as_u64)
@@ -903,6 +964,28 @@ pub fn build_store(
         .max();
     let unit = crate::screens::tape_unit(largest_usual_step);
     let run_start = header.run_start_ts.as_deref();
+    let selected = selected_path
+        .and_then(|path| rows.iter().find(|r| r.path == path))
+        .map(|row| {
+            crate::screens::build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+            )
+        });
+    let usual_so_far_tokens = {
+        use crate::model::StatusKind;
+        let sum: u64 = rows
+            .iter()
+            .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+            .filter_map(|r| crate::screens::tape_row_usual_tokens(&r.path, plan, header))
+            .sum();
+        (sum > 0).then_some(sum)
+    };
     StoreScreen {
         tree,
         table,
@@ -910,6 +993,8 @@ pub fn build_store(
         unit,
         last_finished: crate::screens::last_finished_row(rows, flat, plan, run_start),
         head: crate::screens::build_run_head(run_start, header, rows, flat),
+        selected,
+        usual_so_far_tokens,
     }
 }
 
@@ -967,23 +1052,71 @@ mod tests {
         ];
         let tiles = layout_store(&tree, 2, 2, 115, 15);
         let kind = tiles.iter().find(|t| t.path == "prime.kind").unwrap();
-        assert_eq!(kind.rect, StoreRect { x: 2, y: 2, w: 28, h: 15 });
+        assert_eq!(
+            kind.rect,
+            StoreRect {
+                x: 2,
+                y: 2,
+                w: 28,
+                h: 15
+            }
+        );
         let gate = tiles.iter().find(|t| t.path == "prime.gate").unwrap();
-        assert_eq!(gate.rect, StoreRect { x: 31, y: 2, w: 51, h: 15 });
+        assert_eq!(
+            gate.rect,
+            StoreRect {
+                x: 31,
+                y: 2,
+                w: 51,
+                h: 15
+            }
+        );
         let reply = tiles.iter().find(|t| t.path == "prime.gate.reply").unwrap();
-        assert_eq!(reply.rect, StoreRect { x: 32, y: 3, w: 49, h: 13 });
+        assert_eq!(
+            reply.rect,
+            StoreRect {
+                x: 32,
+                y: 3,
+                w: 49,
+                h: 13
+            }
+        );
         let drafts = tiles.iter().find(|t| t.path == "prime.drafts").unwrap();
-        assert_eq!(drafts.rect, StoreRect { x: 83, y: 2, w: 34, h: 15 });
+        assert_eq!(
+            drafts.rect,
+            StoreRect {
+                x: 83,
+                y: 2,
+                w: 34,
+                h: 15
+            }
+        );
         let iter0 = tiles
             .iter()
             .find(|t| t.path == "prime.drafts.iter_0.draft")
             .unwrap();
-        assert_eq!(iter0.rect, StoreRect { x: 84, y: 3, w: 32, h: 6 });
+        assert_eq!(
+            iter0.rect,
+            StoreRect {
+                x: 84,
+                y: 3,
+                w: 32,
+                h: 6
+            }
+        );
         let iter1 = tiles
             .iter()
             .find(|t| t.path == "prime.drafts.iter_1.draft")
             .unwrap();
-        assert_eq!(iter1.rect, StoreRect { x: 84, y: 10, w: 32, h: 6 });
+        assert_eq!(
+            iter1.rect,
+            StoreRect {
+                x: 84,
+                y: 10,
+                w: 32,
+                h: 6
+            }
+        );
     }
 
     /// At 80x24: `kind` x2-19, `gate` x21-53, `drafts` x55-76
@@ -1011,21 +1144,61 @@ mod tests {
         ];
         let tiles = layout_store(&tree, 2, 2, 75, 10);
         let kind = tiles.iter().find(|t| t.path == "prime.kind").unwrap();
-        assert_eq!(kind.rect, StoreRect { x: 2, y: 2, w: 18, h: 10 });
+        assert_eq!(
+            kind.rect,
+            StoreRect {
+                x: 2,
+                y: 2,
+                w: 18,
+                h: 10
+            }
+        );
         let gate = tiles.iter().find(|t| t.path == "prime.gate").unwrap();
-        assert_eq!(gate.rect, StoreRect { x: 21, y: 2, w: 33, h: 10 });
+        assert_eq!(
+            gate.rect,
+            StoreRect {
+                x: 21,
+                y: 2,
+                w: 33,
+                h: 10
+            }
+        );
         let drafts = tiles.iter().find(|t| t.path == "prime.drafts").unwrap();
-        assert_eq!(drafts.rect, StoreRect { x: 55, y: 2, w: 22, h: 10 });
+        assert_eq!(
+            drafts.rect,
+            StoreRect {
+                x: 55,
+                y: 2,
+                w: 22,
+                h: 10
+            }
+        );
         let iter0 = tiles
             .iter()
             .find(|t| t.path == "prime.drafts.iter_0.draft")
             .unwrap();
-        assert_eq!(iter0.rect, StoreRect { x: 56, y: 3, w: 20, h: 3 });
+        assert_eq!(
+            iter0.rect,
+            StoreRect {
+                x: 56,
+                y: 3,
+                w: 20,
+                h: 3
+            }
+        );
         let iter1 = tiles
             .iter()
             .find(|t| t.path == "prime.drafts.iter_1.draft")
             .unwrap();
-        assert_eq!(iter1.rect, StoreRect { x: 56, y: 7, w: 20, h: 4 });
+        assert_eq!(
+            iter1.rect,
+            StoreRect {
+                x: 56,
+                y: 7,
+                w: 20,
+                h: 4
+            }
+        );
     }
 
     #[test]
@@ -1113,9 +1286,7 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree(
-            "prime", &flat, &kinds, &plan, &header, &model, "t1", true,
-        );
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].path(), "prime.used");
     }
@@ -1140,9 +1311,7 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree(
-            "prime", &flat, &kinds, &plan, &header, &model, "t1", true,
-        );
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
         assert_eq!(tree.len(), 1);
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
@@ -1179,9 +1348,7 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree(
-            "prime", &flat, &kinds, &plan, &header, &model, "t1", true,
-        );
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
         };
@@ -1333,7 +1500,11 @@ mod tests {
             "prime.drafts",
             "drafts",
             false,
-            vec![leaf("prime.drafts.iter_1.draft", "iter_1 \u{203a} draft", 50)],
+            vec![leaf(
+                "prime.drafts.iter_1.draft",
+                "iter_1 \u{203a} draft",
+                50,
+            )],
         )];
         let table = build_store_table(&tree, "prime", 50);
         assert_eq!(table[0].label, "drafts \u{203a} iter_1 \u{203a} draft");
@@ -1372,10 +1543,7 @@ mod tests {
         let header = empty_header();
         let table = build_store_table(&tree, "prime", 261);
         let readings = build_store_readings(&table, &tree, &header, &rows);
-        assert_eq!(
-            readings.loop_progress,
-            Some(("drafts".to_string(), 2, 3))
-        );
+        assert_eq!(readings.loop_progress, Some(("drafts".to_string(), 2, 3)));
     }
 
     #[test]

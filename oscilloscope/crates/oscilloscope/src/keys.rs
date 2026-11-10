@@ -7,7 +7,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use oscilloscope_core::render::{FullValueField, Row, StateRow};
 use oscilloscope_core::screens::Screen;
-use oscilloscope_core::treemap::{Measure, TreemapNode};
 
 /// DESIGN.md §6.3's `tab` cycle, issue #527: `Tree` → `Details` →
 /// `State` → `Tree`. The treemap and token bar have no pane of their
@@ -136,19 +135,11 @@ pub struct App {
     /// `pane == Pane::State` is only true while that pane itself has
     /// focus, never while scrolling its own selection's details.
     pub details_source: Pane,
-    /// The Cost screen's own treemap measure (issue #632): `i`/`o`/
-    /// `$` switch it, the same key again returns to `Total`.
-    pub cost_measure: oscilloscope_core::treemap::Measure,
-    /// The Cost screen's own zoom stack (issue #632): each `⏎`
-    /// pushes the selected store's own path, zooming into its
-    /// children; `esc` pops one level back out. Empty means the
-    /// top-level tiles (the root's own children).
-    pub cost_zoom: Vec<String>,
-    /// The selected store's own path at the Cost screen's *current*
-    /// zoom level -- independent of `selected_path`/
-    /// `state_selected_path`, same reasoning as those two staying
-    /// independent of each other.
-    pub cost_selected: Option<String>,
+    /// The Store screen's own table cursor (issue #695), a path --
+    /// independent of `selected_path`/`state_selected_path`, same
+    /// reasoning as those two staying independent of each other.
+    /// Sticks to its own path as the table's own rows reorder.
+    pub store_selected: Option<String>,
     /// The rail's own horizontal scroll (issue #691, DESIGN.md
     /// §2.3's follow rule): a character offset from the run's own
     /// start, clamped to the rail's real width only at draw time
@@ -241,9 +232,7 @@ impl App {
             expanded_quick_steps: std::collections::BTreeSet::new(),
             details_source: Pane::Tree,
             screen: Screen::default(),
-            cost_measure: oscilloscope_core::treemap::Measure::Total,
-            cost_zoom: Vec::new(),
-            cost_selected: None,
+            store_selected: None,
             flow_scroll: 0,
             flow_manual_scroll: false,
             flow_rows: Vec::new(),
@@ -483,7 +472,7 @@ impl App {
         state_rows: &[&StateRow],
         running: bool,
         has_prompt_sent: bool,
-        cost_tree: &[TreemapNode],
+        store_rows: &[String],
     ) -> Action {
         // Finding K3: raw mode turns a real Ctrl-C into `Char('c')`
         // with the CONTROL modifier, not a distinct key code — caught
@@ -559,7 +548,7 @@ impl App {
                 Action::None
             }
             Dialog::None => {
-                self.handle_key_normal(key, rows, state_rows, running, has_prompt_sent, cost_tree)
+                self.handle_key_normal(key, rows, state_rows, running, has_prompt_sent, store_rows)
             }
         }
     }
@@ -571,14 +560,14 @@ impl App {
         state_rows: &[&StateRow],
         running: bool,
         has_prompt_sent: bool,
-        cost_tree: &[TreemapNode],
+        store_rows: &[String],
     ) -> Action {
-        // Issue #632: the Cost screen's own keys (`i`/`o`/`$`, ↑↓ to
-        // select a store in size order, `⏎`/`esc` to zoom) take over
-        // first, before any of the generic panes' own bindings below
-        // -- `0`-`3` (screen switching), `t`, `?`, `c`/`q` and Ctrl-C
-        // still fall through to the match below unchanged.
-        if self.screen == Screen::Cost && self.handle_cost_key(key, cost_tree) {
+        // Issue #695: the Store screen's own keys (↑↓ and aliases to
+        // select a table row, `⏎` to open it) take over first, before
+        // any of the generic panes' own bindings below -- `0`-`3`
+        // (screen switching), `?`, `c`/`q` and Ctrl-C still fall
+        // through to the match below unchanged.
+        if self.screen == Screen::Store && self.handle_store_key(key, store_rows) {
             return Action::None;
         }
         match key.code {
@@ -636,7 +625,8 @@ impl App {
                 if self.pane == Pane::Tree
                     && self.screen != Screen::Tape
                     && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow =>
+                    && self.screen != Screen::Flow
+                    && self.screen != Screen::Store =>
             {
                 if let Some(path) = &self.selected_path {
                     self.collapsed.remove(path);
@@ -680,7 +670,11 @@ impl App {
             // sibling between two groups -- or before the selected
             // row -- never gets scanned past into an earlier group's
             // own expansion.
-            KeyCode::Left if self.pane == Pane::Tree && self.screen != Screen::Tape => {
+            KeyCode::Left
+                if self.pane == Pane::Tree
+                    && self.screen != Screen::Tape
+                    && self.screen != Screen::Store =>
+            {
                 if let Some(path) = self.selected_path.clone() {
                     self.collapsed.insert(path.clone());
                     if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
@@ -759,13 +753,14 @@ impl App {
             // with, and overloading it here only let `↑↓` silently
             // scroll the detail pane instead of moving the selection.
             // Still live on the unported screens below.
-            // Gone from the Flow screen (issue #691, §4): each
-            // screen now has one list with a cursor, nothing to tab
-            // between -- still live on Cost until its own redesign.
+            // Gone from the Flow screen (issue #691, §4) and the
+            // Store (issue #695): each screen now has one list with
+            // a cursor, nothing to tab between.
             KeyCode::Tab
                 if self.screen != Screen::Tape
                     && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow =>
+                    && self.screen != Screen::Flow
+                    && self.screen != Screen::Store =>
             {
                 // On a small terminal the state pane isn't drawn
                 // at all (`tui::draw` zeroes `state_viewport` the
@@ -806,25 +801,33 @@ impl App {
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #613: `z` turns folding off to show the full,
             // unfolded tree, and back on again -- gone from the Tape,
-            // Signal and Flow (§4 has no fold key on any of the
-            // three; the rail's own `+`/`-` is a different thing),
-            // still live on Cost until its own redesign.
+            // Signal, Flow and Store (§4 has no fold key on any of
+            // them; the rail's own `+`/`-` is a different thing).
             KeyCode::Char('z')
                 if self.screen != Screen::Tape
                     && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow =>
+                    && self.screen != Screen::Flow
+                    && self.screen != Screen::Store =>
             {
                 self.fold_enabled = !self.fold_enabled;
             }
-            KeyCode::Char('e') => self.errors_only = !self.errors_only,
-            KeyCode::Char('/') => {
+            // Issue #695: `e`/`/` act on the Tape's own rows alone
+            // (§4); gone from the Store, which has no rows of its own
+            // to filter or restrict to errors.
+            KeyCode::Char('e') if self.screen != Screen::Store => {
+                self.errors_only = !self.errors_only;
+            }
+            KeyCode::Char('/') if self.screen != Screen::Store => {
                 self.dialog = Dialog::FilterInput(self.filter.clone().unwrap_or_default());
             }
             // Gone from the Tape the same way `z` is above -- its own
             // detail pane already shows the prompt and reply in full
-            // -- and from the Flow screen, whose own selected pane
-            // does too.
-            KeyCode::Char('v') if self.screen != Screen::Tape && self.screen != Screen::Flow => {
+            // -- and from the Flow and Store screens too.
+            KeyCode::Char('v')
+                if self.screen != Screen::Tape
+                    && self.screen != Screen::Flow
+                    && self.screen != Screen::Store =>
+            {
                 self.dialog = Dialog::FullValue(if has_prompt_sent {
                     FullValueField::PromptSent
                 } else {
@@ -865,52 +868,44 @@ impl App {
     /// the generic panes' own bindings; `true` means the key was
     /// consumed here and `handle_key_normal`'s own match below must
     /// not also act on it.
-    fn handle_cost_key(&mut self, key: KeyEvent, tree: &[TreemapNode]) -> bool {
+    fn handle_store_key(&mut self, key: KeyEvent, rows: &[String]) -> bool {
+        /// The table's own usual visible row count (DESIGN.md §2.4),
+        /// since the Store has no viewport of its own cached from a
+        /// real draw the way the Tree/State/Details panes do.
+        const STORE_PAGE_SIZE: i32 = 4;
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.move_cost_selection(tree, -1);
+                self.move_store_selection(rows, -1);
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.move_cost_selection(tree, 1);
+                self.move_store_selection(rows, 1);
                 true
             }
-            // `⏎` zooms into the selected store (DESIGN.md) -- only
-            // once it actually has children of its own to zoom into;
-            // a leaf (or a store too small to show its own children
-            // at all) has nothing further down to show.
+            KeyCode::PageUp => {
+                self.move_store_selection(rows, -STORE_PAGE_SIZE);
+                true
+            }
+            KeyCode::PageDown => {
+                self.move_store_selection(rows, STORE_PAGE_SIZE);
+                true
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.store_selected = rows.first().cloned();
+                true
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.store_selected = rows.last().cloned();
+                true
+            }
+            // `⏎` opens the selected store's own step full-screen
+            // (DESIGN.md §2.4), the same toggle the Tape/Signal/Flow
+            // already share -- only while a row is actually selected,
+            // but consumed here either way so it never falls through
+            // to the generic pane's own quick-steps expand below.
             KeyCode::Enter => {
-                let level = self.cost_level(tree);
-                let items = oscilloscope_core::treemap::sorted_children(level);
-                let target = self
-                    .cost_selected
-                    .as_deref()
-                    .and_then(|p| items.iter().find(|n| n.path == p).copied())
-                    .or_else(|| items.first().copied());
-                if let Some(node) = target {
-                    if !node.children.is_empty() {
-                        self.cost_zoom.push(node.path.clone());
-                        self.cost_selected = None;
-                    }
-                }
-                true
-            }
-            // `esc` zooms back out one level (DESIGN.md) -- a no-op
-            // at the top level, same as every other screen's `esc`
-            // with nothing open.
-            KeyCode::Esc => {
-                if !self.cost_zoom.is_empty() {
-                    self.cost_zoom.pop();
-                    self.cost_selected = None;
-                }
-                true
-            }
-            // `i`/`o`/`$` switch the treemap's own measure; the same
-            // key again returns to the default, total tokens
-            // (`Measure::from_key`'s own toggle rule).
-            KeyCode::Char(c @ ('i' | 'o' | '$')) => {
-                if let Some(measure) = Measure::from_key(self.cost_measure, c) {
-                    self.cost_measure = measure;
+                if self.store_selected.is_some() {
+                    self.tape_fullscreen_step = !self.tape_fullscreen_step;
                 }
                 true
             }
@@ -918,47 +913,25 @@ impl App {
         }
     }
 
-    /// The Cost screen's own current zoom level's children (issue
-    /// #632): walks `self.cost_zoom`'s own stack of store paths into
-    /// `tree`, dropping any trailing entry that no longer resolves
-    /// (the underlying state changed since it was pushed) rather than
-    /// leaving the screen stuck on a level that no longer exists.
-    pub(crate) fn cost_level<'a>(&mut self, tree: &'a [TreemapNode]) -> &'a [TreemapNode] {
-        let mut level = tree;
-        let mut valid_depth = 0;
-        for path in &self.cost_zoom {
-            match level.iter().find(|n| &n.path == path) {
-                Some(node) => {
-                    level = &node.children;
-                    valid_depth += 1;
-                }
-                None => break,
-            }
-        }
-        self.cost_zoom.truncate(valid_depth);
-        level
-    }
-
-    /// `↑`/`↓` select tiles in size order (DESIGN.md), the same
-    /// largest-total-first, tie-by-key order `treemap::layout` itself
-    /// lays tiles out in -- so moving the selection one step always
-    /// matches moving to the tile actually next to it on screen.
-    fn move_cost_selection(&mut self, tree: &[TreemapNode], delta: i32) {
-        let level = self.cost_level(tree);
-        let items = oscilloscope_core::treemap::sorted_children(level);
-        if items.is_empty() {
+    /// `↑`/`↓` select rows in the table's own order (DESIGN.md §2.4:
+    /// tokens descending, ties in plan order) -- `rows` is already in
+    /// that order (`store::build_store_table`'s own output), so
+    /// moving the selection one step always matches moving to the row
+    /// actually next to it on screen.
+    fn move_store_selection(&mut self, rows: &[String], delta: i32) {
+        if rows.is_empty() {
             return;
         }
         let current = self
-            .cost_selected
+            .store_selected
             .as_deref()
-            .and_then(|p| items.iter().position(|n| n.path == p));
+            .and_then(|p| rows.iter().position(|r| r == p));
         let next = match current {
-            Some(idx) => (idx as i32 + delta).clamp(0, items.len() as i32 - 1) as usize,
+            Some(idx) => (idx as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize,
             None if delta >= 0 => 0,
-            None => items.len() - 1,
+            None => rows.len() - 1,
         };
-        self.cost_selected = Some(items[next].path.clone());
+        self.store_selected = Some(rows[next].clone());
     }
 
     /// Issue #678's own addition for the Tape: a manual move turns
@@ -1413,7 +1386,7 @@ mod tests {
         let rows = [row("prime.loop", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.selected_path = Some("prime.loop".to_string());
         app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
         assert!(app.collapsed.contains("prime.loop"));
@@ -1536,7 +1509,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         assert!(app.fold_enabled, "issue #613: fold is on by default");
         app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
         assert!(!app.fold_enabled);
@@ -1577,73 +1550,6 @@ mod tests {
         assert!(app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
         assert!(!app.tape_fullscreen_step);
-    }
-
-    #[test]
-    fn enter_expands_a_quick_steps_row_and_left_folds_it_again() {
-        // Cost's own `⏎` is already claimed, unconditionally, by its
-        // own treemap zoom (`handle_cost_key`) -- the expand step here
-        // sets `expanded_quick_steps` directly, the same state `⏎`
-        // used to reach through the tree screen this replaced; `←`'s
-        // own re-fold is exercised for real, the same key Cost still
-        // reaches it through today.
-        let mut quick_steps_row = row("prime.a", 1, StatusKind::Done);
-        quick_steps_row.label = "3 quick steps".to_string();
-        quick_steps_row.kind = RowKind::QuickSteps;
-        let rows = [quick_steps_row];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Cost;
-        app.selected_path = Some("prime.a".to_string());
-        app.expanded_quick_steps.insert("prime.a".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
-        assert!(!app.expanded_quick_steps.contains("prime.a"));
-    }
-
-    /// ← re-folds an expanded group from any of its steps, not only
-    /// from its own representative (the first one, and the only path
-    /// `expanded_quick_steps` ever stores) -- selecting the *second*
-    /// exploded step and pressing ← must still re-fold the whole
-    /// group.
-    #[test]
-    fn left_re_folds_an_expanded_quick_steps_group_from_any_of_its_steps() {
-        let quick = |path: &str| {
-            let mut r = row(path, 1, StatusKind::Done);
-            r.duration_s = Some(0.3);
-            r
-        };
-        let rows = [quick("prime.a"), quick("prime.b"), quick("prime.c")];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Cost;
-        app.expanded_quick_steps.insert("prime.a".to_string());
-        app.selected_path = Some("prime.b".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
-        assert!(!app.expanded_quick_steps.contains("prime.a"));
-    }
-
-    /// The backward scan stops at the first row that isn't itself a
-    /// quick step, so an unrelated sibling between two groups -- or
-    /// after one -- never gets scanned past into an earlier group's
-    /// own expansion.
-    #[test]
-    fn left_on_an_unrelated_sibling_leaves_an_earlier_groups_expansion_alone() {
-        let mut slow = row("prime.slow", 1, StatusKind::Done);
-        slow.duration_s = Some(5.0);
-        let rows = [
-            row("prime.q1", 1, StatusKind::Done),
-            row("prime.q2", 1, StatusKind::Done),
-            slow,
-            row("prime.box", 1, StatusKind::Done),
-        ];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Cost;
-        app.expanded_quick_steps.insert("prime.q1".to_string());
-        app.selected_path = Some("prime.box".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
-        assert!(app.expanded_quick_steps.contains("prime.q1"));
-        assert!(app.collapsed.contains("prime.box"));
     }
 
     #[test]
@@ -1851,7 +1757,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert!(matches!(app.dialog, Dialog::FullValue(_)));
         app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
@@ -1863,7 +1769,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
     }
@@ -1875,7 +1781,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
     }
@@ -1885,7 +1791,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
@@ -2114,7 +2020,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.state_viewport = 8;
         assert_eq!(app.pane, Pane::Tree);
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
@@ -2133,7 +2039,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app.state_viewport = 0;
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
         assert_eq!(app.pane, Pane::Details);
@@ -2313,7 +2219,7 @@ mod tests {
         app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Signal);
         app.handle_key(key(KeyCode::Char('3')), &[], &[], true, false, &[]);
-        assert_eq!(app.screen, Screen::Cost);
+        assert_eq!(app.screen, Screen::Store);
     }
 
     #[test]
@@ -2369,107 +2275,123 @@ mod tests {
         assert_eq!(visible.len(), 2);
     }
 
-    fn cost_leaf(key: &str, total: u64) -> TreemapNode {
-        TreemapNode::leaf(key, total, Some(oscilloscope_core::model::StatusKind::Done))
-    }
-
-    fn cost_app() -> App {
+    fn store_app() -> App {
         let mut app = App::new(false);
-        app.screen = Screen::Cost;
+        app.screen = Screen::Store;
         app
     }
 
     #[test]
-    fn i_o_dollar_switch_the_cost_measure_and_the_same_key_returns_to_total() {
-        let mut app = cost_app();
-        assert_eq!(app.cost_measure, Measure::Total);
-        app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &[]);
-        assert_eq!(app.cost_measure, Measure::In);
-        app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &[]);
-        assert_eq!(app.cost_measure, Measure::Total);
-        app.handle_key(key(KeyCode::Char('o')), &[], &[], true, false, &[]);
-        assert_eq!(app.cost_measure, Measure::Out);
-        app.handle_key(key(KeyCode::Char('$')), &[], &[], true, false, &[]);
-        assert_eq!(app.cost_measure, Measure::Cost);
-        app.handle_key(key(KeyCode::Char('$')), &[], &[], true, false, &[]);
-        assert_eq!(app.cost_measure, Measure::Total);
-    }
-
-    #[test]
-    fn up_down_select_cost_tiles_in_size_order() {
-        let mut app = cost_app();
-        let tree = vec![cost_leaf("small", 10), cost_leaf("big", 100)];
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_selected.as_deref(), Some("big"));
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_selected.as_deref(), Some("small"));
-        app.handle_key(key(KeyCode::Up), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_selected.as_deref(), Some("big"));
-    }
-
-    #[test]
-    fn enter_zooms_into_the_selected_store_and_esc_zooms_back_out() {
-        let mut app = cost_app();
-        let tree = vec![TreemapNode {
-            key: "review".to_string(),
-            path: "prime.review".to_string(),
-            total: 100,
-            weight: 100,
-            status: Some(oscilloscope_core::model::StatusKind::Done),
-            live: false,
-            live_turns: None,
-            children: vec![cost_leaf("agent", 60), cost_leaf("fix", 40)],
-        }];
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_selected.as_deref(), Some("prime.review"));
-        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_zoom, vec!["prime.review".to_string()]);
-        // Zoomed in: selection now moves among `review`'s own children.
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_selected.as_deref(), Some("agent"));
-        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &tree);
-        assert!(app.cost_zoom.is_empty());
-    }
-
-    #[test]
-    fn enter_does_nothing_on_a_leaf_with_no_children() {
-        let mut app = cost_app();
-        let tree = vec![cost_leaf("agent", 60)];
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &tree);
-        assert!(app.cost_zoom.is_empty(), "a leaf has nothing to zoom into");
-    }
-
-    #[test]
-    fn esc_at_the_top_level_is_a_no_op() {
-        let mut app = cost_app();
-        let tree = vec![cost_leaf("agent", 60)];
-        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &tree);
-        assert!(app.cost_zoom.is_empty());
-    }
-
-    #[test]
-    fn a_stale_zoom_path_that_no_longer_resolves_is_dropped() {
-        let mut app = cost_app();
-        app.cost_zoom = vec!["prime.gone".to_string()];
-        let tree = vec![cost_leaf("agent", 60)];
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        assert!(
-            app.cost_zoom.is_empty(),
-            "a zoom path the current tree no longer has must be dropped, not leave the screen stuck"
+    fn up_down_select_table_rows_in_order_and_clamp_at_the_ends() {
+        let mut app = store_app();
+        let rows = vec!["prime.a".to_string(), "prime.b".to_string()];
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.b"));
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
+        assert_eq!(
+            app.store_selected.as_deref(),
+            Some("prime.b"),
+            "clamped at the end"
         );
-        assert_eq!(app.cost_selected.as_deref(), Some("agent"));
+        app.handle_key(key(KeyCode::Up), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::Up), &[], &[], true, false, &rows);
+        assert_eq!(
+            app.store_selected.as_deref(),
+            Some("prime.a"),
+            "clamped at the start"
+        );
     }
 
     #[test]
-    fn cost_keys_do_nothing_outside_the_cost_screen() {
+    fn j_k_pgup_pgdn_home_end_g_gg_are_aliases_for_store_selection() {
+        let mut app = store_app();
+        let rows = vec![
+            "prime.a".to_string(),
+            "prime.b".to_string(),
+            "prime.c".to_string(),
+        ];
+        app.handle_key(key(KeyCode::Char('j')), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::Char('G')), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        app.handle_key(key(KeyCode::Char('g')), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::End), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        app.handle_key(key(KeyCode::Home), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::PageDown), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        app.handle_key(key(KeyCode::Char('k')), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.b"));
+        app.handle_key(key(KeyCode::PageUp), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+    }
+
+    #[test]
+    fn enter_only_opens_full_screen_with_a_row_selected() {
+        let mut app = store_app();
+        let rows: Vec<String> = Vec::new();
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
+        assert!(
+            !app.tape_fullscreen_step,
+            "enter does nothing with no row selected"
+        );
+        app.store_selected = Some("prime.a".to_string());
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
+        assert!(app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &rows);
+        assert!(!app.tape_fullscreen_step);
+    }
+
+    #[test]
+    fn switching_screens_resets_the_shared_fullscreen_toggle_for_the_store_too() {
+        let mut app = store_app();
+        app.store_selected = Some("prime.a".to_string());
+        let rows = vec!["prime.a".to_string()];
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
+        assert!(app.tape_fullscreen_step);
+        app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &rows);
+        assert_eq!(app.screen, Screen::Tape);
+        assert!(!app.tape_fullscreen_step);
+    }
+
+    #[test]
+    fn store_keys_do_nothing_outside_the_store_screen() {
         let mut app = App::new(false);
         assert_eq!(app.screen, Screen::Tape);
-        let tree = vec![cost_leaf("agent", 60)];
-        app.handle_key(key(KeyCode::Char('i')), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_measure, Measure::Total);
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &tree);
-        assert_eq!(app.cost_selected, None);
+        let rows = vec!["prime.a".to_string()];
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
+        assert_eq!(app.store_selected, None);
+    }
+
+    #[test]
+    fn i_o_dollar_tab_z_v_e_slash_and_arrows_do_nothing_on_the_store() {
+        let mut app = store_app();
+        let rows = vec!["prime.a".to_string()];
+        for code in [
+            KeyCode::Char('i'),
+            KeyCode::Char('o'),
+            KeyCode::Char('$'),
+            KeyCode::Tab,
+            KeyCode::Char('z'),
+            KeyCode::Char('v'),
+            KeyCode::Char('e'),
+            KeyCode::Char('/'),
+            KeyCode::Left,
+            KeyCode::Right,
+        ] {
+            app.handle_key(key(code), &[], &[], true, false, &rows);
+        }
+        assert_eq!(app.store_selected, None);
+        assert_eq!(app.pane, Pane::Tree);
+        assert!(app.fold_enabled);
+        assert!(!app.errors_only);
+        assert_eq!(app.filter, None);
+        assert_eq!(app.dialog, Dialog::None);
     }
 
     // -------------------------------------------------------------

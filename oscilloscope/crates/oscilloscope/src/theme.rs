@@ -16,7 +16,6 @@
 //! by [`resolve`].
 
 use clap::ValueEnum;
-use oscilloscope_core::model::StatusKind;
 use ratatui::style::Color;
 
 /// The eleven themes, in the order `--theme`/`OSI_THEME` accept and
@@ -164,21 +163,6 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn status_color(&self, kind: StatusKind) -> Color {
-        match kind {
-            StatusKind::Pending => self.status_pending,
-            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
-                self.status_running
-            }
-            StatusKind::Done => self.status_done,
-            StatusKind::Failed => self.status_failed,
-            StatusKind::FailedHandled => self.status_failed_handled,
-            StatusKind::Skipped => self.status_skipped,
-            StatusKind::Cancelled => self.status_cancelled,
-            StatusKind::Aborted => self.status_aborted,
-        }
-    }
-
     pub fn for_name(name: ThemeName) -> Theme {
         match name {
             ThemeName::Terminal => Theme::terminal(),
@@ -1047,6 +1031,7 @@ pub fn nearest_xterm256(r: u8, g: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oscilloscope_core::model::StatusKind;
 
     const NAMED_THEMES: [ThemeName; 10] = [
         ThemeName::Dracula,
@@ -1230,30 +1215,26 @@ mod tests {
             check("text", theme.text, 4.5);
             check("error", theme.error, 4.5);
             check("dim", theme.dim, 3.0);
-            // Finding 11: every `StatusKind` through `status_color`,
-            // not just running/done/failed -- `pending`/`skipped`
-            // reuse `dim`'s own 3:1 floor (they already are `dim`
-            // in every theme); every other status kind is a 4.5:1
-            // role like `text`/`error`.
-            for kind in [
-                StatusKind::Pending,
-                StatusKind::Running,
-                StatusKind::Done,
-                StatusKind::Failed,
-                StatusKind::FailedHandled,
-                StatusKind::Skipped,
-                StatusKind::Cancelled,
-                StatusKind::Aborted,
+            // Finding 11: every `StatusKind`'s own role colour, not
+            // just running/done/failed -- `pending`/`skipped` reuse
+            // `dim`'s own 3:1 floor (they already are `dim` in every
+            // theme); every other status kind is a 4.5:1 role like
+            // `text`/`error`.
+            for (kind, color) in [
+                (StatusKind::Pending, theme.status_pending),
+                (StatusKind::Running, theme.status_running),
+                (StatusKind::Done, theme.status_done),
+                (StatusKind::Failed, theme.status_failed),
+                (StatusKind::FailedHandled, theme.status_failed_handled),
+                (StatusKind::Skipped, theme.status_skipped),
+                (StatusKind::Cancelled, theme.status_cancelled),
+                (StatusKind::Aborted, theme.status_aborted),
             ] {
                 let min = match kind {
                     StatusKind::Pending | StatusKind::Skipped => 3.0,
                     _ => 4.5,
                 };
-                check(
-                    &format!("status_color({kind:?})"),
-                    theme.status_color(kind),
-                    min,
-                );
+                check(&format!("status_color({kind:?})"), color, min);
             }
 
             let highlight_ratio = contrast_ratio(theme.text, theme.highlight);

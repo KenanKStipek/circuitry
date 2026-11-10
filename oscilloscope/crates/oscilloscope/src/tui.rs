@@ -7,7 +7,6 @@
 
 use oscilloscope_core::model::{RunStatus, StatusKind};
 use oscilloscope_core::render::Details;
-use oscilloscope_core::treemap::{Measure, TreemapNode};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -45,46 +44,6 @@ fn test_zone() -> chrono::FixedOffset {
     chrono::FixedOffset::east_opt(0).unwrap()
 }
 
-/// Issue #527's own small-terminal fallback thresholds: below each,
-/// drop one more pane, in this order, until the rest fits. The header
-/// line itself never disappears. These are whole-*terminal* widths
-/// (DESIGN.md §6.3, the README's TUI section) — checked against
-/// `frame.area()`'s own width, never `body`'s. The *height* figures
-/// are four rows lower than the panel's own named size (issue #678's
-/// shared chrome: the header band, the Totals row, the status line
-/// and the key bar cost every screen four rows that used to be the
-/// panel's own, so a panel named for an `N`-row terminal is checked
-/// against `N - 4` of what is actually left for it, `reduced_area`
-/// at every one of these call sites) -- a panel named "80×20" still
-/// means a terminal that's actually 80×20, not 80×24.
-mod thresholds {
-    /// Below this, the two-column layout itself collapses to one.
-    /// Issue #635: no screen still uses this pair on its own (the
-    /// Flow screen's own `FLOW_TWO_PANE_MIN_WIDTH`/`_MIN_HEIGHT`
-    /// below happen to share the same numbers); kept for the Cost
-    /// screen's own thresholds just below, which are defined relative
-    /// to it. Named for an 80×20 terminal (the panel's own height is
-    /// 20 minus the shared chrome's own four rows).
-    pub const TWO_COLUMN_MIN_WIDTH: u16 = 80;
-    pub const TWO_COLUMN_MIN_HEIGHT: u16 = 16;
-
-    /// The Cost screen's own thresholds (issue #632, DESIGN.md's
-    /// "small terminals"): at this size and up, the tokens-over-time
-    /// chart sits beside the largest-stores table, under the
-    /// treemap. Below it (but still at [`COST_TREEMAP_MIN_WIDTH`]/
-    /// `_MIN_HEIGHT`), the chart is dropped and the table takes the
-    /// treemap's own row's full width instead. Both figures are whole-
-    /// *terminal* sizes, same as every other threshold here -- checked
-    /// against `frame.area()`, never `body`, inclusive (100×30 and
-    /// 80×20 themselves already qualify).
-    pub const COST_CHART_MIN_WIDTH: u16 = 100;
-    pub const COST_CHART_MIN_HEIGHT: u16 = 26;
-    /// Below this, the treemap itself is dropped too, leaving the
-    /// table alone (`⏎` still zooms it) -- the same floor screen 2's
-    /// own two-column layout collapses at.
-    pub const COST_TREEMAP_MIN_WIDTH: u16 = TWO_COLUMN_MIN_WIDTH;
-    pub const COST_TREEMAP_MIN_HEIGHT: u16 = TWO_COLUMN_MIN_HEIGHT;
-}
 // ---------------------------------------------------------------------
 // The Tape (screen 0, issue #678)
 // ---------------------------------------------------------------------
@@ -541,31 +500,6 @@ fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     if wide {
         items.push(("0-3", "Screens"));
     }
-    items.push(("?", "Help"));
-    items.push(("q", "Quit"));
-    items
-}
-
-/// Flow/Cost's own keys (§9's shared chrome around their own,
-/// unchanged panels): each screen's own existing keys, kept exactly
-/// as before, plus the globals every key bar now carries -- the
-/// Tape and Signal draw their own dedicated key bars instead.
-fn screen_key_bar_items(
-    screen: oscilloscope_core::screens::Screen,
-) -> Vec<(&'static str, &'static str)> {
-    use oscilloscope_core::screens::Screen;
-    let mut items = vec![("↑↓", "Select"), ("tab", "Pane")];
-    match screen {
-        Screen::Flow => items.extend([
-            ("s", "State"),
-            ("l", "Log"),
-            ("z", "Fold"),
-            ("v", "Full Value"),
-        ]),
-        Screen::Cost => items.extend([("i/o/$", "Measure")]),
-        Screen::Tape | Screen::Signal => {}
-    }
-    items.extend([("e", "Errors"), ("/", "Filter"), ("0-3", "Screens")]);
     items.push(("?", "Help"));
     items.push(("q", "Quit"));
     items
@@ -4303,110 +4237,6 @@ fn agent_live_lines(
     lines
 }
 
-/// Truncates a line's own displayed text to `max_chars`, ending in
-/// `…` rather than letting the terminal clip it mid-word (DESIGN.md:
-/// "long values truncate with …"), styling kept span by span.
-fn truncate_line(line: Line<'static>, max_chars: usize) -> Line<'static> {
-    let total: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-    if total <= max_chars {
-        return line;
-    }
-    if max_chars == 0 {
-        return Line::from("");
-    }
-    let mut budget = max_chars.saturating_sub(1);
-    let mut spans = Vec::new();
-    for span in line.spans {
-        if budget == 0 {
-            break;
-        }
-        let count = span.content.chars().count();
-        if count <= budget {
-            budget -= count;
-            spans.push(span);
-        } else {
-            let truncated: String = span.content.chars().take(budget).collect();
-            spans.push(Span::styled(truncated, span.style));
-            budget = 0;
-        }
-    }
-    spans.push(Span::raw("…"));
-    Line::from(spans)
-}
-
-fn truncate_lines(lines: Vec<Line<'static>>, max_chars: usize) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .map(|l| truncate_line(l, max_chars))
-        .collect()
-}
-
-#[cfg(test)]
-mod truncate_tests {
-    use super::*;
-
-    /// A card's own long value ends in `…` once it overflows its own
-    /// width (DESIGN.md: "long values truncate with …"), rather than
-    /// being clipped mid-word the way the terminal itself would clip
-    /// an over-wide line with no wrap.
-    #[test]
-    fn truncate_line_ends_in_an_ellipsis_once_it_overflows() {
-        let line = Line::from("a somewhat long value that will not fit");
-        let truncated = truncate_line(line, 10);
-        let text: String = truncated.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text.chars().count(), 10);
-        assert!(text.ends_with('…'), "{text:?}");
-        assert_eq!(text, "a somewha…");
-    }
-
-    #[test]
-    fn truncate_line_leaves_a_line_that_already_fits_untouched() {
-        let line = Line::from("short");
-        let truncated = truncate_line(line, 10);
-        let text: String = truncated.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "short");
-    }
-
-    #[test]
-    fn truncate_line_keeps_each_spans_own_style_up_to_the_cut() {
-        let line = Line::from(vec![
-            Span::styled("abc", Style::default().fg(Color::Red)),
-            Span::styled("defgh", Style::default().fg(Color::Blue)),
-        ]);
-        let truncated = truncate_line(line, 5);
-        assert_eq!(truncated.spans[0].content.as_ref(), "abc");
-        assert_eq!(truncated.spans[0].style.fg, Some(Color::Red));
-        assert_eq!(truncated.spans[1].content.as_ref(), "d");
-        assert_eq!(truncated.spans[1].style.fg, Some(Color::Blue));
-        assert_eq!(truncated.spans[2].content.as_ref(), "…");
-    }
-}
-
-/// `print_line`/`format_log_line`'s own clock prefix, `HH:MM:SS `
-/// (`main.rs::Clock::format` plus the one space that always follows
-/// it) -- always this many bytes, since the clock is always exactly
-/// two ASCII digits per field.
-const LOG_CLOCK_PREFIX_LEN: usize = 9;
-
-/// Whether `line` (already clock-prefixed) is a report's own line
-/// (#610): the leading `▸` right after the clock prefix, written
-/// only by `diff::report_line` -- no other line this crate ever
-/// builds starts with it, so a front end can tell the two apart from
-/// the line's own text alone, with no separate field needed.
-fn is_report_log_line(line: &str) -> bool {
-    line.get(LOG_CLOCK_PREFIX_LEN..)
-        .is_some_and(|rest| rest.starts_with('▸'))
-}
-
-fn is_warning_report_log_line(line: &str) -> bool {
-    line.get(LOG_CLOCK_PREFIX_LEN..)
-        .is_some_and(|rest| rest.starts_with("▸ warning: "))
-}
-
-fn status_color(kind: StatusKind, theme: &Theme) -> Color {
-    theme.status_color(kind)
-}
-
 /// Cuts `label` to `max` characters, with a trailing `…` when it did
 /// (§3.8's own row-text ellipsis).
 fn truncate_label(label: &str, max: usize) -> String {
@@ -4424,61 +4254,6 @@ fn truncate_label(label: &str, max: usize) -> String {
     }
 }
 
-/// Issue #637's Cost section: "the per-turn strip comes from `turn_
-/// tokens`" -- the last `width` values, oldest first, each scaled to
-/// one of eight block heights relative to the largest value in that
-/// same window (never the whole session's own history), so a single
-/// unusually large turn doesn't flatten every other bar in sight.
-fn turn_tokens_sparkline(values: &[u64], width: usize) -> String {
-    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    if values.is_empty() || width == 0 {
-        return String::new();
-    }
-    let slice = if values.len() > width {
-        &values[values.len() - width..]
-    } else {
-        values
-    };
-    let max = slice.iter().copied().max().unwrap_or(0);
-    slice
-        .iter()
-        .map(|&v| {
-            if max == 0 {
-                LEVELS[0]
-            } else {
-                let idx = ((v as f64 / max as f64) * (LEVELS.len() - 1) as f64).round() as usize;
-                LEVELS[idx.min(LEVELS.len() - 1)]
-            }
-        })
-        .collect()
-}
-
-/// A running agent tile's own second line (issue #637's Cost
-/// section): the per-turn strip, and, when there's room left after
-/// it, the cache bar -- `tokens_cached_in`'s own share of the tile's
-/// `total` (its live `tokens_sent`, the one figure a live tile is
-/// ever sized from). `None` for a tile that isn't a live agent at
-/// all, or one with neither figure to show.
-fn live_turn_line(cell: &oscilloscope_core::treemap::TreemapCell, width: usize) -> Option<String> {
-    let live_turns = cell.live_turns.as_ref()?;
-    let spark = turn_tokens_sparkline(&live_turns.turn_tokens, width.min(12));
-    let cache = live_turns.tokens_cached_in.map(|cached| {
-        let pct = if cell.total > 0 {
-            (cached as f64 / cell.total as f64 * 100.0).round() as u64
-        } else {
-            0
-        };
-        format!("cache {pct}%")
-    });
-    let text = match (spark.is_empty(), cache) {
-        (false, Some(cache)) => format!("{spark} {cache}"),
-        (false, None) => spark,
-        (true, Some(cache)) => cache,
-        (true, None) => return None,
-    };
-    Some(truncate_label(&text, width))
-}
-
 /// A bar of filled block characters, `value`'s own share of `max`
 /// (issue #527's "scaled to the larger of the two") — `max == 0`
 /// draws an empty bar rather than dividing by zero. Shared by the
@@ -4490,670 +4265,6 @@ fn bar(value: u64, max: u64, width: usize) -> String {
     }
     let filled = ((value as f64 / max as f64) * width as f64).round() as usize;
     "█".repeat(filled.min(width))
-}
-
-/// The Cost screen's own squarified-layout cache (issue #632,
-/// DESIGN.md's performance rule: "laid out again only when the tree
-/// or the area changes") -- owned by the main loop alongside `App`,
-/// not folded into it, since it holds ratatui's own `Rect` and the
-/// laid-out `TreemapCell`s, neither of which `oscilloscope_core`
-/// (pure geometry/model, no ratatui dependency) ever sees.
-#[derive(Default)]
-pub struct CostLayoutCache {
-    key: Option<(Vec<TreemapNode>, Rect)>,
-    cells: Vec<oscilloscope_core::treemap::TreemapCell>,
-}
-
-impl CostLayoutCache {
-    fn cells(
-        &mut self,
-        nodes: &[TreemapNode],
-        area: Rect,
-    ) -> &[oscilloscope_core::treemap::TreemapCell] {
-        let stale = match &self.key {
-            Some((prev_nodes, prev_area)) => prev_nodes.as_slice() != nodes || *prev_area != area,
-            None => true,
-        };
-        if stale {
-            self.cells =
-                oscilloscope_core::treemap::layout(nodes, area.x, area.y, area.width, area.height);
-            self.key = Some((nodes.to_vec(), area));
-        }
-        &self.cells
-    }
-}
-
-/// A measure's own value, formatted the way the Cost screen's own
-/// treemap and table show it (DESIGN.md: `reviews 517 t`, `$1.10`)
-/// -- `total` is always in [`oscilloscope_core::treemap::build_tree_
-/// for_measure`]'s own unit for `measure` (tokens, or micro-dollars
-/// for [`Measure::Cost`]), never a raw count to format directly.
-fn format_measure_value(total: u64, measure: Measure) -> String {
-    match measure {
-        Measure::Cost => format!(
-            "${:.2}",
-            oscilloscope_core::treemap::display_cost_usd(total)
-        ),
-        _ => oscilloscope_core::format::format_tokens(total),
-    }
-}
-
-/// The Cost screen's own by-store treemap (issue #632, DESIGN.md:
-/// "one tile per state store"). Unlike screen 2's old `tokens by
-/// key` treemap, there is no single wrapping root cell -- `screen.
-/// tree` is already the root's own children, and `app.cost_zoom`
-/// (self-healing: `App::cost_level` drops a trailing entry that no
-/// longer resolves) picks which level is actually on screen. A tile
-/// for a leaf still running shows "tokens when done" instead of a
-/// number, whatever its own placeholder weight happens to be
-/// (DESIGN.md), gated on exactly the same `status`/`has_children` a
-/// `TreemapCell` already carries -- no extra field needed.
-fn draw_cost_treemap(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::screens::CostScreen,
-    app: &mut App,
-    cost_layout: &mut CostLayoutCache,
-    ctx: &DrawCtx,
-) {
-    let level = app.cost_level(&screen.tree).to_vec();
-    let mut title = format!(" tokens by store · {} ", screen.measure.label());
-    if !app.cost_zoom.is_empty() {
-        // The zoomed store's own name at each level, not its full
-        // dotted path -- `app.cost_zoom` stacks a *path* per level,
-        // and every deeper one already contains every shallower one
-        // as a prefix, so joining the raw paths themselves would
-        // read `prime.fan › prime.fan.iter_0` instead of `fan ›
-        // iter_0`. The measure stays in the title too, so zooming
-        // never hides which measure is on screen.
-        let breadcrumb: Vec<&str> = app
-            .cost_zoom
-            .iter()
-            .map(|p| p.rsplit('.').next().unwrap_or(p.as_str()))
-            .collect();
-        title = format!(
-            " tokens by store · {} · {} ",
-            screen.measure.label(),
-            breadcrumb.join(" › ")
-        );
-    }
-    if screen.stores_without_measure > 0 {
-        let noun = if screen.stores_without_measure == 1 {
-            "store"
-        } else {
-            "stores"
-        };
-        title = format!(
-            "{} · {} {noun} without {} ",
-            title.trim_end(),
-            screen.stores_without_measure,
-            screen.measure.label()
-        );
-        title = format!(" {}", title.trim_start());
-    }
-    let block = Block::default().borders(Borders::ALL).title(title);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if level.is_empty() || inner.width == 0 || inner.height == 0 {
-        let paragraph = Paragraph::new("(no stores yet)");
-        frame.render_widget(paragraph, inner);
-        return;
-    }
-
-    let selected = app.cost_selected.clone();
-    let cells = cost_layout.cells(&level, inner).to_vec();
-    for cell in &cells {
-        let rect = Rect::new(cell.rect.x, cell.rect.y, cell.rect.w, cell.rect.h);
-        if rect.width == 0 || rect.height == 0 {
-            continue;
-        }
-        let color = cell
-            .status
-            .map(|s| status_color(s, ctx.theme))
-            .unwrap_or(ctx.theme.dim);
-        let is_selected = selected.is_some() && cell.path == selected;
-        let mut style = Style::default().fg(color);
-        if is_selected {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        // DESIGN.md: a tile for a step that is still running reads
-        // "tokens when done" until it finishes, never a number --
-        // true for a container's own tile exactly as much as a
-        // leaf's: `cell.total` is always the real, unboosted value
-        // ([`oscilloscope_core::treemap::TreemapNode`]'s own doc
-        // comment), so a container with at least one real, finished
-        // child already shows that real total (never hidden behind
-        // "tokens when done" merely because something else under it
-        // is still running), while one with nothing but a running
-        // placeholder underneath reads exactly like a bare running
-        // leaf would. A run that ended (aborted or cancelled) while a
-        // leaf was still in flight leaves it in the exact same state
-        // -- no `completed_at` ever written -- but it will never
-        // reach "done" either, so it reads "no tokens reported"
-        // instead, rather than the placeholder weight's own number
-        // read back as if it were a real one.
-        let value_text = if cell.total > 0 {
-            format_measure_value(cell.total, screen.measure)
-        } else {
-            match cell.status {
-                Some(StatusKind::Running) => "tokens when done".to_string(),
-                Some(StatusKind::Aborted) | Some(StatusKind::Cancelled) => {
-                    "no tokens reported".to_string()
-                }
-                _ => format_measure_value(cell.total, screen.measure),
-            }
-        };
-        // Issue #637: a running agent's own tile, sized from its
-        // live `tokens_sent`, is labelled `live` instead of a bare
-        // number -- the one thing `cell.total > 0` alone can no
-        // longer tell apart from a container that already has a
-        // real, finished child of its own.
-        let labelled = if cell.live {
-            format!("{} {value_text} live", cell.label)
-        } else {
-            format!("{} {value_text}", cell.label)
-        };
-        if cell.has_children {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(truncate_label(
-                    &labelled,
-                    rect.width.saturating_sub(2) as usize,
-                ))
-                .border_style(style);
-            frame.render_widget(block, rect);
-        } else {
-            // Same "fill is the area" rule screen 2's old treemap used
-            // (DESIGN.md §6.3): a leaf (or a merged `…` bucket) has no
-            // border, so its own background fill reads as an area at
-            // all.
-            let fill = Style::default().bg(color);
-            let fill = if is_selected {
-                fill.add_modifier(Modifier::REVERSED)
-            } else {
-                fill
-            };
-            frame.render_widget(Block::default().style(fill), rect);
-            if rect.width >= 2 {
-                let label = truncate_label(&labelled, rect.width as usize);
-                let text_style = Style::default().bg(color).fg(ctx.theme.on_accent);
-                let text_style = if is_selected {
-                    text_style.add_modifier(Modifier::REVERSED)
-                } else {
-                    text_style
-                };
-                let mut tile_lines = vec![Line::styled(label, text_style)];
-                // Issue #637: the per-turn strip and the cache bar,
-                // when the tile actually has a second row to draw
-                // them on -- never at the cost of the label itself.
-                if rect.height >= 2 {
-                    if let Some(extra) = live_turn_line(cell, rect.width as usize) {
-                        tile_lines.push(Line::styled(extra, text_style));
-                    }
-                }
-                let paragraph = Paragraph::new(tile_lines);
-                frame.render_widget(paragraph, rect);
-            }
-        }
-    }
-}
-
-/// The tokens-over-time chart's own fixed cycle of glyphs (DESIGN.md:
-/// "one band per top-level step"), paired one-for-one with
-/// [`phase_color`]'s own cycle -- DESIGN.md's "still reads from
-/// glyphs and modifiers, never colour alone" rule applies here same
-/// as everywhere else: two adjacent bands must still read apart with
-/// colour turned off. Its own length is `crate::screens::build_cost_
-/// screen`'s own `max_phase_bands` (issue #641): with more real
-/// phases than this, `cost::cap_phase_bands` folds the smallest ones
-/// into one further `other` band rather than ever reusing a glyph
-/// in the legend.
-pub(crate) const PHASE_GLYPHS: [char; 6] = ['█', '▓', '▒', '░', '▐', '▌'];
-
-/// One of a small, fixed cycle of theme colours for the tokens-over-
-/// time chart's own bands -- there is no per-phase colour role in
-/// `Theme` itself (phases are document-specific, unlike a fixed
-/// status), so this cycles through roles that are already visually
-/// distinct from one another, the same cycle length as
-/// [`PHASE_GLYPHS`].
-fn phase_color(index: usize, theme: &Theme) -> Color {
-    match index % PHASE_GLYPHS.len() {
-        0 => theme.token_in,
-        1 => theme.token_out,
-        2 => theme.status_running,
-        3 => theme.status_done,
-        4 => theme.warning,
-        _ => theme.error,
-    }
-}
-
-/// A fill glyph for one of the chart's own bands, paired with
-/// [`phase_color`] (same index, same cycle length).
-fn phase_glyph(index: usize) -> char {
-    PHASE_GLYPHS[index % PHASE_GLYPHS.len()]
-}
-
-/// The "tokens over time" stacked chart's own clock axis (DESIGN.md:
-/// "a clock axis from the run's start to now") -- the start, middle
-/// and end of exactly the span `screen.tokens_over_time` was bucketed
-/// over, left-, centre- and right-aligned across `width` columns.
-/// Blank once the run has no start time yet (nothing has bucketed
-/// data to put an axis under).
-fn chart_axis_line(
-    screen: &oscilloscope_core::screens::CostScreen,
-    ctx: &DrawCtx,
-    width: usize,
-) -> Line<'static> {
-    let Some(start_ts) = screen.chart_start_ts.as_deref() else {
-        return Line::from("");
-    };
-    let format = oscilloscope_core::format::format_clock_time;
-    let start = format(start_ts, ctx.zone).unwrap_or_default();
-    let end = format(&screen.chart_end_ts, ctx.zone).unwrap_or_default();
-    let mid =
-        oscilloscope_core::format::midpoint_clock_time(start_ts, &screen.chart_end_ts, ctx.zone)
-            .unwrap_or_default();
-    let mut row = vec![' '; width];
-    place_label(&mut row, 0, &start);
-    let mid_start = (width / 2).saturating_sub(mid.chars().count() / 2);
-    place_label(&mut row, mid_start, &mid);
-    place_label(&mut row, width.saturating_sub(end.chars().count()), &end);
-    Line::styled(
-        row.into_iter().collect::<String>(),
-        Style::default().fg(ctx.theme.dim),
-    )
-}
-
-/// Overwrites `row` starting at `start` with `text`'s own characters
-/// -- later calls (the axis's end label, right of its middle one) can
-/// overwrite a few trailing spaces of an earlier one on a narrow
-/// pane, but never panics: every index is bounds-checked first.
-fn place_label(row: &mut [char], start: usize, text: &str) {
-    for (i, c) in text.chars().enumerate() {
-        if let Some(slot) = row.get_mut(start + i) {
-            *slot = c;
-        }
-    }
-}
-
-/// The chart's own legend (DESIGN.md's "never colour alone" rule): one
-/// glyph-and-label pair per phase, truncated to `width` as a whole
-/// rather than cut mid-pair.
-fn chart_legend_line(
-    screen: &oscilloscope_core::screens::CostScreen,
-    width: usize,
-) -> Line<'static> {
-    let mut text = String::new();
-    for (idx, (label, _)) in screen.tokens_over_time.iter().enumerate() {
-        if idx > 0 {
-            text.push(' ');
-        }
-        text.push(phase_glyph(idx));
-        text.push(' ');
-        text.push_str(label);
-    }
-    Line::from(truncate_label(&text, width))
-}
-
-/// The "tokens over time" stacked chart (DESIGN.md: "a stacked area
-/// chart with one band per top-level step, on a clock axis from the
-/// run's start to now"). `screen.tokens_over_time` is already
-/// bucketed by [`oscilloscope_core::cost::TOKENS_OVER_TIME_BUCKETS`]
-/// equal time spans; this rebins those onto exactly as many columns
-/// as the pane's own width has, splitting a bucket's value across
-/// every column it spans (or summing several buckets into one when
-/// the pane is narrower than the bucket count) rather than capping
-/// the chart at the bucket count itself, then fills each column's
-/// own rows bottom-up, per phase, proportional to that phase's own
-/// share of the column's total -- the nearest a character-cell
-/// terminal gets to a real stacked area fill. The bottom two rows
-/// (whenever there's room for them) are the clock axis and a glyph
-/// legend rather than more bars.
-fn draw_cost_chart(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::screens::CostScreen,
-    ctx: &DrawCtx,
-) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" tokens over time ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let width = inner.width as usize;
-    if width == 0 || inner.height == 0 || screen.tokens_over_time.is_empty() {
-        return;
-    }
-    let reserved = if inner.height >= 3 { 2 } else { 0 };
-    let bars_height = inner.height as usize - reserved;
-    if bars_height == 0 {
-        return;
-    }
-    let buckets = oscilloscope_core::cost::TOKENS_OVER_TIME_BUCKETS;
-    let phases = screen.tokens_over_time.len();
-    let columns_n = width;
-    let mut columns = vec![vec![0u64; phases]; columns_n];
-    for (phase_idx, (_, series)) in screen.tokens_over_time.iter().enumerate() {
-        for (bucket_idx, &value) in series.iter().enumerate() {
-            if value == 0 {
-                continue;
-            }
-            let col_start = bucket_idx * columns_n / buckets;
-            let col_end = ((bucket_idx + 1) * columns_n / buckets)
-                .max(col_start + 1)
-                .min(columns_n);
-            let span = (col_end - col_start) as u64;
-            let share = value / span;
-            let remainder = value % span;
-            for (i, col) in (col_start..col_end).enumerate() {
-                let extra = u64::from((i as u64) < remainder);
-                columns[col][phase_idx] += share + extra;
-            }
-        }
-    }
-    let max_total = columns
-        .iter()
-        .map(|c| c.iter().sum::<u64>())
-        .max()
-        .unwrap_or(0);
-    if max_total == 0 {
-        let paragraph = Paragraph::new("(no tokens yet)");
-        frame.render_widget(paragraph, inner);
-        return;
-    }
-    // `grid[row][col]` is the phase index filling that cell, or
-    // `None` for blank space above a column's own fill.
-    let mut grid: Vec<Vec<Option<usize>>> = vec![vec![None; columns_n]; bars_height];
-    for (col_idx, col) in columns.iter().enumerate() {
-        let col_total = col.iter().sum::<u64>();
-        if col_total == 0 {
-            continue;
-        }
-        let col_height =
-            ((col_total as f64 / max_total as f64) * bars_height as f64).round() as usize;
-        let col_height = col_height.clamp(1, bars_height);
-        let mut filled = 0usize;
-        for (phase_idx, &value) in col.iter().enumerate() {
-            if filled >= col_height {
-                break;
-            }
-            let share = ((value as f64 / col_total as f64) * col_height as f64).round() as usize;
-            let share = share.min(col_height - filled);
-            for r in 0..share {
-                let row = bars_height - 1 - filled - r;
-                grid[row][col_idx] = Some(phase_idx);
-            }
-            filled += share;
-        }
-    }
-    let mut lines: Vec<Line> = grid
-        .into_iter()
-        .map(|row| {
-            let spans: Vec<Span> = row
-                .into_iter()
-                .map(|cell| match cell {
-                    None => Span::raw(" "),
-                    Some(phase_idx) => Span::styled(
-                        phase_glyph(phase_idx).to_string(),
-                        Style::default().fg(phase_color(phase_idx, ctx.theme)),
-                    ),
-                })
-                .collect();
-            Line::from(spans)
-        })
-        .collect();
-    if reserved == 2 {
-        lines.push(chart_axis_line(screen, ctx, width));
-        lines.push(chart_legend_line(screen, width));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// The "largest stores" table (DESIGN.md: "path, tokens in, tokens
-/// out, cost (when reported) and share of the total"), with its own
-/// footer (the run's own totals, and the gap between them and the
-/// table, when there is one).
-/// `↑`/`↓`/`⏎`/`esc` select and zoom the table the same way they do
-/// the treemap (DESIGN.md: "the table alone, where ⏎ still zooms") --
-/// `app.cost_level`'s own self-healing walk of `app.cost_zoom` is
-/// what the table's own rows are filtered to, not a second, possibly
-/// diverging, copy of that walk, and a row matching `app.cost_
-/// selected` is reversed the same way a selected treemap tile is.
-fn draw_cost_table(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::screens::CostScreen,
-    app: &mut App,
-    ctx: &DrawCtx,
-) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" largest stores ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    let zoomed = !app.cost_zoom.is_empty();
-    let level = app.cost_level(&screen.tree);
-    let in_scope: Vec<&str> = level.iter().map(|n| n.path.as_str()).collect();
-    let selected = app.cost_selected.clone();
-    // Unzoomed, every row already descends from some top-level tile
-    // by construction -- skipping the scope check entirely there
-    // keeps this `O(rows)`, not `O(rows × level)`, for the common
-    // case (issue #527's own 2,000-node redraw-cost bound covers the
-    // Cost screen too).
-    let in_path_scope = |path: &str| -> bool {
-        in_scope.iter().any(|p| {
-            path == *p
-                || (path.len() > p.len() && path.starts_with(p) && path.as_bytes()[p.len()] == b'.')
-        })
-    };
-    let rows: Vec<&oscilloscope_core::cost::StoreRow> = screen
-        .stores
-        .rows
-        .iter()
-        .filter(|r| !zoomed || in_path_scope(&r.path))
-        .collect();
-    let total_tokens: u64 = rows.iter().map(|r| r.tokens_sent + r.tokens_received).sum();
-    // Relative to the zoomed store, not the whole run, once zoomed --
-    // `row.label` itself is always root-relative (`oscilloscope_core
-    // ::cost::StoreRow`'s own doc comment), so a zoomed view re-
-    // derives it from the row's own real path instead of trying to
-    // strip a prefix back out of an already-built string.
-    let zoom_root = app.cost_zoom.last().map(String::as_str);
-    // Issue #641 (finding on look-alike rows): every row's own full,
-    // unshortened label, so shortening one row's own label can tell
-    // whether dropping down to some width would make it read
-    // identically to another's -- and if so, which ancestor segment
-    // actually tells them apart.
-    let all_labels: Vec<String> = rows
-        .iter()
-        .map(|row| match zoom_root {
-            Some(root) => oscilloscope_core::cost::zoomed_row_label(row, root),
-            None => row.label.clone(),
-        })
-        .collect();
-    let mut row_lines: Vec<Line> = Vec::new();
-    for row in &rows {
-        let share = if total_tokens > 0 {
-            (row.tokens_sent + row.tokens_received) as f64 / total_tokens as f64 * 100.0
-        } else {
-            0.0
-        };
-        let cost = match row.cost_usd {
-            Some(c) => format!("  ${c:.2}"),
-            None => String::new(),
-        };
-        let color = row
-            .status
-            .map(|s| status_color(s, ctx.theme))
-            .unwrap_or(ctx.theme.text);
-        let mut style = Style::default().fg(color);
-        // The orchestration pane's own selection can name a
-        // container (`fan`), not only a leaf -- in table-only mode
-        // `↑`/`↓` walk the treemap's own tiles, so a selected
-        // container never has a row whose path matches it exactly
-        // unless that container also happens to be a `while: mode:
-        // model` loop with a `check` row of its own. Every row *under*
-        // the selection (its path, plus `.`) is reversed too, the same
-        // as the treemap highlights every descendant tile of a
-        // selected container.
-        let is_selected = selected.as_deref().is_some_and(|sel| {
-            row.path == sel
-                || (row.path.len() > sel.len()
-                    && row.path.starts_with(sel)
-                    && row.path.as_bytes()[sel.len()] == b'.')
-        });
-        if is_selected {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        // The same "nothing real yet" rule the treemap's own tiles
-        // read by (`draw_cost_treemap`'s `value_text`): a running (or
-        // ended-without-finishing) row with nothing reported shows
-        // the same placeholder text its tile does, never `↑0 t ↓0 t
-        // 0%` read back as if it meant something.
-        let share_text = oscilloscope_core::format::format_share_pct(share);
-        let value_text = if row.tokens_sent + row.tokens_received > 0 {
-            format!(
-                "↑{} ↓{}{cost}  {share_text}",
-                oscilloscope_core::format::format_tokens(row.tokens_sent),
-                oscilloscope_core::format::format_tokens(row.tokens_received),
-            )
-        } else {
-            match row.status {
-                Some(StatusKind::Running) => "tokens when done".to_string(),
-                Some(StatusKind::Aborted) | Some(StatusKind::Cancelled) => {
-                    "no tokens reported".to_string()
-                }
-                _ => format!(
-                    "↑{} ↓{}{cost}  {share_text}",
-                    oscilloscope_core::format::format_tokens(row.tokens_sent),
-                    oscilloscope_core::format::format_tokens(row.tokens_received),
-                ),
-            }
-        };
-        let label = match zoom_root {
-            Some(root) => oscilloscope_core::cost::zoomed_row_label(row, root),
-            None => row.label.clone(),
-        };
-        // Shortened from the left (`… › iter_1 › review`), never the
-        // right: the leaf is the one segment that actually has to
-        // stay readable to tell two same-named rows apart.
-        let label_budget = (inner.width as usize).saturating_sub(2 + value_text.chars().count());
-        let label = oscilloscope_core::cost::shorten_breadcrumb_from_left(
-            &label,
-            &all_labels,
-            label_budget,
-        );
-        row_lines.push(Line::styled(format!("{label}  {value_text}"), style));
-    }
-
-    let footer = &screen.stores.footer;
-    let mut footer_lines: Vec<Line> = Vec::new();
-    // The coverage note (`$4.20 (from 3 of 9 prompts)`) gets its own
-    // line, not appended to the totals line -- issue #632's small-
-    // terminal acceptance item: sharing one line with `total ↑X ↓Y`
-    // left only the table pane's own narrower width (beside the
-    // chart, DESIGN.md's 62/38 split) for both, truncating the label
-    // well before the pane itself ran out of room for it alone.
-    footer_lines.push(Line::styled(
-        format!(
-            "total ↑{} ↓{}",
-            oscilloscope_core::format::format_tokens(footer.run_tokens_sent),
-            oscilloscope_core::format::format_tokens(footer.run_tokens_received),
-        ),
-        Style::default().fg(ctx.theme.dim),
-    ));
-    if let Some(cost_label) = footer.cost_label_for_width(inner.width as usize) {
-        footer_lines.push(Line::styled(cost_label, Style::default().fg(ctx.theme.dim)));
-    }
-    if footer.gap_tokens > 0 {
-        footer_lines.push(Line::styled(
-            format!(
-                "{} not in the table above",
-                oscilloscope_core::format::format_tokens(footer.gap_tokens)
-            ),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-
-    // The footer (the run's own totals, its gap, its cost coverage)
-    // always stays visible, right after the rows: with more rows than
-    // fit, rows are what gets cut, ending in a "+N more" line, never
-    // the footer itself scrolling off the bottom of a `Paragraph` that
-    // simply stops drawing past its own area -- which is exactly what
-    // appending the footer after every row, unconditionally, used to
-    // risk.
-    let reserved = footer_lines.len() + 1; // +1: the blank separator line, always present.
-    let available_for_rows = (inner.height as usize).saturating_sub(reserved);
-    let mut lines: Vec<Line> = Vec::new();
-    if row_lines.len() <= available_for_rows {
-        lines.extend(row_lines);
-    } else if available_for_rows > 0 {
-        let shown = available_for_rows - 1; // -1: this tier's own "+N more" line.
-        let dropped = row_lines.len() - shown;
-        lines.extend(row_lines.into_iter().take(shown));
-        lines.push(Line::styled(
-            format!("+{dropped} more"),
-            Style::default().fg(ctx.theme.dim),
-        ));
-    }
-    lines.push(Line::from(""));
-    lines.extend(footer_lines);
-
-    let lines = truncate_lines(lines, inner.width as usize);
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// Screen 3 (`Cost`, issue #632). DESIGN.md's own small-terminal
-/// rules: at [`thresholds::COST_CHART_MIN_WIDTH`]/`_MIN_HEIGHT` (the
-/// mockup's 100×30) and up, the treemap (62% of the height) sits
-/// above the chart and the table, side by side at 62/38; below that
-/// but still at [`thresholds::COST_TREEMAP_MIN_WIDTH`]/`_MIN_HEIGHT`
-/// (80×20), the chart is dropped and the table takes the full width
-/// under the treemap; below that, the table alone, where `⏎` still
-/// zooms it.
-fn draw_cost_screen(
-    frame: &mut Frame,
-    frame_area: Rect,
-    area: Rect,
-    screen: &oscilloscope_core::screens::CostScreen,
-    app: &mut App,
-    cost_layout: &mut CostLayoutCache,
-    ctx: &DrawCtx,
-) {
-    let show_treemap = frame_area.width >= thresholds::COST_TREEMAP_MIN_WIDTH
-        && frame_area.height >= thresholds::COST_TREEMAP_MIN_HEIGHT;
-    if !show_treemap {
-        draw_cost_table(frame, area, screen, app, ctx);
-        return;
-    }
-    let treemap_rows = oscilloscope_core::layout::golden_major_section(area.height);
-    let rest_rows = area.height - treemap_rows;
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(treemap_rows), Constraint::Min(rest_rows)])
-        .split(area);
-    draw_cost_treemap(frame, rows[0], screen, app, cost_layout, ctx);
-
-    let show_chart = frame_area.width >= thresholds::COST_CHART_MIN_WIDTH
-        && frame_area.height >= thresholds::COST_CHART_MIN_HEIGHT;
-    if !show_chart {
-        draw_cost_table(frame, rows[1], screen, app, ctx);
-        return;
-    }
-    let chart_width = oscilloscope_core::layout::golden_major_section(rows[1].width);
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(chart_width),
-            Constraint::Min(rows[1].width - chart_width),
-        ])
-        .split(rows[1]);
-    draw_cost_chart(frame, cols[0], screen, ctx);
-    draw_cost_table(frame, cols[1], screen, app, ctx);
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -5226,7 +4337,7 @@ fn draw_overlay_at(
 /// never a leftover key from an older draft of this same screen,
 /// or one some *other* screen's own key bar still has.
 const HELP_ROWS: &[(&str, &str, &str, &str)] = &[
-    ("↑ ↓", "select a row", "0 1 2 3", "Tape Signal Flow Cost"),
+    ("↑ ↓", "select a row", "0 1 2 3", "Tape Signal Flow Store"),
     ("enter", "open the step", "?", "this help"),
     ("p", "prompt previews on or off", "esc", "close · back"),
     (
@@ -5333,7 +4444,7 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
             "enter",
             "open the step under the cursor",
         ),
-        ("0 1 2 3", "Tape Signal Flow Cost", "?", "this help"),
+        ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
         ("esc", "close · back", "q", "quit · confirms if running"),
         ("c", "cancel · confirms", "", ""),
     ];
@@ -5371,7 +4482,7 @@ fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
             "enter",
             "open the selection full-screen",
         ),
-        ("f", "follow Now", "0 1 2 3", "Tape Signal Flow Cost"),
+        ("f", "follow Now", "0 1 2 3", "Tape Signal Flow Store"),
         ("?", "this help", "esc", "close · back"),
         ("q", "quit · confirms if running", "c", "cancel · confirms"),
     ];
@@ -5395,66 +4506,833 @@ fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
     lines
 }
 
-/// Cost's own Help: unlike the Tape, Signal and now Flow, it keeps
-/// `s`/`l`/`z`/`v`/`Tab` live until its own part of the redesign, so
-/// its own Help lists them rather than its own key bar.
-fn screen_help_text(screen: oscilloscope_core::screens::Screen) -> (String, Vec<&'static str>) {
-    use oscilloscope_core::screens::Screen;
-    let (title, screen_lines): (&str, &[&str]) = match screen {
-        Screen::Cost => (
-            " Help · Cost ",
-            &["i o $     measure: tokens in / out / cost"],
-        ),
-        Screen::Tape | Screen::Signal | Screen::Flow => (" Help ", &[]),
+/// The Store's own Help (issue #695, design v1 part 4), the same
+/// fixed overlay the Tape's, Signal's and Flow's own use, listing
+/// exactly §4's own Store keys (`↑↓`/its aliases, `enter`) and the
+/// globals every key bar shares -- never `i`/`o`/`$` (Cost's own
+/// measures, gone), `Tab`, `s`/`l`/`z`/`v`, `e` or `/`.
+fn store_help_lines(ctx: &DrawCtx, unit: u64) -> Vec<Line<'static>> {
+    let rows: Vec<(&str, &str, &str, &str)> = vec![
+        ("↑ ↓", "select a row", "enter", "open the selected store"),
+        ("j k", "same as ↑ ↓", "PgUp PgDn", "move a page"),
+        ("Home End", "first / last row", "g G", "same as Home/End"),
+        ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
+        ("esc", "close · back", "q", "quit · confirms if running"),
+        ("c", "cancel · confirms", "", ""),
+    ];
+    let mut lines: Vec<Line<'static>> = rows
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(tape_help_row(
+        "▰",
+        &format!("= {unit} t · fixed scale"),
+        "",
+        "",
+        ctx,
+    ));
+    for _ in 0..4 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
+}
+
+fn store_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![("↑↓", "Select"), ("enter", "Open")];
+    if wide {
+        items.push(("0-3", "Screens"));
+    }
+    items.push(("?", "Help"));
+    items.push(("q", "Quit"));
+    items
+}
+
+/// §3.2's status line: the most recently finished row, any depth --
+/// the same shared chrome the Signal's and Flow's own status lines
+/// already read.
+fn draw_store_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    header: &oscilloscope_core::render::Header,
+    ctx: &DrawCtx,
+    now: &str,
+) {
+    if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+    let Some(last) = &screen.last_finished else {
+        frame.render_widget(Paragraph::new(Line::from("")), area);
+        return;
     };
-    let mut lines = vec!["↑ ↓       select a row               0-3     Tape Signal Flow Cost"];
-    lines.extend_from_slice(screen_lines);
-    lines.extend_from_slice(&[
-        "v         full value overlay          z       fold on/off",
-        "j k       same as ↑ ↓                   PgUp PgDn move a page",
-        "Home End  first / last row            g G     same as Home/End",
-        "/         filter rows                 e       errors only",
-        "f         follow the running row      T       cycle the colour theme",
-        "?         this help                   esc     close · back",
-        "q         quit · confirms if running   c       cancel · confirms",
-    ]);
-    (title.to_string(), lines)
+    let glyph = tape_glyph(last.kind, last.status);
+    let age = last
+        .ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now));
+    let tokens = last
+        .tokens
+        .map(|(sent, received)| {
+            format!(
+                " \u{b7} \u{2191}{} \u{2193}{}",
+                oscilloscope_core::format::format_tokens_thousands(sent),
+                oscilloscope_core::format::format_tokens_thousands(received)
+            )
+        })
+        .unwrap_or_default();
+    let age_text = age
+        .map(|a| {
+            format!(
+                " \u{b7} {} ago",
+                oscilloscope_core::format::format_duration(a)
+            )
+        })
+        .unwrap_or_default();
+    let dim = Style::default().fg(ctx.theme.dim);
+    let spans = vec![
+        Span::styled(
+            format!(" {glyph} "),
+            tape_glyph_style(last.kind, last.status, ctx.theme),
+        ),
+        Span::styled(
+            format!("{} finished ", last.label),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(format!("{tokens}{age_text}").trim_start().to_string(), dim),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn fill_rect(frame: &mut Frame, rect: Rect, bg: Color) {
+    frame.buffer_mut().set_style(rect, Style::default().bg(bg));
+}
+
+/// §3.6's deviation colour, without the table's own extra bold
+/// (issue #695's rule 7: "the table's own deviations are regular")
+/// -- the same bands [`tape_deviation_style`] uses, kept separate
+/// since that one always bolds the outer two bands.
+fn store_table_deviation_style(pct: f64, theme: &Theme) -> Style {
+    if pct >= 50.0 {
+        Style::default().fg(theme.status_failed)
+    } else if pct >= 25.0 {
+        Style::default().fg(theme.warning)
+    } else if pct >= 0.0 {
+        Style::default().fg(theme.text)
+    } else {
+        Style::default().fg(theme.accent_primary)
+    }
+}
+
+/// A leaf tile's own content lines (issue #695's rule 4): `name · N
+/// t` on one line when it fits, else `name` then `N t` on the next;
+/// the deviation line (absent without history); the arrows line --
+/// as many as the tile's own height allows, dropped from the bottom.
+fn store_leaf_lines(
+    leaf: &oscilloscope_core::store::StoreLeaf,
+    width: u16,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let width = width as usize;
+    let faint = if leaf.live {
+        Modifier::DIM
+    } else {
+        Modifier::empty()
+    };
+    let name_style = Style::default()
+        .fg(theme.text)
+        .add_modifier(Modifier::BOLD | faint);
+    let value_style = Style::default().fg(theme.text).add_modifier(faint);
+    let muted_style = Style::default().fg(theme.fg_muted).add_modifier(faint);
+    let tok_text = oscilloscope_core::format::format_tokens_t(leaf.tokens());
+    let mut lines = Vec::new();
+    let one_line = format!(" {} \u{b7} {tok_text}", leaf.label);
+    if one_line.chars().count() <= width {
+        lines.push(pad_line(
+            vec![
+                Span::styled(format!(" {} ", leaf.label), name_style),
+                Span::styled(format!("\u{b7} {tok_text}"), value_style),
+            ],
+            width,
+        ));
+    } else {
+        lines.push(pad_line(
+            vec![Span::styled(format!(" {}", leaf.label), name_style)],
+            width,
+        ));
+        lines.push(pad_line(
+            vec![Span::styled(format!(" {tok_text}"), value_style)],
+            width,
+        ));
+    }
+    if let Some(pct) = leaf.deviation_pct {
+        let dev_style = tape_deviation_style(pct, theme).add_modifier(Modifier::BOLD | faint);
+        lines.push(pad_line(
+            vec![
+                Span::styled(format!(" {pct:+.0}% "), dev_style),
+                Span::styled("vs usual", muted_style),
+            ],
+            width,
+        ));
+    }
+    lines.push(pad_line(
+        vec![Span::styled(
+            format!(
+                " \u{2191}{} \u{2193}{}",
+                oscilloscope_core::format::format_tokens_thousands(leaf.tokens_sent),
+                oscilloscope_core::format::format_tokens_thousands(leaf.tokens_received)
+            ),
+            muted_style,
+        )],
+        width,
+    ));
+    lines
+}
+
+/// A container tile's own title line (issue #695's rules 1/6/12): `●
+/// {name}` in the accent colour while running, until the run itself
+/// ends; `<n>/<m> with tokens` as a second line once its own
+/// children don't fit.
+fn store_container_lines(
+    label: &str,
+    running: bool,
+    collapsed: Option<oscilloscope_core::store::StoreCollapsedContainer>,
+    tokens: u64,
+    width: u16,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let width = width as usize;
+    let (name_text, name_style) = if running {
+        (
+            format!(" \u{25cf} {label} "),
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            format!(" {label} "),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )
+    };
+    let tok_text = format!(
+        "\u{b7} {}",
+        oscilloscope_core::format::format_tokens_t(tokens)
+    );
+    let mut lines = vec![pad_line(
+        vec![
+            Span::styled(name_text, name_style),
+            Span::styled(tok_text, Style::default().fg(theme.fg_muted)),
+        ],
+        width,
+    )];
+    if let Some(c) = collapsed {
+        lines.push(pad_line(
+            vec![Span::styled(
+                format!(
+                    " {}/{} with tokens",
+                    c.children_with_tokens, c.children_planned
+                ),
+                Style::default().fg(theme.fg_muted),
+            )],
+            width,
+        ));
+    }
+    lines
+}
+
+fn render_tile_lines(frame: &mut Frame, rect: Rect, lines: Vec<Line<'static>>) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let take: Vec<Line<'static>> = lines.into_iter().take(rect.height as usize).collect();
+    frame.render_widget(Paragraph::new(take), rect);
+}
+
+fn store_rect_to_ratatui(rect: oscilloscope_core::store::StoreRect) -> Rect {
+    Rect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.w,
+        height: rect.h,
+    }
+}
+
+/// The area diagram's own tiles (issue #695's rule 2): a container's
+/// own rect fills with `bg.inset`, a leaf's with `bg.surface`,
+/// painted in the order [`oscilloscope_core::store::layout_store`]
+/// returns them -- a container always precedes its own children, so
+/// painting in that order lets a child's own smaller rect paint over
+/// its parent's fill without any extra bookkeeping.
+fn draw_store_tiles(
+    frame: &mut Frame,
+    tiles: &[oscilloscope_core::store::StoreTile],
+    theme: &Theme,
+) {
+    use oscilloscope_core::store::StoreTileKind;
+    for tile in tiles {
+        let rect = store_rect_to_ratatui(tile.rect);
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        match &tile.kind {
+            StoreTileKind::Leaf(leaf) => {
+                fill_rect(frame, rect, theme.bg_surface);
+                let lines = store_leaf_lines(leaf, rect.width, theme);
+                render_tile_lines(frame, rect, lines);
+            }
+            StoreTileKind::Container { running, collapsed } => {
+                fill_rect(frame, rect, theme.bg_inset);
+                let lines = store_container_lines(
+                    &tile.label,
+                    *running,
+                    *collapsed,
+                    tile.tokens,
+                    rect.width,
+                    theme,
+                );
+                render_tile_lines(frame, rect, lines);
+            }
+            StoreTileKind::More { count, tokens } => {
+                fill_rect(frame, rect, theme.bg_inset);
+                let text = format!(
+                    "\u{2026} {count} more \u{b7} {}",
+                    oscilloscope_core::format::format_tokens_t(*tokens)
+                );
+                let line = pad_line(
+                    vec![Span::styled(text, Style::default().fg(theme.fg_muted))],
+                    rect.width as usize,
+                );
+                render_tile_lines(frame, rect, vec![line]);
+            }
+        }
+    }
+}
+
+/// Screen 3's own area diagram and Totals row (issue #695, design
+/// v1 part 4): a bordered pane, always focused (the Store has only
+/// one primary pane), with the tiles inset one column on the left
+/// and two on the right of its own interior (rule 2's margins), a
+/// one-cell gutter between siblings, and the shared Totals row
+/// pinned above its own bottom border, a blank row and a rule above
+/// that.
+fn draw_store_chart(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    header: &oscilloscope_core::render::Header,
+    title_full: bool,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border_focused;
+    let title = if title_full {
+        "Store \u{b7} Tokens by Store \u{b7} Area = Tokens Used So Far"
+    } else {
+        "Store \u{b7} Area = Tokens Used So Far"
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height <= 3 {
+        return;
+    }
+    let tiles_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(3),
+        height: inner.height - 3,
+    };
+    if tiles_area.width > 0 && tiles_area.height > 0 {
+        let tiles = oscilloscope_core::store::layout_store(
+            &screen.tree,
+            tiles_area.x,
+            tiles_area.y,
+            tiles_area.width,
+            tiles_area.height,
+        );
+        draw_store_tiles(frame, &tiles, ctx.theme);
+    }
+    let totals_y = inner.y + inner.height - 1;
+    let sep_y = totals_y - 1;
+    frame.buffer_mut().set_string(
+        inner.x,
+        sep_y,
+        "\u{2500}".repeat(inner.width as usize),
+        Style::default().fg(ctx.theme.border),
+    );
+    draw_totals_row(
+        frame,
+        Rect {
+            x: inner.x,
+            y: totals_y,
+            width: inner.width,
+            height: 1,
+        },
+        header,
+        false,
+        None,
+        screen.usual_so_far_tokens,
+        Some(border_color),
+        false,
+        ctx,
+    );
+}
+
+/// The Largest Stores table's own column widths (issue #695's rule
+/// 8) -- `label`/`bar`(8 cells + 2 trailing)/`tokens` are fixed;
+/// `wide` is the same boolean that decides whether Readings sits
+/// beside the table ("from the frames": the label column reads 27
+/// cells there, 23 once the table takes the whole pane alone).
+fn store_table_columns(wide: bool) -> (usize, usize, usize) {
+    (if wide { 27 } else { 23 }, 10, 8)
+}
+
+/// The table's own share/deviation split ("from the frames", issue
+/// #695's rule 8): deviation's own field keeps growing with the
+/// pane's own width (12 trailing cells, beyond its own text, in
+/// every row this part's frames show); share takes whatever is left
+/// of the fixed 12-cell gap between the two fields' own text.
+fn store_table_tail_widths(dev_text_len: usize, combined: usize) -> (usize, usize) {
+    let share = 12usize.saturating_sub(dev_text_len).max(1);
+    let share = share.min(combined);
+    (share, combined - share)
+}
+
+fn store_cut_label(label: &str, width: usize) -> String {
+    if label.chars().count() <= width {
+        label.to_string()
+    } else if width == 0 {
+        String::new()
+    } else {
+        format!(
+            "{}\u{2026}",
+            label
+                .chars()
+                .take(width.saturating_sub(1))
+                .collect::<String>()
+        )
+    }
+}
+
+/// The Largest Stores table (issue #695's rule 8): full path from
+/// the run's root, cut on the right with `…`, the fixed-scale bar,
+/// tokens, share and deviation, with a cursor -- up to `max_rows`,
+/// the rest simply cut (DESIGN.md: "no +N more line").
+fn draw_store_table(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    app: &App,
+    max_rows: usize,
+    wide: bool,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border;
+    let title = format!("Largest Stores \u{b7} \u{25b0} = {} t", screen.unit);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width < 5 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let content_width = (inner.width - 3) as usize;
+    let (label_w, bar_w, tokens_w) = store_table_columns(wide);
+    let combined = content_width.saturating_sub(label_w + bar_w + tokens_w);
+    let theme = ctx.theme;
+    let header_text = format!(
+        "{:<width$}TOKENS SHARE VS USUAL",
+        "STORE",
+        width = label_w + bar_w
+    );
+    let mut lines = vec![pad_line(
+        vec![Span::styled(
+            header_text,
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )],
+        content_width,
+    )];
+    for (i, row) in screen.table.iter().take(max_rows).enumerate() {
+        let selected = app.store_selected.as_deref() == Some(row.path.as_str());
+        let bg = selected.then_some(theme.selection_bg);
+        let label_fg = if selected {
+            theme.selection_fg
+        } else {
+            theme.text
+        };
+        let share_fg = if selected {
+            theme.selection_fg
+        } else {
+            theme.fg_muted
+        };
+        let tokens_style = {
+            let mut s = Style::default().fg(label_fg);
+            if i == 0 {
+                s = s.add_modifier(Modifier::BOLD);
+            }
+            s
+        };
+        let dev_text = row
+            .deviation_pct
+            .map(|p| format!("{p:+.0}%"))
+            .unwrap_or_else(|| "\u{2014}".to_string());
+        let dev_style = row
+            .deviation_pct
+            .map(|p| store_table_deviation_style(p, theme))
+            .unwrap_or_else(|| Style::default().fg(theme.dim));
+        let (share_w, dev_w) = store_table_tail_widths(dev_text.chars().count(), combined);
+        let bar_unit = screen.unit.max(1);
+        let filled = ((row.tokens() as f64 / bar_unit as f64).round() as usize).min(8);
+        let cursor = Span::styled(
+            if selected { " \u{276f} " } else { "   " }.to_string(),
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        );
+        let mut spans = vec![cursor];
+        spans.push(Span::styled(
+            format!("{:<1$}", store_cut_label(&row.label, label_w), label_w),
+            Style::default().fg(label_fg),
+        ));
+        spans.push(Span::styled(
+            "\u{25b0}".repeat(filled),
+            Style::default().fg(theme.accent_primary),
+        ));
+        spans.push(Span::styled(
+            format!("{:<1$}", "\u{25b1}".repeat(8 - filled), bar_w - 8),
+            Style::default().fg(theme.dim),
+        ));
+        spans.push(Span::styled(
+            format!(
+                "{:<1$}",
+                oscilloscope_core::format::format_tokens_t(row.tokens()),
+                tokens_w
+            ),
+            tokens_style,
+        ));
+        spans.push(Span::styled(
+            format!(
+                "{:<1$}",
+                oscilloscope_core::format::format_share_pct(row.share_pct),
+                share_w
+            ),
+            Style::default().fg(share_fg),
+        ));
+        spans.push(Span::styled(format!("{dev_text:<dev_w$}"), dev_style));
+        if let Some(bg) = bg {
+            for span in &mut spans {
+                span.style = span.style.bg(bg);
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: inner.height,
+        },
+    );
+}
+
+/// Readings (issue #695's rule 9): Largest, Stores with tokens,
+/// Ratio sent to received, and the loop's own progress -- absent
+/// without a loop in the document at all.
+fn draw_store_readings(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Readings", border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width < 2 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let theme = ctx.theme;
+    let muted = Style::default().fg(theme.fg_muted);
+    let default = Style::default().fg(theme.text);
+    let bold = default.add_modifier(Modifier::BOLD);
+    let content_width = (inner.width - 1) as usize;
+    let readings = &screen.readings;
+    let mut lines = vec![pad_line(
+        match &readings.largest {
+            Some((label, tokens, share)) => vec![
+                Span::styled("Largest ", muted),
+                Span::styled(format!("{label} "), default),
+                Span::styled(
+                    format!("{} ", oscilloscope_core::format::format_tokens_t(*tokens)),
+                    bold,
+                ),
+                Span::styled(
+                    format!(
+                        "\u{b7} {}",
+                        oscilloscope_core::format::format_share_pct(*share)
+                    ),
+                    muted,
+                ),
+            ],
+            None => vec![
+                Span::styled("Largest ", muted),
+                Span::styled("\u{2014}", muted),
+            ],
+        },
+        content_width,
+    )];
+    lines.push(pad_line(
+        vec![
+            Span::styled("Stores  ", muted),
+            Span::styled(
+                format!("{} with tokens so far", readings.stores_with_tokens),
+                default,
+            ),
+        ],
+        content_width,
+    ));
+    lines.push(pad_line(
+        vec![
+            Span::styled("Ratio   ", muted),
+            Span::styled(
+                readings
+                    .ratio
+                    .map(|r| format!("{r:.1} : 1 sent to received"))
+                    .unwrap_or_else(|| "\u{2014}".to_string()),
+                default,
+            ),
+        ],
+        content_width,
+    ));
+    if let Some((label, with_tokens, total)) = &readings.loop_progress {
+        lines.push(pad_line(
+            vec![
+                Span::styled("Loop    ", muted),
+                Span::styled(
+                    format!("{label} \u{b7} {with_tokens} of {total} passes have tokens"),
+                    default,
+                ),
+            ],
+            content_width,
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width - 1,
+            height: inner.height,
+        },
+    );
+}
+
+/// `enter`'s own full-screen step view (issue #695's rule 4), the
+/// same shared toggle and the same [`FocusedStep`] the Tape's,
+/// Signal's and Flow's own already build theirs from.
+fn draw_store_detail(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    ctx: &DrawCtx,
+) {
+    let Some(step) = &screen.selected else {
+        return;
+    };
+    let border_color = ctx.theme.border_focused;
+    let title = format!("{} \u{b7} Selected", step.breadcrumb);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(" Status  ", muted),
+        Span::styled(
+            format!(
+                "{} ",
+                oscilloscope_core::format::format_duration(step.elapsed_s.unwrap_or(0.0))
+            ),
+            default,
+        ),
+    ])];
+    if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
+        lines.push(Line::from(""));
+        lines.push(Line::styled(" Reply", muted));
+        if let Some(snippet) = snippet {
+            for line in snippet.lines() {
+                lines.push(Line::styled(format!(" {line}"), default));
+            }
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width.saturating_sub(1),
+            height: inner.height,
+        },
+    );
+}
+
+/// The table's own pane height for `rows` data rows: a header row
+/// plus `rows`, inside a border (issue #695's §2.4 frames: 7 at
+/// 120x30's 4 rows, 6 at 80x24's 3).
+fn store_table_pane_height(rows: usize) -> u16 {
+    rows as u16 + 3
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_store(
+    frame: &mut Frame,
+    full_area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    header: &oscilloscope_core::render::Header,
+    app: &mut App,
+    ctx: &DrawCtx,
+    icon_frame: u64,
+    now: &str,
+) {
+    if full_area.width < MIN_WIDTH || full_area.height < MIN_HEIGHT {
+        draw_too_small(frame, full_area, ctx);
+        return;
+    }
+    // §4: below 80 columns only the Tape is offered -- the Store
+    // bounces to it on its own, the same way the Signal does.
+    if full_area.width < 80 {
+        app.screen = oscilloscope_core::screens::Screen::Tape;
+        return;
+    }
+    // DESIGN.md §2.4's settled point 4: the cursor starts on the
+    // table's own first row.
+    if app.store_selected.is_none() {
+        app.store_selected = screen.table.first().map(|r| r.path.clone());
+    }
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(full_area);
+    draw_tape_header_band(frame, sections[0], header, "STORE", now, icon_frame, ctx);
+    draw_store_status_line(frame, sections[2], screen, header, ctx, now);
+    draw_key_bar(
+        frame,
+        sections[3],
+        &store_key_bar_items(full_area.width >= 80),
+        ctx,
+    );
+
+    let body = sections[1];
+    if app.tape_fullscreen_step && screen.selected.is_some() {
+        draw_store_detail(frame, body, screen, ctx);
+        return;
+    }
+    let title_full = full_area.width >= 120;
+    // §5's own rule 11: Readings only at 100 columns and up *and* 30
+    // rows and up; the table shows 4 rows at 30 rows and up, 3 below
+    // that -- 80-99 is always one pane, no Readings, three rows.
+    if full_area.width < 100 {
+        let table_height = store_table_pane_height(3);
+        let rows_split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(table_height)])
+            .split(body);
+        draw_store_chart(frame, rows_split[0], screen, header, title_full, ctx);
+        draw_store_table(frame, rows_split[1], screen, app, 3, false, ctx);
+        return;
+    }
+    let show_readings = full_area.height >= 30;
+    let max_rows = if show_readings { 4 } else { 3 };
+    let table_height = store_table_pane_height(max_rows);
+    let rows_split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(table_height)])
+        .split(body);
+    draw_store_chart(frame, rows_split[0], screen, header, title_full, ctx);
+    if show_readings {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+            .split(rows_split[1]);
+        draw_store_table(frame, cols[0], screen, app, max_rows, true, ctx);
+        draw_store_readings(frame, cols[1], screen, ctx);
+    } else {
+        draw_store_table(frame, rows_split[1], screen, app, max_rows, true, ctx);
+    }
 }
 
 /// One redraw's whole layout (issue #626): a one-line header, shared
 /// by every screen (replacing the old three-row one), then the
-/// screen currently on display (`app.screen`) — screen 2 (`Flow`,
-/// issue #635) is the tree as control flow, the selected step and the
-/// run's story; screen 1 (`Signal`) draws its own header, body and
-/// key bar entirely on its own, before this function's shared layout
-/// is even reached.
-/// `overview`/`cost_screen`/`flow_screen`/`signal_screen` are
+/// screen currently on display (`app.screen`). Every screen now
+/// draws its own header band, status line and key bar entirely on
+/// its own (the Tape, Signal, Flow and Store, issue #695), before
+/// this function's own shared layout below is ever reached.
+/// `tape_screen`/`store_screen`/`flow_screen`/`signal_screen` are
 /// screens 0, 3, 2 and 1's own models, `Some` only while that screen
-/// is actually on display
-/// (issue #626's own performance rule: "models for screens not on
-/// display aren't built"); `cost_layout` is the Cost screen's own
-/// squarify-layout cache, re-laid out only when its own tree or area
-/// actually changes. `raw_state` is the engine's own last snapshot,
-/// untruncated — `details`' own `prompt_sent`/`value` are already cut
-/// to `DETAILS_PREVIEW_CHARS` for the details pane, which `v`'s own
-/// full-value overlay must not be.
+/// is actually on display (issue #626's own performance rule:
+/// "models for screens not on display aren't built"). `raw_state` is
+/// the engine's own last snapshot, untruncated — `details`' own
+/// `prompt_sent`/`value` are already cut to `DETAILS_PREVIEW_CHARS`
+/// for the details pane, which `v`'s own full-value overlay must not
+/// be.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     state: &oscilloscope_core::render::RenderState,
     details: Option<&Details>,
-    log_lines: &[String],
+    // Every screen now draws its own status line from the run's own
+    // state (issue #695) -- kept in the signature only so main.rs's
+    // own `--log` tail doesn't need a parallel code path.
+    _log_lines: &[String],
     app: &mut App,
     raw_state: Option<&serde_json::Value>,
     ctx: &DrawCtx,
     icon_frame: u64,
     now: &str,
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
-    cost_screen: Option<&oscilloscope_core::screens::CostScreen>,
+    store_screen: Option<&oscilloscope_core::store::StoreScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
     signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
-    cost_layout: &mut CostLayoutCache,
 ) {
     let area = frame.area();
     if let Some(bg) = ctx.theme.background {
@@ -5560,7 +5438,7 @@ pub fn draw(
     // band, status line and key bar too, the same self-contained way
     // the Tape and Signal do -- its own panels (the rail, the
     // selected pass or station, the Story pane) never share the
-    // generic layout Cost still uses below.
+    // generic layout below.
     if app.screen == oscilloscope_core::screens::Screen::Flow {
         if let Some(flow_screen) = flow_screen {
             draw_flow(
@@ -5595,129 +5473,40 @@ pub fn draw(
         return;
     }
 
-    // Issue #678's R3: the header band, the Totals row, the status
-    // line and the key bar are the outer frame shared by every
-    // screen now, not just the Tape -- Flow/Cost keep their own
-    // inner panels and their own keys exactly as before, drawn into
-    // whatever's left of `area` below the band and above the other
-    // three rows.
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(5),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
-    let chip = match app.screen {
-        oscilloscope_core::screens::Screen::Tape => "TAPE",
-        oscilloscope_core::screens::Screen::Signal => "SIGNAL",
-        oscilloscope_core::screens::Screen::Flow => "FLOW",
-        oscilloscope_core::screens::Screen::Cost => "COST",
-    };
-    draw_tape_header_band(
-        frame,
-        sections[0],
-        &state.header,
-        chip,
-        now,
-        icon_frame,
-        ctx,
-    );
-
-    // The body's own threshold checks (three-pane Flow, and so on)
-    // read a `frame_area` as wide as the real terminal but as tall as
-    // what is actually left for them below the header band and above
-    // the Totals/status/key-bar rows -- the literal `area` would let
-    // them believe they have three more rows than `body` really does.
-    let reduced_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: area.height.saturating_sub(4),
-    };
-    let body = sections[1];
-    let _ = reduced_area;
-    match app.screen {
-        oscilloscope_core::screens::Screen::Tape
-        | oscilloscope_core::screens::Screen::Signal
-        | oscilloscope_core::screens::Screen::Flow => {}
-        oscilloscope_core::screens::Screen::Cost => {
-            if let Some(cost_screen) = cost_screen {
-                draw_cost_screen(
-                    frame,
-                    reduced_area,
-                    body,
-                    cost_screen,
-                    app,
-                    cost_layout,
-                    ctx,
-                );
-            }
+    // The Store (issue #695, design v1 part 4, replacing Cost) draws
+    // its own header band, status line and key bar too, the same
+    // self-contained way the Tape, Signal and Flow do.
+    if app.screen == oscilloscope_core::screens::Screen::Store {
+        if let Some(store_screen) = store_screen {
+            draw_store(
+                frame,
+                area,
+                store_screen,
+                &state.header,
+                app,
+                ctx,
+                icon_frame,
+                now,
+            );
         }
-    }
-
-    draw_totals_row(
-        frame,
-        sections[2],
-        &state.header,
-        false,
-        None,
-        None,
-        None,
-        false,
-        ctx,
-    );
-    draw_status_line_generic(frame, sections[3], &state.header, log_lines, ctx);
-    draw_key_bar(frame, sections[4], &screen_key_bar_items(app.screen), ctx);
-
-    dim_backdrop_for_dialog(frame, area, None, app, ctx);
-    draw_dialog_overlay(frame, area, app, details, raw_state, ctx, 50, None);
-}
-
-/// Flow/Cost's own status line (§3.2), until their own part of the
-/// redesign gives them a bespoke one the way the Tape and Signal
-/// already have -- the run's own latest report, in the theme's own
-/// warning/error colour,
-/// collapsed to a bare `▸` when it would not fit (issue #610's
-/// behaviour, carried over from the one-line header this replaces),
-/// else the newest line already in the run's own log.
-fn draw_status_line_generic(
-    frame: &mut Frame,
-    area: Rect,
-    header: &oscilloscope_core::render::Header,
-    log_lines: &[String],
-    ctx: &DrawCtx,
-) {
-    use oscilloscope_core::observe::ReportLevel;
-    if let Some(report) = &header.latest_report {
-        let (prefix, style) = match report.level {
-            ReportLevel::Warning => ("▸ warning: ", Style::default().fg(ctx.theme.warning)),
-            ReportLevel::Info => ("▸ ", Style::default().fg(ctx.theme.status_info)),
+        let status_line = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(2),
+            width: area.width,
+            height: 1,
         };
-        let full = format!(" {prefix}{}", report.message);
-        let text = if full.chars().count() as u16 > area.width {
-            " ▸".to_string()
-        } else {
-            full
-        };
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
-        return;
+        dim_backdrop_for_dialog(frame, area, Some(status_line), app, ctx);
+        draw_dialog_overlay(
+            frame,
+            area,
+            app,
+            details,
+            raw_state,
+            ctx,
+            store_screen.map(|s| s.unit).unwrap_or(50),
+            state.header.history_same_hash_count,
+        );
     }
-    let text = log_lines.last().cloned().unwrap_or_default();
-    let style = if is_warning_report_log_line(&text) {
-        Style::default().fg(ctx.theme.warning)
-    } else if is_report_log_line(&text) {
-        Style::default().fg(ctx.theme.status_info)
-    } else {
-        Style::default().fg(ctx.theme.text)
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(format!(" {text}"), style))),
-        area,
-    );
 }
 
 /// Dims the whole backdrop to `fg.faint` before a dialog draws on
@@ -5877,12 +5666,40 @@ fn draw_dialog_overlay(
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
-        Dialog::Help => {
-            let (title, lines) = screen_help_text(app.screen);
-            let height = (lines.len() as u16 + 2).max(HELP_OVERLAY_HEIGHT);
-            let text = lines.into_iter().map(Line::from).collect();
-            draw_overlay(frame, area, &title, text, HELP_OVERLAY_WIDTH, height, ctx);
+        Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Store => {
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
+            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Store", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(store_help_lines(ctx, tape_unit))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
         }
+        // Every screen has its own guarded `Dialog::Help` arm above;
+        // this never actually draws.
+        Dialog::Help => {}
         Dialog::ConfirmCancel { .. } => {
             let text = vec![
                 Line::from("cancel the run?"),
@@ -8938,491 +8755,6 @@ mod golden_tests {
         assert!(text.contains("pytest -k b running 1m00s"), "{text}");
     }
 
-    /// [`snapshot_at`], for screen 3 (the Cost screen, issue #632):
-    /// builds the Cost screen's own model (the by-store treemap,
-    /// the largest-stores table, the tokens-over-time chart) the
-    /// same way `main.rs`'s own `build_cost_screen_if_active` does,
-    /// only while that screen is on display.
-    fn cost_snapshot_at(
-        width: u16,
-        height: u16,
-        plan: &PlanTree,
-        model: &mut RunModel,
-        state: Option<&Value>,
-        process: ProcessState,
-    ) -> String {
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            plan,
-            model,
-            state,
-            process,
-            300.0,
-            "2026-01-01T00:05:00Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let empty = Value::Null;
-        let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-        let statuses: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.status.clone()))
-            .collect();
-        let kinds: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.kind))
-            .collect();
-        let cost_screen = oscilloscope_core::screens::build_cost_screen(
-            &rendered.rows,
-            &rendered.header,
-            &flat,
-            &statuses,
-            &kinds,
-            state,
-            Measure::Total,
-            model,
-            "2026-01-01T00:05:00Z",
-            PHASE_GLYPHS.len(),
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Cost;
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut cost_layout = CostLayoutCache::default();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    &mut app,
-                    state,
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:05:00Z",
-                    None,
-                    Some(&cost_screen),
-                    None,
-                    None,
-                    None,
-                    &mut cost_layout,
-                )
-            })
-            .unwrap();
-        terminal.backend().to_string()
-    }
-
-    /// Three stores with real tokens/cost (`a`, `b`, and `fan`'s own
-    /// running pass `nap`, with no tokens yet -- DESIGN.md's "a tile
-    /// for a step that is still running reads tokens when done"),
-    /// plenty for the treemap, the chart and the table to all show
-    /// something real.
-    fn cost_running_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
-            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "adapter": "scripted", "tokens_sent_total": 900, "tokens_received_total": 400, "cost_usd": 1.2}},
-            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": "2026-01-01T00:02:00Z", "adapter": "scripted", "tokens_sent_total": 300, "tokens_received_total": 150}},
-            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 0, "total": 2}},
-                "iter_0": {"value": null, "meta": {"completed_at": null},
-                    "nap": {"value": null, "meta": {"created_at": "2026-01-01T00:02:00Z", "completed_at": null, "adapter": "scripted"}}
-                }
-            }
-        }})
-    }
-
-    fn cost_finished_state() -> Value {
-        json!({
-            "runtime": {"last_run": {"completed_at": "2026-01-01T00:05:00Z", "totals": {"wall_time_s": 300.0, "effects_run": 3, "tokens_sent": 1300, "tokens_received": 600, "cost_usd": 1.2}}},
-            "prime": {"value": true, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:05:00Z", "error": null},
-            "a": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:00Z", "adapter": "scripted", "tokens_sent_total": 900, "tokens_received_total": 400, "cost_usd": 1.2}},
-            "b": {"value": "ok", "meta": {"created_at": "2026-01-01T00:01:00Z", "completed_at": "2026-01-01T00:02:00Z", "adapter": "scripted", "tokens_sent_total": 300, "tokens_received_total": 150}},
-            "fan": {"value": null, "meta": {"completed_at": "2026-01-01T00:05:00Z", "progress": {"done": 2, "total": 2}},
-                "iter_0": {"value": null, "meta": {"completed_at": "2026-01-01T00:03:00Z"},
-                    "nap": {"value": "ok", "meta": {"created_at": "2026-01-01T00:02:00Z", "completed_at": "2026-01-01T00:03:00Z", "adapter": "scripted", "tokens_sent_total": 50, "tokens_received_total": 50}}
-                },
-                "iter_1": {"value": null, "meta": {"completed_at": "2026-01-01T00:05:00Z"},
-                    "nap": {"value": "ok", "meta": {"created_at": "2026-01-01T00:04:00Z", "completed_at": "2026-01-01T00:05:00Z", "adapter": "scripted", "tokens_sent_total": 50, "tokens_received_total": 50}}
-                }
-            }
-        }})
-    }
-
-    #[test]
-    fn cost_running_at_120x40() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_running_state();
-        let text = cost_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// Issue #637: a running agent's own tile, sized and labelled
-    /// from `meta.live.tokens_sent` -- `tokens when done` never
-    /// appears for it, unlike every other running store.
-    fn cost_agent_running_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
-            "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
-                "provider": "agent", "live": {
-                    "tokens_sent": 2100000,
-                    "turn_tokens": [400000, 900000, 600000, 2100000],
-                    "tokens_cached_in": 1800000
-                }}}
-        }})
-    }
-
-    fn cost_agent_finished_state() -> Value {
-        json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "t"},
-            "fix": {"value": "done", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "t",
-                "provider": "agent", "tokens_sent": 2100000, "tokens_received": 18000, "cost_usd": 1.10}}
-        }})
-    }
-
-    #[test]
-    fn cost_tile_running_agent_at_120x40() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = cost_agent_running_state();
-        let text = cost_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_tile_running_agent_at_80x24() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = cost_agent_running_state();
-        let text = cost_snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_tile_finished_agent_at_120x40() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = cost_agent_finished_state();
-        let process = ProcessState::exited(false);
-        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_tile_finished_agent_at_80x24() {
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = cost_agent_finished_state();
-        let process = ProcessState::exited(false);
-        let text = cost_snapshot_at(80, 24, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_finished_at_120x40() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let process = ProcessState::exited(true);
-        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    /// Issue #632's own small-terminal acceptance item: at 120x40 the
-    /// table pane sits beside the chart (DESIGN.md's 62/38 split,
-    /// narrower than the full screen width), and the coverage label
-    /// must still show in full there, on its own line, not truncated
-    /// mid-word the way sharing the totals line's own width used to
-    /// leave it (`$1.20 (from 1 of 4 pr…`).
-    #[test]
-    fn the_full_cost_coverage_label_shows_at_120x40() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let process = ProcessState::exited(true);
-        let text = cost_snapshot_at(120, 40, &plan, &mut model, Some(&state), process);
-        assert!(
-            text.contains("$1.20 (from 1 of 4 prompts)"),
-            "the full coverage label did not appear:\n{text}"
-        );
-    }
-
-    #[test]
-    fn cost_running_at_100x30() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_running_state();
-        let text = cost_snapshot_at(
-            100,
-            30,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_finished_at_100x30() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let process = ProcessState::exited(true);
-        let text = cost_snapshot_at(100, 30, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_running_at_80x24() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_running_state();
-        let text = cost_snapshot_at(
-            80,
-            24,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_finished_at_80x24() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let process = ProcessState::exited(true);
-        let text = cost_snapshot_at(80, 24, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    /// 80×20 itself still qualifies for the treemap and the table
-    /// (`COST_TREEMAP_MIN_WIDTH`/`_MIN_HEIGHT` are inclusive, checked
-    /// against the whole terminal) -- only below it does the table
-    /// show alone.
-    #[test]
-    fn cost_running_at_80x20() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_running_state();
-        let text = cost_snapshot_at(
-            80,
-            20,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    /// Issue #641: a store with well under 1% of the run's total
-    /// tokens must read `<1%` in the largest-stores table, never a
-    /// plain `0%` that looks the same as an actual zero share.
-    #[test]
-    fn the_table_shows_a_small_nonzero_share_as_under_one_percent() {
-        use oscilloscope_core::plan::PlanTree;
-        let plan = PlanTree::empty();
-        let mut model = RunModel::new();
-        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
-            "big": {"value": "y", "meta": {
-                "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
-                "tokens_sent_total": 10000, "tokens_received_total": 0
-            }},
-            "tiny": {"value": "y", "meta": {
-                "created_at": "t0", "completed_at": "t1", "adapter": "scripted",
-                "tokens_sent_total": 30, "tokens_received_total": 0
-            }}
-        }});
-        let text = cost_snapshot_at(
-            120,
-            40,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-        );
-        assert!(text.contains("<1%"), "{text}");
-    }
-
-    #[test]
-    fn cost_finished_at_80x20() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let process = ProcessState::exited(true);
-        let text = cost_snapshot_at(80, 20, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_running_at_70x20() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_running_state();
-        let text = cost_snapshot_at(
-            70,
-            20,
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::Running,
-        );
-        insta::assert_snapshot!(text);
-    }
-
-    #[test]
-    fn cost_finished_at_70x20() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let process = ProcessState::exited(true);
-        let text = cost_snapshot_at(70, 20, &plan, &mut model, Some(&state), process);
-        insta::assert_snapshot!(text);
-    }
-
-    /// Below [`thresholds::COST_TREEMAP_MIN_WIDTH`]/`_MIN_HEIGHT`
-    /// (DESIGN.md: "the table alone, where ⏎ still zooms") the table
-    /// is the only thing on screen -- it must still honour a zoom
-    /// already in effect (`app.cost_zoom`) and mark the selected row,
-    /// since nothing else on screen can show either any more.
-    #[test]
-    fn the_table_alone_still_reflects_zoom_and_selection() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            300.0,
-            "2026-01-01T00:05:00Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let statuses: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.status.clone()))
-            .collect();
-        let kinds: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.kind))
-            .collect();
-        let cost_screen = oscilloscope_core::screens::build_cost_screen(
-            &rendered.rows,
-            &rendered.header,
-            &flat,
-            &statuses,
-            &kinds,
-            Some(&state),
-            Measure::Total,
-            &model,
-            "2026-01-01T00:05:00Z",
-            PHASE_GLYPHS.len(),
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Cost;
-        app.cost_zoom = vec!["prime.fan".to_string()];
-        app.cost_selected = Some("prime.fan.iter_0.nap".to_string());
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(70, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut cost_layout = CostLayoutCache::default();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:05:00Z",
-                    None,
-                    Some(&cost_screen),
-                    None,
-                    None,
-                    None,
-                    &mut cost_layout,
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(text.contains("iter_0"), "{text}");
-        assert!(
-            !text.contains("a  ↑"),
-            "zoomed into fan, a must not show: {text}"
-        );
-        assert!(
-            !text.contains("b  ↑"),
-            "zoomed into fan, b must not show: {text}"
-        );
-        assert!(
-            text.contains("iter_0 › nap"),
-            "zoomed into fan, iter_0's row must read relative to it: {text}"
-        );
-        assert!(
-            text.contains("iter_1 › nap"),
-            "zoomed into fan, iter_1's row must read relative to it: {text}"
-        );
-        assert!(
-            !text.contains("fan ›"),
-            "zoomed into fan, no row may still carry fan's own name as a prefix: {text}"
-        );
-        let buffer = terminal.backend().buffer();
-        let tinted = (0..buffer.area.height).any(|y| {
-            (0..buffer.area.width).any(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED))
-        });
-        assert!(tinted, "the selected row must be reversed: {text}");
-    }
-
     #[test]
     fn pending_plan() {
         // Kept at 70×20 deliberately, as one of this suite's own
@@ -9515,7 +8847,6 @@ mod golden_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -9577,7 +8908,6 @@ mod golden_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -9838,7 +9168,6 @@ mod golden_tests {
                     Some(&flow_screen),
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -10176,7 +9505,6 @@ mod golden_tests {
                     Some(&flow_screen),
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -10358,349 +9686,6 @@ mod golden_tests {
         assert!(text.contains("(when done)"), "{text}");
         insta::assert_snapshot!(text);
     }
-
-    /// A leaf that never got `completed_at` because the run itself
-    /// ended first (aborted or cancelled) is in the exact same data
-    /// shape as a still-running one -- only its own status tells the
-    /// two apart, and it must never read as a real (if tiny) token
-    /// count.
-    #[test]
-    fn an_aborted_leafs_placeholder_weight_never_reads_as_a_real_number() {
-        // `cut_off`'s own `weight` (what boosting a running/aborted
-        // placeholder actually touches, `treemap`'s own tests) is
-        // comparable to its sibling's, large enough to draw a real
-        // share of the row -- but its `total` (the real value) is
-        // honestly zero, which is what this test pins: `draw_cost_
-        // treemap`'s display-text decision reads `total`, never
-        // `weight`, so the boosted number itself can never leak into
-        // the label text.
-        let tree = vec![
-            TreemapNode::leaf("big", 1_000_000, Some(StatusKind::Done)),
-            TreemapNode {
-                key: "cut_off".to_string(),
-                path: "cut_off".to_string(),
-                total: 0,
-                weight: 900_000,
-                status: Some(StatusKind::Aborted),
-                live: false,
-                live_turns: None,
-                children: Vec::new(),
-            },
-        ];
-        let screen = oscilloscope_core::screens::CostScreen {
-            measure: Measure::Total,
-            tree,
-            stores_without_measure: 0,
-            stores: oscilloscope_core::cost::LargestStores::default(),
-            tokens_over_time: Vec::new(),
-            chart_start_ts: None,
-            chart_end_ts: "2026-01-01T00:00:00Z".to_string(),
-        };
-        let mut app = App::new(false);
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let ctx = DrawCtx {
-            theme: &test_theme,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(60, 10);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut cost_layout = CostLayoutCache::default();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                draw_cost_treemap(f, area, &screen, &mut app, &mut cost_layout, &ctx);
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(text.contains("no tokens reported"), "{text}");
-        assert!(!text.contains("cut_off 900"), "{text}");
-    }
-
-    fn cost_table_screen(
-        rows: Vec<oscilloscope_core::cost::StoreRow>,
-    ) -> oscilloscope_core::screens::CostScreen {
-        let run_tokens_sent = rows.iter().map(|r| r.tokens_sent).sum();
-        let run_tokens_received = rows.iter().map(|r| r.tokens_received).sum();
-        oscilloscope_core::screens::CostScreen {
-            measure: Measure::Total,
-            tree: Vec::new(),
-            stores_without_measure: 0,
-            stores: oscilloscope_core::cost::LargestStores {
-                rows,
-                footer: oscilloscope_core::cost::StoresFooter {
-                    run_tokens_sent,
-                    run_tokens_received,
-                    run_cost_usd: None,
-                    gap_tokens: 0,
-                    cost_reporting: 0,
-                    cost_stores: 0,
-                },
-            },
-            tokens_over_time: Vec::new(),
-            chart_start_ts: None,
-            chart_end_ts: "2026-01-01T00:00:00Z".to_string(),
-        }
-    }
-
-    fn draw_cost_table_text(
-        screen: &oscilloscope_core::screens::CostScreen,
-        width: u16,
-        height: u16,
-    ) -> String {
-        let mut app = App::new(false);
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let ctx = DrawCtx {
-            theme: &test_theme,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                draw_cost_table(f, area, screen, &mut app, &ctx);
-            })
-            .unwrap();
-        terminal.backend().to_string()
-    }
-
-    /// 20 stores in the table pane an 80×24 terminal's own layout
-    /// actually carves out for it (DESIGN.md's small-terminal rule:
-    /// the treemap above, the table taking the rest -- no chart below
-    /// 100 columns wide): the footer (the run's own totals, its cost
-    /// coverage) must still show in full, at the bottom, with a
-    /// `+N more` line accounting for whatever rows had to drop to
-    /// make room for it, never the footer itself scrolled off the
-    /// bottom the way appending it after every row used to risk.
-    #[test]
-    fn the_footer_stays_pinned_with_20_stores_at_80x24() {
-        let rows: Vec<oscilloscope_core::cost::StoreRow> = (0..20)
-            .map(|i| oscilloscope_core::cost::StoreRow {
-                label: format!("store{i}"),
-                path: format!("prime.store{i}"),
-                tokens_sent: 100,
-                tokens_received: 50,
-                cost_usd: None,
-                status: Some(StatusKind::Done),
-            })
-            .collect();
-        let screen = cost_table_screen(rows);
-        // The table pane's own area at a nominal 80×24 terminal
-        // (`draw_cost_screen`'s own derivation: a 1-line header, then
-        // the treemap's golden-major share of the remaining height,
-        // the table taking the rest, full width since the chart needs
-        // 100 columns).
-        let text = draw_cost_table_text(&screen, 80, 9);
-        assert!(
-            text.contains("total ↑"),
-            "the footer's own totals line must still show: {text}"
-        );
-        assert!(
-            text.contains("more"),
-            "rows had to be dropped to fit, so a +N more line must show: {text}"
-        );
-        assert!(text.contains("store0"), "{text}");
-    }
-
-    /// DESIGN.md: a still-running store's table row reads the same
-    /// "tokens when done" its tile does, never `↑0 t ↓0 t 0%` read
-    /// back as if it meant something.
-    #[test]
-    fn a_running_rows_own_table_line_reads_tokens_when_done() {
-        let rows = vec![
-            oscilloscope_core::cost::StoreRow {
-                label: "review".to_string(),
-                path: "prime.review".to_string(),
-                tokens_sent: 0,
-                tokens_received: 0,
-                cost_usd: None,
-                status: Some(StatusKind::Running),
-            },
-            oscilloscope_core::cost::StoreRow {
-                label: "plan".to_string(),
-                path: "prime.plan".to_string(),
-                tokens_sent: 100,
-                tokens_received: 50,
-                cost_usd: None,
-                status: Some(StatusKind::Done),
-            },
-        ];
-        let screen = cost_table_screen(rows);
-        let text = draw_cost_table_text(&screen, 60, 10);
-        assert!(
-            text.contains("review  tokens when done"),
-            "a running row must read \"tokens when done\", not 0 t: {text}"
-        );
-        assert!(!text.contains("↑0 t ↓0 t"), "{text}");
-    }
-
-    /// DESIGN.md's own performance rule, directly, rather than only
-    /// through the timing bound [`drawing_a_2000_node_state_stays_
-    /// well_under_the_redraw_interval`] checks indirectly -- corrupts
-    /// the cache's own stored cells after the first call, then calls
-    /// again with the identical nodes and area: a cache *hit* must
-    /// return that untouched corruption, not a freshly squarified
-    /// (and so no longer corrupt) set of cells.
-    #[test]
-    fn cost_layout_cache_skips_squarify_when_neither_the_tree_nor_the_area_changed() {
-        let nodes = vec![
-            TreemapNode::leaf("a", 2000, Some(StatusKind::Done)),
-            TreemapNode::leaf("b", 1000, Some(StatusKind::Done)),
-        ];
-        let area = Rect::new(0, 0, 30, 10);
-        let mut cache = CostLayoutCache::default();
-        let first = cache.cells(&nodes, area).to_vec();
-        assert!(!first.is_empty());
-        cache.cells.clear();
-        let second = cache.cells(&nodes, area);
-        assert!(
-            second.is_empty(),
-            "a cache hit must skip squarify entirely, not recompute and overwrite the corruption"
-        );
-        // Changing the area is what must actually invalidate it.
-        let third = cache.cells(&nodes, Rect::new(0, 0, 40, 12));
-        assert!(
-            !third.is_empty(),
-            "a changed area must trigger a fresh layout"
-        );
-    }
-
-    #[test]
-    fn the_treemap_says_no_stores_yet_rather_than_drawing_an_empty_grid() {
-        let screen = oscilloscope_core::screens::CostScreen {
-            measure: Measure::Total,
-            tree: Vec::new(),
-            stores_without_measure: 0,
-            stores: oscilloscope_core::cost::LargestStores::default(),
-            tokens_over_time: Vec::new(),
-            chart_start_ts: None,
-            chart_end_ts: "2026-01-01T00:00:00Z".to_string(),
-        };
-        let mut app = App::new(false);
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let ctx = DrawCtx {
-            theme: &test_theme,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(60, 10);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut cost_layout = CostLayoutCache::default();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                draw_cost_treemap(f, area, &screen, &mut app, &mut cost_layout, &ctx);
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(text.contains("no stores yet"), "{text}");
-    }
-
-    /// A zoomed treemap (DESIGN.md: "the zoomed store's own name at
-    /// each level ... shown alongside the measure"): zooming into
-    /// `fan` must show only its own children, title the pane with
-    /// `fan`'s own name (not `prime.fan`) next to the measure, and
-    /// leave `a`/`b` off screen entirely.
-    #[test]
-    fn zoomed_into_fan_at_120x40() {
-        let plan = sample_plan();
-        let mut model = RunModel::new();
-        let state = cost_finished_state();
-        let rendered = render::build_folded(
-            "do-thing.yml",
-            "cof",
-            &plan,
-            &mut model,
-            Some(&state),
-            ProcessState::exited(true),
-            300.0,
-            "2026-01-01T00:05:00Z",
-            &[],
-            true,
-            &Default::default(),
-        );
-        let flat = oscilloscope_core::model::flatten_state(&state);
-        let statuses: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.status.clone()))
-            .collect();
-        let kinds: std::collections::BTreeMap<_, _> = rendered
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.kind))
-            .collect();
-        let cost_screen = oscilloscope_core::screens::build_cost_screen(
-            &rendered.rows,
-            &rendered.header,
-            &flat,
-            &statuses,
-            &kinds,
-            Some(&state),
-            Measure::Total,
-            &model,
-            "2026-01-01T00:05:00Z",
-            PHASE_GLYPHS.len(),
-        );
-        let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Cost;
-        app.cost_zoom = vec!["prime.fan".to_string()];
-        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
-        let test_ctx = DrawCtx {
-            theme: &test_theme,
-            theme_banner: None,
-            zone: &test_zone(),
-            no_animation: false,
-        };
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut cost_layout = CostLayoutCache::default();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    &mut app,
-                    Some(&state),
-                    &test_ctx,
-                    0,
-                    "2026-01-01T00:05:00Z",
-                    None,
-                    Some(&cost_screen),
-                    None,
-                    None,
-                    None,
-                    &mut cost_layout,
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(text.contains("tokens by store · tokens · fan"), "{text}");
-        assert!(text.contains("iter_0"), "{text}");
-        assert!(
-            !text.contains("a 900"),
-            "a must be off screen while zoomed: {text}"
-        );
-        assert!(
-            text.contains("iter_0 › nap"),
-            "zoomed into fan, iter_0's table row must read relative to it: {text}"
-        );
-        assert!(
-            text.contains("iter_1 › nap"),
-            "zoomed into fan, iter_1's table row must read relative to it: {text}"
-        );
-        assert!(
-            !text.contains("fan ›"),
-            "zoomed into fan, no table row may still carry fan's own name as a prefix: {text}"
-        );
-    }
 }
 
 /// Issue #535's own "buffer test" acceptance item: pins a highlighted
@@ -10785,7 +9770,7 @@ mod highlight_tests {
         };
         let first_cell_is_blank = |width: u16| -> bool {
             let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Cost;
+            app.screen = oscilloscope_core::screens::Screen::Store;
             let backend = TestBackend::new(width, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
@@ -10805,7 +9790,6 @@ mod highlight_tests {
                         None,
                         None,
                         None,
-                        &mut CostLayoutCache::default(),
                     )
                 })
                 .unwrap();
@@ -10843,7 +9827,7 @@ mod highlight_tests {
             no_animation: false,
         };
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Cost;
+        app.screen = oscilloscope_core::screens::Screen::Store;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -10863,7 +9847,6 @@ mod highlight_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -10890,7 +9873,7 @@ mod highlight_tests {
             no_animation: false,
         };
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Cost;
+        app.screen = oscilloscope_core::screens::Screen::Store;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -10910,7 +9893,6 @@ mod highlight_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -10930,7 +9912,7 @@ mod highlight_tests {
             no_animation: false,
         };
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Cost;
+        app.screen = oscilloscope_core::screens::Screen::Store;
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -10950,7 +9932,6 @@ mod highlight_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -11029,7 +10010,6 @@ mod tape_live_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -11284,7 +10264,6 @@ mod tape_live_tests {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -11643,6 +10622,7 @@ mod tape_frame_goldens {
             "status.warning" => theme.warning,
             "status.error" => theme.status_failed,
             "status.info" => theme.status_info,
+            "table.header" => theme.text,
             "statusbar.bg" => theme.statusbar_bg,
             "statusbar.fg" => theme.statusbar_fg,
             "keyhint.key" => theme.keyhint_key,
@@ -11687,6 +10667,24 @@ mod tape_frame_goldens {
         let mut out = Vec::new();
         let mut i = 0;
         while i < chars.len() {
+            // Issue #695: the Store's own gutter cells -- between
+            // two tiles, never inside either one's own span -- are a
+            // bare, untagged space in these two frames, the pane's
+            // own base style (`parse_mock`'s own padding default):
+            // always exactly one space, never a wider run.
+            if chars[i] == ' ' {
+                out.push((
+                    ' ',
+                    MockCellStyle {
+                        fg: theme.text,
+                        bg: base_bg,
+                        bold: false,
+                        dim: false,
+                    },
+                ));
+                i += 1;
+                continue;
+            }
             assert_eq!(
                 chars[i], '{',
                 "tape_frame_goldens: expected a span tag at {line:?}[{i}]"
@@ -11818,12 +10816,24 @@ mod tape_frame_goldens {
                 let actual_bold = cell.modifier.contains(Modifier::BOLD);
                 let actual_dim = cell.modifier.contains(Modifier::DIM);
                 let actual_ch = cell.symbol().chars().next().unwrap_or(' ');
-                if actual_ch != expected_ch
-                    || cell.fg != expected_style.fg
-                    || cell.bg != expected_style.bg
-                    || actual_bold != expected_style.bold
-                    || actual_dim != expected_style.dim
-                {
+                // Issue #695: a space cell's own foreground, weight
+                // and dimness are invisible -- a mockup's blank
+                // cells inherit the style of whatever text sits on
+                // the same row in another tile (`design/tui-design.md`
+                // doesn't draw them that way on purpose; it's an
+                // artefact of the grid the frames were authored on),
+                // so a space compares only its background and
+                // character here, never its fg/bold/dim.
+                let mismatch = if expected_ch == ' ' {
+                    actual_ch != expected_ch || cell.bg != expected_style.bg
+                } else {
+                    actual_ch != expected_ch
+                        || cell.fg != expected_style.fg
+                        || cell.bg != expected_style.bg
+                        || actual_bold != expected_style.bold
+                        || actual_dim != expected_style.dim
+                };
+                if mismatch {
                     mismatches.push(format!(
                         "({x},{y}): got {actual_ch:?} fg={:?} bg={:?} bold={actual_bold} dim={actual_dim} -- want {expected_ch:?} fg={:?} bg={:?} bold={} dim={}",
                         cell.fg, cell.bg, expected_style.fg, expected_style.bg, expected_style.bold, expected_style.dim
@@ -11926,7 +10936,6 @@ mod tape_frame_goldens {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -12036,7 +11045,6 @@ mod tape_frame_goldens {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -12141,7 +11149,6 @@ mod tape_frame_goldens {
                     None,
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -12806,7 +11813,6 @@ mod tape_frame_goldens {
                     None,
                     Some(signal_screen),
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -13005,7 +12011,6 @@ mod tape_frame_goldens {
                     Some(flow_screen),
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -13335,7 +12340,6 @@ mod tape_frame_goldens {
                     None,
                     Some(&signal_screen),
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();
@@ -13398,7 +12402,6 @@ mod tape_frame_goldens {
                     Some(&flow_screen),
                     None,
                     None,
-                    &mut CostLayoutCache::default(),
                 )
             })
             .unwrap();

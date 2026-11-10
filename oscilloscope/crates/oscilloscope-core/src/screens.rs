@@ -30,7 +30,9 @@ pub enum Screen {
     Tape,
     Signal,
     Flow,
-    Cost,
+    /// The area diagram of filled tiles, the Largest Stores table
+    /// and Readings (issue #695, design v1 part 4, replacing Cost).
+    Store,
 }
 
 impl Screen {
@@ -39,7 +41,7 @@ impl Screen {
             Screen::Tape => 0,
             Screen::Signal => 1,
             Screen::Flow => 2,
-            Screen::Cost => 3,
+            Screen::Store => 3,
         }
     }
 
@@ -48,14 +50,14 @@ impl Screen {
             Screen::Tape => "tape",
             Screen::Signal => "signal",
             Screen::Flow => "flow",
-            Screen::Cost => "cost",
+            Screen::Store => "store",
         }
     }
 
     pub fn is_available(self) -> bool {
         matches!(
             self,
-            Screen::Tape | Screen::Signal | Screen::Flow | Screen::Cost
+            Screen::Tape | Screen::Signal | Screen::Flow | Screen::Store
         )
     }
 
@@ -67,7 +69,7 @@ impl Screen {
             '0' => Screen::Tape,
             '1' => Screen::Signal,
             '2' => Screen::Flow,
-            '3' => Screen::Cost,
+            '3' => Screen::Store,
             _ => return None,
         };
         screen.is_available().then_some(screen)
@@ -75,7 +77,7 @@ impl Screen {
 
     /// Every screen with a tab, in tab order (issue #626's header).
     pub fn available() -> &'static [Screen] {
-        &[Screen::Tape, Screen::Signal, Screen::Flow, Screen::Cost]
+        &[Screen::Tape, Screen::Signal, Screen::Flow, Screen::Store]
     }
 }
 
@@ -583,7 +585,7 @@ fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -
 /// running to remove it (`docs/plugins/agent.md`: "a watcher shows
 /// it as stopped"). `None` once every agent either finished normally
 /// or never started at all.
-fn build_focused_step(
+pub(crate) fn build_focused_step(
     row: &Row,
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
@@ -3842,7 +3844,7 @@ mod tests {
         assert_eq!(Screen::from_key('0'), Some(Screen::Tape));
         assert_eq!(Screen::from_key('1'), Some(Screen::Signal));
         assert_eq!(Screen::from_key('2'), Some(Screen::Flow));
-        assert_eq!(Screen::from_key('3'), Some(Screen::Cost));
+        assert_eq!(Screen::from_key('3'), Some(Screen::Store));
         assert_eq!(Screen::from_key('x'), None);
     }
 
