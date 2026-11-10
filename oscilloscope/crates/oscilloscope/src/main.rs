@@ -5086,19 +5086,23 @@ fn run_all_grid_screen(
                 zone: &LocalZone,
                 no_animation: true,
             };
-            let page_slots = &mut slots[page_offset..page_offset + page_run_count];
-            let mut tiles: Vec<tui::AllTile> = page_slots
+            // Every slot, not only this page's own -- the header's
+            // own elapsed time, the status line and the Signal
+            // tiles' own shared scale all read across every run
+            // regardless of paging (issue #698, §3.2), never just
+            // whichever page happens to be on screen.
+            let mut all_tiles: Vec<tui::AllTile> = slots
                 .iter_mut()
                 .enumerate()
-                .map(|(i, slot)| slot.build(all_state.screen, &now_str, page_offset + i))
+                .map(|(i, slot)| slot.build(all_state.screen, &now_str, i))
                 .collect();
             if all_state.screen == oscilloscope_core::screens::Screen::Signal {
-                let largest_sent = tiles
+                let largest_sent = all_tiles
                     .iter()
                     .map(|t| t.render.largest_sent)
                     .max()
                     .unwrap_or(0);
-                let largest_received = tiles
+                let largest_received = all_tiles
                     .iter()
                     .map(|t| t.render.largest_received)
                     .max()
@@ -5109,7 +5113,7 @@ fn run_all_grid_screen(
                     largest_received,
                     shared_received_top,
                 );
-                for tile in &mut tiles {
+                for tile in &mut all_tiles {
                     if let oscilloscope_core::multi::TileScreen::Signal(s) = &mut tile.render.screen
                     {
                         s.sent_axis_top = shared_sent_top;
@@ -5120,24 +5124,30 @@ fn run_all_grid_screen(
             let status_entries: Vec<(
                 String,
                 Option<oscilloscope_core::screens::SignalLastFinished>,
-            )> = tiles
+            )> = all_tiles
                 .iter()
                 .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
                 .collect();
             let status_line =
                 oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+            let elapsed_s = all_tiles
+                .iter()
+                .map(|t| t.render.header.elapsed_s)
+                .fold(0.0_f64, f64::max);
             let running_count = runs.len();
+            let tiles = &all_tiles[page_offset..page_offset + page_run_count];
             let drew = terminal.draw(|f| {
                 tui::draw_all(
                     f,
                     f.area(),
-                    &tiles,
+                    tiles,
                     grid,
                     all_state.focus,
                     more_count,
                     all_state.screen,
                     running_count,
                     status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    elapsed_s,
                     &now_str,
                     &ctx,
                 );

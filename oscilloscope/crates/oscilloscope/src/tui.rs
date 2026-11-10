@@ -4041,6 +4041,12 @@ pub fn draw_all(
     screen: oscilloscope_core::screens::Screen,
     running_count: usize,
     status_line: Option<(&str, &oscilloscope_core::screens::SignalLastFinished)>,
+    // The largest elapsed time across every run, not only this
+    // page's own drawn tiles (issue #698's own header reads "2.8s"
+    // for the whole grid, paged or not) -- the caller's to compute,
+    // since only it still has every slot once paging has cut this
+    // call's own `tiles` down to one page.
+    elapsed_s: f64,
     now: &str,
     ctx: &DrawCtx,
 ) {
@@ -4070,10 +4076,6 @@ pub fn draw_all(
             Constraint::Length(1),
         ])
         .split(full_area);
-    let elapsed_s = tiles
-        .iter()
-        .map(|t| t.render.header.elapsed_s)
-        .fold(0.0_f64, f64::max);
     draw_all_header_band(
         frame,
         sections[0],
@@ -15411,6 +15413,10 @@ mod tape_frame_goldens {
             .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
             .collect();
         let status_line = oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+        let elapsed_s = tiles
+            .iter()
+            .map(|t| t.render.header.elapsed_s)
+            .fold(0.0_f64, f64::max);
         let backend = TestBackend::new(180, 48);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -15425,6 +15431,7 @@ mod tape_frame_goldens {
                     oscilloscope_core::screens::Screen::Tape,
                     tiles.len(),
                     status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    elapsed_s,
                     now,
                     &ctx,
                 )
@@ -15585,6 +15592,10 @@ mod tape_frame_goldens {
             .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
             .collect();
         let status_line = oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+        let elapsed_s = tiles
+            .iter()
+            .map(|t| t.render.header.elapsed_s)
+            .fold(0.0_f64, f64::max);
         let backend = TestBackend::new(180, 48);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -15599,6 +15610,7 @@ mod tape_frame_goldens {
                     oscilloscope_core::screens::Screen::Signal,
                     tiles.len(),
                     status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    elapsed_s,
                     now,
                     &ctx,
                 )
@@ -15639,6 +15651,10 @@ mod tape_frame_goldens {
         let now = "2026-11-08T23:51:58.588Z";
         let tiles = snap6_tiles(oscilloscope_core::screens::Screen::Flow, now);
         let grid = oscilloscope_core::multi::tile_grid(tiles.len(), 180, 45);
+        let elapsed_s = tiles
+            .iter()
+            .map(|t| t.render.header.elapsed_s)
+            .fold(0.0_f64, f64::max);
         let backend = TestBackend::new(180, 48);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -15653,19 +15669,31 @@ mod tape_frame_goldens {
                     oscilloscope_core::screens::Screen::Flow,
                     tiles.len(),
                     None,
+                    elapsed_s,
                     now,
                     &ctx,
                 )
             })
             .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains("Flow"),
-            "every tile draws its own Flow title:\n{text}"
+        // The first tile's own rail (`triage.yml`, clipped to the
+        // tile), cell-exact over its own two rows -- never just
+        // "Flow" appearing somewhere, which a blank tile with a
+        // bare title would already satisfy.
+        let row4: String = buffer_row_cells(terminal.backend().buffer(), 4, 0..60)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        let row5: String = buffer_row_cells(terminal.backend().buffer(), 5, 0..60)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert_eq!(
+            row4, "│■ Start   ── ✓ kind    ── ● tests   ── · gate    ─┬─ · rep│",
+            "the triage tile's own rail row, clipped to the tile:\n{row4}"
         );
-        assert!(
-            !text.trim().is_empty(),
-            "the grid draws real content, not a blank screen"
+        assert_eq!(
+            row5, "│15:51:56     215 t        2.2s         → …        │  usual│",
+            "the triage tile's own rail row below it:\n{row5}"
         );
     }
 
@@ -15682,6 +15710,10 @@ mod tape_frame_goldens {
         let now = "2026-11-08T23:51:58.588Z";
         let tiles = snap6_tiles(oscilloscope_core::screens::Screen::Store, now);
         let grid = oscilloscope_core::multi::tile_grid(tiles.len(), 180, 45);
+        let elapsed_s = tiles
+            .iter()
+            .map(|t| t.render.header.elapsed_s)
+            .fold(0.0_f64, f64::max);
         let backend = TestBackend::new(180, 48);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -15696,19 +15728,31 @@ mod tape_frame_goldens {
                     oscilloscope_core::screens::Screen::Store,
                     tiles.len(),
                     None,
+                    elapsed_s,
                     now,
                     &ctx,
                 )
             })
             .unwrap();
-        let text = terminal.backend().to_string();
-        assert!(
-            text.contains("Store"),
-            "every tile draws its own Store title:\n{text}"
+        // The first tile's own area diagram (`triage.yml`'s own
+        // finished `kind` effect), cell-exact -- never just "Store"
+        // appearing somewhere, which a blank tile with a bare title
+        // would already satisfy.
+        let row3: String = buffer_row_cells(terminal.backend().buffer(), 3, 0..60)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        let row4: String = buffer_row_cells(terminal.backend().buffer(), 4, 0..60)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert_eq!(
+            row3, "│  kind · 215 t                                            │",
+            "the triage tile's own leaf tile, clipped to the tile:\n{row3}"
         );
-        assert!(
-            !text.trim().is_empty(),
-            "the grid draws real content, not a blank screen"
+        assert_eq!(
+            row4, "│  ↑212 ↓3                                                 │",
+            "the triage tile's own leaf tile's token figures:\n{row4}"
         );
     }
 
