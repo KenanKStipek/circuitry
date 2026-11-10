@@ -215,16 +215,19 @@ pub struct App {
     /// run's own default row only ever happens that one time, never
     /// again overriding wherever the user has since moved to.
     pub tape_run_end_fired: bool,
-    /// Issue #704 rule 1: the detail pane shows the run summary
-    /// while this is set, whatever row is actually highlighted in
-    /// the list (the run's own most notable row -- a handled
-    /// failure's, say -- is still worth pointing the cursor at) --
-    /// set alongside `tape_run_end_fired` the instant the run ends,
-    /// cleared for good the first time the user actually moves the
-    /// Tape's own selection by hand (`move_tree_selection`/`jump`),
-    /// which then shows that selected row's own details instead, the
-    /// same as `TapeHead::Normal` always has.
-    pub tape_run_end_mode: bool,
+    /// Issue #704 rule 1: the exact path `tape_select_run_end_once`
+    /// moved the selection to the instant the run ended -- the
+    /// detail pane shows the run summary for as long as `selected_
+    /// path` is still this (drawing-time comparison, `tui::draw_tape_
+    /// detail`'s own `ended_row_selected`), never a separate sticky
+    /// flag: the selection can move away through any screen or key
+    /// (the Signal, the Flow, `[`/`]` in the full-screen step, not
+    /// only the Tape's own `move_tree_selection`/`jump`), and summary
+    /// mode must end the moment it does, from every one of them.
+    /// Moving back onto this exact row re-enters summary mode just
+    /// as readily, the same way any other selection shows its own
+    /// details whenever the cursor lands back on it.
+    pub tape_run_end_target: Option<String>,
 }
 
 impl App {
@@ -266,7 +269,7 @@ impl App {
             tape_tokens_view: false,
             tape_fullscreen_step: false,
             tape_run_end_fired: false,
-            tape_run_end_mode: false,
+            tape_run_end_target: None,
             step_meta_unfolded: false,
         }
     }
@@ -279,14 +282,17 @@ impl App {
     /// detail -- exactly once, since a later manual move away from
     /// summary mode must never be pulled back (`running` stays
     /// `false` forever after, but `tape_run_end_fired` already stops
-    /// this from firing again).
+    /// this from firing again). `tape_run_end_target` records exactly
+    /// which path that was, so summary mode can later be read off
+    /// the live selection instead of a separate flag.
     pub fn tape_select_run_end_once(&mut self, running: bool, default_target: Option<String>) {
         if !running && !self.tape_run_end_fired {
-            if let Some(target) = default_target {
+            let target = default_target.or_else(|| self.selected_path.clone());
+            if let Some(target) = target.clone() {
                 self.select_tree_path_keeping_details(Some(target));
             }
             self.tape_run_end_fired = true;
-            self.tape_run_end_mode = true;
+            self.tape_run_end_target = target;
         }
     }
 
@@ -1127,9 +1133,6 @@ impl App {
                         rows[rows.len() - 1]
                     };
                     self.select_tree_path(Some(target.path.clone()));
-                    if self.screen == Screen::Tape {
-                        self.tape_run_end_mode = false;
-                    }
                 }
                 self.follow = false;
             }
@@ -1174,9 +1177,6 @@ impl App {
             None => rows.len() - 1,
         };
         self.select_tree_path(Some(rows[next].path.clone()));
-        if self.screen == Screen::Tape {
-            self.tape_run_end_mode = false;
-        }
     }
 
     /// The state pane's own, independent selection (issue #527):

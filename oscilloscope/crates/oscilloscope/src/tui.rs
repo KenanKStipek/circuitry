@@ -3064,26 +3064,28 @@ fn draw_tape_detail(
     ctx: &DrawCtx,
 ) {
     use oscilloscope_core::screens::TapeHead;
-    // Issue #704 rule 1: once the run has ended, the detail pane
-    // shows the run summary for as long as `tape_run_end_mode` holds
-    // (set the instant the run ends, cleared for good the first time
-    // the user actually moves the Tape's own selection) -- whatever
-    // row the list highlights meanwhile (the run's own most notable
-    // one, say a handled failure) still shows its own details once
-    // that mode ends, the same as `TapeHead::Normal` always has.
-    let ended_row_selected = app.tape_run_end_mode;
+    // Issue #704 rule 1: once the run has ended (or failed), the
+    // detail pane shows the run summary for as long as `selected_
+    // path` is still `tape_run_end_target` (the row `tape_select_
+    // run_end_once` moved the selection to the instant the run
+    // ended) -- a comparison made fresh on every draw, not a sticky
+    // flag, so moving the selection away through *any* screen or key
+    // (the Signal, the Flow, `[`/`]` in the full-screen step, not
+    // only the Tape's own ↑↓) ends summary mode, and moving back onto
+    // that exact row re-enters it, the same as any other row's own
+    // details always have.
+    let ended_row_selected = app.tape_run_end_target.is_some()
+        && app.tape_run_end_target.as_deref() == app.selected_path.as_deref();
     let title = match &screen.head {
         TapeHead::Starting => "Run · Starting".to_string(),
         TapeHead::Ended { .. } if ended_row_selected => "Run · Ended".to_string(),
-        TapeHead::Ended { .. } => match &screen.selected_breadcrumb {
-            Some(breadcrumb) => format!("{breadcrumb} · Selected"),
-            None => "Tape".to_string(),
-        },
-        TapeHead::Failed { .. } => "Run · Failed".to_string(),
-        TapeHead::Normal => match &screen.selected_breadcrumb {
-            Some(breadcrumb) => format!("{breadcrumb} · Selected"),
-            None => "Tape".to_string(),
-        },
+        TapeHead::Failed { .. } if ended_row_selected => "Run · Failed".to_string(),
+        TapeHead::Ended { .. } | TapeHead::Failed { .. } | TapeHead::Normal => {
+            match &screen.selected_breadcrumb {
+                Some(breadcrumb) => format!("{breadcrumb} · Selected"),
+                None => "Tape".to_string(),
+            }
+        }
     };
     let border_color = if app.pane == Pane::Details {
         ctx.theme.border_focused
@@ -3125,20 +3127,22 @@ fn draw_tape_detail(
             .as_ref()
             .map(|d| tape_ended_detail_lines(d, width, ctx))
             .unwrap_or_default(),
-        TapeHead::Ended { .. } | TapeHead::Normal => tape_normal_detail_lines(
-            screen,
-            width,
-            content_area.height as usize,
-            transcript_view,
-            now,
-            app.step_meta_unfolded,
-            ctx,
-        ),
-        TapeHead::Failed { .. } => screen
+        TapeHead::Failed { .. } if ended_row_selected => screen
             .failed_detail
             .as_ref()
             .map(|d| tape_failed_detail_lines(d, width, ctx))
             .unwrap_or_default(),
+        TapeHead::Ended { .. } | TapeHead::Failed { .. } | TapeHead::Normal => {
+            tape_normal_detail_lines(
+                screen,
+                width,
+                content_area.height as usize,
+                transcript_view,
+                now,
+                app.step_meta_unfolded,
+                ctx,
+            )
+        }
     };
     // Issue #704 rule 4: the full-screen step scrolls with ↑↓/PgUp/
     // PgDn/Home/End (`App::scroll_details`, the same shared scroll
@@ -12815,6 +12819,12 @@ mod tape_frame_goldens {
         );
         let mut app = crate::keys::App::new(false);
         app.selected_path = Some("prime.tests".to_string());
+        // Issue #704 rule 1: the frame depicts the Tape right as the
+        // run fails -- the list highlights the failure's own row
+        // (its own default selection), but the detail pane still
+        // reads the run summary until the user actually moves away
+        // from it.
+        app.tape_run_end_target = Some("prime.tests".to_string());
         let ctx = DrawCtx {
             theme: &theme,
             theme_banner: None,
@@ -12848,6 +12858,57 @@ mod tape_frame_goldens {
             &mock,
             "tape--failed--120x30",
             &[],
+        );
+    }
+
+    /// Issue #704 rule 1: a failed run can be browsed exactly the
+    /// same way an ended one can -- moving the selection away from
+    /// the failure's own default row shows that row's own details
+    /// instead of the run summary, and moving back onto it shows the
+    /// summary again.
+    #[test]
+    fn tape_failed_moving_the_selection_shows_that_rows_own_details() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let run_dir = fixtures_dir().join("run");
+        let state = load_json(&run_dir.join("state.live.json"));
+        let events = load_events(&run_dir.join("events.jsonl"));
+        let now = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string();
+        let (_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::exited(false),
+            &now,
+            "cof",
+            Some("prime.tests"),
+            true,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.tests".to_string());
+        app.tape_run_end_target = Some("prime.tests".to_string());
+        let rows = crate::keys::visible_rows_for_tape(&tape_screen);
+        let visible: Vec<&oscilloscope_core::render::Row> = rows.iter().collect();
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Up,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &visible,
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert_ne!(app.selected_path.as_deref(), Some("prime.tests"));
+        assert_ne!(
+            app.tape_run_end_target.as_deref(),
+            app.selected_path.as_deref()
         );
     }
 
@@ -13055,7 +13116,7 @@ mod tape_frame_goldens {
             // failure (its own default selection), but the detail
             // pane still reads the run summary until the user
             // actually moves away from it.
-            |app| app.tape_run_end_mode = true,
+            |app| app.tape_run_end_target = Some("prime.flaky".to_string()),
             &now,
             &[(103, 4)],
         );
@@ -13091,7 +13152,7 @@ mod tape_frame_goldens {
         );
         let mut app = crate::keys::App::new(false);
         app.selected_path = Some("prime.flaky".to_string());
-        app.tape_run_end_mode = true;
+        app.tape_run_end_target = Some("prime.flaky".to_string());
         let rows = crate::keys::visible_rows_for_tape(&tape_screen);
         let visible: Vec<&oscilloscope_core::render::Row> = rows.iter().collect();
         app.handle_key(
@@ -13109,9 +13170,10 @@ mod tape_frame_goldens {
         // followed by `prime.summary` in the Tape's own finish
         // order (the `tape--ended--120x30` frame itself draws them
         // in exactly that sequence), and moving away from the
-        // default row turns `tape_run_end_mode` off for good.
+        // default row no longer matches `tape_run_end_target`, so
+        // summary mode ends.
         assert_eq!(app.selected_path.as_deref(), Some("prime.summary"));
-        assert!(!app.tape_run_end_mode);
+        assert_ne!(app.tape_run_end_target.as_deref(), app.selected_path.as_deref());
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
             &rendered.header,
