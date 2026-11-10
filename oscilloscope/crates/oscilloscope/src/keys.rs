@@ -967,7 +967,7 @@ impl App {
     /// on the row follow would itself have picked -- `↑↓` past the
     /// Now band and back, say, restores it on its own rather than
     /// needing `f`.
-    fn lands_back_on_the_followed_row(&self, rows: &[&Row]) -> bool {
+    pub(crate) fn lands_back_on_the_followed_row(&self, rows: &[&Row]) -> bool {
         match self.screen {
             Screen::Tape => {
                 use oscilloscope_core::model::StatusKind;

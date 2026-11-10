@@ -6708,17 +6708,32 @@ fn flow_resolve_scroll(
                 app.flow_scroll = best.min(max_scroll);
             }
         }
-    } else if app.flow_manual_scroll {
-        if let Some(arrow) = arrow {
-            if in_view(app.flow_scroll, arrow) {
-                app.follow = true;
+    } else {
+        // The land-back rule (DESIGN.md's own Tape precedent, issue
+        // #691's follow-up): `↑↓` moving away turns follow off, but
+        // it resumes on its own the instant the selection it left
+        // behind is, again, the row follow would itself pick -- not
+        // only right at the keypress (`flow_select_lane`'s own
+        // one-shot check), but on any later redraw too, since a
+        // loop's own "the running pass" is a moving target: the
+        // exact pass `↑↓` landed on can start running again several
+        // passes later, with no further key pressed at all.
+        let rows: Vec<&oscilloscope_core::render::Row> = app.flow_rows.iter().collect();
+        let land_back = app.lands_back_on_the_followed_row(&rows);
+        if app.flow_manual_scroll || land_back {
+            if let Some(arrow) = arrow {
+                if in_view(app.flow_scroll, arrow) {
+                    app.follow = true;
+                }
             }
         }
     }
     // One-shot: only the draw right after a ←→ key press may land
-    // follow back on (the key handler sets this); any other redraw
-    // (a clock tick, ↑↓, `f` turning follow off) must never flip it
-    // back on just because Now happens to already be in view.
+    // follow back on through the manual-scroll flag (the key handler
+    // sets this); any other redraw (a clock tick, `f` turning follow
+    // off) must never flip it back on just because Now happens to
+    // already be in view -- only the land-back rule above, or a
+    // fresh manual scroll, may do that.
     app.flow_manual_scroll = false;
     app.flow_scroll = app.flow_scroll.min(max_scroll);
     app.flow_scroll
