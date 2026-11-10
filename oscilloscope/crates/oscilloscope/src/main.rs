@@ -2378,7 +2378,8 @@ fn run_tui(
         // Issue #691 (design v1 part 3): the Flow screen's own
         // `↑↓` moves over `RowKind::Pass`, not this list -- it needs
         // only the plain, unfiltered `rows` the rail itself is built
-        // from, the same as Cost still does below.
+        // from, the same as the Store's own table rows are built
+        // from (issue #695), not this one.
         let tape_owned: Vec<oscilloscope_core::render::Row> =
             if app.screen == oscilloscope_core::screens::Screen::Tape {
                 tape_screen

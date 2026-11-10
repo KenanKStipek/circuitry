@@ -374,8 +374,9 @@ pub struct NodeMeta {
     pub progress_eta_s: Option<f64>,
     /// `meta.live` (`docs/plugins/agent.md`'s "Live progress while the
     /// session runs"), parsed once here so every reader (the overview's
-    /// now pane, Flow's selected pane, the Cost screen) shares one
-    /// parse instead of re-reading the raw `Value` each time. `None`
+    /// now pane, Flow's selected pane, the Store's own running tiles)
+    /// shares one parse instead of re-reading the raw `Value` each
+    /// time. `None`
     /// for every node that isn't a currently- or recently-live agent
     /// session, including one that finished normally (`meta.live` is
     /// removed once the attempt ends, success or failure, except when

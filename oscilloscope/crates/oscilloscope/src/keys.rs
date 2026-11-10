@@ -460,11 +460,11 @@ impl App {
     /// details carry a `prompt_sent` (review finding 5): `v` opens
     /// that first when there is one, since it's usually the more
     /// useful of the two to read in full, and the value otherwise.
-    /// `cost_tree` is the Cost screen's own by-store tree for the
-    /// currently selected measure (issue #632) -- empty for every
-    /// caller that doesn't care about it (every screen but Cost never
-    /// reads it at all). The tree is one frame stale at worst, the
-    /// same way `rows`/`state_rows` already are.
+    /// `store_rows` is the Store screen's own Largest Stores table,
+    /// in its own rank order (issue #695) -- empty for every caller
+    /// that doesn't care about it (every screen but Store never
+    /// reads it at all). It is one frame stale at worst, the same
+    /// way `rows`/`state_rows` already are.
     pub fn handle_key(
         &mut self,
         key: KeyEvent,
@@ -656,10 +656,13 @@ impl App {
                 self.follow = false;
                 self.flow_manual_scroll = true;
             }
-            // Not on the Tape's own key bar (§4) -- its rows are
-            // already flat, with no collapsed state of their own to
-            // toggle; still live on Flow/Time/Cost. Issue #613: the
-            // same key re-folds a quick-steps group ⏎ had expanded
+            // Not on the Tape's, Signal's, Flow's or Store's own key
+            // bar (§4) -- none of the four has a tree pane of its own
+            // left to collapse or expand; reachable now only through
+            // a screen none of the design's own four have (kept, not
+            // removed, since nothing says a later screen won't reuse
+            // the tree pane this acted on). Issue #613: the same key
+            // re-folds a quick-steps group ⏎ had expanded
             // in place, from any of its steps, not only its own
             // representative (`expanded_quick_steps`' own key): scan
             // backward over same-depth rows from the selected one

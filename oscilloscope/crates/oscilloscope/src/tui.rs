@@ -130,7 +130,7 @@ fn draw_tape_header_band(
     // `RunStatus`'s own "Running" (true only once it's actually
     // under way) -- the same `run_start_ts.is_none()` the Tape's own
     // head rule already keys off of.
-    // Scoped to the Tape itself: Flow/Signal/Cost's own existing
+    // Scoped to the Tape itself: Flow/Signal/Store's own existing
     // "Running" reading, even before any state has arrived at all
     // (a state-only poll's very first frame), is unrelated to issue
     // #678's own Starting state and keeps its pre-existing meaning.
@@ -5410,8 +5410,8 @@ pub fn draw(
 
     // Signal (issue #688) draws its own header band, status line and
     // key bar too, the same self-contained way the Tape does -- its
-    // own panels (the trace, the Now pane, Readings) never share the
-    // generic layout Flow/Cost still use below.
+    // own panels (the trace, the Now pane, Readings) never share any
+    // generic layout; every screen now draws its own.
     if app.screen == oscilloscope_core::screens::Screen::Signal {
         if let Some(signal_screen) = signal_screen {
             draw_signal(

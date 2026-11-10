@@ -497,12 +497,11 @@ pub fn token_bar_in_flight_line(bar: &TokenBar) -> String {
 /// bar, and the log pane's lines so far. `details_for` builds the
 /// right pane for whichever row is currently selected — kept separate
 /// from `rows` so selecting a different row never needs a fresh
-/// `RunModel::observe` call. The Cost screen's own by-store treemap
-/// (issue #632) is deliberately not part of this: it is built only
+/// `RunModel::observe` call. The Store screen's own area diagram
+/// (issue #695) is deliberately not part of this: it is built only
 /// while that screen is actually on display (`main.rs`'s own
-/// `build_cost_screen_if_active`), not on every redraw regardless of
-/// which screen is showing, the way the old `tokens by key` treemap
-/// screen 2 drew was.
+/// `build_store_screen_if_active`), not on every redraw regardless
+/// of which screen is showing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderState {
     pub header: Header,
