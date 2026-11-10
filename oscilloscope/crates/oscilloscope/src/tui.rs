@@ -3287,16 +3287,29 @@ fn draw_tape_detail(
 const MIN_WIDTH: u16 = 60;
 const MIN_HEIGHT: u16 = 24;
 
+/// Select's own width floor (§5): its narrowest frame is 80x24, with
+/// nothing narrower ever shown -- higher than every other screen's
+/// shared 60-column [`MIN_WIDTH`].
+const SELECT_MIN_WIDTH: u16 = 80;
+
 /// §5's own too-small screen (the design's `tape--toosmall` frame):
 /// the `osi` word, the minimum each dimension needs and whether it's
 /// met, the plain-language line naming both and `osi --log`, and a
 /// bare `q Quit` key bar -- the only state that ever draws below the
 /// shared 60×24 floor, on every screen.
 fn draw_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
+    draw_too_small_with_min_width(frame, area, ctx, MIN_WIDTH);
+}
+
+/// [`draw_too_small`], with its own width floor rather than the
+/// shared [`MIN_WIDTH`] -- Select's own body needs 80 columns, wider
+/// than every other screen's shared 60 (§5), so it alone draws this
+/// notice that much sooner.
+fn draw_too_small_with_min_width(frame: &mut Frame, area: Rect, ctx: &DrawCtx, min_width: u16) {
     let ok_style = Style::default().fg(ctx.theme.status_done);
     let err_style = Style::default().fg(ctx.theme.status_failed);
     let err_bold_style = err_style.add_modifier(Modifier::BOLD);
-    let width_ok = area.width >= MIN_WIDTH;
+    let width_ok = area.width >= min_width;
     let height_ok = area.height >= MIN_HEIGHT;
     let dim_line = |label: &str, have: u16, need: u16, ok: bool| {
         Line::from(vec![
@@ -3334,11 +3347,11 @@ fn draw_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
                 .add_modifier(Modifier::BOLD),
         ),
         Line::from(""),
-        dim_line("Width", area.width, MIN_WIDTH, width_ok),
+        dim_line("Width", area.width, min_width, width_ok),
         dim_line("Height", area.height, MIN_HEIGHT, height_ok),
         Line::from(""),
         Line::styled(
-            format!("      osi needs {MIN_WIDTH} columns and {MIN_HEIGHT} rows · try osi --log"),
+            format!("      osi needs {min_width} columns and {MIN_HEIGHT} rows · try osi --log"),
             Style::default().fg(ctx.theme.fg_muted),
         ),
     ];
@@ -3382,9 +3395,11 @@ pub enum SelectBody<'a> {
 /// The Select screen (issue #698): the shared header band and key
 /// bar (§3), with its own centred running list or full-width Recent
 /// Runs panel in between -- below the shared floor (§5), the same
-/// too-small notice every other screen reads. `cursor` indexes
-/// whichever list `body` holds; out of range (an empty list) draws
-/// no selected row at all.
+/// too-small notice every other screen reads, but at its own,
+/// higher width floor ([`SELECT_MIN_WIDTH`]): the 80-column frame is
+/// already this screen's own narrowest, with nothing narrower ever
+/// shown. `cursor` indexes whichever list `body` holds; out of range
+/// (an empty list) draws no selected row at all.
 pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &str, ctx: &DrawCtx) {
     let area = frame.area();
     if let Some(bg) = ctx.theme.background {
@@ -3393,8 +3408,8 @@ pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &st
             area,
         );
     }
-    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-        draw_too_small(frame, area, ctx);
+    if area.width < SELECT_MIN_WIDTH || area.height < MIN_HEIGHT {
+        draw_too_small_with_min_width(frame, area, ctx, SELECT_MIN_WIDTH);
         return;
     }
     let running = match body {
@@ -3497,6 +3512,7 @@ pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("enter", "Open the selected run"),
         row("?", "This help"),
         row("q", "Quit"),
+        row("c", "Inert here (no run attached to cancel)"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -3608,15 +3624,23 @@ fn draw_select_list(
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
+    // The cursor can sit on a row the box isn't tall enough to show
+    // all of at once (more running rows than the terminal's own
+    // height leaves room for) -- the window scrolls to keep it in
+    // view, the selected row landing at the window's own bottom edge
+    // the moment it would otherwise scroll off, the same rule the
+    // Store table's own cursor already follows.
+    let max_visible = inner.height as usize;
+    let max_start = rows.len().saturating_sub(max_visible);
+    let start = cursor
+        .saturating_sub(max_visible.saturating_sub(1))
+        .min(max_start);
+
     let config_width = (inner.width as usize).saturating_sub(32);
-    for (i, row) in rows.iter().enumerate() {
-        let y = inner.y + i as u16;
-        if y >= inner.y + inner.height {
-            break;
-        }
+    for (i, row) in rows.iter().enumerate().skip(start).take(max_visible) {
         let line_rect = Rect {
             x: inner.x,
-            y,
+            y: inner.y + (i - start) as u16,
             width: inner.width,
             height: 1,
         };
@@ -3642,9 +3666,14 @@ fn select_row_spans(
     };
     let tail = match row {
         SelectRow::All { running } => {
+            // A refresh can leave exactly one run after another ends
+            // while Select stays open with more than one still on
+            // screen (the single-run auto-attach only ever applies
+            // at `run_select`'s own, one-time startup check).
+            let noun = if *running == 1 { "run" } else { "runs" };
             format!(
                 "{:<w$}",
-                format!("{running} runs · tiled"),
+                format!("{running} {noun} · tiled"),
                 w = config_width + 11 + 1
             )
         }
@@ -3815,7 +3844,22 @@ fn draw_select_empty_panel(
         )],
     );
     y += 1;
-    for (i, row) in rows.iter().enumerate() {
+    // `y` has already drawn 5 rows (`Looked`, `Found`, a blank, the
+    // `Recent Runs` title and this header) and `Start One` below
+    // needs 5 more of its own (a blank, its own title, three
+    // examples) -- the table's own window scrolls to keep the
+    // cursor in view within whatever's left, the same rule
+    // `draw_select_list`'s own running rows already follow, rather
+    // than letting `enter` open a row that scrolled off with no
+    // indication it had.
+    let trailing_rows = 5u16;
+    let max_visible = (inner.height.saturating_sub(trailing_rows) as usize)
+        .saturating_sub((y - inner.y) as usize);
+    let max_start = rows.len().saturating_sub(max_visible);
+    let start = cursor
+        .saturating_sub(max_visible.saturating_sub(1))
+        .min(max_start);
+    for (i, row) in rows.iter().enumerate().skip(start).take(max_visible) {
         if y >= inner.y + inner.height {
             break;
         }
@@ -3833,16 +3877,18 @@ fn draw_select_empty_panel(
         y += 1;
     }
     y += 1;
-    render_line(
-        frame,
-        Rect {
-            x: inner.x,
-            y,
-            width: inner.width,
-            height: 1,
-        },
-        vec![Span::styled(" Start One", title_style)],
-    );
+    if y < inner.y + inner.height {
+        render_line(
+            frame,
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+            vec![Span::styled(" Start One", title_style)],
+        );
+    }
     y += 1;
     for line_text in [
         " osi demo.yml config.json      run a document and attach",
@@ -6020,8 +6066,11 @@ const HELP_OVERLAY_HEIGHT: u16 = 18;
 
 /// §4's own Signal keys, plus the globals every screen's key bar
 /// shares -- the only keys Signal's own key bar advertises, so the
-/// only ones its own Help lists.
-fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+/// only ones its own Help lists. `is_watch` (issue #698's own §4:
+/// `q`/`c` behave differently on a watch, which owns no process of
+/// its own to confirm quitting or ever cancel) swaps the two rows
+/// that otherwise describe a run `osi` launched itself.
+fn signal_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         (
             "← →",
@@ -6036,11 +6085,19 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
             "open the step under the cursor",
         ),
         ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
+    ];
+    const QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
         ("esc", "close · back", "q", "quit · confirms if running"),
         ("c", "cancel · confirms", "", ""),
     ];
+    const WATCH_QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
+        ("esc", "close · back", "q", "quit at once"),
+        ("c", "inert · launched only", "", ""),
+    ];
+    let quit_rows: &[(&str, &str, &str, &str)] = if is_watch { WATCH_QUIT_ROWS } else { QUIT_ROWS };
     let mut lines: Vec<Line<'static>> = ROWS
         .iter()
+        .chain(quit_rows.iter())
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
     for _ in 0..7 {
@@ -6064,7 +6121,7 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
 /// §4's own Flow keys and the globals every key bar shares -- never
 /// the movement aliases, `/`, `e`, `T`, `v`, `z`, `s`, `l`, `Tab`
 /// §4 already says are gone from the Flow.
-fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+fn flow_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         ("← →", "select a station", "+ -", "open / fold loop lanes"),
         (
@@ -6075,10 +6132,15 @@ fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
         ),
         ("f", "follow Now", "0 1 2 3", "Tape Signal Flow Store"),
         ("?", "this help", "esc", "close · back"),
-        ("q", "quit · confirms if running", "c", "cancel · confirms"),
     ];
+    let quit_row: (&str, &str, &str, &str) = if is_watch {
+        ("q", "quit at once", "c", "inert · launched only")
+    } else {
+        ("q", "quit · confirms if running", "c", "cancel · confirms")
+    };
     let mut lines: Vec<Line<'static>> = ROWS
         .iter()
+        .chain(std::iter::once(&quit_row))
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
     for _ in 0..7 {
@@ -6102,15 +6164,20 @@ fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
 /// exactly §4's own Store keys (`↑↓`/its aliases, `enter`) and the
 /// globals every key bar shares -- never `i`/`o`/`$` (Cost's own
 /// measures, gone), `Tab`, `s`/`l`/`z`/`v`, `e` or `/`.
-fn store_help_lines(ctx: &DrawCtx, unit: u64) -> Vec<Line<'static>> {
-    let rows: Vec<(&str, &str, &str, &str)> = vec![
+fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool) -> Vec<Line<'static>> {
+    let mut rows: Vec<(&str, &str, &str, &str)> = vec![
         ("↑ ↓", "select a row", "enter", "open the selected store"),
         ("j k", "same as ↑ ↓", "PgUp PgDn", "move a page"),
         ("Home End", "first / last row", "g G", "same as Home/End"),
         ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
-        ("esc", "close · back", "q", "quit · confirms if running"),
-        ("c", "cancel · confirms", "", ""),
     ];
+    if is_watch {
+        rows.push(("esc", "close · back", "q", "quit at once"));
+        rows.push(("c", "inert · launched only", "", ""));
+    } else {
+        rows.push(("esc", "close · back", "q", "quit · confirms if running"));
+        rows.push(("c", "cancel · confirms", "", ""));
+    }
     let mut lines: Vec<Line<'static>> = rows
         .iter()
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
@@ -7320,7 +7387,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(signal_help_lines(ctx))
+            let paragraph = Paragraph::new(signal_help_lines(ctx, app.is_watch))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -7351,7 +7418,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(flow_help_lines(ctx))
+            let paragraph = Paragraph::new(flow_help_lines(ctx, app.is_watch))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -7382,7 +7449,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(store_help_lines(ctx, tape_unit))
+            let paragraph = Paragraph::new(store_help_lines(ctx, tape_unit, app.is_watch))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -14124,13 +14191,16 @@ mod tape_frame_goldens {
                 )
             })
             .unwrap();
-        // `hist/run-h1`'s own precise timestamps now round to 5.1s
-        // (`totals.wall_time_s` 5.060017s), one tenth past the
-        // frame's own `5.0s` -- the fixture's own timestamps
-        // disagree with the frame, as parts 1-3 did for `gate ›
-        // reply`; the one differing cell (the TOOK column's own
-        // tenths digit on the `config-h1.json` row) is allow-listed
-        // rather than bending the rounding rule to match it.
+        // `hist/run-h1`'s own `wall_s` (`build_record`'s own
+        // `started_at`→`completed_at` span from the state, 5.0565s)
+        // rounds to 5.1s, one tenth past the frame's own `5.0s` --
+        // the frame's TOOK column instead matches the fixture's own
+        // events (`run_start`→`run_end`, 5.049s) for every row. The
+        // fixture's state and events disagree by a few milliseconds,
+        // as parts 1-3 already saw for `gate › reply`; the one
+        // differing cell (the TOOK column's own tenths digit on the
+        // `config-h1.json` row) is allow-listed rather than bending
+        // the rounding rule to match it.
         assert_matches_mock(
             terminal.backend().buffer(),
             &mock,
@@ -15885,6 +15955,55 @@ mod tape_frame_goldens {
             !text.contains("errors only"),
             "not the generic list:\n{text}"
         );
+    }
+
+    /// Issue #698: a watch owns no process of its own to confirm
+    /// quitting or ever cancel, so its own Help says so, on every
+    /// screen that would otherwise show the "confirms if running"/
+    /// "cancel · confirms" pair a run `osi` launched itself gets.
+    #[test]
+    fn watch_only_help_text_replaces_confirm_and_cancel_with_quit_and_inert() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let to_text = |lines: Vec<Line<'static>>| {
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for (launched, watch) in [
+            (
+                to_text(signal_help_lines(&ctx, false)),
+                to_text(signal_help_lines(&ctx, true)),
+            ),
+            (
+                to_text(flow_help_lines(&ctx, false)),
+                to_text(flow_help_lines(&ctx, true)),
+            ),
+            (
+                to_text(store_help_lines(&ctx, 50, false)),
+                to_text(store_help_lines(&ctx, 50, true)),
+            ),
+        ] {
+            assert!(launched.contains("confirms if running"), "{launched}");
+            assert!(launched.contains("cancel"), "{launched}");
+            assert!(watch.contains("quit at once"), "{watch}");
+            assert!(watch.contains("inert"), "{watch}");
+            assert!(!watch.contains("confirms if running"), "{watch}");
+            assert!(!watch.contains("cancel"), "{watch}");
+        }
     }
 
     #[test]
