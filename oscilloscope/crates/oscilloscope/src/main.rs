@@ -1973,15 +1973,21 @@ fn focused_agent_transcript_path(
 struct TranscriptTailCache {
     path: Option<String>,
     len: Option<u64>,
+    bound: Option<u64>,
     view: Option<oscilloscope_core::transcript::TranscriptView>,
 }
 
 /// Tails the one step's transcript this frame actually needs
 /// (`focused_agent_transcript_path`), bounded to the last 64 KiB
-/// (DESIGN.md, issue #637) -- switching focus to a different step
-/// (or off a screen that shows one at all) costs nothing more than
-/// this call simply returning `None` next time; no file is ever
-/// opened for a step that isn't the one on screen.
+/// (DESIGN.md, issue #637), or the whole file while the full-screen
+/// step is open (issue #704 rule 4, "nothing is cut": a transcript
+/// longer than 64 KiB has lines the compact pane never showed
+/// anyway, but the full-screen view, scrollable and reading every
+/// other section in full already, must not cut this one alone) --
+/// switching focus to a different step (or off a screen that shows
+/// one at all) costs nothing more than this call simply returning
+/// `None` next time; no file is ever opened for a step that isn't
+/// the one on screen.
 fn tail_focused_transcript(
     app: &App,
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
@@ -1992,18 +1998,25 @@ fn tail_focused_transcript(
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
     let path =
         focused_agent_transcript_path(app, tape_screen, flow_screen, signal_screen, store_screen)?;
+    let bound = if app.tape_fullscreen_step {
+        u64::MAX
+    } else {
+        TRANSCRIPT_TAIL_BYTES
+    };
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
-    if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
+    if cache.path.as_deref() == Some(path.as_str())
+        && cache.len == len
+        && cache.bound == Some(bound)
+    {
         return cache.view.clone();
     }
-    let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
-    let truncated = oscilloscope_core::observe::transcript_tail_truncated(
-        Path::new(&path),
-        TRANSCRIPT_TAIL_BYTES,
-    );
+    let lines = tail_transcript_lines(Path::new(&path), bound);
+    let truncated =
+        oscilloscope_core::observe::transcript_tail_truncated(Path::new(&path), bound);
     let view = oscilloscope_core::transcript::build_transcript_view(&lines, truncated);
     cache.path = Some(path);
     cache.len = len;
+    cache.bound = Some(bound);
     cache.view = Some(view.clone());
     Some(view)
 }
