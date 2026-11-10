@@ -6675,6 +6675,29 @@ fn flow_now_arrow_x(items: &[RailItem], app: &App, area_width: u16) -> Option<us
     None
 }
 
+/// The rail's own frontier: the right edge of the last top-level
+/// item that has actually run (a Past or Live station anywhere
+/// inside it). Once a run has ended there is no `▾ Now` left to
+/// follow, so follow parks the view on this instead -- the End
+/// station for a run that finished, the failed or cancelled station
+/// otherwise -- so a run that ends in a burst right after a long
+/// loop does not leave its last stations off the right edge.
+fn flow_frontier_x(items: &[RailItem], app: &App, area_width: u16) -> Option<usize> {
+    fn has_run(items: &[RailItem]) -> bool {
+        items.iter().any(|it| match it {
+            RailItem::Station(s) => rail::edge_style(s.status) != EdgeStyle::Ahead,
+            RailItem::Fork(f) => f.lanes.iter().any(|l| has_run(&l.items)),
+        })
+    }
+    let layout = flow_layout(items, app, area_width);
+    items
+        .iter()
+        .zip(layout.iter())
+        .rev()
+        .find(|(item, _)| has_run(std::slice::from_ref(*item)))
+        .map(|(_, &(_, end))| end.saturating_sub(1))
+}
+
 /// The rail's own follow rule (tui-design.md §2.3): never
 /// scrolls while Now is in view; once it would leave, scrolls to the
 /// top-level item boundary closest to putting Now at 60% of the
@@ -6686,13 +6709,22 @@ fn flow_resolve_scroll(
     app: &mut App,
     area_width: u16,
     visible_width: usize,
+    run_ended: bool,
 ) -> usize {
     let total = flow_total_width(items, app, area_width);
     let max_scroll = total.saturating_sub(visible_width);
     let arrow = flow_now_arrow_x(items, app, area_width);
     let in_view = |scroll: usize, arrow: usize| scroll <= arrow && arrow < scroll + visible_width;
     if app.follow {
-        if let Some(arrow) = arrow {
+        // While the run is live, follow tracks `▾ Now`; once it has
+        // ended, the rail's own frontier (`flow_frontier_x`) stands in
+        // for it, so the view parks where the run stopped.
+        let anchor = if run_ended {
+            arrow.or_else(|| flow_frontier_x(items, app, area_width))
+        } else {
+            arrow
+        };
+        if let Some(arrow) = anchor {
             if !in_view(app.flow_scroll, arrow) {
                 let target = (arrow as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
                 let layout = flow_layout(items, app, area_width);
@@ -7057,6 +7089,7 @@ fn flow_paint_ghost(
     x: usize,
     y0: u16,
     name: &str,
+    decided: bool,
     ctx: &DrawCtx,
 ) {
     let style = Style::default().fg(ctx.theme.dim);
@@ -7073,6 +7106,10 @@ fn flow_paint_ghost(
         )],
         rail::STATION_WIDTH,
     );
+    // `not taken` is a verdict: only a decided fork's untaken lane
+    // reads it. While the decision is still pending both of its
+    // lanes are merely ahead, with a blank headline.
+    let headline = if decided { "not taken" } else { "" };
     flow_paint_row(
         buf,
         area,
@@ -7080,7 +7117,7 @@ fn flow_paint_ghost(
         visible_width,
         x,
         y0 + 1,
-        &[("not taken".to_string(), style)],
+        &[(headline.to_string(), style)],
         rail::STATION_WIDTH,
     );
     // The ghost's own third line is blank, left untouched (DESIGN.md
@@ -7340,6 +7377,7 @@ fn flow_paint_fork(
                     content_x,
                     row_y,
                     name,
+                    rail::edge_style(fork.source_status) == EdgeStyle::Past,
                     ctx,
                 );
                 (content_x + rail::STATION_WIDTH, faint, faint)
@@ -7945,7 +7983,7 @@ mod flow_layout_tests {
     fn flow_resolve_scroll_never_scrolls_while_now_is_in_view() {
         let items = vec![station("a", StatusKind::Running)];
         let mut app = App::new(false);
-        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100, false);
         assert_eq!(scroll, 0);
         assert!(app.follow);
     }
@@ -7972,7 +8010,7 @@ mod flow_layout_tests {
         let mut app = App::new(false);
         let visible_width = 100usize;
         let area_width = 200u16;
-        let scroll = flow_resolve_scroll(&items, &mut app, area_width, visible_width);
+        let scroll = flow_resolve_scroll(&items, &mut app, area_width, visible_width, false);
         let arrow =
             flow_now_arrow_x(&items, &app, area_width).expect("the running station's own x");
         assert!(
@@ -8007,7 +8045,7 @@ mod flow_layout_tests {
         // `flow_resolve_scroll` only re-arms follow on the one draw
         // that flag covers.
         app.flow_manual_scroll = true;
-        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100, false);
         assert_eq!(scroll, 0);
         assert!(
             app.follow,
@@ -8027,14 +8065,14 @@ mod flow_layout_tests {
         app.follow = false;
         app.flow_scroll = 0;
         assert!(!app.flow_manual_scroll);
-        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100, false);
         assert_eq!(scroll, 0);
         assert!(
             !app.follow,
             "Now being in view on an ordinary redraw must not resume follow on its own"
         );
         // A second ordinary redraw, same as the first: still no resume.
-        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100);
+        let scroll = flow_resolve_scroll(&items, &mut app, 200, 100, false);
         assert_eq!(scroll, 0);
         assert!(!app.follow);
     }
@@ -8042,6 +8080,68 @@ mod flow_layout_tests {
     /// The manual-scroll flag is one-shot: consumed by the very next
     /// `flow_resolve_scroll` call regardless of outcome, so a later
     /// redraw with no new ←→ press can't ride on a stale flag.
+    /// Once the run has ended there is no `▾ Now`; with follow on,
+    /// the view parks on the frontier (the End station of a finished
+    /// run), so a burst of fast final steps never leaves them off the
+    /// right edge.
+    #[test]
+    fn flow_resolve_scroll_parks_on_the_frontier_once_the_run_ended() {
+        let mut items: Vec<RailItem> = (0..40)
+            .map(|i| station(&format!("s{i}"), StatusKind::Done))
+            .collect();
+        items.push(station("End", StatusKind::Done));
+        let mut app = App::new(false);
+        app.follow = true;
+        app.flow_scroll = 0;
+        let area_width = 120u16;
+        let visible_width = 100usize;
+        let scroll = flow_resolve_scroll(&items, &mut app, area_width, visible_width, true);
+        let frontier = flow_frontier_x(&items, &app, area_width).expect("the End station ran");
+        assert!(
+            scroll <= frontier && frontier < scroll + visible_width,
+            "the frontier at {frontier} must be in view after scrolling to {scroll}"
+        );
+        assert!(
+            scroll > 0,
+            "a 41-station ended rail cannot stay at scroll 0"
+        );
+        assert!(app.follow, "follow stays on; it parked the view itself");
+    }
+
+    /// A moment with nothing running in a run that is still live is
+    /// not the frontier rule: the rail stays put until Now returns.
+    #[test]
+    fn flow_resolve_scroll_does_not_park_on_the_frontier_while_the_run_is_live() {
+        let mut items: Vec<RailItem> = (0..40)
+            .map(|i| station(&format!("s{i}"), StatusKind::Done))
+            .collect();
+        items.push(station("End", StatusKind::Pending));
+        let mut app = App::new(false);
+        app.follow = true;
+        app.flow_scroll = 0;
+        let scroll = flow_resolve_scroll(&items, &mut app, 120, 100, false);
+        assert_eq!(scroll, 0, "no Now and no ended run: nothing to scroll to");
+    }
+
+    /// A failed run's frontier is the station that failed, not the
+    /// planned tail behind it.
+    #[test]
+    fn flow_frontier_is_the_last_station_that_ran() {
+        let items = vec![
+            station("a", StatusKind::Done),
+            station("b", StatusKind::Failed),
+            station("c", StatusKind::Pending),
+            station("End", StatusKind::Pending),
+        ];
+        let app = App::new(false);
+        let layout = flow_layout(&items, &app, 120);
+        assert_eq!(
+            flow_frontier_x(&items, &app, 120),
+            Some(layout[1].1 - 1),
+            "the failed station b is the frontier"
+        );
+    }
+
     #[test]
     fn flow_resolve_scrolls_manual_scroll_flag_is_consumed_after_one_draw() {
         let items = vec![station("a", StatusKind::Running)];
@@ -8049,7 +8149,7 @@ mod flow_layout_tests {
         app.follow = false;
         app.flow_scroll = 0;
         app.flow_manual_scroll = true;
-        flow_resolve_scroll(&items, &mut app, 200, 100);
+        flow_resolve_scroll(&items, &mut app, 200, 100, false);
         assert!(
             !app.flow_manual_scroll,
             "the flag is consumed by the draw it armed"
@@ -8318,7 +8418,13 @@ fn draw_flow_rail_pane(
     fill_border_rows(frame, inner, border_color);
 
     let visible_width = inner.width as usize;
-    let scroll = flow_resolve_scroll(&screen.rail.items, app, frame_width, visible_width);
+    let scroll = flow_resolve_scroll(
+        &screen.rail.items,
+        app,
+        frame_width,
+        visible_width,
+        nothing_to_follow,
+    );
 
     let now_row = Rect {
         x: inner.x,
