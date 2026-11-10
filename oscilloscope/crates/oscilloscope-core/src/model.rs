@@ -2669,6 +2669,34 @@ mod tests {
         assert_eq!(total_received, 70);
     }
 
+    /// Issue #702: `osi watch` attaching after the agent has already
+    /// finished (or any other way the session is seen finished with
+    /// no running sighting ever observed first) still gets its own
+    /// Signal column, from the very first state this model ever
+    /// observes.
+    #[test]
+    fn an_agent_session_osi_only_ever_saw_finished_still_gets_one_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:58Z"},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+                "provider": "agent", "tokens_sent_total": 11550, "tokens_received_total": 130
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let sightings = model.agent_live_sightings();
+        assert_eq!(sightings.len(), 1);
+        assert_eq!(sightings[0].path, "prime.fixer");
+        assert_eq!(sightings[0].ts, "2026-10-08T11:46:58Z");
+        assert_eq!(sightings[0].tokens_sent, 11550);
+        assert_eq!(sightings[0].tokens_received, 130);
+        // A later redraw of the identical, already-finished state
+        // must never record the same sighting a second time.
+        model.observe(&finished, &plan, ProcessState::Running);
+        assert_eq!(model.agent_live_sightings().len(), 1);
+    }
+
     #[test]
     fn a_non_object_meta_live_value_parses_as_none() {
         assert_eq!(AgentLive::from_value(&Value::Null), None);
