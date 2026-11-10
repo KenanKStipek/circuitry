@@ -66,6 +66,15 @@ pub struct StoreLeaf {
     pub label: String,
     pub tokens_sent: u64,
     pub tokens_received: u64,
+    /// Whether `tokens_sent`/`tokens_received` (respectively) is a
+    /// real `0`, or stands in for a figure neither live source has
+    /// ever reported (Claude Code's own `tokens_received: null`
+    /// mid-turn) -- drawn as `—` rather than a false `0` wherever a
+    /// leaf's own sent/received split is shown; the sums and shares
+    /// above still treat it as `0`, the same rule every other screen
+    /// follows.
+    pub tokens_sent_unknown: bool,
+    pub tokens_received_unknown: bool,
     /// `+6%`/`-16%`, from history's median tokens for this literal
     /// path (`screens::tape_row_usual_tokens`) -- `None` without
     /// enough history, drawn as `—` (§3.6).
@@ -380,6 +389,8 @@ fn container_own_leaf(
         label: "check".to_string(),
         tokens_sent,
         tokens_received,
+        tokens_sent_unknown: false,
+        tokens_received_unknown: false,
         deviation_pct,
         live: false,
     })
@@ -470,6 +481,8 @@ fn build_leaf(
     // `AgentLive::is_recent` false) still gives its last known
     // figures here, just no longer drawn faint.
     let figures = crate::model::step_tokens_so_far(Some(node), path, model, now);
+    let tokens_sent_unknown = figures.tokens_sent.is_none();
+    let tokens_received_unknown = figures.tokens_received.is_none();
     let tokens_sent = figures.tokens_sent.unwrap_or(0);
     let tokens_received = figures.tokens_received.unwrap_or(0);
     let live = figures.live;
@@ -487,6 +500,8 @@ fn build_leaf(
         label,
         tokens_sent,
         tokens_received,
+        tokens_sent_unknown,
+        tokens_received_unknown,
         deviation_pct,
         live,
     })
@@ -1087,19 +1102,14 @@ pub fn build_store(
     // included) must count in this denominator too, or a leaf tile's
     // own live-figure numerator can outrun it -- the exact `19000%`
     // this issue's own bug report found on the Largest Stores table.
-    let run_tokens = state
-        .and_then(crate::model::run_totals)
-        .map(|totals| {
-            totals
-                .get("tokens_sent")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                + totals
-                    .get("tokens_received")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-        })
-        .unwrap_or(header.tokens_sent + header.tokens_received)
+    // `header.tokens_sent`/`_received` already prefer `run_totals`
+    // over summing `flat` and fold in a cancelled run's own leftover
+    // `meta.live` (an agent session that never finished an attempt,
+    // so `run_totals` itself reads `0`/`0`) -- re-deriving the same
+    // figure from `state` here instead would drop that leftover and
+    // disagree with the Tape's own share for the same step.
+    let run_tokens = header.tokens_sent
+        + header.tokens_received
         + header.tokens_sent_live_estimate
         + header.tokens_received_live_estimate;
     let table = build_store_table(&tree, root_path, run_tokens);
@@ -1156,6 +1166,8 @@ mod tests {
             label: label.to_string(),
             tokens_sent: tokens,
             tokens_received: 0,
+            tokens_sent_unknown: false,
+            tokens_received_unknown: false,
             deviation_pct: None,
             live: false,
         })
