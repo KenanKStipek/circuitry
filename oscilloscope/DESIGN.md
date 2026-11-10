@@ -3076,6 +3076,18 @@ second time. The one shared event-reader thread (`spawn_event_reader`,
 the groundwork's own `EventReader`) is handed back and forth the same
 way, never a second one spawned.
 
+One PTY end-to-end test (`e2e_tui_pty.rs`): two live runs show
+Select listing both, and `enter` attaches. Exactly one live run
+attaching directly, and no live runs showing the empty Select, are
+not PTY-tested: both turn on `discover_runs`'s own machine-wide `ps`
+scan finding *exactly* what one test itself started, which doesn't
+hold under `cargo test --workspace`'s own default parallelism (this
+file runs alongside `e2e_cof.rs`/`e2e_electricity.rs`, whose own
+`cof`/`electricity` processes the same scan also sees); both are
+unit-testable only down at `discover_runs`'s own level (already
+covered there) and were checked by hand against a release build
+instead.
+
 **Browsing every effect after a run, with one selection across
 screens** (issue #704, beyond anything `design/tui-design.md` itself
 describes). The Tape's own `TapeHead::Ended` state (`App::
