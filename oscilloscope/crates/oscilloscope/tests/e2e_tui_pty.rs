@@ -2923,10 +2923,14 @@ fn a_slow_streaming_prompt_shows_live_token_figures_then_settles() {
         );
     }
 
+    // The prompt's final figures land a moment before the run itself
+    // ends, and `q` on a run that is still live only asks for a
+    // confirmation this test never answers: wait for the header's own
+    // `Ended` first. Every wait is its own named step, so a slow runner
+    // fails on the step that lagged rather than on the exit.
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
     send_bytes(&mut master, b"q");
-    // The waits above can take 20 s (the alternate screen on a cold runner) plus 10 s (for
-    // the first rate) before the streamed run itself ends, so the cap sits well past their sum.
-    let status = wait_with_timeout(child, Duration::from_secs(90));
+    let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
@@ -3006,10 +3010,14 @@ fn a_slow_streaming_prompt_shows_live_token_figures_then_settles_on_electricity(
         );
     }
 
+    // The prompt's final figures land a moment before the run itself
+    // ends, and `q` on a run that is still live only asks for a
+    // confirmation this test never answers: wait for the header's own
+    // `Ended` first. Every wait is its own named step, so a slow runner
+    // fails on the step that lagged rather than on the exit.
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
     send_bytes(&mut master, b"q");
-    // The waits above can take 20 s (the alternate screen on a cold runner) plus 10 s (for
-    // the first rate) before the streamed run itself ends, so the cap sits well past their sum.
-    let status = wait_with_timeout(child, Duration::from_secs(90));
+    let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
