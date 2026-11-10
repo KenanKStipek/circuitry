@@ -1043,7 +1043,11 @@ fn tape_row_line(
         Span::styled(
             format!(
                 "{:<what_width$}",
-                tape_what_text(&tape_loop_what(row, wide_detail), what_width)
+                if row.what_is_agent_text {
+                    tape_agent_what_text(&tape_loop_what(row, wide_detail), what_width)
+                } else {
+                    tape_what_text(&tape_loop_what(row, wide_detail), what_width)
+                }
             ),
             bg(what_style),
         ),
@@ -1144,6 +1148,33 @@ fn tape_what_text(what: &str, what_width: usize) -> String {
         let truncated: String = what.chars().take(budget.saturating_sub(1)).collect();
         format!("{truncated}⋯")
     }
+}
+
+/// The running/finished agent row's own cut (issue #703's rules 1
+/// and 2: "cut from the right in that order"): drops whole trailing
+/// " · "-separated pieces first, never half of one (`· ct⋯`) -- each
+/// piece is a discrete figure (a turn, a tool, a token count), never
+/// free text worth trimming by character the way [`tape_what_text`]
+/// trims a prompt row's own reply preview. Only once even the first
+/// piece alone still doesn't fit does this fall back to cutting that
+/// one piece by character, the same as [`tape_what_text`] would.
+fn tape_agent_what_text(what: &str, what_width: usize) -> String {
+    let budget = what_width.saturating_sub(1);
+    if what.chars().count() < budget {
+        return what.to_string();
+    }
+    if budget == 0 {
+        return String::new();
+    }
+    let segments: Vec<&str> = what.split(" · ").collect();
+    for end in (1..=segments.len()).rev() {
+        let cut = format!("{}⋯", segments[..end].join(" · "));
+        if cut.chars().count() <= budget {
+            return cut;
+        }
+    }
+    let truncated: String = segments[0].chars().take(budget.saturating_sub(1)).collect();
+    format!("{truncated}⋯")
 }
 
 /// The Tape's own list pane (§2.1): Run Started, finished rows in
@@ -1922,6 +1953,7 @@ fn tape_status_glyph_word_style(kind: StatusKind, theme: &Theme) -> (char, &'sta
 fn tape_normal_detail_lines(
     screen: &oscilloscope_core::screens::TapeScreen,
     width: usize,
+    height: usize,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
     ctx: &DrawCtx,
@@ -1975,35 +2007,6 @@ fn tape_normal_detail_lines(
         ],
         width,
     ));
-
-    // Issue #703's rule 3: an agent step's own detail pane is the
-    // one shared Agent block, right after Status/Type -- never the
-    // generic Live/Tokens/Usual/Share lines below, which only a
-    // prompt row still uses.
-    if let oscilloscope_core::screens::FocusDetail::Agent {
-        stale, live, note, ..
-    } = &step.detail
-    {
-        if *stale {
-            lines.push(tape_detail_line(
-                vec![Span::styled("stopped", muted)],
-                width,
-            ));
-        }
-        for line in agent_block_lines(step, transcript_view, ctx, now) {
-            lines.push(tape_detail_line(line.spans, width));
-        }
-        let running = matches!(
-            step.status.kind,
-            oscilloscope_core::model::StatusKind::Running
-                | oscilloscope_core::model::StatusKind::LikelyRunning
-                | oscilloscope_core::model::StatusKind::RunningOrQueued
-        );
-        if live.is_none() && running {
-            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
-        }
-        return lines;
-    }
 
     // Issue #675's Live block: a running prompt shows its own live
     // figures here, in place of the Tokens line below (never both --
@@ -2147,6 +2150,37 @@ fn tape_normal_detail_lines(
             ],
             width,
         ));
+    }
+
+    // Issue #703's rule 3: an agent step's own detail pane adds the
+    // one shared Agent block after Tokens/Usual/Share, which still
+    // read from the step's own totals the same as any other tool --
+    // Live, Prompt Sent and Reply above and below are already `None`
+    // for a non-prompt row, so they never draw here.
+    if let oscilloscope_core::screens::FocusDetail::Agent {
+        stale, live, note, ..
+    } = &step.detail
+    {
+        if *stale {
+            lines.push(tape_detail_line(
+                vec![Span::styled("stopped", muted)],
+                width,
+            ));
+        }
+        let running = matches!(
+            step.status.kind,
+            oscilloscope_core::model::StatusKind::Running
+                | oscilloscope_core::model::StatusKind::LikelyRunning
+                | oscilloscope_core::model::StatusKind::RunningOrQueued
+        );
+        let note_reserved = usize::from(live.is_none() && running);
+        let max_lines = height.saturating_sub(lines.len() + note_reserved);
+        for line in agent_block_lines(step, transcript_view, ctx, now, Some(max_lines)) {
+            lines.push(tape_detail_line(line.spans, width));
+        }
+        if live.is_none() && running {
+            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        }
     }
 
     if let Some(prompt_sent) = &detail.prompt_sent {
@@ -2666,7 +2700,14 @@ fn draw_tape_detail(
             .as_ref()
             .map(|d| tape_failed_detail_lines(d, width, ctx))
             .unwrap_or_default(),
-        TapeHead::Normal => tape_normal_detail_lines(screen, width, transcript_view, now, ctx),
+        TapeHead::Normal => tape_normal_detail_lines(
+            screen,
+            width,
+            content_area.height as usize,
+            transcript_view,
+            now,
+            ctx,
+        ),
     };
     frame.render_widget(Paragraph::new(lines), content_area);
 }
@@ -4019,7 +4060,6 @@ fn draw_signal_readings(
 /// row), good enough to read a step's prompt and reply in full
 /// without leaving the screen. Shared by the Signal and the Store,
 /// whose own full-screen step views are otherwise identical.
-#[allow(clippy::too_many_arguments)]
 fn draw_focused_step_detail(
     frame: &mut Frame,
     area: Rect,
@@ -4063,17 +4103,19 @@ fn draw_focused_step_detail(
         if *stale {
             lines.push(Line::styled(" stopped", muted));
         }
-        for line in agent_block_lines(step, transcript_view, ctx, now) {
-            let mut spans = vec![Span::raw(" ")];
-            spans.extend(line.spans);
-            lines.push(Line::from(spans));
-        }
         let running = matches!(
             step.status.kind,
             oscilloscope_core::model::StatusKind::Running
                 | oscilloscope_core::model::StatusKind::LikelyRunning
                 | oscilloscope_core::model::StatusKind::RunningOrQueued
         );
+        let note_reserved = usize::from(live.is_none() && running);
+        let max_lines = (inner.height as usize).saturating_sub(lines.len() + note_reserved);
+        for line in agent_block_lines(step, transcript_view, ctx, now, Some(max_lines)) {
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(line.spans);
+            lines.push(Line::from(spans));
+        }
         if live.is_none() && running {
             lines.push(Line::styled(format!(" {}", *note), muted));
         }
@@ -4097,18 +4139,6 @@ fn draw_focused_step_detail(
     );
 }
 
-/// The one Agent block (issue #703's rule 3), shared by every pane
-/// that shows a running or finished agent step: the Tape's own
-/// detail pane (`tape_normal_detail_lines`), the full-screen step
-/// (`draw_focused_step_detail`) and the Flow screen's own Selected
-/// pane -- Asked, Turn, Tool, Tools, Context, Files, Tests, Said
-/// (the transcript's own `last_reply`) and Cost, each left out
-/// whenever the engine didn't report it, then the transcript tail
-/// (newest at the bottom, a running call with its own elapsed, a
-/// leading `…` once the tailed window no longer reaches the
-/// session's own start). `step.detail` must be `FocusDetail::Agent`;
-/// an empty `Vec` otherwise, which no caller here ever actually asks
-/// for (each already matched on the same variant first).
 /// One Agent block field line (issue #703's rule 3): an eight-cell
 /// label, then the value in the pane's own default text colour.
 fn agent_field_line(
@@ -4123,11 +4153,24 @@ fn agent_field_line(
     ])
 }
 
+/// The one Agent block (issue #703's rule 3), shared by every pane
+/// that shows a running or finished agent step: the Tape's own
+/// detail pane (`tape_normal_detail_lines`), the full-screen step
+/// (`draw_focused_step_detail`) and the Flow screen's own Selected
+/// pane -- Asked, Turn, Tool, Tools, Context, Files, Tests, Said
+/// (the transcript's own `last_reply`) and Cost, each left out
+/// whenever the engine didn't report it, then the transcript tail
+/// (newest at the bottom, a running call with its own elapsed, a
+/// leading `…` once the tailed window no longer reaches the
+/// session's own start). `step.detail` must be `FocusDetail::Agent`;
+/// an empty `Vec` otherwise, which no caller here ever actually asks
+/// for (each already matched on the same variant first).
 fn agent_block_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     now: &str,
+    max_lines: Option<usize>,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::format::{format_duration, format_tokens_k};
     use oscilloscope_core::screens::FocusDetail;
@@ -4240,11 +4283,16 @@ fn agent_block_lines(
             if !text.is_empty() {
                 text.push_str(" · ");
             }
-            text.push_str(&format!(
-                "+{} −{}",
-                lines_added.unwrap_or(0),
-                lines_removed.unwrap_or(0)
-            ));
+            // Never a bogus `−0` for whichever side the engine
+            // didn't report.
+            let mut sides = Vec::new();
+            if let Some(added) = lines_added {
+                sides.push(format!("+{added}"));
+            }
+            if let Some(removed) = lines_removed {
+                sides.push(format!("−{removed}"));
+            }
+            text.push_str(&sides.join(" "));
         }
         lines.push(agent_field_line("Files", text, muted, default));
     }
@@ -4252,7 +4300,7 @@ fn agent_block_lines(
     if let Some(tests) = transcript_view.and_then(|v| v.tests) {
         use oscilloscope_core::transcript::TestOutcome;
         let text = match tests {
-            TestOutcome::Running => "…".to_string(),
+            TestOutcome::Running => "running".to_string(),
             TestOutcome::Ok => "✓".to_string(),
             TestOutcome::Failed => "✗".to_string(),
         };
@@ -4276,12 +4324,31 @@ fn agent_block_lines(
         ));
     }
 
+    // The tail's own row budget (issue #703's rule 3): whatever is
+    // left of the caller's own pane height once the fields above
+    // have taken their share -- newest calls kept, oldest dropped
+    // first, with a leading `…` whenever either the read window or
+    // this budget cut the list short. `None` (every unit test but
+    // the PTY one, which has no real pane to fit into) keeps today's
+    // unbounded reading of the whole tail.
+    let tail_budget = max_lines.unwrap_or(usize::MAX).saturating_sub(lines.len());
     if let Some(view) = transcript_view.filter(|v| !v.calls.is_empty()) {
+        if tail_budget == 0 {
+            return lines;
+        }
         lines.push(Line::from(""));
-        if view.truncated {
+        let budget_for_calls = tail_budget - 1;
+        let ellipsis = view.truncated || view.calls.len() > budget_for_calls;
+        let take = if ellipsis {
+            budget_for_calls.saturating_sub(1)
+        } else {
+            budget_for_calls
+        };
+        if ellipsis && budget_for_calls > 0 {
             lines.push(Line::styled("…", dim));
         }
-        for call in &view.calls {
+        let calls = &view.calls[view.calls.len().saturating_sub(take)..];
+        for call in calls {
             let clock = call
                 .start_t
                 .as_deref()
@@ -4294,8 +4361,18 @@ fn agent_block_lines(
                 text.push_str(target);
             }
             match call.ok {
-                Some(true) => text.push_str(" ✓"),
-                Some(false) => text.push_str(" ✗"),
+                Some(true) => {
+                    text.push_str(" ✓");
+                    if let Some(ms) = call.ms {
+                        text.push_str(&format!(" {}", format_duration(ms as f64 / 1000.0)));
+                    }
+                }
+                Some(false) => {
+                    text.push_str(" ✗");
+                    if let Some(ms) = call.ms {
+                        text.push_str(&format!(" {}", format_duration(ms as f64 / 1000.0)));
+                    }
+                }
                 // Issue #647: a stopped session's own transcript can
                 // end mid-call, with no later `tool_start` to ever
                 // mark it `call.stopped` -- the step's own status
@@ -5924,17 +6001,17 @@ fn draw_flow_selected_pane(
     } else {
         "Selected".to_string()
     };
+    let viewport = area.height.saturating_sub(2) as usize;
     let lines = if let Some(pass) = &screen.selected_pass {
         selected_pass_lines(pass, wide, ctx)
     } else if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected_step {
-        flow_selected_step_lines(step, transcript_view, ctx, now)
+        flow_selected_step_lines(step, transcript_view, ctx, now, Some(viewport))
     } else {
         vec![Line::from("nothing selected")]
     };
     let border_color = ctx.theme.border;
-    let viewport = area.height.saturating_sub(2) as usize;
     app.details_viewport = viewport;
     let total = lines.len();
     app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
@@ -6106,6 +6183,7 @@ fn flow_selected_step_lines(
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     now: &str,
+    max_lines: Option<usize>,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
     use oscilloscope_core::screens::FocusDetail;
@@ -6137,7 +6215,17 @@ fn flow_selected_step_lines(
         if *stale {
             lines.push(Line::styled("stopped", dim));
         }
-        lines.extend(agent_block_lines(step, transcript_view, ctx, now));
+        let note_reserved = usize::from(live.is_none() && running);
+        let error_reserved = usize::from(step.error.is_some());
+        let block_budget =
+            max_lines.map(|max| max.saturating_sub(lines.len() + note_reserved + error_reserved));
+        lines.extend(agent_block_lines(
+            step,
+            transcript_view,
+            ctx,
+            now,
+            block_budget,
+        ));
         // The fallback note only ever applies in the brief window
         // before the agent tool's very first `meta.live` write, which
         // the block above has nothing to show for at all yet.
@@ -8829,6 +8917,35 @@ mod golden_tests {
         }
     }
 
+    /// Issue #703's rules 1/2: a running or finished agent row's
+    /// own "what" text is cut from the right by dropping whole
+    /// ` · `-separated pieces, never half of one -- `ctx 41k` goes
+    /// first, whole, never `· ct⋯`, and so on back toward the
+    /// elapsed time, which stays on its own once nothing else fits.
+    #[test]
+    fn tape_agent_what_text_cuts_from_the_right_at_segment_boundaries() {
+        let what = "1m12s · turn 4 · bash 12.0s · ctx 41k/200k";
+        assert_eq!(tape_agent_what_text(what, 100), what);
+        // Just short of the whole string: the context piece drops
+        // entirely, never a partial `ctx 41k⋯` or `· ct⋯`.
+        let cut = tape_agent_what_text(what, what.chars().count());
+        assert_eq!(cut, "1m12s · turn 4 · bash 12.0s⋯");
+        assert!(!cut.contains("ctx"), "{cut}");
+        // Narrower still: the tool segment drops too.
+        let cut = tape_agent_what_text(what, 24);
+        assert_eq!(cut, "1m12s · turn 4⋯");
+        assert!(!cut.contains("bash"), "{cut}");
+        // Narrower yet: even the turn segment drops, leaving the
+        // elapsed time alone.
+        let cut = tape_agent_what_text(what, 12);
+        assert_eq!(cut, "1m12s⋯");
+        // Narrower than even the first segment alone: falls back to
+        // cutting that one piece by character, same as any other
+        // row's own text would.
+        let cut = tape_agent_what_text(what, 4);
+        assert_eq!(cut, "1m⋯");
+    }
+
     /// Issue #647, carried over by #703's shared Agent block: with no
     /// transcript tailed yet, a running tool's own elapsed shows next
     /// to its own name in the Tool field, from `meta.live.current_
@@ -8849,7 +8966,7 @@ mod golden_tests {
         }))
         .unwrap();
         let step = agent_focused_step(Some(live), false, Some(24.0), StatusKind::Running);
-        let lines = agent_block_lines(&step, None, &ctx, "2026-01-01T11:52:54Z");
+        let lines = agent_block_lines(&step, None, &ctx, "2026-01-01T11:52:54Z", None);
         let text = lines
             .iter()
             .map(|l| l.to_string())
@@ -8878,7 +8995,7 @@ mod golden_tests {
         }))
         .unwrap();
         let step = agent_focused_step(Some(live), true, None, StatusKind::Running);
-        let lines = agent_block_lines(&step, None, &ctx, "2026-01-01T11:52:54Z");
+        let lines = agent_block_lines(&step, None, &ctx, "2026-01-01T11:52:54Z", None);
         let text = lines
             .iter()
             .map(|l| l.to_string())
@@ -8913,7 +9030,7 @@ mod golden_tests {
         let live =
             oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
         let step = agent_focused_step(Some(live), false, None, StatusKind::Running);
-        let lines = agent_block_lines(&step, Some(&view), &ctx, "2026-01-01T11:52:00Z");
+        let lines = agent_block_lines(&step, Some(&view), &ctx, "2026-01-01T11:52:00Z", None);
         let text = lines
             .iter()
             .map(|l| l.to_string())
@@ -8921,6 +9038,512 @@ mod golden_tests {
             .join("\n");
         assert!(text.contains("pytest -k a running 2m00s"), "{text}");
         assert!(text.contains("pytest -k b running 1m00s"), "{text}");
+    }
+
+    fn agent_fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
+    }
+
+    /// Compiles the recorded fixture's own `do.yml` against its own
+    /// `config.fixture.json` (`scripts/record_fixtures.py`) into a
+    /// real [`PlanTree`] -- never a hand-written one, so a later
+    /// change to the recorded orchestration can't quietly drift from
+    /// what this test still assumes it says.
+    fn agent_fixture_plan(name: &str) -> PlanTree {
+        let dir = agent_fixtures_dir().join(name);
+        let program = oscilloscope_core::plan::compile(
+            &dir.join("do.yml"),
+            Some(&dir.join("config.fixture.json")),
+            &indexmap::IndexMap::new(),
+        )
+        .unwrap_or_else(|e| panic!("{name}: do.yml doesn't compile: {e}"));
+        PlanTree::from_program(&program)
+    }
+
+    /// Every state snapshot `cof` wrote for the named fixture, oldest
+    /// first (`snapshots.jsonl`'s own wrapper around each one).
+    fn agent_fixture_snapshots(name: &str) -> Vec<Value> {
+        let text = std::fs::read_to_string(agent_fixtures_dir().join(name).join("snapshots.jsonl"))
+            .unwrap_or_else(|e| panic!("{name}: couldn't read snapshots.jsonl: {e}"));
+        text.lines()
+            .filter(|l| !l.is_empty())
+            .map(|line| {
+                let wrapper: Value = serde_json::from_str(line).expect("valid JSON line");
+                wrapper["state"].clone()
+            })
+            .collect()
+    }
+
+    /// The first snapshot whose own `prime.top_agent.meta.live.turns`
+    /// has reached `turns` -- the same selector `oscilloscope-core`'s
+    /// own `agent_live_fixtures.rs` uses, since timing jitter makes a
+    /// snapshot's own elapsed wall-clock time useless here.
+    fn agent_fixture_state_at_turn(name: &str, turns: u64) -> Value {
+        for state in agent_fixture_snapshots(name) {
+            let live = state
+                .pointer("/prime/top_agent/meta/live")
+                .and_then(oscilloscope_core::model::AgentLive::from_value);
+            if live.is_some_and(|l| l.turns == Some(turns)) {
+                return state;
+            }
+        }
+        panic!("{name}: no snapshot ever reached turns={turns}");
+    }
+
+    /// The real transcript file `cof` wrote for the fixture's own
+    /// `top_agent` step, tailed and parsed exactly the way osi's own
+    /// TUI does -- never hand-written transcript lines.
+    fn agent_fixture_transcript_view(name: &str) -> oscilloscope_core::transcript::TranscriptView {
+        let path = agent_fixtures_dir()
+            .join(name)
+            .join("top_agent_transcript.jsonl");
+        let lines = oscilloscope_core::observe::tail_transcript_lines(
+            &path,
+            oscilloscope_core::observe::TRANSCRIPT_TAIL_BYTES,
+        );
+        oscilloscope_core::transcript::build_transcript_view(&lines, false)
+    }
+
+    /// The same `prime.top_agent` step, built the way the Tape's own
+    /// detail pane and the Flow's own Selected pane each build
+    /// theirs -- [`agent_block_lines`] must read identically off
+    /// either, since both panes share the one function (issue #703's
+    /// rule 3). Returns the whole [`TapeScreen`] (its own row text is
+    /// also checked from it) alongside the Flow's own step.
+    fn agent_fixture_screens(
+        name: &str,
+        state: &Value,
+        process: ProcessState,
+        now: &str,
+    ) -> (
+        oscilloscope_core::screens::TapeScreen,
+        oscilloscope_core::screens::FocusedStep,
+    ) {
+        let plan = agent_fixture_plan(name);
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(state),
+            process,
+            1.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(state),
+            Some("prime.top_agent"),
+            true,
+            now,
+        );
+        let zone = test_zone();
+        let flow_screen = oscilloscope_core::screens::build_flow(
+            &rendered.unfolded_rows,
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(state),
+            &[],
+            Some("prime.top_agent"),
+            &zone,
+            rendered.header.run_end_ts.as_deref(),
+            now,
+        );
+        let flow_step = flow_screen
+            .selected_step
+            .expect("the Flow selected top_agent");
+        (tape_screen, flow_step)
+    }
+
+    fn agent_block_lines_text(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Issue #703's rule 3, against the recorded `agent_live_pi`
+    /// fixture (`tests/fixtures/agent_live_pi`): a finished session's
+    /// own block, built straight from its real `meta.raw` and its
+    /// real transcript file, reads identically whichever of the
+    /// Tape's own detail pane or the Flow's own Selected pane built
+    /// the step.
+    #[test]
+    fn agent_block_lines_matches_the_recorded_agent_live_pi_fixtures_finished_session() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let states = agent_fixture_snapshots("agent_live_pi");
+        let state = states.last().expect("at least one snapshot");
+        let now = state["prime"]["meta"]["completed_at"]
+            .as_str()
+            .expect("the run itself finished")
+            .to_string();
+        let (tape_screen, flow_step) =
+            agent_fixture_screens("agent_live_pi", state, ProcessState::exited(false), &now);
+        let tape_step = tape_screen
+            .selected
+            .clone()
+            .expect("the Tape selected top_agent");
+        let view = agent_fixture_transcript_view("agent_live_pi");
+
+        let tape_text = agent_block_lines_text(&agent_block_lines(
+            &tape_step,
+            Some(&view),
+            &ctx,
+            &now,
+            None,
+        ));
+        let flow_text = agent_block_lines_text(&agent_block_lines(
+            &flow_step,
+            Some(&view),
+            &ctx,
+            &now,
+            None,
+        ));
+        assert_eq!(
+            tape_text, flow_text,
+            "the same block from the Tape's own step and the Flow's own step"
+        );
+
+        assert!(tape_text.contains("Asked   Fix the bug."), "{tape_text}");
+        assert!(tape_text.contains("Turn    3"), "{tape_text}");
+        assert!(
+            tape_text.contains(&format!(
+                "Context {}",
+                oscilloscope_core::format::format_tokens_k(5000)
+            )),
+            "{tape_text}"
+        );
+        assert!(
+            tape_text.contains("Files   1 changed \u{b7} +3 \u{2212}1"),
+            "{tape_text}"
+        );
+        assert!(tape_text.contains("Tests   \u{2713}"), "{tape_text}");
+        assert!(
+            tape_text.contains("Said    Done. MARKER_REPLY all tests pass."),
+            "{tape_text}"
+        );
+        assert!(tape_text.contains("Cost    $0.04"), "{tape_text}");
+        // The transcript tail's own ended calls (issue #703's rule 3:
+        // `✓ 1.2s`), from the real recorded `ms`.
+        assert!(
+            tape_text.contains("\u{203a} bash pytest -k MARKER_COMMAND \u{2713} 2.5s"),
+            "{tape_text}"
+        );
+        assert!(
+            tape_text.contains("\u{203a} edit src/MARKER_PATH.py \u{2713} 2.5s +3 \u{2212}1"),
+            "{tape_text}"
+        );
+    }
+
+    /// Issue #703's rule 3, against the recorded `agent_live_claude_
+    /// code` fixture mid-turn (`docs/plugins/agent.md`'s own "never
+    /// reports `tokens_received`/`cost_usd` live" case for Claude
+    /// Code): a running session's own block reads its real live
+    /// figures, including a field the engine never reports at all
+    /// staying left out rather than a bogus `0`/empty line.
+    #[test]
+    fn agent_block_lines_matches_the_recorded_agent_live_claude_code_fixtures_running_session() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let state = agent_fixture_state_at_turn("agent_live_claude_code", 1);
+        let updated_at = state["prime"]["top_agent"]["meta"]["live"]["updated_at"]
+            .as_str()
+            .expect("a live snapshot has its own updated_at");
+        let now = (chrono::DateTime::parse_from_rfc3339(updated_at).unwrap()
+            + chrono::Duration::seconds(2))
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let (tape_screen, flow_step) = agent_fixture_screens(
+            "agent_live_claude_code",
+            &state,
+            ProcessState::Running,
+            &now,
+        );
+        let tape_step = tape_screen
+            .selected
+            .clone()
+            .expect("the Tape selected top_agent");
+        let view = agent_fixture_transcript_view("agent_live_claude_code");
+
+        let tape_text = agent_block_lines_text(&agent_block_lines(
+            &tape_step,
+            Some(&view),
+            &ctx,
+            &now,
+            None,
+        ));
+        let flow_text = agent_block_lines_text(&agent_block_lines(
+            &flow_step,
+            Some(&view),
+            &ctx,
+            &now,
+            None,
+        ));
+        assert_eq!(
+            tape_text, flow_text,
+            "the same block from the Tape's own step and the Flow's own step"
+        );
+
+        assert!(tape_text.contains("Turn    1"), "{tape_text}");
+        assert!(tape_text.contains("Tool    Read"), "{tape_text}");
+        assert!(
+            tape_text.contains("Tools   Read \u{d7}1 \u{b7} Task \u{d7}1"),
+            "{tape_text}"
+        );
+        assert!(
+            tape_text.contains(&format!(
+                "Context {}",
+                oscilloscope_core::format::format_tokens_k(1600)
+            )),
+            "{tape_text}"
+        );
+        // `docs/plugins/agent.md`: Claude Code never reports these
+        // two live -- never a bogus `$0.00`/`0 t` line for either.
+        assert!(!tape_text.contains("Cost"), "{tape_text}");
+        assert!(!tape_text.contains("Files"), "{tape_text}");
+        // The real transcript file is the whole finished run's own
+        // (fixtures are captured once, after the run ends), so its
+        // tail shows every call that session ever made, each with
+        // its own real duration.
+        assert!(
+            tape_text.contains("\u{203a} Read MARKER_PATH.md \u{2713} 2.5s"),
+            "{tape_text}"
+        );
+        assert!(
+            tape_text.contains("\u{203a} Edit src/MARKER_PATH.py \u{2713} 2.5s +3 \u{2212}1"),
+            "{tape_text}"
+        );
+        assert!(
+            tape_text.contains("Said    Done. MARKER_REPLY"),
+            "{tape_text}"
+        );
+    }
+
+    /// Issue #703's rule 1 and rule 3, against the recorded `agent_
+    /// live_pi_cancelled` fixture: an interrupted run's own leftover
+    /// `meta.live` (no `completed_at`, `AgentLive::is_recent` long
+    /// since false) reads `stopped` on the Tape row and leaves its
+    /// transcript's own unfinished call `stopped` too, never still
+    /// "running".
+    #[test]
+    fn agent_block_lines_matches_the_recorded_agent_live_pi_cancelled_fixtures_stale_leftover() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let states = agent_fixture_snapshots("agent_live_pi_cancelled");
+        let state = states.last().expect("at least one snapshot");
+        let updated_at = state["prime"]["top_agent"]["meta"]["live"]["updated_at"]
+            .as_str()
+            .expect("the leftover live is still there");
+        let now = (chrono::DateTime::parse_from_rfc3339(updated_at).unwrap()
+            + chrono::Duration::seconds(6))
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let (tape_screen, flow_step) = agent_fixture_screens(
+            "agent_live_pi_cancelled",
+            state,
+            ProcessState::exited(true),
+            &now,
+        );
+        let tape_step = tape_screen
+            .selected
+            .clone()
+            .expect("the Tape selected top_agent");
+        assert_eq!(tape_step.status.kind, StatusKind::Cancelled);
+
+        let row_what = tape_screen
+            .items
+            .iter()
+            .find_map(|item| match item {
+                oscilloscope_core::screens::TapeItem::Row(row) if row.path == "prime.top_agent" => {
+                    Some(row.what.clone())
+                }
+                _ => None,
+            })
+            .expect("top_agent has its own row");
+        assert!(row_what.contains("stopped \u{b7} turn 1"), "{row_what}");
+
+        let view = agent_fixture_transcript_view("agent_live_pi_cancelled");
+        let tape_text = agent_block_lines_text(&agent_block_lines(
+            &tape_step,
+            Some(&view),
+            &ctx,
+            &now,
+            None,
+        ));
+        let flow_text = agent_block_lines_text(&agent_block_lines(
+            &flow_step,
+            Some(&view),
+            &ctx,
+            &now,
+            None,
+        ));
+        assert_eq!(
+            tape_text, flow_text,
+            "the same block from the Tape's own step and the Flow's own step"
+        );
+
+        assert!(tape_text.contains("Turn    1"), "{tape_text}");
+        assert!(tape_text.contains("Tool    bash"), "{tape_text}");
+        assert!(
+            !tape_text.contains("bash \u{b7} "),
+            "{tape_text}: stale, so no elapsed next to the tool"
+        );
+        assert!(tape_text.contains("Tests   running"), "{tape_text}");
+        assert!(
+            tape_text.contains("\u{203a} bash pytest -k MARKER_COMMAND stopped"),
+            "{tape_text}"
+        );
+    }
+    /// Issue #703's rule 3: a call superseded by a retried attempt's
+    /// own lower id (`transcript::ToolCall::stopped`) reads `stopped`
+    /// in the tail even while the session itself is still running --
+    /// never "running", which only the attempt that's actually still
+    /// in flight gets.
+    #[test]
+    fn agent_block_lines_shows_a_stopped_call_from_an_earlier_retried_attempt() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let view = oscilloscope_core::transcript::TranscriptView {
+            calls: vec![oscilloscope_core::transcript::ToolCall {
+                start_t: Some("2026-01-01T11:50:00Z".to_string()),
+                end_t: None,
+                tool: "bash".to_string(),
+                target: Some("pytest -k a".to_string()),
+                ok: None,
+                ms: None,
+                lines_added: None,
+                lines_removed: None,
+                stopped: true,
+            }],
+            ..Default::default()
+        };
+        let live =
+            oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
+        let step = agent_focused_step(Some(live), false, None, StatusKind::Running);
+        let lines = agent_block_lines(&step, Some(&view), &ctx, "2026-01-01T11:52:00Z", None);
+        let text = agent_block_lines_text(&lines);
+        assert!(text.contains("pytest -k a stopped"), "{text}");
+        assert!(!text.contains("running"), "{text}");
+    }
+
+    /// Issue #703's rule 3: a leading ellipsis marks the tail
+    /// whenever the read window didn't reach back to the session's
+    /// own start, whether or not the pane's own height also had to
+    /// cut it.
+    #[test]
+    fn agent_block_lines_shows_a_leading_ellipsis_when_the_read_window_was_cut() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let view = oscilloscope_core::transcript::TranscriptView {
+            calls: vec![oscilloscope_core::transcript::ToolCall {
+                start_t: Some("2026-01-01T11:50:00Z".to_string()),
+                end_t: Some("2026-01-01T11:50:02Z".to_string()),
+                tool: "bash".to_string(),
+                target: Some("pytest -k a".to_string()),
+                ok: Some(true),
+                ms: Some(2000),
+                lines_added: None,
+                lines_removed: None,
+                stopped: false,
+            }],
+            truncated: true,
+            ..Default::default()
+        };
+        let live =
+            oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
+        let step = agent_focused_step(Some(live), false, None, StatusKind::Running);
+        let lines = agent_block_lines(&step, Some(&view), &ctx, "2026-01-01T11:52:00Z", None);
+        let text = agent_block_lines_text(&lines);
+        let ellipsis_idx = text.find('…').expect("the ellipsis line");
+        let call_idx = text.find("pytest -k a").expect("the call line");
+        assert!(ellipsis_idx < call_idx, "{text}");
+    }
+
+    /// Issue #703's rule 3: once more calls have been made than the
+    /// caller's own row budget allows, the newest stay and the
+    /// oldest drop first, with the same leading ellipsis -- a pane
+    /// that never scrolls (the Tape's own detail pane, the full-
+    /// screen step) must still show the tail actually growing rather
+    /// than stall once it first fills the pane.
+    #[test]
+    fn agent_block_lines_keeps_the_newest_calls_once_the_row_budget_cuts_the_tail() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let call = |n: u32| oscilloscope_core::transcript::ToolCall {
+            start_t: Some(format!("2026-01-01T11:50:0{n}Z")),
+            end_t: Some(format!("2026-01-01T11:50:0{n}Z")),
+            tool: "bash".to_string(),
+            target: Some(format!("pytest -k {n}")),
+            ok: Some(true),
+            ms: Some(0),
+            lines_added: None,
+            lines_removed: None,
+            stopped: false,
+        };
+        let view = oscilloscope_core::transcript::TranscriptView {
+            calls: vec![call(1), call(2), call(3), call(4), call(5)],
+            ..Default::default()
+        };
+        let live =
+            oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
+        let step = agent_focused_step(Some(live), false, None, StatusKind::Running);
+        // Only the Asked field is absent here, so the block's own
+        // fields take 0 lines -- a budget of 3 leaves room for the
+        // blank separator, one ellipsis line and one call.
+        let lines = agent_block_lines(&step, Some(&view), &ctx, "2026-01-01T11:52:00Z", Some(3));
+        let text = agent_block_lines_text(&lines);
+        assert!(text.contains("pytest -k 5"), "{text}");
+        assert!(!text.contains("pytest -k 1"), "{text}");
+        assert!(!text.contains("pytest -k 4"), "{text}");
+        assert!(text.contains("…"), "{text}");
     }
 
     #[test]

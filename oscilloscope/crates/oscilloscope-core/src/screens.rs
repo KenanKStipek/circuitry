@@ -809,6 +809,13 @@ pub struct TapeRow {
     /// `3.0s · sleep 3`, `kind != ""`, `3 passes · 2 wide · 0 done`,
     /// `prompt · queued`, `skipped · not reached · prompt`.
     pub what: String,
+    /// Issue #703's rules 1/2: `true` only for a running or finished
+    /// agent's own `what`, a list of discrete figures (a turn, a
+    /// tool, a token count) each worth dropping whole from the
+    /// right rather than trimming into -- never a prompt row's own
+    /// reply preview, which a front end should still cut by
+    /// character instead.
+    pub what_is_agent_text: bool,
     /// The faint preview line under a prompt row, when previews are
     /// on -- the text actually sent once finished, the plan's own
     /// unrendered template while still ahead.
@@ -1036,14 +1043,20 @@ fn tape_running_agent_what(
     let mut what = duration_s
         .map(crate::format::format_duration)
         .unwrap_or_default();
-    if let Some(attempt) = live.attempt.filter(|&a| a > 1) {
-        what.push_str(&format!(" · attempt {attempt}"));
-    }
-    let turn_word = if live.phase.as_deref() == Some("repair") {
+    // `attempt N` follows the turn word, the same order the shared
+    // Agent block's own Turn field reads (`4 · attempt 2`), never
+    // ahead of it.
+    let mut turn_word = if live.phase.as_deref() == Some("repair") {
         Some("repair".to_string())
     } else {
         live.turns.map(|t| format!("turn {t}"))
     };
+    if let Some(attempt) = live.attempt.filter(|&a| a > 1) {
+        turn_word = Some(match turn_word {
+            Some(turn_word) => format!("{turn_word} · attempt {attempt}"),
+            None => format!("attempt {attempt}"),
+        });
+    }
     if !live.is_recent(now) {
         what.push_str(" · stopped");
         if let Some(turn_word) = turn_word {
@@ -1091,13 +1104,22 @@ fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> S
         .map(crate::format::format_duration)
         .unwrap_or_default();
     if let Some(turns) = raw.turns {
-        what.push_str(&format!(" · {turns} turns"));
+        what.push_str(&format!(
+            " · {turns} turn{}",
+            if turns == 1 { "" } else { "s" }
+        ));
     }
     if let Some(calls) = raw.tool_calls {
-        what.push_str(&format!(" · {calls} tools"));
+        what.push_str(&format!(
+            " · {calls} tool{}",
+            if calls == 1 { "" } else { "s" }
+        ));
     }
     if let Some(files) = raw.files_changed {
-        what.push_str(&format!(" · {files} files"));
+        what.push_str(&format!(
+            " · {files} file{}",
+            if files == 1 { "" } else { "s" }
+        ));
         if raw.lines_added.is_some() || raw.lines_removed.is_some() {
             what.push_str(&format!(
                 " +{} −{}",
@@ -1395,6 +1417,37 @@ fn tape_preview_line(text: &str) -> String {
     format!("› {body}")
 }
 
+/// Whether a row's own `what` ([`tape_row_content`]) is the running
+/// or finished agent shape (issue #703's rules 1/2) -- mirrors that
+/// function's own dispatch exactly (an ahead/skipped/failed/failed-
+/// handled row reads differently, even for an agent), so a front
+/// end knows to cut this row's own `what` by dropping whole `·`-
+/// separated pieces from the right, never by character the way a
+/// prompt row's own reply preview still is.
+fn tape_row_what_is_agent_text(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> bool {
+    let is_tool_kind = matches!(
+        row.kind,
+        RowKind::Tool | RowKind::Use | RowKind::Yield | RowKind::Dynamic | RowKind::TryFinally
+    );
+    if !is_tool_kind {
+        return false;
+    }
+    let pending = row.status.kind == StatusKind::Pending;
+    let skipped = matches!(row.status.kind, StatusKind::Skipped);
+    if pending
+        || skipped
+        || row.status.kind == StatusKind::Failed
+        || row.status.kind == StatusKind::FailedHandled
+    {
+        return false;
+    }
+    is_agent_row(row, flat, plan)
+}
+
 /// Builds one row's own `(what, preview, tokens)` (§3.4/§3.5).
 /// `queued` is §3.4's " · queued" suffix for a row ahead that is a
 /// loop pass waiting on a busy loop's own concurrency.
@@ -1596,7 +1649,17 @@ fn tape_row_content(
                     row.status.kind,
                     StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
                 );
-                if is_running {
+                // Issue #637's own stale leftover (`stopped · turn
+                // 4`) must also show for an interrupted run: once
+                // Ctrl-C/SIGTERM lands, the status moves straight to
+                // `Cancelled`/`Aborted` with no `completed_at` ever
+                // written, but `meta.live` is still the node's last
+                // word, so it reads the same as a stale leftover
+                // caught mid-run.
+                let has_leftover_live =
+                    matches!(row.status.kind, StatusKind::Cancelled | StatusKind::Aborted)
+                        && node.is_some_and(|n| n.live.is_some());
+                if is_running || has_leftover_live {
                     match node.and_then(|n| n.live.clone()) {
                         Some(live) => (
                             tape_running_agent_what(row.duration_s, &live, now),
@@ -2301,6 +2364,7 @@ pub fn build_tape(
                 .get(&row.path)
                 .and_then(|n| n.completed_at.clone().or_else(|| n.created_at.clone())),
             what,
+            what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
             preview,
             bold: false,
             tokens,
@@ -2328,6 +2392,7 @@ pub fn build_tape(
             status: row.status.clone(),
             ts: flat.get(&row.path).and_then(|n| n.created_at.clone()),
             what,
+            what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
             preview,
             bold: true,
             tokens,
@@ -2376,6 +2441,7 @@ pub fn build_tape(
             status: row.status.clone(),
             ts: None,
             what,
+            what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
             preview,
             bold: false,
             tokens,
@@ -4633,7 +4699,7 @@ mod tests {
             false,
             "2026-01-01T11:52:54Z",
         );
-        assert_eq!(what, "1m12s · attempt 2 · turn 1");
+        assert_eq!(what, "1m12s · turn 1 · attempt 2");
     }
 
     /// A stale leftover (`AgentLive::is_recent` false, issue #637: an
@@ -4668,10 +4734,48 @@ mod tests {
         assert_eq!(what, "1m12s · stopped · turn 4");
     }
 
-    /// Narrow widths cut the running agent row's own text from the
-    /// right, dropping context first, then the tool, then the turn
-    /// -- never reordering anything, since each piece is simply the
-    /// longest prefix of the one before it.
+    /// The same stale leftover also shows for an interrupted run: once
+    /// Ctrl-C/SIGTERM lands, the status moves straight to `Cancelled`
+    /// with no `completed_at` ever written, but the node keeps the
+    /// same `meta.live` a still-running session would have had.
+    #[test]
+    fn tape_row_content_shows_stopped_for_a_cancelled_agent_leftover() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "turns": 4, "updated_at": "2026-01-01T11:40:00Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:39:00Z"},
+                        "context_tokens": 41000
+                    }
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut row = running_agent_row();
+        row.status.kind = StatusKind::Cancelled;
+        let (what, _preview, _tokens) = tape_row_content(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:54Z",
+        );
+        assert_eq!(what, "1m12s · stopped · turn 4");
+    }
+
+    /// `tape_running_agent_what`'s own " · "-separated pieces are in
+    /// cut-from-the-right order -- context, then the tool, then the
+    /// turn, never reordered -- since each shorter string is simply
+    /// the longest prefix of the one before it. The actual width-cut
+    /// (`oscilloscope`'s own `tape_agent_what_text`, which drops
+    /// whole pieces rather than trimming into one) has its own test
+    /// against a real rendered row.
     #[test]
     fn tape_row_content_running_agent_cuts_from_the_right_at_narrow_widths() {
         let live = crate::model::AgentLive::from_value(&json!({

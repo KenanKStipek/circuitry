@@ -259,6 +259,28 @@ fn wait_for_screen_text(
     }
 }
 
+/// [`wait_for_screen_text`], but waiting for `needle` to disappear
+/// instead -- the Tape's own full-screen step view (`enter`) draws
+/// over the whole body with no list pane at all, so the list's own
+/// title ("Tape · ") vanishing is the proof that it actually opened,
+/// not just that the detail pane it already shared the screen with
+/// drew something.
+fn wait_for_screen_text_gone(
+    captured_buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    needle: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        if !screen.contains(needle) || std::time::Instant::now() >= deadline {
+            return screen;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn send_bytes(master: &mut File, bytes: &[u8]) {
     master.write_all(bytes).expect("write to pty master");
     master.flush().expect("flush pty master");
@@ -3572,14 +3594,22 @@ fn a_running_agent_shows_its_turn_and_tool_live_and_the_block_grows_on_enter() {
         "expected the running tool on the Tape row; screen:\n{screen}"
     );
 
-    let before_enter = captured_buf.lock().unwrap().len();
-    send_bytes(&mut master, b"\r");
-    std::thread::sleep(Duration::from_millis(400));
+    // At this width (120 columns) the Tape's own list and its
+    // detail pane already share the screen while following, so the
+    // list's own title ("Tape \u{b7} ") is the one thing `enter`'s own
+    // full-screen step view removes -- its own detail pane already
+    // drew Asked/Turn beside the list, so checking for those alone
+    // after `enter` would prove nothing `enter` itself did.
     assert!(
-        captured_buf.lock().unwrap().len() > before_enter,
-        "pressing \u{23ce} drew nothing at all"
+        screen.contains("Tape \u{b7} "),
+        "expected the Tape's own list before \u{23ce}; screen:\n{screen}"
     );
-    let screen = wait_for_screen_text(&captured_buf, "Asked", Duration::from_secs(10));
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Tape \u{b7} "),
+        "expected \u{23ce} to open the full-screen step, dropping the list's own title; screen:\n{screen}"
+    );
     assert!(
         screen.contains("Asked"),
         "expected the Agent block's own Asked field after \u{23ce}; screen:\n{screen}"
@@ -3589,16 +3619,18 @@ fn a_running_agent_shows_its_turn_and_tool_live_and_the_block_grows_on_enter() {
         "expected the Agent block's own Turn field after \u{23ce}; screen:\n{screen}"
     );
     assert!(
-        screen.contains("bash"),
+        screen.contains("\u{203a} bash"),
         "expected the first tool call in the transcript tail; screen:\n{screen}"
     );
 
     // The transcript tail grows: the second tool call (`edit`)
     // appears once its own turn starts, well after the first screen
-    // above was captured.
-    let screen = wait_for_screen_text(&captured_buf, "edit", Duration::from_secs(15));
+    // above was captured -- the tail's own `\u{203a}`-prefixed line,
+    // never the Tools field's own `edit \u{d7}1`, which would already
+    // match without the tail growing at all.
+    let screen = wait_for_screen_text(&captured_buf, "\u{203a} edit", Duration::from_secs(15));
     assert!(
-        screen.contains("edit"),
+        screen.contains("\u{203a} edit"),
         "expected the transcript tail to grow with the second tool call; screen:\n{screen}"
     );
 

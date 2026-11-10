@@ -366,6 +366,18 @@ fn prompt_headline_detail(row: &Row, ctx: &Ctx<'_>) -> (Headline, Detail) {
             // none of that to show.
             let node = ctx.flat.get(&row.path);
             match crate::model::prompt_live_figures(node, &row.path, ctx.model, ctx.now) {
+                Some(live) if !live.streaming => {
+                    // A state-backed, non-streaming adapter never
+                    // gets a first token at all (`waiting_for_first_
+                    // token` would read `true` forever): read like
+                    // the Tape's own row, elapsed and attempt only.
+                    let detail = if live.attempt.is_some_and(|a| a > 0) {
+                        Detail::Attempt(live.attempt.unwrap() + 1)
+                    } else {
+                        Detail::Blank
+                    };
+                    (Headline::Duration(row.duration_s.unwrap_or(0.0)), detail)
+                }
                 Some(live) => {
                     let headline = match live.tokens_received_or_estimate() {
                         Some((tokens, estimated)) => Headline::Received { tokens, estimated },
@@ -1941,6 +1953,40 @@ mod tests {
         let (headline, detail) = prompt_headline_detail(&running_row("prime.ask"), &ctx);
         assert!(matches!(headline, Headline::Duration(_)), "{headline:?}");
         assert!(matches!(detail, Detail::Waiting), "{detail:?}");
+    }
+
+    /// A state-backed, non-streaming adapter's own station reads
+    /// elapsed time only, never stuck on `waiting` for its whole
+    /// call -- it never gets a first token at all.
+    #[test]
+    fn prompt_headline_detail_non_streaming_reads_duration_not_waiting() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "adapter": "openai", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "openai", "model": "m",
+                        "started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:01Z",
+                        "streaming": false, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": 0,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (headline, detail) = prompt_headline_detail(&running_row("prime.ask"), &ctx);
+        assert!(matches!(headline, Headline::Duration(_)), "{headline:?}");
+        assert_eq!(detail, Detail::Blank);
     }
 
     /// A running, streaming prompt's own headline is its received
