@@ -1742,6 +1742,18 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// is actually looking at once they tab onto `Pane::Details` itself
 /// to scroll it -- including a named report's own row, which never
 /// has an orchestration-tree row of its own at all to select instead.
+/// Issue #704 rule 1: the Tape's own default selection the instant
+/// a run ends -- the handled failure's own row when the run has
+/// one (worth pointing at even though the run itself still
+/// succeeded), else the last row the plan runs, right next to the
+/// head rule's own place in the list.
+fn tape_run_end_default_target(rows: &[oscilloscope_core::render::Row]) -> Option<String> {
+    rows.iter()
+        .find(|r| r.status.kind == oscilloscope_core::model::StatusKind::FailedHandled)
+        .or_else(|| rows.last())
+        .map(|r| r.path.clone())
+}
+
 /// Screen 0's own model (issue #678), built only while it's actually
 /// on display -- the performance rule ("models for screens not on
 /// display aren't built"). `flatten_state` runs again here rather
@@ -2419,6 +2431,15 @@ fn run_tui(
             }
             app.reconcile_folding(&render_state.rows);
             app.flow_rows = render_state.unfolded_rows.clone();
+            // Issue #704 rule 1: moves the Tape's own selection to
+            // the Run End row the instant the run ends -- before the
+            // fallback below, which would otherwise land it on the
+            // first row instead on an attach to an already-ended run
+            // that never had a selection of its own yet.
+            app.tape_select_run_end_once(
+                render_state.header.status == RunStatus::Running,
+                tape_run_end_default_target(&render_state.rows),
+            );
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -3763,6 +3784,10 @@ fn run_tui_watch(
             }
             app.reconcile_folding(&render_state.rows);
             app.flow_rows = render_state.unfolded_rows.clone();
+            app.tape_select_run_end_once(
+                render_state.header.status == RunStatus::Running,
+                tape_run_end_default_target(&render_state.rows),
+            );
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);

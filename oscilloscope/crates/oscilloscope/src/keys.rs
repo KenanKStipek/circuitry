@@ -205,6 +205,21 @@ pub struct App {
     pub tape_tokens_view: bool,
     /// ⏎ on the Tape (§4): the selected row's own step, full-screen.
     pub tape_fullscreen_step: bool,
+    /// Issue #704 rule 1: set once, the instant the run ends --
+    /// guards [`Self::tape_select_run_end_once`] so the jump to the
+    /// run's own default row only ever happens that one time, never
+    /// again overriding wherever the user has since moved to.
+    pub tape_run_end_fired: bool,
+    /// Issue #704 rule 1: the detail pane shows the run summary
+    /// while this is set, whatever row is actually highlighted in
+    /// the list (the run's own most notable row -- a handled
+    /// failure's, say -- is still worth pointing the cursor at) --
+    /// set alongside `tape_run_end_fired` the instant the run ends,
+    /// cleared for good the first time the user actually moves the
+    /// Tape's own selection by hand (`move_tree_selection`/`jump`),
+    /// which then shows that selected row's own details instead, the
+    /// same as `TapeHead::Normal` always has.
+    pub tape_run_end_mode: bool,
 }
 
 impl App {
@@ -245,6 +260,27 @@ impl App {
             tape_previews_on: true,
             tape_tokens_view: false,
             tape_fullscreen_step: false,
+            tape_run_end_fired: false,
+            tape_run_end_mode: false,
+        }
+    }
+
+    /// Issue #704 rule 1: the instant a run ends, the Tape's own
+    /// selection moves to `default_target` (the run's own handled
+    /// failure, when it has one, else whatever row the caller
+    /// otherwise considers worth landing on) and the detail pane
+    /// starts showing the run summary rather than that row's own
+    /// detail -- exactly once, since a later manual move away from
+    /// summary mode must never be pulled back (`running` stays
+    /// `false` forever after, but `tape_run_end_fired` already stops
+    /// this from firing again).
+    pub fn tape_select_run_end_once(&mut self, running: bool, default_target: Option<String>) {
+        if !running && !self.tape_run_end_fired {
+            if let Some(target) = default_target {
+                self.select_tree_path_keeping_details(Some(target));
+            }
+            self.tape_run_end_fired = true;
+            self.tape_run_end_mode = true;
         }
     }
 
@@ -911,6 +947,9 @@ impl App {
                         rows[rows.len() - 1]
                     };
                     self.select_tree_path(Some(target.path.clone()));
+                    if self.screen == Screen::Tape {
+                        self.tape_run_end_mode = false;
+                    }
                 }
                 self.follow = false;
             }
@@ -955,6 +994,9 @@ impl App {
             None => rows.len() - 1,
         };
         self.select_tree_path(Some(rows[next].path.clone()));
+        if self.screen == Screen::Tape {
+            self.tape_run_end_mode = false;
+        }
     }
 
     /// The state pane's own, independent selection (issue #527):
