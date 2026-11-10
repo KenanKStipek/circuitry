@@ -22,15 +22,35 @@ pub enum Row {
     Run {
         run: Box<DiscoveredRun>,
         /// The document's own basename, except when disambiguated
-        /// per [`build_rows`]'s own tie-break rule.
+        /// per [`build_rows`]'s own tie-break rule -- `—` for a run
+        /// discovered with no document name known yet (the live-
+        /// state-in-cwd source, before its own events have named
+        /// one).
         document_label: String,
         /// The config's own basename, `None` with no config known at
-        /// all -- shown as `—` nowhere here (the running list has no
-        /// row for a run with no config *and* no document; a row
-        /// with no config still shows the document, just no config
-        /// text).
+        /// all -- the running list's own row shows `—` for it
+        /// (`tui.rs`'s own `select_row_spans`), never blank.
         config_label: Option<String>,
     },
+}
+
+/// Bare `osi`'s own choice of shape once discovery has run (issue
+/// #698, Settled point 3): exactly one running run attaches to it
+/// directly, with no Select screen drawn at all; any other count --
+/// none, or more than one -- shows Select, with the empty or running
+/// body respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    AttachSingle,
+    ShowSelect,
+}
+
+pub fn shape_for_run_count(run_count: usize) -> Shape {
+    if run_count == 1 {
+        Shape::AttachSingle
+    } else {
+        Shape::ShowSelect
+    }
 }
 
 fn basename(path: &str) -> String {
@@ -63,6 +83,7 @@ fn basename_with_parent(path: &str) -> String {
 /// (issue #698 rule 9: "add the parent directory only when two rows
 /// would read identically") -- `runs` is already in launch order
 /// ([`crate::discovery::discover_runs`]'s own), kept unchanged here.
+/// A run with no document name known yet reads `—`, never blank.
 pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
     let config_labels: Vec<Option<String>> = runs
         .iter()
@@ -70,7 +91,12 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
         .collect();
     let plain_doc_labels: Vec<String> = runs
         .iter()
-        .map(|r| r.orchestration.as_deref().map(basename).unwrap_or_default())
+        .map(|r| {
+            r.orchestration
+                .as_deref()
+                .map(basename)
+                .unwrap_or_else(|| "—".to_string())
+        })
         .collect();
 
     let mut counts: std::collections::HashMap<(&str, &Option<String>), usize> =
@@ -90,7 +116,7 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
             run.orchestration
                 .as_deref()
                 .map(basename_with_parent)
-                .unwrap_or_default()
+                .unwrap_or_else(|| "—".to_string())
         } else {
             plain_doc_labels[i].clone()
         };
@@ -152,11 +178,20 @@ pub struct RecentRow {
     pub ok: bool,
     /// The OUTCOME column's own text: [`outcome_label`]'s own
     /// result, or `"gone"` once [`build_recent_rows`] finds the
-    /// record's own `run_dir` no longer exists -- not opened either
-    /// way (issue #698 point 20).
+    /// record's own `run_dir` no longer exists on disk.
     pub outcome_label: String,
     pub run_dir: Option<String>,
+    /// The record's own `run_dir` existed once but no longer does --
+    /// distinct from [`Self::openable`] being false for a record with
+    /// no `run_dir` recorded at all (an older, pre-#700 record), which
+    /// still shows its real outcome, just with no way to open it.
     pub gone: bool,
+    /// Whether `enter` can open this row at all: a `run_dir` was
+    /// recorded, and it still exists on disk (issue #698's own data
+    /// note: an older record with no `run_dir` "cannot be opened"
+    /// either, but is not `gone` -- that word is reserved for a
+    /// directory that genuinely vanished).
+    pub openable: bool,
 }
 
 /// Every [`HistoryRecord`] turned into a [`RecentRow`], newest
@@ -172,8 +207,9 @@ pub fn build_recent_rows(
         .map(|record| {
             let gone = match &record.run_dir {
                 Some(dir) => !run_dir_exists(dir),
-                None => true,
+                None => false,
             };
+            let openable = record.run_dir.is_some() && !gone;
             RecentRow {
                 document_label: basename(&record.document),
                 config_label: record.config.as_deref().map(basename),
@@ -189,10 +225,25 @@ pub fn build_recent_rows(
                 },
                 run_dir: record.run_dir.clone(),
                 gone,
+                openable,
             }
         })
         .collect();
-    rows.sort_by(|a, b| b.ended_at.cmp(&a.ended_at));
+    // Parsed, not a bare string compare: two records' own `ended_at`
+    // can use different RFC3339 offset notations (`Z` against a
+    // numeric `+00:00`) for the same or a different instant, which a
+    // lexicographic compare can get backwards -- falls back to the
+    // raw string only for a record whose own timestamp doesn't even
+    // parse, rather than ever panicking on one.
+    rows.sort_by(|a, b| {
+        match (
+            crate::diff::parse_instant(&a.ended_at),
+            crate::diff::parse_instant(&b.ended_at),
+        ) {
+            (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
+            _ => b.ended_at.cmp(&a.ended_at),
+        }
+    });
     rows
 }
 
@@ -211,6 +262,14 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn shape_for_run_count_attaches_only_at_exactly_one() {
+        assert_eq!(shape_for_run_count(0), Shape::ShowSelect);
+        assert_eq!(shape_for_run_count(1), Shape::AttachSingle);
+        assert_eq!(shape_for_run_count(2), Shape::ShowSelect);
+        assert_eq!(shape_for_run_count(6), Shape::ShowSelect);
     }
 
     #[test]
@@ -432,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn build_recent_rows_reads_gone_with_no_run_dir_at_all() {
+    fn build_recent_rows_cannot_open_a_record_with_no_run_dir_but_still_shows_its_outcome() {
         let records = vec![sample_record(
             "r1",
             "d.yml",
@@ -444,7 +503,80 @@ mod tests {
             BTreeMap::new(),
         )];
         let rows = build_recent_rows(&records, &|_| true);
-        assert!(rows[0].gone);
+        assert!(
+            !rows[0].gone,
+            "a record with no run_dir at all is not 'gone'"
+        );
+        assert!(!rows[0].openable);
+        assert_eq!(rows[0].outcome_label, "ok");
+    }
+
+    #[test]
+    fn build_recent_rows_is_openable_only_with_a_run_dir_that_still_exists() {
+        let records = vec![
+            sample_record(
+                "r1",
+                "d.yml",
+                None,
+                Some("/work/run-dir"),
+                "t0",
+                "t1",
+                Outcome::Ok,
+                BTreeMap::new(),
+            ),
+            sample_record(
+                "r2",
+                "d.yml",
+                None,
+                Some("/work/gone-dir"),
+                "t0",
+                "t2",
+                Outcome::Ok,
+                BTreeMap::new(),
+            ),
+        ];
+        let rows = build_recent_rows(&records, &|dir| dir == "/work/run-dir");
+        let by_dir = |dir: &str| {
+            rows.iter()
+                .find(|r| r.run_dir.as_deref() == Some(dir))
+                .unwrap()
+        };
+        assert!(by_dir("/work/run-dir").openable);
+        assert!(!by_dir("/work/run-dir").gone);
+        assert!(!by_dir("/work/gone-dir").openable);
+        assert!(by_dir("/work/gone-dir").gone);
+    }
+
+    #[test]
+    fn build_recent_rows_orders_by_parsed_time_not_the_raw_string() {
+        // A later instant written with a numeric offset sorts after
+        // an earlier one written as `Z` -- a bare string compare
+        // would get this backwards (`'+'` sorts before `'Z'`).
+        let records = vec![
+            sample_record(
+                "r1",
+                "d.yml",
+                None,
+                None,
+                "t0",
+                "2026-01-01T00:00:00Z",
+                Outcome::Ok,
+                BTreeMap::new(),
+            ),
+            sample_record(
+                "r2",
+                "d.yml",
+                None,
+                None,
+                "t0",
+                "2026-01-01T01:00:00+00:00",
+                Outcome::Ok,
+                BTreeMap::new(),
+            ),
+        ];
+        let rows = build_recent_rows(&records, &|_| true);
+        assert_eq!(rows[0].ended_at, "2026-01-01T01:00:00+00:00");
+        assert_eq!(rows[1].ended_at, "2026-01-01T00:00:00Z");
     }
 
     #[test]

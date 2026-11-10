@@ -833,6 +833,35 @@ pub fn read_all_records(history_dir: &Path) -> Vec<HistoryRecord> {
     out
 }
 
+/// Whether [`read_all_records`]'s own result for `history_dir` might
+/// have changed since a caller's last read (issue #698's own empty
+/// Select, refreshed every two seconds): the latest modification time
+/// across the directory's own `.jsonl` files, listed and `stat`ed but
+/// never read or parsed -- far cheaper than re-reading and re-parsing
+/// every record on every refresh tick just to find out most of them
+/// (every one, usually) didn't change. `None` with no directory, or
+/// none of its own `.jsonl` files -- a caller that already has a
+/// `None` from last time and still gets one now has nothing new
+/// either way.
+pub fn history_dir_signature(history_dir: &Path) -> Option<std::time::SystemTime> {
+    let entries = std::fs::read_dir(history_dir).ok()?;
+    let mut latest: Option<std::time::SystemTime> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        latest = Some(match latest {
+            Some(prev) if prev >= modified => prev,
+            _ => modified,
+        });
+    }
+    latest
+}
+
 /// Issue #649's total-size eviction: "at most 500 documents and 64
 /// MiB in total. Beyond that, the files written least recently are
 /// removed first." Meant to run occasionally (once per `osi`
@@ -2726,5 +2755,41 @@ mod tests {
             Some(155)
         );
         assert_eq!(stats.whole_run.and_then(|r| r.tokens_p50), Some(1324));
+    }
+
+    #[test]
+    fn history_dir_signature_is_none_with_no_directory_or_no_jsonl_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            history_dir_signature(dir.path().join("missing").as_path()),
+            None
+        );
+        std::fs::write(dir.path().join("notes.txt"), b"hi").unwrap();
+        assert_eq!(history_dir_signature(dir.path()), None);
+    }
+
+    #[test]
+    fn history_dir_signature_changes_once_a_jsonl_file_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.jsonl");
+        std::fs::write(&file, b"{}\n").unwrap();
+        let first = history_dir_signature(dir.path());
+        assert!(first.is_some());
+        // A later mtime than the first write, not merely a different
+        // one: some filesystems only keep whole-second resolution, so
+        // a write right after the first could otherwise read back the
+        // same timestamp and look like no change at all.
+        let later = first.unwrap() + std::time::Duration::from_secs(5);
+        let file2 = dir.path().join("b.jsonl");
+        std::fs::write(&file2, b"{}\n").unwrap();
+        std::fs::File::open(&file2)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let second = history_dir_signature(dir.path());
+        assert!(
+            second > first,
+            "a newer .jsonl file must move the signature forward"
+        );
     }
 }
