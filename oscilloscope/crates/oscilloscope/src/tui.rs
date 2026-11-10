@@ -495,7 +495,15 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, items: &[(&str, &str)], ctx: &Dra
 /// screen -- the only keys that actually work while it is open (the
 /// key handler checked first intercepts everything else).
 fn fullscreen_step_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
-    let mut items = vec![("[ ]", "Step"), ("↑↓", "Scroll"), ("m", "Meta")];
+    let mut items = vec![
+        ("[ ]", "Step"),
+        ("↑↓", "Scroll"),
+        // Issue #704 rule 4: `enter` on a pass opens it, in a loop's
+        // own Loop section -- a no-op, falling through to `esc`'s
+        // own close, everywhere else.
+        ("enter", "Open pass"),
+        ("m", "Meta"),
+    ];
     if wide {
         items.push(("0-3", "Screens"));
     }
@@ -503,6 +511,43 @@ fn fullscreen_step_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)
     items.push(("esc", "Close"));
     items.push(("q", "Quit"));
     items
+}
+
+/// Issue #704 rule 5: the full-screen step's own Help, the same
+/// fixed overlay every screen's own uses, listing exactly its own
+/// keys (never whichever screen opened it, whose own keys don't
+/// work while it's open).
+fn fullscreen_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        ("[ ]", "previous / next effect", "↑ ↓", "scroll"),
+        (
+            "PgUp PgDn",
+            "scroll a page",
+            "Home End",
+            "scroll to the ends",
+        ),
+        ("enter", "open a pass (Loop section)", "m", "unfold Meta"),
+        ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
+        ("esc", "close · back", "q", "quit · confirms if running"),
+    ];
+    let mut lines: Vec<Line<'static>> = ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    for _ in 0..7 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
 }
 
 fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
@@ -5375,7 +5420,7 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
 /// §4 already says are gone from the Flow.
 fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
-        ("← →", "scroll the rail", "+ -", "open / fold loop lanes"),
+        ("← →", "select a station", "+ -", "open / fold loop lanes"),
         (
             "↑ ↓",
             "select a pass",
@@ -6538,6 +6583,42 @@ fn draw_dialog_overlay(
     tape_history_runs: Option<usize>,
 ) {
     match &app.dialog {
+        // Issue #704 rule 5: while the full-screen step is open,
+        // `?` lists its own keys (`[ ]`/`↑↓`/`enter`/`m`/`esc`), the
+        // same ones every screen's own fullscreen key bar already
+        // does -- never whichever screen happened to open it, whose
+        // own keys don't work right now at all.
+        Dialog::Help if app.tape_fullscreen_step => {
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
+            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Step", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(fullscreen_help_lines(ctx))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
+        }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
             // §4/§5's own fixed `2,5,72,18` (`design/frames/tape--
             // help`), not centred like every other dialog's own, and
@@ -8421,8 +8502,14 @@ fn flow_paint_fork(
     )
 }
 
-fn flow_key_bar_items(area_width: u16) -> Vec<(&'static str, &'static str)> {
-    let mut items = vec![("←→", "Scroll")];
+fn flow_key_bar_items(
+    area_width: u16,
+    selecting_stations: bool,
+) -> Vec<(&'static str, &'static str)> {
+    // Issue #704 rule 3: with follow off or the run ended, ←→ moves
+    // the selected lane's own station cursor instead of scrolling --
+    // the bar's own label follows whichever one actually happens.
+    let mut items = vec![("←→", if selecting_stations { "Select" } else { "Scroll" })];
     // Below the three-pane threshold (DESIGN.md's own §5, 100×30,
     // the same one the Story pane itself drops below), `↑↓ Lane` goes
     // too -- there's no Story pane left for it to change the
@@ -9476,7 +9563,12 @@ fn draw_flow(
     let key_bar_items = if app.tape_fullscreen_step {
         fullscreen_step_key_bar_items(full_area.width >= 80)
     } else {
-        flow_key_bar_items(full_area.width)
+        let run_ended = matches!(
+            screen.head,
+            oscilloscope_core::screens::TapeHead::Ended { .. }
+                | oscilloscope_core::screens::TapeHead::Failed { .. }
+        );
+        flow_key_bar_items(full_area.width, !app.follow || run_ended)
     };
     draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
@@ -14815,7 +14907,7 @@ mod tape_frame_goldens {
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(text.contains("Help") && text.contains("Flow"), "{text}");
-        assert!(text.contains("scroll the rail"), "{text}");
+        assert!(text.contains("select a station"), "{text}");
         assert!(text.contains("select a pass"), "{text}");
         assert!(text.contains("open / fold loop lanes"), "{text}");
         assert!(
@@ -14967,9 +15059,76 @@ mod tape_frame_goldens {
         assert!(text.contains("Scroll"), "{text}");
         assert!(text.contains("Meta"), "{text}");
         assert!(text.contains("Close"), "{text}");
+        // Issue #704 rule 4: `enter` opens a pass here, never the
+        // Store's own ↑↓ "Select" wording.
+        assert!(text.contains("Open pass"), "{text}");
         assert!(
-            !text.contains("Open"),
+            !text.contains("↑↓ Select"),
             "not the Store's own ordinary key bar:\n{text}"
+        );
+    }
+
+    /// Issue #704 rule 5: `?` while the full-screen step is open
+    /// lists its own keys (`[ ]`/`enter`/`m`), never the Store's own
+    /// -- whichever screen opened it, its own keys don't work right
+    /// now at all.
+    #[test]
+    fn the_help_overlay_lists_the_fullscreen_steps_own_keys_while_its_open() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.tape_fullscreen_step = true;
+        app.dialog = Dialog::Help;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Help") && text.contains("Step"), "{text}");
+        assert!(text.contains("previous / next effect"), "{text}");
+        assert!(text.contains("unfold Meta"), "{text}");
+        assert!(text.contains("open a pass"), "{text}");
+        assert!(
+            !text.contains("open the selected store"),
+            "not the Store's own ordinary Help:\n{text}"
         );
     }
 

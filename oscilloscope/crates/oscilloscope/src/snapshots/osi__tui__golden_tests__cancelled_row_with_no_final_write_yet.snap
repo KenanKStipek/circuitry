@@ -25,4 +25,4 @@ expression: text
 "│ tool · shell                                                                                     │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
 " ✗ run aborted · 0 t · 5.0s                                                                         "
-" ←→ Scroll  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "
+" ←→ Select  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "
