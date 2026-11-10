@@ -3003,16 +3003,37 @@ running list -- `All` first (`N runs · tiled`, inert for now: `All`
 itself is part of a later pull request), then one row per run with
 the document and config basenames, the engine, and a `●` (every row
 here is live by definition); the cursor starts on the first run, not
-`All`. `↑↓`/`j k`/`Home End`/`g G` move the cursor, `enter` attaches
-to a run row (inert on `All`), `q` quits at once (no confirm: leaving
-Select only ever stops watching, never cancels anything), `?` shows
-Select's own Help, `0`-`3` and `c` do nothing (no run is attached from
-here). `esc` on a run attached from Select returns to Select (§2.5's
-own text: "`esc` from the run comes back here") -- a new
-`App::opened_from_select` flag and `keys::Action::BackToSelect`, set
-only for an attach reached this way; `esc` on bare `osi`'s own direct
-single-run attach, or on a plain `osi watch`, still does nothing, as
-before.
+`All`. `↑↓`/`j k`/`Home End`/`g G` move the cursor, kept across every
+leg of a Select<->attach round trip rather than reset to the first
+run each time Select is redrawn; `enter` attaches to a run row (inert
+on `All`), `q` quits at once (no confirm: leaving Select only ever
+stops watching, never cancels anything), `?` shows Select's own Help
+(which lists `c` as inert here, same as the key bar), `0`-`3` and a
+plain `c` do nothing (no run is attached from here). A raw Ctrl-C
+(`Char('c')` with the `CONTROL` modifier, checked before `?`'s own
+Help dialog gets a look at it, same as every other screen) quits with
+exit 130; a forwarded SIGTERM/SIGHUP quits with 143/129, the same
+128+signal convention `osi watch`'s own local-signal case uses
+(`forward_signal_exit_code`, shared by both). `esc` on a run attached
+from Select returns to Select (§2.5's own text: "`esc` from the run
+comes back here") -- a new `App::opened_from_select` flag and
+`keys::Action::BackToSelect`, set only for an attach reached this
+way; `esc` on bare `osi`'s own direct single-run attach, or on a
+plain `osi watch`, still does nothing, as before. The key handling
+itself lives in a pure `keys::SelectState::handle_key`, unit-tested
+with no real terminal; `main.rs`'s own loop only translates its
+`SelectKeyOutcome` into whichever list it indexes.
+
+An attached run's own Help, on every screen, now reads correctly for
+a watch (`App::is_watch`, true for every attach reached through
+Select, same as a plain `osi watch`): `q` "quit at once", not
+"confirms if running" (a watch owns no process of its own to ever
+confirm quitting against), and `c` "inert · launched only", not
+"cancel · confirms" (only a run `osi` launched itself can ever be
+cancelled). `signal_help_lines`/`flow_help_lines`/`store_help_lines`
+each take an `is_watch` flag for exactly this; the Tape's own Help
+never showed `c` at all (§4's own frame-locked blank rows), so it
+needs no change.
 
 With no running orchestrations, the empty Select shows where
 discovery looked, and a Recent Runs table built from
@@ -3024,10 +3045,21 @@ STARTED, TOOK, TOKENS and OUTCOME -- `ok` alone with no step recorded
 `failed · <step>` naming whichever recorded step actually has `ok:
 false` for a failed run (never the raw error text, which this module
 never reads at all -- the same privacy rule history's own module
-doc already states), and `gone` -- not opened -- once the record's own
-`run_dir` no longer exists on disk, or was never recorded at all.
-`enter` on a row that isn't `gone` opens `osi watch <run_dir>`
-read-only, same as a running row's own attach.
+doc already states), and `gone` once the record's own `run_dir`
+existed but no longer does on disk. A record with no `run_dir`
+recorded at all (an older, pre-#700 record) is distinct from that:
+its own OUTCOME still reads its real outcome, since history already
+knows it, just with `RecentRow::openable` false (`enter` is inert)
+rather than the misleading `gone`, which this data note reserves for
+a directory that genuinely vanished. `enter` on an `openable` row
+opens `osi watch <run_dir>` read-only, same as a running row's own
+attach. Both lists' own windows scroll to keep the cursor in view
+once there are more rows than the terminal has room for (the same
+rule the Store table's own cursor already follows), and the empty
+Select's own history read only re-parses when the directory's latest
+`.jsonl` mtime has actually moved since last read
+(`history::history_dir_signature`), not on every two-second refresh
+regardless.
 
 From the frames, not from the design text: the running list's own
 two rows for the same document (`triage.yml` twice in the fixture)
@@ -3038,13 +3070,44 @@ document column only (`select::build_rows`'s own tie-break, issue
 #698's rule 9 -- not shown in either frame, since the fixture's own
 rows never actually collide, but implemented and unit-tested
 against a synthetic case). The running list's own box is 56 cells
-wide at 80 columns and 60 at 120 and up (narrower widths are a
-reasonable interpolation, not frame-verified); the empty Select's own
+wide at 80 columns and 60 at 120 and up; the empty Select's own
 panel is always the full body width and height, with no centring.
 The Select header's own `osi` word never animates (there is no
 single run's own process to trace) -- a deviation from every other
 screen's header, which this screen's own frames don't contradict
-(neither was captured with animation off or on specifically).
+(neither was captured with animation off or on specifically). Select
+draws the shared too-small notice below 80 columns, not the other
+screens' shared 60 (§5: 80x24 is already its own narrowest frame, so
+nothing narrower is ever shown); the notice itself still names
+whichever floor actually applies (`draw_too_small_with_min_width`).
+
+An attached run's own config, shown in the chrome, comes from
+`registry::resolve_attached_config` at attach time (the registry
+entry's own `config`, else `run_start.config`, else the process's
+own arguments, else nothing) -- but a run `discover_runs` first found
+with none of those known yet (the live-state-in-cwd source, before
+its own `run_start` event has arrived) still gets its own `run_start.
+config` recorded in history once it finishes: `HistoryHandle::write`
+falls back to `model.run_start_config()` when its own `config` is
+`None`, read by then even though attach time couldn't have known it.
+
+Select and an attach share one real terminal (the `manage_terminal`
+paragraph below): each fresh `Terminal` either side builds
+(`run_select_screen`'s own, and `run_tui_watch`'s own whenever
+`manage_terminal` is false) is cleared once, right away, since its
+own diffing buffers start blank but the real screen underneath can
+still carry whatever was drawn there last -- without this, switching
+between Select and an attach left the previous screen's own stale
+text behind under the new one. The same split also means `run_tui_
+watch`'s own tail can't write `finish_watch`'s summary and `exit
+{code}` line straight to stdout when `manage_terminal` is false --
+that terminal is still in the alternate screen Select's own
+`TerminalGuard` owns -- so it buffers that text into a plain `Vec<u8>`
+and hands it back through `WatchOutcome::Exited`'s own second field
+instead; `run_select` prints it, once its own `TerminalGuard` has
+actually dropped, only when that `Exited` is the one that ends the
+whole loop (a `BackToSelect` leg just discards it, since Select
+redraws the whole screen again anyway).
 
 Goldens: `select--normal--120x30`/`select--normal--80x24`
 (`tui::tape_frame_goldens::select_normal_120x30_matches_the_frame`/
@@ -3054,11 +3117,14 @@ and `select--empty--80x24` (`select_empty_80x24_matches_the_frame`),
 from `run`, `run2` and `hist/run-h1..3` replayed into
 `HistoryRecord`s the same way `demo_history` already does for the
 Tape's own "usual" goldens. One cell is allow-listed there:
-`hist/run-h1`'s own precise timestamps (`totals.wall_time_s`
-5.060017s) round to `5.1s`, one tenth past the frame's own `5.0s` --
-the fixture's own timestamps disagree with the frame, as parts 1-3
-already did for `gate › reply`, reported rather than bent into the
-rounding rule.
+`build_record`'s own `wall_s` (the state's `started_at`→
+`completed_at` span) for `hist/run-h1` is 5.0565s, rounding to
+`5.1s`, one tenth past the frame's own `5.0s`; the frame's TOOK
+column instead matches the fixture's own events (`run_start`→
+`run_end`) for every row, 5.049s for this one. The fixture's state
+and events disagree by a few milliseconds, as parts 1-3 already saw
+for `gate › reply`, reported rather than bent into the rounding
+rule.
 
 A real pty: toggling raw mode and the alternate screen off and then
 back on, within one process, left the terminal's own write side
@@ -3076,17 +3142,20 @@ second time. The one shared event-reader thread (`spawn_event_reader`,
 the groundwork's own `EventReader`) is handed back and forth the same
 way, never a second one spawned.
 
-One PTY end-to-end test (`e2e_tui_pty.rs`): two live runs show
-Select listing both, and `enter` attaches. Exactly one live run
-attaching directly, and no live runs showing the empty Select, are
-not PTY-tested: both turn on `discover_runs`'s own machine-wide `ps`
-scan finding *exactly* what one test itself started, which doesn't
-hold under `cargo test --workspace`'s own default parallelism (this
-file runs alongside `e2e_cof.rs`/`e2e_electricity.rs`, whose own
-`cof`/`electricity` processes the same scan also sees); both are
-unit-testable only down at `discover_runs`'s own level (already
-covered there) and were checked by hand against a release build
-instead.
+Three PTY end-to-end tests, in their own file (`e2e_tui_pty_select.rs`,
+not `e2e_tui_pty.rs`): two live runs show Select listing both, `enter`
+attaches to the cursor's own run (never either one), `esc` returns to
+a freshly drawn Select with no stray Tape text left over, and `q`
+quits at once; exactly one live run attaches directly, Select never
+drawn at all; no live runs shows the empty Select's own Recent Runs
+table, built from a run recorded in this test's own history. Every
+one of these turns on `discover_runs`'s own machine-wide `ps` scan
+finding *exactly* what the test itself started -- `cargo test` runs
+each test binary in turn, but a single binary's own `#[test]`
+functions run concurrently across threads by default, so these three
+live in a file with nothing else in it, serialised among themselves
+with a shared lock, rather than alongside every other PTY test in
+`e2e_tui_pty.rs`.
 
 **Browsing every effect after a run, with one selection across
 screens** (issue #704, beyond anything `design/tui-design.md` itself
@@ -3171,7 +3240,7 @@ its own ordinary one for as long as it stays open.
 - **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
 - **The Store (`oscilloscope-core/src/store.rs`, issue #695).** Unit tests pin the layout's own rectangles to both frames' geometry (`layout_matches_the_120x30_frame_geometry`/`_80x24`), the largest-remainder apportionment itself (`apportion_uses_largest_remainder_with_earliest_index_tie_break`, including the zero-weight/zero-cells cases), a container too small for its own children collapsing to its own title and `<n>/<m> with tokens`, too-small top-level stores folding into one `… N more` tile, the store tree's own container/fold rules (a loop pass with exactly one token-bearing step folding into a leaf, more than one staying a container, zero-token stores and containers excluded, a running prompt's own live estimate getting a faint tile, a running step with nothing yet getting none, a running container's own marker leaving the moment the run ends even with no `completed_at`), the table's own order/ties/share rounding/breadcrumb, Readings with and without a loop, and `build_store`'s own performance over 2,000 flat leaves (the same bound `render::build`'s own test polices). `oscilloscope-core/tests/store_fixtures.rs` (renamed from `cost_fixtures.rs`) keeps the acceptance item that the store tree's own token sum matches the run's totals on every recorded fixture with a `prompt` effect, on both engines, including a retried prompt. `oscilloscope/src/keys.rs` covers the Store's own keys: `↑↓` and its aliases moving the table's own cursor and clamping at either end, `enter` opening the selected store's own step full-screen only with a row selected, `esc` closing it, switching screens resetting the shared toggle, and `i`/`o`/`$`/`Tab`/`z`/`v`/`e`/`/`/`←→` all doing nothing on the Store. `tui.rs`'s own golden tests cover the Store screen at 120×30 and 80×24 against the design's own frames (`tui::tape_frame_goldens::store_normal_120x30_matches_the_frame`/`_80x24`); further unit-level `tui.rs` tests cover the Help overlay listing exactly the Store's own keys, the full title dropping `Tokens by Store` below 120 columns, Readings dropping below 30 rows or 80 columns, and a leaf's own name and tokens wrapping onto two lines once they don't fit one.
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
-- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSI_E2E_COF=1` (`cof` on `PATH` required once set):
+- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency; `tests/e2e_tui_pty_select.rs`, the Select screen's own PTY tests, kept in their own file and serialised among themselves since they read a machine-wide process scan), gated on `OSI_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;
   - a temporary `HOME`;
   - credential variables removed (the four named in this repository's CLAUDE.md);

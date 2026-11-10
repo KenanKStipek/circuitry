@@ -178,15 +178,25 @@ does, and shows one of three screens:
   from run history across every document -- DOC, CONFIG (`—` for an
   older record with none), STARTED, TOOK, TOKENS and OUTCOME (`ok`, `ok ·
   N handled failure(s)`, `failed · <step>`, or `gone` once the record's
-  own run directory no longer exists -- not opened). `enter` on any other
-  row opens `osi watch <run_dir>` read-only.
+  own run directory existed but no longer does). An older record with no
+  run directory recorded at all still shows its real outcome, just with
+  nothing to open (`enter` is inert there, not `gone` -- that word is
+  reserved for a directory that genuinely vanished); `enter` on any other
+  row opens `osi watch <run_dir>` read-only. Either list's own window
+  scrolls to keep the cursor in view once there are more rows than fit.
 
-Keys: `↑↓`/`j k`/`Home End`/`g G` move the cursor, `enter` attaches (or
-opens, on the empty screen), `?` shows Select's own Help, `q` quits at
-once -- leaving Select, or an attached run, only ever stops watching,
-never cancels anything, so there is nothing to confirm. `0`-`3` and `c`
-do nothing on Select itself (no run is attached from here to switch a
-screen on or cancel).
+Keys: `↑↓`/`j k`/`Home End`/`g G` move the cursor (kept across every
+attach and `esc` back, not reset to the first run each time), `enter`
+attaches (or opens, on the empty screen), `?` shows Select's own Help
+(which lists `c` as inert here), `q` quits at once -- leaving Select, or
+an attached run, only ever stops watching, never cancels anything, so
+there is nothing to confirm. `0`-`3` and a plain `c` do nothing on Select
+itself (no run is attached from here to switch a screen on or cancel); a
+raw Ctrl-C quits with exit 130, same as a forwarded SIGINT would, and a
+forwarded SIGTERM/SIGHUP quits with 143/129. Select needs at least 80
+columns (every screen's own shared 60-column floor is higher here, since
+80×24 is already its own narrowest frame); below that it shows the usual
+too-small notice.
 
 ## The terminal UI
 
