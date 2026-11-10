@@ -4799,6 +4799,97 @@ fn path_basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// A run's own identity across a refresh (issue #698's own slot
+/// reconciliation): its own `--live-state` path, the same key
+/// `discover_runs` itself already dedups two sightings of the same
+/// run by -- falling back to the run directory only for the rare
+/// discovered run with no live-state path of its own at all.
+fn slot_key(run: &oscilloscope_core::discovery::DiscoveredRun) -> Option<&Path> {
+    run.live_state.as_deref().or(run.run_dir.as_deref())
+}
+
+/// The pure core of the All screen's own per-redraw reconciliation:
+/// for each of `runs` (in order), the index into `existing` it
+/// matches by [`slot_key`], or `None` for a run with no existing
+/// slot to carry over -- a run with no key of its own (`slot_key`
+/// returning `None`) never matches anything, including another
+/// keyless run, so it always starts a fresh slot rather than
+/// silently sharing one with an unrelated run. Each existing slot
+/// matches at most once: a repeat of the same key among `runs`
+/// (never real, since `discover_runs` already dedups to one entry
+/// per key) still only consumes its own match the first time.
+fn match_existing_slots<'a>(
+    existing: &[Option<&'a Path>],
+    runs: &[Option<&'a Path>],
+) -> Vec<Option<usize>> {
+    let mut taken = vec![false; existing.len()];
+    runs.iter()
+        .map(|run_key| {
+            let run_key = (*run_key)?;
+            existing
+                .iter()
+                .enumerate()
+                .find(|(i, key)| !taken[*i] && **key == Some(run_key))
+                .map(|(i, _)| {
+                    taken[i] = true;
+                    i
+                })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod all_run_slot_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn match_existing_slots_carries_over_a_run_found_at_the_same_key() {
+        let a = Path::new("/run/a/state.live.json");
+        let b = Path::new("/run/b/state.live.json");
+        let existing = [Some(a), Some(b)];
+        let runs = [Some(b), Some(a)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn match_existing_slots_starts_fresh_for_a_run_with_no_existing_match() {
+        let a = Path::new("/run/a/state.live.json");
+        let c = Path::new("/run/c/state.live.json");
+        let existing = [Some(a)];
+        let runs = [Some(a), Some(c)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(0), None]);
+    }
+
+    #[test]
+    fn match_existing_slots_drops_a_run_that_ended() {
+        let a = Path::new("/run/a/state.live.json");
+        let b = Path::new("/run/b/state.live.json");
+        let existing = [Some(a), Some(b)];
+        // `b` has ended; only `a` is still running.
+        let runs = [Some(a)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(0)]);
+    }
+
+    #[test]
+    fn match_existing_slots_never_matches_two_keyless_runs_to_each_other() {
+        let existing: [Option<&Path>; 1] = [None];
+        let runs: [Option<&Path>; 1] = [None];
+        assert_eq!(match_existing_slots(&existing, &runs), [None]);
+    }
+
+    #[test]
+    fn match_existing_slots_matches_each_existing_slot_at_most_once() {
+        let a = Path::new("/run/a/state.live.json");
+        let existing = [Some(a)];
+        // Never real (`discover_runs` already dedups to one entry
+        // per key), but the matcher still only lets the first of
+        // two runs sharing a key claim the existing slot.
+        let runs = [Some(a), Some(a)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(0), None]);
+    }
+}
+
 impl AllRunSlot {
     fn new(run: oscilloscope_core::discovery::DiscoveredRun) -> Self {
         let run_dir = run.run_dir.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -5012,14 +5103,19 @@ fn run_all_grid_screen(
         }
         if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
             runs = discover_running();
+            let existing_keys: Vec<Option<&Path>> =
+                slots.iter().map(|s| slot_key(&s.run)).collect();
+            let run_keys: Vec<Option<&Path>> = runs.iter().map(slot_key).collect();
+            let matches = match_existing_slots(&existing_keys, &run_keys);
+            let mut existing: Vec<Option<AllRunSlot>> = slots.into_iter().map(Some).collect();
             let mut new_slots = Vec::with_capacity(runs.len());
-            for run in &runs {
-                if let Some(pos) = slots.iter().position(|s| s.run.run_dir == run.run_dir) {
-                    let mut slot = slots.remove(pos);
-                    slot.run = run.clone();
-                    new_slots.push(slot);
-                } else {
-                    new_slots.push(AllRunSlot::new(run.clone()));
+            for (run, matched) in runs.iter().zip(matches) {
+                match matched.and_then(|i| existing[i].take()) {
+                    Some(mut slot) => {
+                        slot.run = run.clone();
+                        new_slots.push(slot);
+                    }
+                    None => new_slots.push(AllRunSlot::new(run.clone())),
                 }
             }
             slots = new_slots;
