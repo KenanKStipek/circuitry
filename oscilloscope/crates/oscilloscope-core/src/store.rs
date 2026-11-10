@@ -2047,7 +2047,23 @@ mod tests {
         let state = serde_json::json!({"prime": serde_json::Value::Object(prime)});
         let flat = crate::model::flatten_state(&state);
         let kinds: BTreeMap<String, RowKind> = BTreeMap::new();
-        let plan = crate::plan::PlanTree::empty();
+        // A real, compiled plan with all 2,000 top-level effects named
+        // -- `PlanTree::empty()` would never exercise `sort_in_plan_
+        // order`'s own `all_paths().iter().position` scan per child at
+        // all, since every lookup against an empty plan short-circuits
+        // to `None` immediately.
+        let dir = tempfile::tempdir().unwrap();
+        let doc_path = dir.path().join("do.yml");
+        let mut doc = String::from("adapter: scripted\nmodel: scripted-model\neffects:\n");
+        for i in 0..2000 {
+            doc.push_str(&format!(
+                "  - name: n{i}\n    type: tool\n    provider: shell\n    params: {{command: \"true\", allowed_commands: [\"true\"]}}\n"
+            ));
+        }
+        std::fs::write(&doc_path, doc).unwrap();
+        let program = crate::plan::compile(&doc_path, None, &indexmap::IndexMap::new())
+            .unwrap_or_else(|e| panic!("test document doesn't compile: {e}"));
+        let plan = crate::plan::PlanTree::from_program(&program);
         let header = empty_header();
         let model = RunModel::new();
         let start = std::time::Instant::now();
