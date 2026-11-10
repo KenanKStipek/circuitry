@@ -225,12 +225,38 @@ fn build_children(
     now: &str,
     run_ended: bool,
 ) -> Vec<StoreNode> {
-    direct_children_of(path, flat)
+    let mut children = direct_children_of(path, flat);
+    sort_in_plan_order(&mut children, plan);
+    children
         .into_iter()
         .flat_map(|child| {
             build_node_or_splice(&child, flat, kinds, plan, header, model, now, run_ended)
         })
         .collect()
+}
+
+/// `direct_children_of`'s own walk (`subtree_entries`, a
+/// `BTreeMap`) reads children alphabetically by path, never in plan
+/// order -- issue #695's settled point 1 asks for plan order
+/// specifically (`kind, gate, drafts`, not `drafts, gate, kind`).
+/// `plan::normalize_pass_segments` turns a real pass's own `iter_N`
+/// into the `iter_*` placeholder `PlanTree::all_paths` itself uses,
+/// so a loop's own real passes sort together at the position their
+/// shared template holds; a path the static plan never named at all
+/// (a dynamically discovered `use` child, say) keeps its own
+/// original relative order, stably, at the end.
+fn sort_in_plan_order(children: &mut [String], plan: &crate::plan::PlanTree) {
+    let order: Vec<Option<usize>> = children
+        .iter()
+        .map(|path| {
+            let normalized = crate::plan::normalize_pass_segments(path);
+            plan.all_paths().iter().position(|p| *p == normalized)
+        })
+        .collect();
+    let mut indexed: Vec<(usize, &str)> = children.iter().map(|s| s.as_str()).enumerate().collect();
+    indexed.sort_by_key(|(i, _)| order[*i].unwrap_or(usize::MAX));
+    let sorted: Vec<String> = indexed.into_iter().map(|(_, s)| s.to_string()).collect();
+    children.clone_from_slice(&sorted);
 }
 
 #[allow(clippy::too_many_arguments)]

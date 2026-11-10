@@ -4914,16 +4914,20 @@ fn store_table_tail_widths(dev_text_len: usize, combined: usize) -> (usize, usiz
 }
 
 fn store_cut_label(label: &str, width: usize) -> String {
-    if label.chars().count() <= width {
+    // Issue #695's rule 8: the frames cut a label that exactly
+    // fills its own field too (`drafts › iter_1 › draft`, 23 chars,
+    // in a 23-wide field at 80 columns), always leaving at least one
+    // trailing space of its own.
+    if label.chars().count() < width {
         label.to_string()
-    } else if width == 0 {
+    } else if width < 2 {
         String::new()
     } else {
         format!(
-            "{}\u{2026}",
+            "{}\u{22ef}",
             label
                 .chars()
-                .take(width.saturating_sub(1))
+                .take(width.saturating_sub(2))
                 .collect::<String>()
         )
     }
@@ -4959,17 +4963,20 @@ fn draw_store_table(
     let (label_w, bar_w, tokens_w) = store_table_columns(wide);
     let combined = content_width.saturating_sub(label_w + bar_w + tokens_w);
     let theme = ctx.theme;
+    // "From the frames": the header's own `TOKENS` lands one column
+    // to the left of where the data rows' own tokens column starts,
+    // at both pinned widths -- not literally aligned to it.
     let header_text = format!(
-        "{:<width$}TOKENS SHARE VS USUAL",
+        "   {:<width$}TOKENS SHARE VS USUAL",
         "STORE",
-        width = label_w + bar_w
+        width = (label_w + bar_w).saturating_sub(1)
     );
     let mut lines = vec![pad_line(
         vec![Span::styled(
             header_text,
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         )],
-        content_width,
+        content_width + 3,
     )];
     for (i, row) in screen.table.iter().take(max_rows).enumerate() {
         let selected = app.store_selected.as_deref() == Some(row.path.as_str());
@@ -5018,7 +5025,11 @@ fn draw_store_table(
             Style::default().fg(theme.accent_primary),
         ));
         spans.push(Span::styled(
-            format!("{:<1$}", "\u{25b1}".repeat(8 - filled), bar_w - 8),
+            format!(
+                "{}{}",
+                "\u{25b1}".repeat(8 - filled),
+                " ".repeat(bar_w.saturating_sub(8))
+            ),
             Style::default().fg(theme.dim),
         ));
         spans.push(Span::styled(
@@ -10653,13 +10664,22 @@ mod tape_frame_goldens {
     /// Parses one `{role [bold|dim] [on:bg-role]}` tag into a style,
     /// against `base` (the pane's own already-painted background --
     /// every span not carrying its own `on:` paints over it, never
-    /// a bare `Color::Reset`).
+    /// a bare `Color::Reset`). Issue #695: a tag can also be a bare
+    /// `{on:bg-role}` with no role at all -- the Store's own
+    /// container padding and inset rows, always blank spaces, for
+    /// which `theme.text` stands in as the (never compared, per the
+    /// space-cell rule below) foreground.
     fn parse_tag(tag: &str, base_bg: Color, theme: &Theme) -> MockCellStyle {
         let mut parts = tag.split(' ');
-        let role = parts.next().expect("a span's tag names a role first");
+        let first = parts.next().expect("a span's tag names a role first");
         let mut bold = false;
         let mut dim = false;
         let mut bg = base_bg;
+        let mut role = first;
+        if let Some(bg_role) = first.strip_prefix("on:") {
+            bg = role_color(bg_role, theme);
+            role = "fg.default";
+        }
         for part in parts {
             if part == "bold" {
                 bold = true;
@@ -11494,7 +11514,7 @@ mod tape_frame_goldens {
                 app.dialog = Dialog::Help;
             },
             now,
-            // Two cells allow-listed, documented here, issue #678's
+            // Cells allow-listed, documented here, issue #678's
             // own "explicit, documented allow-list, never a
             // weakened comparison":
             // - (119,0) and (119,29): the trailing blank past the
@@ -11506,26 +11526,17 @@ mod tape_frame_goldens {
             //   is `fg.dim`/`fg.faint` instead. Every other cell on
             //   both rows, including their own trailing blanks
             //   elsewhere, matches exactly.
-            // - (64,6)-(68,6): the help overlay's own `0 1 2 3`
-            //   row names screen `3` `Store` (§2.4); this codebase
-            //   still calls it Cost, since an unported screen keeps
-            //   its current chip name until its own part lands, so
-            //   matching the frame's own text here would mean
-            //   renaming it a part early, not fixing a real bug.
-            //   `Signal` (part 2) now matches the frame exactly, so
-            //   every other cell on this row does too.
             // - the status line's own row (y=28), below the modal:
             //   same reason as the Normal/Usual goldens' own
             //   (`STATUS_LINE_READS_AN_EARLIER_STEP_120X30`'s own
             //   doc comment) -- the Help overlay never covers it.
+            //   The help overlay's own `0 1 2 3` row names every
+            //   screen `Tape Signal Flow Store` exactly, now that
+            //   the Store (issue #695) has replaced Cost -- no
+            //   longer allow-listed.
             &[
                 (119, 0),
                 (119, 29),
-                (64, 6),
-                (65, 6),
-                (66, 6),
-                (67, 6),
-                (68, 6),
                 (3, 28),
                 (4, 28),
                 (5, 28),
@@ -12117,6 +12128,159 @@ mod tape_frame_goldens {
             &flow_screen,
             now,
             &mut app,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_store_screen(
+        plan: &oscilloscope_core::plan::PlanTree,
+        history: &crate::history_io::HistoryHandle,
+        state: &serde_json::Value,
+        events: &[serde_json::Value],
+        process: oscilloscope_core::model::ProcessState,
+        now: &str,
+        engine: &str,
+        selected_path: Option<&str>,
+    ) -> (RenderState, oscilloscope_core::store::StoreScreen) {
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, events);
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            engine,
+            plan,
+            &mut model,
+            Some(state),
+            process,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(history, &mut rendered.header, Some(state), plan, now);
+        let flat = oscilloscope_core::model::flatten_state(state);
+        let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+            rendered
+                .unfolded_rows
+                .iter()
+                .map(|r| (r.path.clone(), r.kind))
+                .collect();
+        let store_screen = oscilloscope_core::store::build_store(
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            plan,
+            &model,
+            Some(state),
+            "prime",
+            now,
+            selected_path,
+        );
+        (rendered, store_screen)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assert_store_frame(
+        name: &str,
+        width: u16,
+        height: u16,
+        rendered: &RenderState,
+        store_screen: &oscilloscope_core::store::StoreScreen,
+        selected_path: Option<&str>,
+        now: &str,
+        allowed_cells: &[(u16, u16)],
+    ) {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock(name, &theme);
+        let zone = frame_zone();
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.store_selected = selected_path.map(str::to_string);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        assert_matches_mock(terminal.backend().buffer(), &mock, name, allowed_cells);
+    }
+
+    #[test]
+    fn store_normal_120x30_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        assert_store_frame(
+            "store--normal--120x30",
+            120,
+            30,
+            &rendered,
+            &store_screen,
+            Some("prime.gate.reply"),
+            now,
+            &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_120X30,
+        );
+    }
+
+    #[test]
+    fn store_normal_80x24_matches_the_frame() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        assert_store_frame(
+            "store--normal--80x24",
+            80,
+            24,
+            &rendered,
+            &store_screen,
+            Some("prime.gate.reply"),
+            now,
             &SIGNAL_STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
         );
     }

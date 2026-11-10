@@ -4460,7 +4460,7 @@ mod tests {
             ),
             (
                 120,
-                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 tape]  1 signal  2 flow  3 cost",
+                "⠔⠒⠒⠤⠤⠔⠒⠒ feature-0417.yml · ♥ running 47m57s · 11:52:55 · loop ETA ~11:58   [0 tape]  1 signal  2 flow  3 store",
             ),
         ];
         for (width, want) in expected {
