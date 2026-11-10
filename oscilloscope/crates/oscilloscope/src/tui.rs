@@ -3942,27 +3942,25 @@ fn draw_signal_readings(
     let bold = default.add_modifier(Modifier::BOLD);
     let readings = &screen.readings;
     let line_width = (inner.width - 1) as usize;
-    // Sent/Received draw in the faint style for exactly as long as a
-    // live part is still in them, the same rule the Totals row's own
-    // headline follows; the `≈` marker trails the unit rather than
-    // leading the figure, unlike every other screen's own -- this
-    // one's own figure always starts with a digit, nothing else
-    // ever sitting between the label's own whitespace and it.
+    // Sent/Received draw in the faint style, and lead with `≈`, for
+    // exactly as long as a live part is still in them -- the same
+    // marker the Totals row and a streaming row put before an
+    // estimated figure.
     let sent_style = if readings.sent_live { muted } else { default };
     let received_style = if readings.received_live {
         muted
     } else {
         default
     };
-    let sent_marker = if readings.sent_live { " ≈" } else { "" };
-    let received_marker = if readings.received_live { " ≈" } else { "" };
+    let sent_marker = if readings.sent_live { "≈" } else { "" };
+    let received_marker = if readings.received_live { "≈" } else { "" };
     let mut lines = vec![
         pad_line(
             vec![
                 Span::styled("Sent     ", muted),
                 Span::styled(
                     format!(
-                        "{} t{sent_marker}",
+                        "{sent_marker}{} t",
                         oscilloscope_core::format::format_tokens_thousands(readings.sent)
                     ),
                     sent_style,
@@ -3975,7 +3973,7 @@ fn draw_signal_readings(
                 Span::styled("Received ", muted),
                 Span::styled(
                     format!(
-                        "{} t{received_marker}",
+                        "{received_marker}{} t",
                         oscilloscope_core::format::format_tokens_thousands(readings.received)
                     ),
                     received_style,
