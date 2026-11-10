@@ -1855,7 +1855,15 @@ fn build_flow_screen_if_active(
     // still land on the rail's own sensible default pass, not the
     // root's own step pane or whatever leaf follow happens to be on.
     let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
-    let flow_selected_path = if app.follow || selected_path.as_deref() == root_path {
+    // Issue #704 rule 2: once the run has ended there is nothing left
+    // to follow, so `app.follow` sitting on from before (nobody ever
+    // turned it off) must no longer override a real selection with
+    // `default_follow_path`, which itself finds nothing running and
+    // returns `None` -- the Flow must show whatever the selection
+    // actually is then, the same as every other screen already does
+    // post-run.
+    let still_running = render_state.header.status == RunStatus::Running;
+    let flow_selected_path = if (app.follow && still_running) || selected_path.as_deref() == root_path {
         // Issue #703's rule 5: following lands on whichever step is
         // actually running, not only on the default pass -- `None`
         // (the default-pass fallback below) only when the running

@@ -1125,8 +1125,15 @@ pub fn build_store(
         .max();
     let unit = crate::screens::tape_unit(largest_usual_step);
     let run_start = header.run_start_ts.as_deref();
-    let cursor_path =
-        store_cursor_path(selected_path, &table).or_else(|| table.first().map(|r| r.path.clone()));
+    let plan_order: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
+    let cursor_path = store_cursor_path(selected_path, &table, &plan_order)
+        .or_else(|| {
+            plan_order
+                .iter()
+                .find(|p| table.iter().any(|r| &r.path == *p))
+                .cloned()
+        })
+        .or_else(|| table.first().map(|r| r.path.clone()));
     let selected = cursor_path
         .as_deref()
         .and_then(|path| rows.iter().find(|r| r.path == path))
@@ -1166,19 +1173,70 @@ pub fn build_store(
 
 /// Issue #704 rule 2: the Store's own table cursor for `selected_path`
 /// -- itself, when it names a row the table already has (a store
-/// with tokens of its own), else the nearest ancestor that is one.
-/// `None` for a `selected_path` with no ancestor in the table at all
-/// (nothing in its own lineage has used any tokens yet), which
-/// `build_store`'s own caller falls back from to the table's first
-/// row.
-fn store_cursor_path(selected_path: Option<&str>, table: &[StoreTableRow]) -> Option<String> {
-    let mut candidate = selected_path?;
+/// with tokens of its own); else the nearest ancestor that is one;
+/// else the nearest token-bearing leaf in plan order (`plan_order`,
+/// the run's own rows, is what gives "nearest" a real meaning --
+/// never the table's own tokens-descending order, which would pick
+/// the biggest store in the run instead of the closest one). `None`
+/// only when `selected_path` is absent from `plan_order` entirely
+/// (an inferred decision's own synthetic station has no row of its
+/// own) and the table is empty, which `build_store`'s own caller
+/// falls back from to the table's first row.
+pub fn store_cursor_path(
+    selected_path: Option<&str>,
+    table: &[StoreTableRow],
+    plan_order: &[String],
+) -> Option<String> {
+    let selected_path = selected_path?;
+    let mut candidate = selected_path;
     loop {
         if table.iter().any(|r| r.path == candidate) {
             return Some(candidate.to_string());
         }
-        candidate = candidate.rsplit_once('.')?.0;
+        match candidate.rsplit_once('.') {
+            Some((parent, _)) => candidate = parent,
+            None => break,
+        }
     }
+    nearest_token_bearing_path(selected_path, table, plan_order)
+}
+
+/// `store_cursor_path`'s own plan-order fallback: the table's own
+/// path closest to `selected_path` by position in `plan_order`
+/// (ties broken toward the earlier one) -- `None` when `selected_
+/// path` isn't in `plan_order` at all, or no table row is either.
+pub fn nearest_token_bearing_path(
+    selected_path: &str,
+    table: &[StoreTableRow],
+    plan_order: &[String],
+) -> Option<String> {
+    let table_paths: Vec<String> = table.iter().map(|r| r.path.clone()).collect();
+    nearest_path_in_plan_order(selected_path, &table_paths, plan_order)
+}
+
+/// The path in `candidates` closest to `selected_path` by position
+/// in `plan_order` (ties broken toward the earlier one) -- shared by
+/// [`nearest_token_bearing_path`] and the Store's own `enter`/`
+/// ↑↓` key handling, which has no [`StoreTableRow`] of its own to
+/// read tokens off, only the table's own path list. `None` when
+/// `selected_path` isn't in `plan_order` at all, or no candidate is
+/// either.
+pub fn nearest_path_in_plan_order(
+    selected_path: &str,
+    candidates: &[String],
+    plan_order: &[String],
+) -> Option<String> {
+    let idx = plan_order.iter().position(|p| p == selected_path)?;
+    candidates
+        .iter()
+        .filter_map(|path| {
+            plan_order
+                .iter()
+                .position(|p| p == path)
+                .map(|pos| (pos.abs_diff(idx), pos, path.clone()))
+        })
+        .min_by_key(|(dist, pos, _)| (*dist, *pos))
+        .map(|(_, _, path)| path)
 }
 
 #[cfg(test)]
@@ -1228,18 +1286,41 @@ mod tests {
     #[test]
     fn store_cursor_path_climbs_to_the_nearest_ancestor_with_tokens() {
         let table = vec![table_row("prime.gate", 10)];
+        let plan_order = vec!["prime.gate".to_string(), "prime.gate.reply".to_string()];
         assert_eq!(
-            store_cursor_path(Some("prime.gate.reply"), &table),
+            store_cursor_path(Some("prime.gate.reply"), &table, &plan_order),
             Some("prime.gate".to_string())
         );
         // Already in the table: itself, not an ancestor.
         assert_eq!(
-            store_cursor_path(Some("prime.gate"), &table),
+            store_cursor_path(Some("prime.gate"), &table, &plan_order),
             Some("prime.gate".to_string())
         );
-        // No ancestor has tokens at all: no cursor.
-        assert_eq!(store_cursor_path(Some("prime.other.leaf"), &table), None);
-        assert_eq!(store_cursor_path(None, &table), None);
+        // Neither itself nor an ancestor is in `plan_order` at all:
+        // no cursor.
+        assert_eq!(
+            store_cursor_path(Some("prime.other.leaf"), &table, &plan_order),
+            None
+        );
+        assert_eq!(store_cursor_path(None, &table, &plan_order), None);
+    }
+
+    /// Issue #704 rule 2: with no ancestor in the table either,
+    /// "nearest" means plan order, never the table's own
+    /// tokens-descending order -- the bigger, farther store must
+    /// lose to the smaller, closer one.
+    #[test]
+    fn store_cursor_path_falls_back_to_the_nearest_leaf_in_plan_order() {
+        let table = vec![table_row("prime.big", 900), table_row("prime.small", 5)];
+        let plan_order = vec![
+            "prime.small".to_string(),
+            "prime.mid".to_string(),
+            "prime.big".to_string(),
+        ];
+        assert_eq!(
+            store_cursor_path(Some("prime.mid"), &table, &plan_order),
+            Some("prime.small".to_string())
+        );
     }
 
     /// The frames' own geometry (issue #695): at 120x30 `kind`

@@ -984,11 +984,16 @@ impl App {
             }
             // `⏎` opens the selected store's own step full-screen
             // (DESIGN.md §2.4), the same toggle the Tape/Signal/Flow
-            // already share -- only while a row is actually selected,
-            // but consumed here either way so it never falls through
-            // to the generic pane's own quick-steps expand below.
+            // already share -- gated on the table actually having a
+            // row to open at all, never on `store_cursor_index`
+            // resolving a path (it falls back to the first row on
+            // screen the same way `move_store_selection` already
+            // does, so `enter` opens whatever is actually drawn as
+            // the cursor, not nothing). Consumed here either way so
+            // it never falls through to the generic pane's own
+            // quick-steps expand below.
             KeyCode::Enter => {
-                if self.store_cursor_index(rows).is_some() {
+                if !rows.is_empty() {
                     self.tape_fullscreen_step = !self.tape_fullscreen_step;
                 }
                 true
@@ -1001,15 +1006,33 @@ impl App {
     /// the table's own order, resolved the same way `store::
     /// store_cursor_path` resolves a cursor for drawing -- itself
     /// when it names a row the table already has, else the nearest
-    /// ancestor that is one.
+    /// ancestor that is one, else the nearest row in plan order
+    /// (`self.flow_rows`, the run's own plan-ordered rows, never the
+    /// table's own tokens-descending order). `None` only when
+    /// nothing at all resolves, which `move_store_selection` and the
+    /// `enter` handler both fall back from to the first row on
+    /// screen, the same way `store::build_store`'s own cursor does.
     fn store_cursor_index(&self, rows: &[String]) -> Option<usize> {
-        let mut candidate = self.selected_path.as_deref()?;
+        let selected_path = self.selected_path.as_deref()?;
+        let mut candidate = selected_path;
         loop {
             if let Some(idx) = rows.iter().position(|r| r == candidate) {
                 return Some(idx);
             }
-            candidate = candidate.rsplit_once('.')?.0;
+            match candidate.rsplit_once('.') {
+                Some((parent, _)) => candidate = parent,
+                None => break,
+            }
         }
+        let plan_order: Vec<String> = self.flow_rows.iter().map(|r| r.path.clone()).collect();
+        if let Some(path) = oscilloscope_core::store::nearest_path_in_plan_order(
+            selected_path,
+            rows,
+            &plan_order,
+        ) {
+            return rows.iter().position(|r| *r == path);
+        }
+        None
     }
 
     /// `↑`/`↓` select rows in the table's own order (DESIGN.md §2.4:
@@ -2471,6 +2494,21 @@ mod tests {
         assert!(app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &rows);
         assert!(!app.tape_fullscreen_step);
+    }
+
+    /// Issue #704 rule 2: the selected effect has no tokens of its
+    /// own, and no ancestor does either -- the table's own cursor
+    /// draws on the first row anyway (`store::build_store`'s own
+    /// fallback), and `enter` must open that same row, never do
+    /// nothing just because `self.selected_path` itself isn't the
+    /// table's first entry.
+    #[test]
+    fn enter_opens_the_first_row_even_when_the_selection_has_no_tokens_anywhere_in_its_lineage() {
+        let mut app = store_app();
+        let rows = vec!["prime.a".to_string(), "prime.b".to_string()];
+        app.selected_path = Some("prime.other.leaf".to_string());
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
+        assert!(app.tape_fullscreen_step);
     }
 
     #[test]

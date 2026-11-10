@@ -1695,7 +1695,7 @@ fn deepest_fork_zone<'a>(items: &'a [RailItem], selected: &str) -> Option<&'a [R
             }
         } else {
             for lane in &fork.lanes {
-                if !lane_contains(&lane.items, selected) {
+                if !lane_owns(lane, selected) {
                     continue;
                 }
                 return Some(deepest_fork_zone(&lane.items, selected).unwrap_or(&lane.items));
@@ -1712,6 +1712,20 @@ fn lane_contains(items: &[RailItem], selected: &str) -> bool {
     flatten_lane_stations(items)
         .iter()
         .any(|p| p == selected || selected.starts_with(&format!("{p}.")))
+}
+
+/// Whether `selected` is the lane's own path itself (a loop pass or
+/// a parallel `dynamic`'s named child, selected directly by `↑↓`
+/// before any station inside it is, `Lane::path`'s own doc), or is
+/// owned by it per [`lane_contains`] -- `deepest_fork_zone`'s own
+/// membership test, so landing on a pass path right after `↑↓`
+/// still finds the lane `←→` must then walk.
+fn lane_owns(lane: &Lane, selected: &str) -> bool {
+    let on_lane_path = lane
+        .path
+        .as_deref()
+        .is_some_and(|p| p == selected || selected.starts_with(&format!("{p}.")));
+    on_lane_path || lane_contains(&lane.items, selected)
 }
 
 /// Issue #704 rule 3: the stations (plain, decision or fork-host) of
@@ -1944,6 +1958,41 @@ mod tests {
         );
         assert_eq!(
             super::lane_stations(&rail, Some("prime.drafts.iter_1.draft")),
+            vec!["prime.drafts.iter_1.draft".to_string()]
+        );
+    }
+
+    /// Issue #704 rule 3: `↑↓` selects a pass by its own path
+    /// (`prime.drafts.iter_1`, never one of its stations), so
+    /// `lane_stations` must resolve that path to the same zone as
+    /// any station already inside it, not fall back to the top
+    /// level.
+    #[test]
+    fn lane_stations_resolves_a_bare_pass_path_to_its_own_zone() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.drafts".to_string(),
+                    kind: super::ForkKind::Loop,
+                    source_status: StatusKind::Done,
+                    lanes: vec![
+                        lane(
+                            "prime.drafts.iter_0",
+                            vec![nav_station("prime.drafts.iter_0.draft")],
+                            None,
+                        ),
+                        lane(
+                            "prime.drafts.iter_1",
+                            vec![nav_station("prime.drafts.iter_1.draft")],
+                            None,
+                        ),
+                    ],
+                }),
+            ],
+        };
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.drafts.iter_1")),
             vec!["prime.drafts.iter_1.draft".to_string()]
         );
     }

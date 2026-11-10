@@ -7386,18 +7386,9 @@ fn flow_resolve_scroll(
         };
         if let Some(arrow) = anchor {
             if !in_view(app.flow_scroll, arrow) {
-                let target = (arrow as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
-                let layout = flow_layout(items, app, area_width);
-                let mut best = 0usize;
-                let mut best_dist = target;
-                for &(start, _) in std::iter::once(&(0, 0)).chain(layout.iter()) {
-                    let dist = start.abs_diff(target);
-                    if dist < best_dist {
-                        best = start;
-                        best_dist = dist;
-                    }
-                }
-                app.flow_scroll = best.min(max_scroll);
+                app.flow_scroll =
+                    flow_scroll_to_boundary(items, app, area_width, visible_width, arrow)
+                        .min(max_scroll);
             }
         }
     } else {
@@ -7412,10 +7403,29 @@ fn flow_resolve_scroll(
         // passes later, with no further key pressed at all.
         let rows: Vec<&oscilloscope_core::render::Row> = app.flow_rows.iter().collect();
         let land_back = app.lands_back_on_the_followed_row(&rows);
+        let mut resumed_follow = false;
         if app.flow_manual_scroll || land_back {
             if let Some(arrow) = arrow {
                 if in_view(app.flow_scroll, arrow) {
                     app.follow = true;
+                    resumed_follow = true;
+                }
+            }
+        }
+        // Issue #704 rule 2 (the Flow's own station cursor, "scrolled
+        // into view"): with follow off, the view has no other way to
+        // move at all (`←→` moves the selection itself, never
+        // scrolls, once follow is off -- `keys::flow_select_station`),
+        // so it must always keep the selected station in view on its
+        // own, the same snap-to-boundary rule follow itself uses.
+        if !resumed_follow {
+            if let Some(selected) = app.selected_path.clone() {
+                if let Some(x) = flow_selected_x(items, app, area_width, &selected) {
+                    if !in_view(app.flow_scroll, x) {
+                        app.flow_scroll =
+                            flow_scroll_to_boundary(items, app, area_width, visible_width, x)
+                                .min(max_scroll);
+                    }
                 }
             }
         }
@@ -7429,6 +7439,68 @@ fn flow_resolve_scroll(
     app.flow_manual_scroll = false;
     app.flow_scroll = app.flow_scroll.min(max_scroll);
     app.flow_scroll
+}
+
+/// The top-level item boundary closest to putting `x` at 60% of the
+/// visible width -- `flow_resolve_scroll`'s own snapping rule,
+/// shared by its follow-the-arrow branch and its follow-off
+/// selection-tracking branch.
+fn flow_scroll_to_boundary(
+    items: &[RailItem],
+    app: &App,
+    area_width: u16,
+    visible_width: usize,
+    x: usize,
+) -> usize {
+    let target = (x as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
+    let layout = flow_layout(items, app, area_width);
+    let mut best = 0usize;
+    let mut best_dist = target;
+    for &(start, _) in std::iter::once(&(0, 0)).chain(layout.iter()) {
+        let dist = start.abs_diff(target);
+        if dist < best_dist {
+            best = start;
+            best_dist = dist;
+        }
+    }
+    best
+}
+
+/// Whether `item` is, or contains anywhere in its own lanes, the
+/// station, fork host or loop/`dynamic` lane path named `path` --
+/// [`flow_selected_x`]'s own membership test, recursing to any
+/// depth (never stopping at the first lane the way [`flow_now_
+/// arrow_x`] does, since a selection can be inside any lane, running
+/// or not).
+fn flow_item_contains(item: &RailItem, path: &str) -> bool {
+    match item {
+        RailItem::Station(s) => s.path == path,
+        RailItem::Fork(fork) => {
+            fork.path == path
+                || fork.lanes.iter().any(|lane| {
+                    lane.path
+                        .as_deref()
+                        .is_some_and(|p| p == path || path.starts_with(&format!("{p}.")))
+                        || lane.items.iter().any(|it| flow_item_contains(it, path))
+                })
+        }
+    }
+}
+
+/// Issue #704 rule 2: the selected effect's own x on the rail, for
+/// `flow_resolve_scroll`'s own follow-off scrolling -- the start of
+/// whichever top-level item owns it, at any depth inside a fork's
+/// own lanes (never only the x of its own leaf station, which a
+/// folded fork never draws at all) -- `None` when `path` is nowhere
+/// on the rail (a selection some other screen made that the Flow
+/// doesn't have, DESIGN.md's own "nothing selected" case).
+fn flow_selected_x(items: &[RailItem], app: &App, area_width: u16, path: &str) -> Option<usize> {
+    let layout = flow_layout(items, app, area_width);
+    items
+        .iter()
+        .zip(layout.iter())
+        .find(|(item, _)| flow_item_contains(item, path))
+        .map(|(_, &(start, _))| start)
 }
 
 /// Writes `text` into `buf` at the rail's own full-coordinate `x`,
@@ -8828,6 +8900,30 @@ mod flow_layout_tests {
         assert!(
             !app.flow_manual_scroll,
             "the flag is consumed by the draw it armed"
+        );
+    }
+
+    /// Issue #704 rule 2: with follow off (the ordinary state once
+    /// a run has ended and the user has looked at anything),
+    /// `flow_resolve_scroll` must bring the selected station into
+    /// view on its own -- `←→` only moves the selection then, never
+    /// scrolls, so nothing else ever would.
+    #[test]
+    fn flow_resolve_scroll_brings_the_selected_station_into_view_with_follow_off() {
+        let items: Vec<RailItem> = (0..40)
+            .map(|i| station(&format!("s{i}"), StatusKind::Done))
+            .collect();
+        let mut app = App::new(false);
+        app.follow = false;
+        app.flow_scroll = 0;
+        app.selected_path = Some("s39".to_string());
+        let visible_width = 100usize;
+        let area_width = 200u16;
+        let scroll = flow_resolve_scroll(&items, &mut app, area_width, visible_width, true);
+        let x = flow_selected_x(&items, &app, area_width, "s39").expect("s39 is on the rail");
+        assert!(
+            scroll <= x && x < scroll + visible_width,
+            "the selected station must be in view: scroll={scroll} x={x}"
         );
     }
 
