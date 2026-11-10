@@ -499,20 +499,29 @@ fn build_level(
                 i = next;
             }
             RowKind::Loop => {
-                items.push(RailItem::Station(loop_station(row, ctx)));
                 let (fork, next) = build_loop_fork(rows, i, ctx);
-                items.push(RailItem::Fork(fork));
+                // A loop with no real pass observed and no known
+                // total at all (no `progress.total`, no resolvable
+                // `each.in` either) has no lane to show -- never a
+                // dangling `─┬─` tee with no join at all, the typed
+                // container station alone stands in for it, same as
+                // a sequential container with no child yet.
+                if fork.lanes.is_empty() {
+                    items.push(RailItem::Station(container_ahead_station(row, ctx)));
+                } else {
+                    items.push(RailItem::Station(loop_station(row, ctx)));
+                    items.push(RailItem::Fork(fork));
+                }
                 i = next;
             }
             RowKind::Dynamic if dynamic_is_parallel(&row.path, ctx) => {
                 let (fork, next) = build_parallel_fork(rows, i, ctx);
-                let station = if fork.lanes.is_empty() {
-                    container_ahead_station(row, ctx)
+                if fork.lanes.is_empty() {
+                    items.push(RailItem::Station(container_ahead_station(row, ctx)));
                 } else {
-                    plain_station(row, ctx)
-                };
-                items.push(RailItem::Station(station));
-                items.push(RailItem::Fork(fork));
+                    items.push(RailItem::Station(plain_station(row, ctx)));
+                    items.push(RailItem::Fork(fork));
+                }
                 i = next;
             }
             // A sequential container (`use`, a chain-flow `dynamic`,
@@ -2001,5 +2010,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A loop with no real pass observed and no total resolvable
+    /// at all (no `progress.total`, and `each.in` doesn't resolve
+    /// against the state passed here) pushes no fork at all -- the
+    /// typed container station alone stands for it, never a
+    /// dangling `─┬─` tee with no join.
+    #[test]
+    fn a_loop_with_no_resolvable_total_pushes_no_fork_at_all() {
+        let plan = compile_doc(&each_loop_yaml("nap"));
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rail = build_rail_for(&plan, &state);
+        let fan_index = rail
+            .items
+            .iter()
+            .position(|it| matches!(it, RailItem::Station(s) if s.name == "fan"))
+            .expect("a station for the loop");
+        assert!(
+            !matches!(rail.items.get(fan_index + 1), Some(RailItem::Fork(_))),
+            "no fork at all, with nothing to show in one: {:?}",
+            rail.items
+        );
     }
 }
