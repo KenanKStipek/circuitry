@@ -1,0 +1,5 @@
+{"v":1,"seq":0,"ts":"2026-11-08T23:51:56.377Z","ev":"run_start","run_id":"68599af6-9c65-42c7-8364-9f9cfe3bb326","orchestration":"triage.yml","engine":"cof 0.1.0","pid":1068}
+{"v":1,"seq":1,"ts":"2026-11-08T23:51:56.383Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-08T23:51:56.384Z","ev":"start","id":1,"path":"prime.kind"}
+{"v":1,"seq":3,"ts":"2026-11-08T23:51:56.385Z","ev":"end","id":1,"path":"prime.kind","ok":true,"ms":1}
+{"v":1,"seq":4,"ts":"2026-11-08T23:51:56.385Z","ev":"start","id":2,"path":"prime.tests"}
