@@ -541,10 +541,16 @@ fn tape_token_bar(
     // `≈` would otherwise push a count of 1,000 tokens or more past the
     // 16-cell column and get cut by the pane's own clipping, silently
     // turning it into a smaller, wrong number.
+    // Issue #702: an agent's own total routinely reaches five or
+    // six digits (`11,680 t`, exactly 8 characters), unlike an
+    // ordinary prompt's -- an unconditional minimum of one space
+    // here left no room for the trailing `t` inside the column's 16
+    // cells, which the pane's own clipping then silently cut off.
+    // No `.max(1)`: `0` is a real, valid gap once the count alone
+    // already fills the remaining 8 cells.
     let gap = 16usize
         .saturating_sub(8)
-        .saturating_sub(count_text.chars().count())
-        .max(1);
+        .saturating_sub(count_text.chars().count());
     // The gap before the count reads as the empty bar's own
     // colour (`design/frames/`'s own span grouping) -- or, once the
     // bar is full and has no empty cells of its own to lend it one,

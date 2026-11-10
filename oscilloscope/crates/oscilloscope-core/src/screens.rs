@@ -1134,6 +1134,33 @@ fn tape_running_prompt_tokens(live: &crate::model::PromptLiveFigures) -> TapeTok
     }
 }
 
+/// A `tool`/`use`/`yield`/`dynamic`/`try`-`finally` row's own token
+/// column (issue #702's rule 3): `step_tokens_so_far`'s own figures,
+/// or `TapeTokens::default()` (no column at all) for the ordinary
+/// case of a step with nothing to show -- `step_tokens_so_far` itself
+/// can't tell "never spent any tokens" apart from "spent exactly
+/// zero" (both read `Some(0)`/`Some(0)` once finished, `node_tokens`'s
+/// own missing-field default), so this is the one place that treats
+/// a `0` total the same as having nothing at all, the same rule
+/// `store::build_leaf` already follows for a leaf tile.
+fn tape_row_tool_tokens(
+    node: Option<&NodeMeta>,
+    path: &str,
+    model: &RunModel,
+    now: &str,
+) -> TapeTokens {
+    let figures = crate::model::step_tokens_so_far(node, path, model, now);
+    match figures.total() {
+        None | Some(0) => TapeTokens::default(),
+        Some(_) => TapeTokens {
+            sent: figures.tokens_sent,
+            received: figures.tokens_received,
+            live: figures.live,
+            ..Default::default()
+        },
+    }
+}
+
 /// §3.4's "first words": the reply's own text, cut at the first
 /// sentence end or a fixed character budget, whichever comes first
 /// -- `Bug.`, `Thanks for the ⋯` (never the whole reply, which the
@@ -1437,6 +1464,13 @@ fn tape_row_content(
             }
         }
         RowKind::Tool | RowKind::Use | RowKind::Yield | RowKind::Dynamic | RowKind::TryFinally => {
+            // Issue #702's rule 3: any step that has used tokens so
+            // far gets the same token column a prompt row already
+            // does, an agent session included -- almost always
+            // `TapeTokens::default()` for an ordinary tool (its own
+            // `tokens_sent`/`tokens_received` are never set at all),
+            // computed once here rather than in every branch below.
+            let tokens = tape_row_tool_tokens(node, &row.path, model, now);
             if pending {
                 // §2.1's Starting state: a tool ahead reads its own
                 // static command, when every part of it is a plain
@@ -1459,7 +1493,7 @@ fn tape_row_content(
                 )
             } else if row.status.kind == StatusKind::Failed {
                 let error = node.and_then(|n| n.error.clone()).unwrap_or_default();
-                (format!("✗ {error}"), None, TapeTokens::default())
+                (format!("✗ {error}"), None, tokens)
             } else if row.status.kind == StatusKind::FailedHandled {
                 let error = node.and_then(|n| n.error.clone()).unwrap_or_default();
                 let exit = tape_exit_code(&error)
@@ -1474,10 +1508,10 @@ fn tape_row_content(
                 (
                     format!("{exit}handled{mode_text}"),
                     None,
-                    TapeTokens::default(),
+                    tokens,
                 )
             } else {
-                (tape_tool_what(row, node), None, TapeTokens::default())
+                (tape_tool_what(row, node), None, tokens)
             }
         }
         RowKind::Root
