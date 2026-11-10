@@ -8732,6 +8732,12 @@ fn draw_flow(
     app.flow_has_selection = screen.selected_pass.is_some()
         || screen.selected_step.is_some()
         || screen.selected_decision.is_some();
+    // Issue #704 rule 3: `←→`'s own station list for the next key,
+    // the selected lane's stations against the rail this redraw
+    // just built -- one frame stale at worst, the same lifecycle
+    // `flow_rows` already has.
+    app.flow_lane_stations =
+        oscilloscope_core::rail::lane_stations(&screen.rail, app.selected_path.as_deref());
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

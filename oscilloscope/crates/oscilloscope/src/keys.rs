@@ -159,6 +159,12 @@ pub struct App {
     /// container with no `RowKind::Pass` row of its own, is still on
     /// the rail and must still be reachable.
     pub flow_rows: Vec<Row>,
+    /// Issue #704 rule 3: the selected lane's own stations in plan
+    /// order (`rail::lane_stations`'s own output), refreshed on
+    /// every rebuild -- `←→` steps through this list with follow off
+    /// or the run ended; `tui::draw_flow` is the only thing that
+    /// ever rebuilds it, the same lifecycle `flow_rows` already has.
+    pub flow_lane_stations: Vec<String>,
     /// Per-fork lane-open overrides (issue #691's `+`/`-`), keyed by
     /// the fork's own path: `0` folds it into its own band, the
     /// fork's own lane count fully opens it, anything in between is
@@ -245,6 +251,7 @@ impl App {
             flow_scroll: 0,
             flow_manual_scroll: false,
             flow_rows: Vec::new(),
+            flow_lane_stations: Vec::new(),
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_column_ms: 100,
@@ -370,6 +377,32 @@ impl App {
         self.select_tree_path(Some(paths[next].to_string()));
         let rows: Vec<&Row> = self.flow_rows.iter().collect();
         self.follow = self.lands_back_on_the_followed_row(&rows);
+    }
+
+    /// `←→` on the Flow screen with follow off or the run ended
+    /// (issue #704 rule 3): moves over the selected lane's own
+    /// stations, in plan order (`self.flow_lane_stations`, refreshed
+    /// every redraw against the current selection) -- a plain
+    /// station, a decision (named or inferred) or a fork's own host
+    /// (a loop, a parallel `dynamic`) are all stations here, never
+    /// one of a fork's own lanes, which `↑↓` alone still reaches.
+    pub fn flow_select_station(&mut self, delta: i32) {
+        if self.flow_lane_stations.is_empty() {
+            return;
+        }
+        let idx = self
+            .selected_path
+            .as_deref()
+            .and_then(|p| self.flow_lane_stations.iter().position(|q| q.as_str() == p));
+        let next = match idx {
+            Some(i) => {
+                (i as i32 + delta).clamp(0, self.flow_lane_stations.len() as i32 - 1) as usize
+            }
+            None if delta >= 0 => 0,
+            None => self.flow_lane_stations.len() - 1,
+        };
+        self.select_tree_path(Some(self.flow_lane_stations[next].clone()));
+        self.follow = false;
     }
 
     /// The fork `+`/`-` act on (issue #677 §9.3's "the selected
@@ -647,22 +680,28 @@ impl App {
             KeyCode::Char('n') if self.screen == Screen::Signal => self.signal_now(),
             KeyCode::Char('+') if self.screen == Screen::Signal => self.signal_zoom_in(),
             KeyCode::Char('-') if self.screen == Screen::Signal => self.signal_zoom_out(),
-            // Issue #691 (design v1 part 3, §4): ←→ scroll the rail,
-            // turning follow off -- `tui::draw_flow` is the only
-            // thing that knows the rail's own real width, so it (not
-            // this key handler) turns follow back on once a manual
-            // scroll lands Now back in view, the same way the Tape's
-            // own selection rule already does.
-            KeyCode::Left if self.screen == Screen::Flow => {
+            // Issue #691 (design v1 part 3, §4): ←→ scroll the rail
+            // while actually following a live run, turning follow
+            // off -- `tui::draw_flow` is the only thing that knows
+            // the rail's own real width, so it (not this key
+            // handler) turns follow back on once a manual scroll
+            // lands Now back in view, the same way the Tape's own
+            // selection rule already does.
+            KeyCode::Left if self.screen == Screen::Flow && self.follow && running => {
                 self.flow_scroll = self.flow_scroll.saturating_sub(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
                 self.flow_manual_scroll = true;
             }
-            KeyCode::Right if self.screen == Screen::Flow => {
+            KeyCode::Right if self.screen == Screen::Flow && self.follow && running => {
                 self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
                 self.flow_manual_scroll = true;
             }
+            // Issue #704 rule 3: with follow off, or after the run,
+            // ←→ instead move the selection between the selected
+            // lane's own stations, in plan order.
+            KeyCode::Left if self.screen == Screen::Flow => self.flow_select_station(-1),
+            KeyCode::Right if self.screen == Screen::Flow => self.flow_select_station(1),
             // Issue #691: `+` opens the selected fork's own lanes
             // (three at a time, DESIGN.md §2.3's folded loop), `-`
             // folds them back into the band.
@@ -1843,7 +1882,42 @@ mod tests {
         app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
         assert!(!app.follow);
         assert_eq!(app.flow_scroll, 10);
+        // Issue #704 rule 3: follow is already off, so the very next
+        // ←→ moves the station selection instead of scrolling
+        // further -- a no-op here with no station to move to
+        // (`flow_lane_stations` empty), but the rail must not keep
+        // scrolling either.
         app.handle_key(key(KeyCode::Left), &[], &[], true, false, &[]);
+        assert_eq!(app.flow_scroll, 10);
+    }
+
+    /// Issue #704 rule 3: ←→ scrolls the rail only while actually
+    /// following a live run -- with follow off, or the run ended, it
+    /// instead moves the selection between the selected lane's own
+    /// stations.
+    #[test]
+    fn flow_left_right_move_stations_once_follow_is_off_or_the_run_has_ended() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.follow = false;
+        app.flow_lane_stations = vec![
+            "prime.a".to_string(),
+            "prime.b".to_string(),
+            "prime.c".to_string(),
+        ];
+        app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.flow_scroll, 0, "the rail itself never scrolls here");
+        app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        app.handle_key(key(KeyCode::Left), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+
+        // Following, but the run itself has ended (`running` false):
+        // still moves stations, never scrolls.
+        app.follow = true;
+        app.handle_key(key(KeyCode::Right), &[], &[], false, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         assert_eq!(app.flow_scroll, 0);
     }
 

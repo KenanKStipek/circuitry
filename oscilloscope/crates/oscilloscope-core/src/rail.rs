@@ -1638,6 +1638,94 @@ pub fn find_station<'a>(items: &'a [RailItem], path: &str) -> Option<&'a Station
     None
 }
 
+/// A `RailItem`'s own selectable path (issue #704 rule 3): a plain
+/// station's own, or a fork's own host path (the decision, loop or
+/// `dynamic` itself) -- never one of the fork's own lanes, which
+/// `↑↓` alone (`App::flow_select_lane`) still reaches.
+fn rail_item_path(item: &RailItem) -> Option<&str> {
+    match item {
+        RailItem::Station(s) if s.selectable => Some(s.path.as_str()),
+        RailItem::Station(_) => None,
+        RailItem::Fork(f) => Some(f.path.as_str()),
+    }
+}
+
+/// `items`' own stations in plan order (issue #704 rule 3's "stations
+/// in plan order along the selected lane"), a decision fork's own
+/// taken lane inlined right after its own station -- a decision
+/// never really forks the sequence the way a loop's passes or a
+/// parallel `dynamic`'s children do (only one of its two lanes is
+/// ever real), so `←→` flows straight through it; a loop's or a
+/// `dynamic`'s own lanes stay their own separate zones, reached only
+/// by `↑↓` first.
+fn flatten_lane_stations(items: &[RailItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in items {
+        if let Some(path) = rail_item_path(item) {
+            out.push(path.to_string());
+        }
+        if let RailItem::Fork(fork) = item {
+            if fork.kind == ForkKind::Decision {
+                if let Some(taken) = fork.lanes.iter().find(|l| l.ghost.is_none()) {
+                    out.extend(flatten_lane_stations(&taken.items));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The zone (the rail's own top level, or one specific loop/`dynamic`
+/// lane) that owns `selected`, recursing through a decision fork's
+/// own taken lane transparently (same reasoning as `flatten_lane_
+/// stations`'s own inlining): a decision never terminates a zone
+/// search on its own, only a loop's or a `dynamic`'s own lane does,
+/// and only the one that actually holds `selected` -- `None` when
+/// `selected` isn't inside any loop/`dynamic` lane in `items` at any
+/// depth (the rail's own top level is `lane_stations`' own fallback
+/// then, never something this returns itself).
+fn deepest_fork_zone<'a>(items: &'a [RailItem], selected: &str) -> Option<&'a [RailItem]> {
+    for item in items {
+        let RailItem::Fork(fork) = item else { continue };
+        if fork.kind == ForkKind::Decision {
+            if let Some(taken) = fork.lanes.iter().find(|l| l.ghost.is_none()) {
+                if let Some(found) = deepest_fork_zone(&taken.items, selected) {
+                    return Some(found);
+                }
+            }
+        } else {
+            for lane in &fork.lanes {
+                if !lane_contains(&lane.items, selected) {
+                    continue;
+                }
+                return Some(deepest_fork_zone(&lane.items, selected).unwrap_or(&lane.items));
+            }
+        }
+    }
+    None
+}
+
+/// Whether `selected` is, or is nested under, one of `items`' own
+/// flattened stations (a decision's taken lane already inlined) --
+/// `flatten_lane_stations`' own membership test.
+fn lane_contains(items: &[RailItem], selected: &str) -> bool {
+    flatten_lane_stations(items)
+        .iter()
+        .any(|p| p == selected || selected.starts_with(&format!("{p}.")))
+}
+
+/// Issue #704 rule 3: the stations (plain, decision or fork-host) of
+/// the lane that owns `selected_path`, in plan order -- the rail's
+/// own top level with nothing selected, or with a selection the rail
+/// doesn't (yet) contain at all (a path from another screen's own
+/// selection history, say).
+pub fn lane_stations(rail: &Rail, selected_path: Option<&str>) -> Vec<String> {
+    let items = selected_path
+        .and_then(|p| deepest_fork_zone(&rail.items, p))
+        .unwrap_or(&rail.items);
+    flatten_lane_stations(items)
+}
+
 /// Every unnamed `if`'s own inferred decision anywhere on the rail
 /// (recursing into every fork's own lanes), ready for the Story pane
 /// (`crate::flow::build_story`'s own `inferred` parameter): the
@@ -1742,6 +1830,160 @@ mod tests {
             waiting: false,
             path: Some(path.to_string()),
         }
+    }
+
+    fn nav_station(path: &str) -> super::RailItem {
+        super::RailItem::Station(super::Station {
+            path: path.to_string(),
+            selectable: true,
+            is_edge: false,
+            row_kind: crate::render::RowKind::Tool,
+            status: StatusKind::Done,
+            name: path.rsplit('.').next().unwrap_or(path).to_string(),
+            headline: super::Headline::Blank,
+            detail: super::Detail::Blank,
+        })
+    }
+
+    fn lane(path: &str, items: Vec<super::RailItem>, ghost: Option<&str>) -> super::Lane {
+        super::Lane {
+            items,
+            ghost: ghost.map(str::to_string),
+            running: false,
+            waiting: false,
+            path: (ghost.is_none()).then(|| path.to_string()),
+        }
+    }
+
+    /// Issue #704 rule 3: a decision fork never really forks the
+    /// navigable sequence (only one of its two lanes is ever real),
+    /// so ←→ flows straight through its own taken lane -- the fork's
+    /// own station, then the taken lane's own stations, whichever of
+    /// the three is actually selected.
+    #[test]
+    fn lane_stations_flattens_a_decisions_own_taken_lane() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.gate".to_string(),
+                    kind: super::ForkKind::Decision,
+                    source_status: StatusKind::Done,
+                    lanes: vec![
+                        lane(
+                            "prime.gate.then",
+                            vec![nav_station("prime.gate.reply")],
+                            None,
+                        ),
+                        lane("", vec![], Some("else")),
+                    ],
+                }),
+                nav_station("prime.summary"),
+            ],
+        };
+        let expected = vec![
+            "prime.a".to_string(),
+            "prime.gate".to_string(),
+            "prime.gate.reply".to_string(),
+            "prime.summary".to_string(),
+        ];
+        assert_eq!(super::lane_stations(&rail, Some("prime.a")), expected);
+        assert_eq!(super::lane_stations(&rail, Some("prime.gate")), expected);
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.gate.reply")),
+            expected
+        );
+        assert_eq!(super::lane_stations(&rail, Some("prime.summary")), expected);
+    }
+
+    /// Issue #704 rule 3: a loop's own lanes (folded into one band or
+    /// not) are each their own zone, reached only once the selection
+    /// is actually inside one -- the top level sees the loop as a
+    /// single station, never its own passes inlined the way a
+    /// decision's taken lane is.
+    #[test]
+    fn lane_stations_keeps_a_folded_loops_own_lanes_separate_zones() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.drafts".to_string(),
+                    kind: super::ForkKind::Loop,
+                    source_status: StatusKind::Done,
+                    lanes: vec![
+                        lane(
+                            "prime.drafts.iter_0",
+                            vec![nav_station("prime.drafts.iter_0.draft")],
+                            None,
+                        ),
+                        lane(
+                            "prime.drafts.iter_1",
+                            vec![nav_station("prime.drafts.iter_1.draft")],
+                            None,
+                        ),
+                    ],
+                }),
+                nav_station("prime.b"),
+            ],
+        };
+        // Outside the loop: the loop itself is one station, its own
+        // passes never inlined into the top-level sequence.
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.a")),
+            vec![
+                "prime.a".to_string(),
+                "prime.drafts".to_string(),
+                "prime.b".to_string()
+            ]
+        );
+        // Inside one specific pass: only that pass's own stations,
+        // never the other pass's or the top level's.
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.drafts.iter_0.draft")),
+            vec!["prime.drafts.iter_0.draft".to_string()]
+        );
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.drafts.iter_1.draft")),
+            vec!["prime.drafts.iter_1.draft".to_string()]
+        );
+    }
+
+    /// Issue #704 rule 3: a parallel `dynamic`'s own children are
+    /// separate zones the same way a loop's own passes are -- never
+    /// inlined into the top level or into each other.
+    #[test]
+    fn lane_stations_keeps_a_parallel_dynamics_own_children_separate_zones() {
+        let rail = super::Rail {
+            items: vec![super::RailItem::Fork(super::Fork {
+                path: "prime.par".to_string(),
+                kind: super::ForkKind::Parallel,
+                source_status: StatusKind::Done,
+                lanes: vec![
+                    lane(
+                        "prime.par.child_a",
+                        vec![nav_station("prime.par.child_a.step")],
+                        None,
+                    ),
+                    lane(
+                        "prime.par.child_b",
+                        vec![nav_station("prime.par.child_b.step")],
+                        None,
+                    ),
+                ],
+            })],
+        };
+        assert_eq!(
+            super::lane_stations(&rail, None),
+            vec!["prime.par".to_string()]
+        );
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.par.child_a.step")),
+            vec!["prime.par.child_a.step".to_string()]
+        );
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.par.child_b.step")),
+            vec!["prime.par.child_b.step".to_string()]
+        );
     }
 
     /// Six dispatched passes two wide: the two definitely running

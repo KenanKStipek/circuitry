@@ -1125,8 +1125,8 @@ pub fn build_store(
         .max();
     let unit = crate::screens::tape_unit(largest_usual_step);
     let run_start = header.run_start_ts.as_deref();
-    let cursor_path = store_cursor_path(selected_path, &table)
-        .or_else(|| table.first().map(|r| r.path.clone()));
+    let cursor_path =
+        store_cursor_path(selected_path, &table).or_else(|| table.first().map(|r| r.path.clone()));
     let selected = cursor_path
         .as_deref()
         .and_then(|path| rows.iter().find(|r| r.path == path))

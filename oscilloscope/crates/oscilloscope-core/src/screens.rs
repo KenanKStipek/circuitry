@@ -6278,7 +6278,9 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.650Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
+        let signal = build_signal(
+            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
         assert_eq!(signal.now_col, Some(6));
         let bucket = &signal.buckets[6];
         assert_eq!(bucket.sent, 40);
@@ -6326,7 +6328,18 @@ mod tests {
         let mut header = base_header();
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:02.100Z";
-        let signal = build_signal(&[], &header, &flat, &plan, &model, None, 100, None, None, now);
+        let signal = build_signal(
+            &[],
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+        );
         // The two live sightings land at their own observation
         // columns (350ms and 1350ms since the run started, at 100ms
         // per column); the remainder lands at the agent's own end
@@ -6411,7 +6424,9 @@ mod tests {
         let mut header = base_header();
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:01.100Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
+        let signal = build_signal(
+            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
         let (total_sent, total_received) = signal
             .buckets
             .iter()
@@ -6606,7 +6621,9 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:02.100Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
+        let signal = build_signal(
+            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
 
         assert_eq!(signal.now_pane.running.len(), 1);
         assert_eq!(signal.now_pane.running[0].path, "prime.drafts.iter_1.draft");
@@ -6640,20 +6657,8 @@ mod tests {
     #[test]
     fn build_signal_cursor_follows_the_selected_effect_not_always_now() {
         let rows = vec![
-            tape_row(
-                "prime.ask",
-                1,
-                "ask",
-                RowKind::Prompt,
-                StatusKind::Done,
-            ),
-            tape_row(
-                "prime.fix",
-                1,
-                "fix",
-                RowKind::Prompt,
-                StatusKind::Running,
-            ),
+            tape_row("prime.ask", 1, "ask", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.fix", 1, "fix", RowKind::Prompt, StatusKind::Running),
         ];
         let mut flat = BTreeMap::new();
         flat.insert(
@@ -6690,7 +6695,10 @@ mod tests {
             now,
         );
         assert_eq!(signal.cursor_col, Some(10));
-        assert_eq!(signal.selected.as_ref().map(|s| s.path.as_str()), Some("prime.ask"));
+        assert_eq!(
+            signal.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.ask")
+        );
 
         // `prime.fix` is still running, started at 1.5s (column 15) --
         // its own start, not Now, and not `prime.ask`'s own end either.
@@ -6707,7 +6715,10 @@ mod tests {
             now,
         );
         assert_eq!(signal.cursor_col, Some(15));
-        assert_eq!(signal.selected.as_ref().map(|s| s.path.as_str()), Some("prime.fix"));
+        assert_eq!(
+            signal.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.fix")
+        );
 
         // An explicit scrub (`←→`) still wins outright, and finds
         // whichever step the cursor itself lands on, ignoring the
@@ -6726,7 +6737,10 @@ mod tests {
             now,
         );
         assert_eq!(signal.cursor_col, Some(10));
-        assert_eq!(signal.selected.as_ref().map(|s| s.path.as_str()), Some("prime.ask"));
+        assert_eq!(
+            signal.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.ask")
+        );
     }
 
     /// A running prompt's own live estimate marks its column
@@ -6825,8 +6839,12 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.400Z";
-        let at_100ms = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
-        let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, None, now);
+        let at_100ms = build_signal(
+            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
+        let at_200ms = build_signal(
+            &rows, &header, &flat, &plan, &model, None, 200, None, None, now,
+        );
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");
     }
