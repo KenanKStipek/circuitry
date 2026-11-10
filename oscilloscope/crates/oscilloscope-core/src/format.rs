@@ -131,6 +131,21 @@ pub fn format_share_pct(share_pct: f64) -> String {
     }
 }
 
+/// A real dotted path, relative to `ancestor_path`, as a " › "-joined
+/// breadcrumb (`reviews › iter_1 › review`) -- the Store screen's own
+/// table row label (relative to the whole run, issue #695) and the
+/// Signal's own step breadcrumb (`screens::signal_breadcrumb`), both
+/// built by calling this with a different `ancestor_path` rather than
+/// a second, possibly-diverging copy of the stripping rule. `path`
+/// unchanged if it doesn't actually start with `ancestor_path` (never
+/// expected, since every path this is called with always descends
+/// from the tree it was read out of).
+pub fn path_breadcrumb_relative_to(path: &str, ancestor_path: &str) -> String {
+    let prefix = format!("{ancestor_path}.");
+    let relative = path.strip_prefix(prefix.as_str()).unwrap_or(path);
+    relative.replace('.', " \u{203a} ")
+}
+
 /// Resolves a UTC instant to a local calendar time (DESIGN.md's
 /// "clock times" section, issue #613). A per-timestamp method, not a
 /// single fixed offset held once, so an implementation backed by the
@@ -154,18 +169,6 @@ impl ClockZone for chrono::FixedOffset {
 pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
     let parsed = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
     let utc = parsed.with_timezone(&chrono::Utc);
-    Some(zone.local(utc).format("%H:%M:%S").to_string())
-}
-
-/// The midpoint between `start_ts` and `end_ts`, formatted the same
-/// way [`format_clock_time`] formats either end (the Cost screen's
-/// own chart axis, DESIGN.md: "a clock axis from the run's start to
-/// now") -- `None` when either timestamp fails to parse.
-pub fn midpoint_clock_time(start_ts: &str, end_ts: &str, zone: &dyn ClockZone) -> Option<String> {
-    let start = chrono::DateTime::parse_from_rfc3339(start_ts).ok()?;
-    let end = chrono::DateTime::parse_from_rfc3339(end_ts).ok()?;
-    let mid = start + (end - start) / 2;
-    let utc = mid.with_timezone(&chrono::Utc);
     Some(zone.local(utc).format("%H:%M:%S").to_string())
 }
 
@@ -325,23 +328,5 @@ mod tests {
     fn clock_time_rejects_unparseable_timestamps() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
         assert_eq!(format_clock_time("not a timestamp", &utc), None);
-    }
-
-    #[test]
-    fn midpoint_clock_time_halves_the_span() {
-        let utc = chrono::FixedOffset::east_opt(0).unwrap();
-        assert_eq!(
-            midpoint_clock_time("2026-10-08T11:00:00Z", "2026-10-08T12:00:00Z", &utc).unwrap(),
-            "11:30:00"
-        );
-    }
-
-    #[test]
-    fn midpoint_clock_time_rejects_unparseable_timestamps() {
-        let utc = chrono::FixedOffset::east_opt(0).unwrap();
-        assert_eq!(
-            midpoint_clock_time("not a timestamp", "2026-10-08T12:00:00Z", &utc),
-            None
-        );
     }
 }

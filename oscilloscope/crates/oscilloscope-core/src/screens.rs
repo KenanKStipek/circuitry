@@ -391,19 +391,6 @@ fn truncate_head_keep_tail(label: &str, max: usize) -> String {
 // The overview (screen 0)
 // ---------------------------------------------------------------------
 
-/// A row in the phase strip -- the document's own top-level steps,
-/// already breadcrumb-folded (`label` comes straight from `Row`,
-/// which `fold::fold_rows` already folded a single-child wrapper
-/// chain into one row for, e.g. `"review \u203a fix"`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PhaseStep {
-    pub path: String,
-    pub label: String,
-    pub status: RowStatus,
-    pub start_ts: Option<String>,
-    pub duration_s: Option<f64>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum FocusDetail {
     Prompt {
@@ -711,19 +698,6 @@ fn build_focused_step(
         usual_busy_p50_s: None,
         usual_busy_p90_s: None,
     }
-}
-
-fn build_phase_strip(rows: &[Row]) -> Vec<PhaseStep> {
-    rows.iter()
-        .filter(|r| r.depth == 1)
-        .map(|r| PhaseStep {
-            path: r.path.clone(),
-            label: r.label.clone(),
-            status: r.status.clone(),
-            start_ts: None,
-            duration_s: r.duration_s,
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -2645,7 +2619,7 @@ fn signal_axis_top(largest_usual: Option<u64>, largest_col: u64, start: u64) -> 
 /// pane: `drafts › iter_0 › pause`, never stripped of its own loop
 /// name the way the Tape's list rows are).
 fn signal_breadcrumb(path: &str) -> String {
-    crate::cost::path_breadcrumb_relative_to(path, "prime")
+    crate::format::path_breadcrumb_relative_to(path, "prime")
 }
 
 /// `path` cut back to its own first `iter_N` segment (`prime.drafts.
@@ -3342,94 +3316,6 @@ pub fn build_signal(
     }
 }
 
-/// Screen 3's own model (issue #632): the by-store treemap for
-/// whichever [`crate::treemap::Measure`] is currently selected, the
-/// "largest stores" table and its footer, and the "tokens over time"
-/// stacked chart's own per-phase series. A caller builds this only
-/// while the Cost screen is actually on display (the same
-/// performance rule the overview's own model follows) -- unlike the
-/// overview, this is also rebuilt on every measure switch (`i`/`o`/
-/// `$`) and zoom, both of which only ever change `measure`/how the
-/// already-built `tree` is sliced, never trigger a fresh
-/// `RunModel::observe` of their own.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CostScreen {
-    pub measure: crate::treemap::Measure,
-    /// The root's own children, already chain-folded -- the
-    /// top-level tiles before any zoom (DESIGN.md: "the zoomed
-    /// store's path is shown as a breadcrumb above the treemap",
-    /// `oscilloscope`'s own `App::cost_zoom` decides which node's
-    /// children are actually on screen this frame).
-    pub tree: Vec<crate::treemap::TreemapNode>,
-    /// How many *finished* stores were left out for having no value
-    /// under `measure` at all (DESIGN.md: "the footer counts them").
-    pub stores_without_measure: u64,
-    pub stores: crate::cost::LargestStores,
-    /// One series per top-level phase, in the phase strip's own
-    /// order (DESIGN.md: "one band per top-level step").
-    pub tokens_over_time: Vec<(String, Vec<u64>)>,
-    /// The exact start/end the chart's own buckets span -- the same
-    /// pair [`tokens_over_time_by_phase`](crate::cost::tokens_over_time_by_phase)
-    /// was built from, so a front end's own clock-axis labels always
-    /// name the span the bars actually cover, never a separate
-    /// "now" of its own that could disagree with it. `chart_start_ts`
-    /// is `None` only before the run has a start time at all, in
-    /// which case every bucket is already empty too.
-    pub chart_start_ts: Option<String>,
-    pub chart_end_ts: String,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn build_cost_screen(
-    rows: &[Row],
-    header: &crate::render::Header,
-    flat: &BTreeMap<String, NodeMeta>,
-    statuses: &BTreeMap<String, crate::model::RowStatus>,
-    kinds: &BTreeMap<String, RowKind>,
-    state: Option<&Value>,
-    measure: crate::treemap::Measure,
-    model: &RunModel,
-    now: &str,
-    // Issue #641: the front end's own number of distinct glyphs for
-    // the "tokens over time" chart's bands -- `crate::cost::cap_
-    // phase_bands`' own `max_bands`, kept here rather than hardcoded
-    // so core never has to know a glyph count of its own.
-    max_phase_bands: usize,
-) -> CostScreen {
-    let (tree, stores_without_measure) =
-        crate::treemap::build_tree_for_measure("prime", flat, statuses, kinds, measure);
-    let stores = crate::cost::largest_stores("prime", flat, statuses, kinds, state);
-    let phases: Vec<(String, String)> = build_phase_strip(rows)
-        .into_iter()
-        .map(|p| (p.path, p.label))
-        .collect();
-    // DESIGN.md: the chart spans "the run's start to now (or to its
-    // end)" -- once the run has actually finished, `run_end_ts` is
-    // that fixed end, so a finished run's chart (`osi watch` on a
-    // document that is done) stops growing new buckets as real clock
-    // time keeps advancing underneath it.
-    let end = header.run_end_ts.as_deref().unwrap_or(now);
-    let tokens_over_time = crate::cost::cap_phase_bands(
-        crate::cost::tokens_over_time_by_phase(
-            header.run_start_ts.as_deref(),
-            end,
-            flat,
-            &phases,
-            model,
-        ),
-        max_phase_bands,
-    );
-    CostScreen {
-        measure,
-        tree,
-        stores_without_measure,
-        stores,
-        tokens_over_time,
-        chart_start_ts: header.run_start_ts.clone(),
-        chart_end_ts: end.to_string(),
-    }
-}
-
 /// A decision row's own detail, for the selected pane when the
 /// flow pane's own selection is a `◆`/untaken-branch row rather than
 /// an ordinary step (issue #635: "a decision row shows its condition,
@@ -3486,8 +3372,8 @@ pub struct SelectedPass {
 
 /// Screen 2's own model (issue #691, part 3 of #677) -- built only
 /// while the Flow screen is actually on display, the same
-/// performance rule `build_cost_screen` already follows for screen
-/// 3. `rail` is [`crate::rail::build_rail`]'s own output; `story` is
+/// performance rule the Store screen's own model follows for screen
+/// 3 (`store::build_store`). `rail` is [`crate::rail::build_rail`]'s own output; `story` is
 /// `crate::flow::build_story`'s; `selected_pass`/`selected_step` pick
 /// whichever of the two the current selection actually is -- never
 /// both, a loop pass and a plain station are never the same
@@ -5151,114 +5037,6 @@ mod tests {
                 text: "true".to_string()
             })
         );
-    }
-
-    #[test]
-    fn phase_strip_folds_single_child_wrappers_and_counts_depth_one() {
-        let plan = PlanTree::from_program(&program_with_ifs());
-        let state = json!({
-            "prime": {
-                "value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": null},
-                "plan": {"value": "x", "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:05Z"}},
-                "check": {
-                    "value": {"branch": "then"}, "meta": {"created_at": "2026-10-08T11:00:05Z", "completed_at": "2026-10-08T11:00:06Z", "branch": "then"},
-                    "taken": {"value": "ok\n", "meta": {"created_at": "2026-10-08T11:00:06Z", "completed_at": "2026-10-08T11:00:06Z"}}
-                }
-            }
-        });
-        let flat = flat_from(state.clone());
-        let mut model = RunModel::new();
-        let statuses = model.observe(&state, &plan, ProcessState::Running);
-        let all_paths: BTreeMap<String, ()> = flat.keys().map(|k| (k.clone(), ())).collect();
-        let rows = crate::render::build_rows(
-            &plan,
-            &flat,
-            &statuses,
-            &all_paths,
-            "2026-10-08T11:00:10Z",
-            &model,
-            None,
-        );
-        let folded = crate::fold::fold_rows(rows, true, &Default::default());
-        let strip = build_phase_strip(&folded);
-        // Issue #635: a named `if` is no longer breadcrumb-eligible, so
-        // `check` no longer folds with its own single child `taken`
-        // (which drops to depth 2, out of the phase strip entirely) --
-        // the strip has two top-level rows, `plan` and `check` on its
-        // own, neither carrying a › breadcrumb.
-        assert_eq!(strip.len(), 2);
-        assert!(strip.iter().any(|s| s.label == "check"));
-        assert!(!strip.iter().any(|s| s.label.contains('\u{203a}')));
-    }
-
-    /// Issue #641: with more top-level phases than the front end has
-    /// distinct glyphs for (`max_phase_bands`), the chart's own
-    /// series cap to that many, the smallest ones folded into one
-    /// `other` band -- never silently reusing a glyph for two
-    /// different phases.
-    #[test]
-    fn the_chart_caps_its_own_bands_to_max_phase_bands() {
-        let header = base_header();
-        let mut flat = BTreeMap::new();
-        let mut statuses = BTreeMap::new();
-        let mut kinds_map: BTreeMap<String, RowKind> = BTreeMap::new();
-        let mut rows = Vec::new();
-        for i in 0..8 {
-            let path = format!("prime.p{i}");
-            flat.insert(
-                path.clone(),
-                NodeMeta {
-                    created_at: Some("2026-10-08T11:04:58Z".to_string()),
-                    completed_at: Some("2026-10-08T11:05:58Z".to_string()),
-                    error: None,
-                    branch: None,
-                    progress_done: None,
-                    progress_total: None,
-                    progress_eta_s: None,
-                    live: None,
-                    prompt_live: None,
-                    value: Value::Null,
-                    meta: json!({
-                        "adapter": "scripted",
-                        "tokens_sent_total": (i + 1) * 10,
-                        "tokens_received_total": 0
-                    }),
-                },
-            );
-            let status = RowStatus {
-                kind: StatusKind::Done,
-                skip_reason: None,
-                retrying: false,
-            };
-            statuses.insert(path.clone(), status.clone());
-            kinds_map.insert(path.clone(), RowKind::Prompt);
-            rows.push(Row {
-                path: path.clone(),
-                depth: 1,
-                label: format!("p{i}"),
-                kind: RowKind::Prompt,
-                status,
-                duration_s: Some(60.0),
-                loop_progress: None,
-                dim: None,
-                has_children: false,
-            });
-        }
-        let model = RunModel::new();
-        let screen = build_cost_screen(
-            &rows,
-            &header,
-            &flat,
-            &statuses,
-            &kinds_map,
-            None,
-            crate::treemap::Measure::Total,
-            &model,
-            "2026-10-08T11:52:55Z",
-            6,
-        );
-        assert_eq!(screen.tokens_over_time.len(), 6);
-        assert_eq!(screen.tokens_over_time.last().unwrap().0, "other");
     }
 
     fn agent_row(path: &str) -> Row {
