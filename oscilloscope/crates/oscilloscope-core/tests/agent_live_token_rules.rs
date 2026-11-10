@@ -239,7 +239,7 @@ fn a_running_agents_tape_share_never_exceeds_100_percent() {
     assert_eq!(share, 100);
 }
 
-/// Finding: an interrupted run's own Store share must agree with
+/// An interrupted run's own Store share must agree with
 /// the Tape's for the identical step -- both read `top_agent`'s own
 /// stale leftover `meta.live` tokens as the denominator's exact
 /// figure, never `0`, from the real recorded cancelled fixture.
