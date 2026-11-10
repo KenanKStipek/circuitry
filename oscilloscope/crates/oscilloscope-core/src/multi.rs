@@ -153,10 +153,17 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
     // The Starting state has no second marker and nothing after its
     // own single `HeadRule` at all -- there is nothing left here to
     // fold.
-    let Some(now_idx) = items.iter().enumerate().skip(1).find_map(|(i, it)| {
-        is_now_marker(it).then_some(i)
-    }) else {
-        return items.iter().take(max_rows.max(1)).map(TapeTileLine::Item).collect();
+    let Some(now_idx) = items
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(i, it)| is_now_marker(it).then_some(i))
+    else {
+        return items
+            .iter()
+            .take(max_rows.max(1))
+            .map(TapeTileLine::Item)
+            .collect();
     };
     let finished = &items[1..now_idx];
     let rest = &items[now_idx..];
@@ -289,6 +296,7 @@ pub struct TileRender {
 /// has no interactive cursor; `enter` opens the real, selectable
 /// screen instead) and no previews (there is no room for a second
 /// line per row at a tile's own width either way).
+#[allow(clippy::too_many_arguments)]
 pub fn build_tile(
     document_label: &str,
     engine_label: &str,
@@ -533,7 +541,10 @@ mod tests {
             items.push(TapeItem::Row(row(&format!("run{i}"), StatusKind::Running)));
         }
         for i in 0..ahead {
-            items.push(TapeItem::Row(row(&format!("ahead{i}"), StatusKind::Pending)));
+            items.push(TapeItem::Row(row(
+                &format!("ahead{i}"),
+                StatusKind::Pending,
+            )));
         }
         items.push(TapeItem::RunEnd {
             usual_total_tokens: None,
@@ -640,8 +651,14 @@ mod tests {
     #[test]
     fn newest_finished_across_runs_picks_the_latest_ts() {
         let entries = vec![
-            ("a.yml".to_string(), Some(last_finished("x", "2026-01-01T00:00:01Z"))),
-            ("b.yml".to_string(), Some(last_finished("y", "2026-01-01T00:00:02Z"))),
+            (
+                "a.yml".to_string(),
+                Some(last_finished("x", "2026-01-01T00:00:01Z")),
+            ),
+            (
+                "b.yml".to_string(),
+                Some(last_finished("y", "2026-01-01T00:00:02Z")),
+            ),
         ];
         let (doc, lf) = newest_finished_across_runs(&entries).unwrap();
         assert_eq!(doc, "b.yml");
@@ -651,8 +668,14 @@ mod tests {
     #[test]
     fn newest_finished_across_runs_breaks_a_tie_by_run_order() {
         let entries = vec![
-            ("a.yml".to_string(), Some(last_finished("x", "2026-01-01T00:00:01Z"))),
-            ("b.yml".to_string(), Some(last_finished("y", "2026-01-01T00:00:01Z"))),
+            (
+                "a.yml".to_string(),
+                Some(last_finished("x", "2026-01-01T00:00:01Z")),
+            ),
+            (
+                "b.yml".to_string(),
+                Some(last_finished("y", "2026-01-01T00:00:01Z")),
+            ),
         ];
         let (doc, _) = newest_finished_across_runs(&entries).unwrap();
         assert_eq!(doc, "a.yml", "the earlier run order wins an exact tie");
@@ -662,7 +685,10 @@ mod tests {
     fn newest_finished_across_runs_skips_runs_with_nothing_finished_yet() {
         let entries = vec![
             ("a.yml".to_string(), None),
-            ("b.yml".to_string(), Some(last_finished("y", "2026-01-01T00:00:01Z"))),
+            (
+                "b.yml".to_string(),
+                Some(last_finished("y", "2026-01-01T00:00:01Z")),
+            ),
         ];
         let (doc, _) = newest_finished_across_runs(&entries).unwrap();
         assert_eq!(doc, "b.yml");

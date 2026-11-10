@@ -3255,12 +3255,12 @@ mod tests {
     }
 
     #[test]
-    fn select_enter_on_all_is_inert() {
+    fn select_enter_on_all_opens_the_all_screen() {
         let mut state = SelectState::new(0);
         let (code, modifiers) = select_key(KeyCode::Enter);
         assert_eq!(
             state.handle_key(code, modifiers, false, 2, false),
-            SelectKeyOutcome::None
+            SelectKeyOutcome::OpenAll
         );
     }
 

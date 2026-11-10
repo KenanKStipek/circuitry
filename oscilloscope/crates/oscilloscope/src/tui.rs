@@ -4007,6 +4007,727 @@ fn recent_row_spans(
     }
 }
 
+/// One tile of the All screen (issue #698, §2.6): the same
+/// [`oscilloscope_core::multi::TileRender`] a single-run attach
+/// would build from this run's own model/plan/state, plus the
+/// labels the tile's own mini header band shows (the document and
+/// config are muted text in the band itself, never repeated inside
+/// the tile's own Run Started row -- that row carries the time and
+/// engine instead, issue #698's own Settled point 11).
+pub struct AllTile {
+    pub document_label: String,
+    pub config_label: Option<String>,
+    pub render: oscilloscope_core::multi::TileRender,
+}
+
+/// The All screen's own body (issue #698, §2.6): the header band,
+/// one mini document band plus one bordered panel per tile in the
+/// grid, the status line (the newest finished step across every
+/// run) and the key bar. `tiles` is this page's own real tiles,
+/// already in display order; `more_count` is `0` on a page with
+/// nothing left to page to.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_all(
+    frame: &mut Frame,
+    full_area: Rect,
+    tiles: &[AllTile],
+    grid: oscilloscope_core::multi::GridLayout,
+    focus: usize,
+    more_count: usize,
+    screen: oscilloscope_core::screens::Screen,
+    running_count: usize,
+    status_line: Option<(&str, &oscilloscope_core::screens::SignalLastFinished)>,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    if full_area.width < oscilloscope_core::multi::TILE_MIN_WIDTH
+        || full_area.height < oscilloscope_core::multi::TILE_MIN_HEIGHT + 4
+    {
+        draw_too_small_with_min_width(
+            frame,
+            full_area,
+            ctx,
+            oscilloscope_core::multi::TILE_MIN_WIDTH,
+        );
+        return;
+    }
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(full_area);
+    let elapsed_s = tiles
+        .iter()
+        .map(|t| t.render.header.elapsed_s)
+        .fold(0.0_f64, f64::max);
+    draw_all_header_band(
+        frame,
+        sections[0],
+        screen,
+        running_count,
+        elapsed_s,
+        now,
+        ctx,
+    );
+    draw_all_status_line(frame, sections[2], status_line, now, ctx);
+    draw_key_bar(frame, sections[3], &all_key_bar_items(), ctx);
+
+    let body = sections[1];
+    let base_row_height = body.height / grid.rows as u16;
+    let row_remainder = body.height % grid.rows as u16;
+    let base_col_width = body.width / grid.columns as u16;
+    let col_remainder = body.width % grid.columns as u16;
+
+    let mut y = body.y;
+    for row in 0..grid.rows {
+        let row_height = base_row_height
+            + if row + 1 == grid.rows {
+                row_remainder
+            } else {
+                0
+            };
+        let mut x = body.x;
+        for col in 0..grid.columns {
+            let col_width = base_col_width
+                + if col + 1 == grid.columns {
+                    col_remainder
+                } else {
+                    0
+                };
+            let cell = Rect {
+                x,
+                y,
+                width: col_width,
+                height: row_height,
+            };
+            let index = row * grid.columns + col;
+            let cell_sections = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(oscilloscope_core::multi::TILE_MIN_HEIGHT),
+                ])
+                .split(cell);
+            if let Some(tile) = tiles.get(index) {
+                draw_all_tile_band(frame, cell_sections[0], tile, ctx);
+                draw_all_tile_panel(frame, cell_sections[1], tile, index == focus, now, ctx);
+            } else if index + 1 == grid.slots() && more_count > 0 {
+                draw_all_more_tile(frame, cell_sections[1], more_count, ctx);
+            }
+            x += col_width;
+        }
+        y += row_height;
+    }
+}
+
+fn all_key_bar_items() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("0-3", "Screens"),
+        ("←→↑↓", "Focus"),
+        ("enter", "Open"),
+        ("u", "Combined Signal"),
+        ("esc", "Select"),
+        ("?", "Help"),
+        ("q", "Quit"),
+    ]
+}
+
+/// The All screen's own header band (§2.6/§3.1): `osi  All ·
+/// ● 6 Running · 2.8s`, the `ALL · <screen>` chip and the clock.
+fn draw_all_header_band(
+    frame: &mut Frame,
+    area: Rect,
+    screen: oscilloscope_core::screens::Screen,
+    running_count: usize,
+    elapsed_s: f64,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let bg = ctx.theme.statusbar_bg;
+    let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
+    let mut left = vec![
+        Span::styled(
+            " osi  ",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("All ", Style::default().fg(ctx.theme.text).bg(bg)),
+        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+        Span::styled(
+            "● ",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{running_count} Running "),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ),
+        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+        Span::styled(
+            oscilloscope_core::format::format_duration(elapsed_s),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ),
+    ];
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let clock_text =
+        oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
+    let chip_text = format!("  ALL · {}  ", all_screen_chip_word(screen));
+    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let pad = (area.width as usize).saturating_sub(left_width + right_width);
+    left.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(ctx.theme.text).bg(bg),
+    ));
+    left.push(Span::styled(
+        chip_text,
+        Style::default()
+            .fg(ctx.theme.on_accent)
+            .bg(ctx.theme.accent_secondary),
+    ));
+    left.push(Span::styled(format!("  {clock_text} "), base));
+    frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
+}
+
+fn all_screen_chip_word(screen: oscilloscope_core::screens::Screen) -> &'static str {
+    match screen {
+        oscilloscope_core::screens::Screen::Tape => "TAPE",
+        oscilloscope_core::screens::Screen::Signal => "SIGNAL",
+        oscilloscope_core::screens::Screen::Flow => "FLOW",
+        oscilloscope_core::screens::Screen::Store => "STORE",
+    }
+}
+
+/// The status line (§3.2): the newest finished step across every
+/// run, `None` with nothing finished anywhere yet.
+fn draw_all_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    status_line: Option<(&str, &oscilloscope_core::screens::SignalLastFinished)>,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let Some((document, last)) = status_line else {
+        frame.render_widget(Paragraph::new(Line::from("")), area);
+        return;
+    };
+    let glyph = tape_glyph(last.kind, last.status);
+    let age = last
+        .ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now));
+    let age_text = age
+        .map(|a| format!(" · {} ago", oscilloscope_core::format::format_duration(a)))
+        .unwrap_or_default();
+    let spans = vec![
+        Span::styled(
+            format!(" {glyph} "),
+            tape_glyph_style(last.kind, last.status, ctx.theme),
+        ),
+        Span::styled(
+            format!("{document} · {} finished", last.label),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(age_text, Style::default().fg(ctx.theme.dim)),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// One tile's own mini document band (§2.6): `triage.yml
+/// config-triage.json · ● 2.2s   cof`, on the statusbar colours, the
+/// same band style the main header uses but scoped to one run.
+fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawCtx) {
+    let bg = ctx.theme.statusbar_bg;
+    let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
+    let header = &tile.render.header;
+    let (glyph, glyph_color) = match header.status {
+        oscilloscope_core::model::RunStatus::Running => ('●', ctx.theme.accent_primary),
+        oscilloscope_core::model::RunStatus::Ok => ('✓', ctx.theme.status_done),
+        _ => ('✗', ctx.theme.status_failed),
+    };
+    let config_text = tile
+        .config_label
+        .as_deref()
+        .map(|c| format!("{c} "))
+        .unwrap_or_default();
+    let mut left = vec![
+        Span::styled(
+            format!(" {} ", tile.document_label),
+            Style::default()
+                .fg(ctx.theme.text)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
+        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+        Span::styled(
+            format!("{glyph} "),
+            Style::default()
+                .fg(glyph_color)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            oscilloscope_core::format::format_duration(header.elapsed_s),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ),
+    ];
+    let engine_word = header
+        .engine
+        .split_whitespace()
+        .next()
+        .unwrap_or(&header.engine)
+        .to_string();
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let right_text = format!("{engine_word} ");
+    let pad = (area.width as usize).saturating_sub(left_width + right_text.chars().count() + 1);
+    left.push(Span::styled(" ".repeat(pad), base));
+    left.push(Span::styled(right_text, base));
+    frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
+}
+
+/// A `… n more` tile (§9.6/Settled point 5): the grid's own last
+/// slot once a page can't show every running run at once.
+fn draw_all_more_tile(frame: &mut Frame, area: Rect, more_count: usize, ctx: &DrawCtx) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .border_style(Style::default().fg(ctx.theme.border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, ctx.theme.border);
+    let mid = inner.y + inner.height / 2;
+    let text = format!("… {more_count} more");
+    let line_area = Rect {
+        x: inner.x,
+        y: mid,
+        width: inner.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default().fg(ctx.theme.dim),
+        )))
+        .alignment(Alignment::Center),
+        line_area,
+    );
+}
+
+/// One tile's own panel (issue #698, Settled point 5): a bordered
+/// box whose title is the tile's own screen-specific counts
+/// (`Tape · 1 Done · 1 Running · 10 Ahead · ▰ = 50 t`), dispatched to
+/// whichever of the four screens `screen` names -- the same shared
+/// `0`-`3` every tile draws at once.
+fn draw_all_tile_panel(
+    frame: &mut Frame,
+    area: Rect,
+    tile: &AllTile,
+    focused: bool,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    match &tile.render.screen {
+        oscilloscope_core::multi::TileScreen::Tape(s) => {
+            draw_all_tape_tile(frame, area, s, &tile.render.header, focused, ctx)
+        }
+        oscilloscope_core::multi::TileScreen::Signal(s) => {
+            draw_all_signal_tile(frame, area, s, &tile.render.header, focused, ctx)
+        }
+        oscilloscope_core::multi::TileScreen::Flow(s) => {
+            draw_all_flow_tile(frame, area, s, &tile.render.header, focused, now, ctx)
+        }
+        oscilloscope_core::multi::TileScreen::Store(s) => {
+            draw_all_store_tile(frame, area, s, &tile.render.header, focused, ctx)
+        }
+    }
+}
+
+/// A Tape tile's own content: Run Started (time and engine, not the
+/// document -- already in the band above), the finished rows (the
+/// oldest folding into `… n earlier`), the Now band, the running
+/// rows, the slots rule, the rows ahead (folding into `… n more`),
+/// Run End, and the Totals row pinned above the bottom border --
+/// never the clock column or a detail pane (issue #698, Settled
+/// point 5). `content` is the panel's own interior shrunk by one
+/// more column on each side (the frames' own gutter around every
+/// row but the rule lines and the Totals row, which already carry
+/// their own).
+fn draw_all_tape_tile(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::TapeScreen,
+    header: &oscilloscope_core::render::Header,
+    focused: bool,
+    ctx: &DrawCtx,
+) {
+    let border_color = if focused {
+        ctx.theme.border_focused
+    } else {
+        ctx.theme.border
+    };
+    let title = format!(
+        "Tape · {} Done · {} Running · {} Ahead · ▰ = {} t",
+        screen.done, screen.running, screen.ahead, screen.unit
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height < 3 {
+        fill_border_rows(frame, inner, border_color);
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let content = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
+    };
+    let name_width = 19usize;
+    let token_width = 16usize;
+    let what_width = (content.width as usize).saturating_sub(2 + name_width + token_width);
+
+    let viewport = (inner.height as usize).saturating_sub(2);
+    let folded = oscilloscope_core::multi::fold_tape_tile(&screen.items, viewport);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(folded.len());
+    for line in &folded {
+        use oscilloscope_core::multi::TapeTileLine;
+        use oscilloscope_core::screens::TapeItem;
+        match line {
+            TapeTileLine::Item(TapeItem::RunStarted { ts, engine, .. }) => {
+                let prefix = "■ Run Started        ";
+                let used = prefix.chars().count();
+                let ts_text = ts
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                    .unwrap_or_default();
+                let text = format!("{ts_text} · {engine}");
+                let width = (content.width as usize).saturating_sub(used);
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(ctx.theme.fg_muted)),
+                    Span::styled(
+                        format!("{text:<width$}"),
+                        Style::default().fg(ctx.theme.dim),
+                    ),
+                ]));
+            }
+            TapeTileLine::Item(TapeItem::Row(row)) => {
+                lines.push(tape_row_line(
+                    row,
+                    false,
+                    screen.unit,
+                    false,
+                    true,
+                    true,
+                    name_width,
+                    what_width,
+                    token_width,
+                    border_color,
+                    ctx,
+                ));
+            }
+            TapeTileLine::Item(TapeItem::NowBand { ts, elapsed_s }) => {
+                let ts_text = ts
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                    .unwrap_or_default();
+                let label = format!(
+                    "Now {ts_text} · {}",
+                    oscilloscope_core::format::format_duration(*elapsed_s)
+                );
+                lines.push(tape_rule_line(
+                    &label,
+                    ctx.theme.accent_primary,
+                    ctx.theme.accent_primary,
+                    true,
+                    inner.width as usize,
+                ));
+            }
+            TapeTileLine::Item(TapeItem::SlotsRule {
+                busy,
+                slots,
+                queued,
+            }) => {
+                let label = format!("{busy} of {slots} Slots Busy · {queued} Pass Queued");
+                lines.push(tape_rule_line(
+                    &label,
+                    ctx.theme.accent_primary,
+                    ctx.theme.accent_primary,
+                    false,
+                    inner.width as usize,
+                ));
+            }
+            TapeTileLine::Item(TapeItem::HeadRule) => {
+                if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
+                    lines.push(Line::from(spans));
+                } else {
+                    lines.push(Line::from(""));
+                }
+            }
+            TapeTileLine::Item(TapeItem::RunEnd { eta_ts, .. }) => {
+                let eta_text = eta_ts
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+                let mut text = "Run End            ".to_string();
+                match eta_text {
+                    Some(eta) => text.push_str(&format!("ETA {eta}")),
+                    None => text.push_str("ETA — · no history yet"),
+                }
+                let width = (content.width as usize).saturating_sub(2);
+                if text.chars().count() < width {
+                    text = format!("{text:<width$}");
+                }
+                lines.push(Line::from(vec![
+                    Span::styled("■ ", Style::default().fg(ctx.theme.fg_muted)),
+                    Span::styled(text, Style::default().fg(ctx.theme.dim)),
+                ]));
+            }
+            TapeTileLine::EarlierFold(n) => {
+                let text = format!("… {n} earlier");
+                let width = content.width as usize;
+                lines.push(Line::from(Span::styled(
+                    format!("{text:<width$}"),
+                    Style::default().fg(ctx.theme.dim),
+                )));
+            }
+            TapeTileLine::MoreFold(n) => {
+                let text = format!("… {n} more");
+                let width = content.width as usize;
+                lines.push(Line::from(Span::styled(
+                    format!("{text:<width$}"),
+                    Style::default().fg(ctx.theme.dim),
+                )));
+            }
+        }
+    }
+    let list_area = Rect {
+        x: content.x,
+        y: content.y,
+        width: content.width,
+        height: (lines.len() as u16).min(viewport as u16),
+    };
+    frame.render_widget(Paragraph::new(lines), list_area);
+
+    let rule_y = inner.y + viewport as u16;
+    let rule_area = Rect {
+        x: inner.x,
+        y: rule_y,
+        width: inner.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from("─".repeat(inner.width as usize)))
+            .style(Style::default().fg(border_color)),
+        rule_area,
+    );
+    let totals_area = Rect {
+        x: inner.x,
+        y: rule_y + 1,
+        width: inner.width,
+        height: 1,
+    };
+    draw_totals_row(
+        frame,
+        totals_area,
+        header,
+        false,
+        header.effects_planned_full,
+        screen.usual_so_far_tokens,
+        Some(border_color),
+        matches!(
+            screen.head,
+            oscilloscope_core::screens::TapeHead::Ended { .. }
+                | oscilloscope_core::screens::TapeHead::Failed { .. }
+        ),
+        ctx,
+    );
+}
+
+/// A Signal tile's own content (issue #698, Settled point 5): the
+/// fifteen-row chart on the shared scale every tile's own
+/// [`oscilloscope_core::screens::SignalScreen`] has already been
+/// overridden to carry, two finished-step labels and a Now pane
+/// whose title carries the slots.
+fn draw_all_signal_tile(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    header: &oscilloscope_core::render::Header,
+    focused: bool,
+    ctx: &DrawCtx,
+) {
+    let border_color = if focused {
+        ctx.theme.border_focused
+    } else {
+        ctx.theme.border
+    };
+    if area.height < 10 {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_set(ratatui::symbols::border::ROUNDED)
+            .border_style(Style::default().fg(border_color));
+        frame.render_widget(block, area);
+        return;
+    }
+    let chart_rows = (SIGNAL_SENT_ROWS + 1 + SIGNAL_RECEIVED_ROWS) as u16 + 4;
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(chart_rows), Constraint::Min(3)])
+        .split(area);
+    draw_signal_chart(frame, sections[0], screen, header, false, border_color, ctx);
+    draw_signal_now_pane(frame, sections[1], screen, ctx, false);
+}
+
+/// A Flow tile (issue #698's Settled point 5/Issue #698 rule 17):
+/// the 80-column Flow (folded lanes, no Story pane), clipped to the
+/// tile -- snapshot-tested, no frame of its own.
+fn draw_all_flow_tile(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::FlowScreen,
+    header: &oscilloscope_core::render::Header,
+    focused: bool,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let border_color = if focused {
+        ctx.theme.border_focused
+    } else {
+        ctx.theme.border
+    };
+    let mut app = App::new(false);
+    app.selected_path = screen.selected_step.as_ref().map(|s| s.path.clone());
+    draw_flow_rail_pane(
+        frame,
+        area,
+        screen,
+        header,
+        &mut app,
+        area.width,
+        border_color,
+        ctx,
+        now,
+    );
+}
+
+/// A Store tile (issue #698's Settled point 5/Issue #698 rule 17):
+/// the area diagram alone, clipped to the tile -- snapshot-tested,
+/// no frame of its own.
+fn draw_all_store_tile(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::store::StoreScreen,
+    _header: &oscilloscope_core::render::Header,
+    focused: bool,
+    ctx: &DrawCtx,
+) {
+    let border_color = if focused {
+        ctx.theme.border_focused
+    } else {
+        ctx.theme.border
+    };
+    let title = format!("Store · ▰ = {} t", screen.unit);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let tiles_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(3),
+        height: inner.height,
+    };
+    if tiles_area.width > 0 && tiles_area.height > 0 {
+        let tiles = oscilloscope_core::store::layout_store(
+            &screen.tree,
+            tiles_area.x,
+            tiles_area.y,
+            tiles_area.width,
+            tiles_area.height,
+        );
+        draw_store_tiles(frame, &tiles, ctx.theme);
+    }
+}
+
+/// The All screen's own Help overlay (§4): exactly the All key bar's
+/// own keys plus the globals, the same shape [`draw_select_help`]
+/// already follows.
+pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 5,
+        width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+        height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+    };
+    frame.render_widget(Clear, popup);
+    let border = ctx.theme.border_focused;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+        popup,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Help · All", border, ctx))
+        .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    fill_border_rows(frame, inner, border);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    let row = |k: &str, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{k:<16}"), key_style),
+            Span::styled(d.to_string(), desc_style),
+        ])
+    };
+    let lines = vec![
+        row("0-3", "Screens on every tile"),
+        row("←→↑↓", "Move the focus"),
+        row("enter", "Open the focused run"),
+        row("PageUp PageDown", "Turn the page"),
+        row("u", "Combined Signal (coming soon)"),
+        row("esc", "Back to Select"),
+        row("?", "This help"),
+        row("q", "Quit"),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
+        content_area,
+    );
+}
+
 /// Screen 0 (issue #678): the header band, the list (with its detail
 /// pane at 120 columns and up), the status line and the key bar --
 /// the shared chrome every screen will eventually carry; today only
@@ -4181,7 +4902,15 @@ fn draw_signal(
             Constraint::Length(now_pane_rows),
         ])
         .split(body);
-    draw_signal_chart(frame, rows_split[0], screen, header, wide, ctx);
+    draw_signal_chart(
+        frame,
+        rows_split[0],
+        screen,
+        header,
+        wide,
+        ctx.theme.border_focused,
+        ctx,
+    );
     if wide {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -4390,9 +5119,9 @@ fn draw_signal_chart(
     screen: &oscilloscope_core::screens::SignalScreen,
     header: &oscilloscope_core::render::Header,
     wide: bool,
+    border_color: Color,
     ctx: &DrawCtx,
 ) {
-    let border_color = ctx.theme.border_focused;
     let title = signal_title(screen, wide);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -10069,10 +10798,10 @@ fn draw_flow_rail_pane(
     header: &oscilloscope_core::render::Header,
     app: &mut App,
     frame_width: u16,
+    border_color: Color,
     ctx: &DrawCtx,
     now: &str,
 ) {
-    let border_color = ctx.theme.border_focused;
     let mut title = format!(
         "Flow · {}/{} · ▰ = {} t",
         header.effects_done,
@@ -10345,6 +11074,7 @@ fn draw_flow(
         header,
         app,
         full_area.width,
+        ctx.theme.border_focused,
         ctx,
         now,
     );
@@ -15775,7 +16505,7 @@ mod tape_frame_goldens {
         terminal
             .draw(|f| {
                 let area = f.area();
-                draw_signal_chart(f, area, screen, &header, wide, &ctx);
+                draw_signal_chart(f, area, screen, &header, wide, theme.border_focused, &ctx);
             })
             .unwrap();
         terminal.backend().buffer().clone()

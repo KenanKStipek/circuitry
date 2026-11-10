@@ -4321,9 +4321,7 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             SelectAction::AttachRecent(row) => {
                 attach_recent_run(&row, no_animation, theme_name, no_history, reader)
             }
-            SelectAction::OpenAll => {
-                run_all_loop(no_history, theme_name, no_animation, reader)
-            }
+            SelectAction::OpenAll => run_all_loop(no_history, theme_name, no_animation, reader),
         };
         match outcome {
             WatchOutcome::Exited(code, output) => break (code, output),
@@ -4733,6 +4731,360 @@ fn attach_recent_run(
         // `TerminalGuard` for the whole session.
         false,
     )
+}
+
+/// One All screen tile's own ingestion (issue #698, §2.6): the same
+/// live-state poller/events tailer/differ/[`RunModel`] a single-run
+/// attach keeps, plus the compiled plan from the registry's own
+/// orchestration/config paths -- unlike a Select-opened single-run
+/// attach (`attach_discovered_run`'s own `PlanTree::empty()`), a
+/// tile needs the real plan to show its own rows ahead at all. A
+/// document that no longer compiles (edited or removed since this
+/// osi discovered the run) falls back to the same empty plan a
+/// single-run attach already accepts; observations alone still
+/// carry the tile's own finished and running rows.
+struct AllRunSlot {
+    run: oscilloscope_core::discovery::DiscoveredRun,
+    document_label: String,
+    config_label: Option<String>,
+    plan: PlanTree,
+    model: RunModel,
+    live_poller: LiveStatePoller,
+    events_tailer: EventsTailer,
+    differ: Differ,
+    last_state: Option<serde_json::Value>,
+}
+
+fn path_basename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+impl AllRunSlot {
+    fn new(run: oscilloscope_core::discovery::DiscoveredRun) -> Self {
+        let run_dir = run.run_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        let events_path = run
+            .events
+            .clone()
+            .unwrap_or_else(|| run_dir.join("events.jsonl"));
+        let live_state_path = run
+            .live_state
+            .clone()
+            .unwrap_or_else(|| run_dir.join("state.live.json"));
+        let document_label = run
+            .orchestration
+            .as_deref()
+            .map(path_basename)
+            .unwrap_or_else(|| "—".to_string());
+        let config_label = run.config.as_deref().map(path_basename);
+        let plan = run
+            .orchestration
+            .as_deref()
+            .and_then(|doc| {
+                let doc_path = PathBuf::from(doc);
+                let config_path = run.config.as_deref().map(PathBuf::from);
+                let inputs = oscilloscope_core::plan::parse_inputs(&[]).unwrap_or_default();
+                oscilloscope_core::plan::compile(&doc_path, config_path.as_deref(), &inputs)
+                    .ok()
+                    .map(|program| PlanTree::from_program(&program))
+            })
+            .unwrap_or_else(PlanTree::empty);
+        AllRunSlot {
+            run,
+            document_label,
+            config_label,
+            plan,
+            model: RunModel::new(),
+            live_poller: LiveStatePoller::new(&live_state_path),
+            events_tailer: EventsTailer::new(events_path),
+            differ: Differ::new(),
+            last_state: None,
+        }
+    }
+
+    fn tick(&mut self) {
+        let (_lines, state) = observe_tick(
+            &mut self.live_poller,
+            &mut self.events_tailer,
+            &mut self.differ,
+            &mut self.model,
+            &self.plan,
+        );
+        if let Some(state) = state {
+            self.last_state = Some(state);
+        }
+    }
+
+    fn build(&mut self, screen: oscilloscope_core::screens::Screen, now: &str) -> tui::AllTile {
+        let engine_label = self.run.engine.clone().unwrap_or_else(|| "cof".to_string());
+        let render = oscilloscope_core::multi::build_tile(
+            &self.document_label,
+            &engine_label,
+            &self.plan,
+            &mut self.model,
+            self.last_state.as_ref(),
+            screen,
+            &LocalZone,
+            now,
+        );
+        tui::AllTile {
+            document_label: self.document_label.clone(),
+            config_label: self.config_label.clone(),
+            render,
+        }
+    }
+}
+
+/// The grid geometry and this page's own slice of `run_count` runs
+/// (issue #698, §2.6/§5): the body height already has the header
+/// band, status line and key bar subtracted. `page` is clamped to
+/// the real page count, so a resize (or a run ending) that shrinks
+/// the grid never leaves it pointing past the end.
+fn all_grid_info(
+    run_count: usize,
+    width: u16,
+    height: u16,
+    page: usize,
+) -> (
+    oscilloscope_core::multi::GridLayout,
+    usize,
+    usize,
+    usize,
+    usize,
+) {
+    let body_height = height.saturating_sub(3);
+    let grid = oscilloscope_core::multi::tile_grid(run_count, width, body_height);
+    let page_size = grid.page_size.max(1);
+    let page_count = run_count.div_ceil(page_size).max(1);
+    let page = page.min(page_count - 1);
+    let page_offset = page * page_size;
+    let page_run_count = run_count.saturating_sub(page_offset).min(page_size);
+    let more_count = if page + 1 < page_count {
+        run_count.saturating_sub(page_offset + page_run_count)
+    } else {
+        0
+    };
+    (grid, page_count, page_offset, page_run_count, more_count)
+}
+
+/// The All screen's own loop (issue #698, §2.6): an outer round
+/// trip the same shape as [`run_select`]'s own -- each leg draws
+/// the grid until `enter` opens a focused run (through
+/// [`attach_discovered_run`], exactly as Select opens one, so `esc`
+/// from it comes back to the *next* leg's own fresh grid rather
+/// than to Select); `esc` on the grid itself, or `q` anywhere,
+/// leaves this loop for good.
+fn run_all_loop(
+    no_history: bool,
+    theme_name: theme::ThemeName,
+    no_animation: bool,
+    mut event_rx: EventReader,
+) -> WatchOutcome {
+    let mut all_state = keys::AllState::new();
+    loop {
+        let (action, reader) =
+            run_all_grid_screen(no_history, theme_name, event_rx, &mut all_state);
+        event_rx = reader;
+        match action {
+            AllAction::Quit(code) => {
+                return WatchOutcome::Exited(ExitCode::from(code), Vec::new());
+            }
+            AllAction::BackToSelect => return WatchOutcome::BackToSelect(event_rx),
+            AllAction::Open(run) => {
+                match attach_discovered_run(
+                    &run,
+                    true,
+                    no_animation,
+                    theme_name,
+                    no_history,
+                    event_rx,
+                ) {
+                    WatchOutcome::Exited(code, output) => {
+                        return WatchOutcome::Exited(code, output);
+                    }
+                    WatchOutcome::BackToSelect(reader) => event_rx = reader,
+                }
+            }
+        }
+    }
+}
+
+/// What one leg of [`run_all_grid_screen`]'s own loop decided.
+enum AllAction {
+    Quit(u8),
+    BackToSelect,
+    Open(Box<oscilloscope_core::discovery::DiscoveredRun>),
+}
+
+/// One leg of the All screen's own grid (issue #698): its own fresh
+/// `Terminal` on `run_select`'s already-active `TerminalGuard`,
+/// exactly like [`run_select_screen`]'s own -- re-entered every time
+/// an opened run's own `esc` comes back, which is also the only
+/// time this needs a fresh one at all (the real screen underneath
+/// otherwise still carries this same loop's own last frame).
+///
+/// `no_history` is accepted, not read: a tile's own "usual"/ETA
+/// figures (unlike a single-run attach's own `apply_history_eta`)
+/// aren't wired to history yet -- every tile reads `ETA — · no
+/// history yet` regardless, same as a run with none at all.
+fn run_all_grid_screen(
+    _no_history: bool,
+    theme_name: theme::ThemeName,
+    event_rx: EventReader,
+    all_state: &mut keys::AllState,
+) -> (AllAction, EventReader) {
+    let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return (AllAction::Quit(1), event_rx);
+        }
+    };
+    let _ = terminal.clear();
+    let color_mode = theme::ColorMode::from_env();
+    let resolved_theme = theme::resolve(theme_name, color_mode);
+    let theme = resolved_theme.theme;
+
+    let mut runs = discover_running();
+    let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    let mut last_refresh = Instant::now();
+    let mut signals = SignalWatcher::new().ok();
+    let mut needs_draw = true;
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut lost_terminal = false;
+
+    let outcome = 'all: loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                break 'all AllAction::Quit(forward_signal_exit_code(sig));
+            }
+        }
+        if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
+            runs = discover_running();
+            let mut new_slots = Vec::with_capacity(runs.len());
+            for run in &runs {
+                if let Some(pos) = slots.iter().position(|s| s.run.run_dir == run.run_dir) {
+                    let mut slot = slots.remove(pos);
+                    slot.run = run.clone();
+                    new_slots.push(slot);
+                } else {
+                    new_slots.push(AllRunSlot::new(run.clone()));
+                }
+            }
+            slots = new_slots;
+            last_refresh = Instant::now();
+            needs_draw = true;
+        }
+        for slot in &mut slots {
+            slot.tick();
+        }
+        needs_draw |= !slots.is_empty();
+
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        let size = terminal.size().unwrap_or_default();
+                        let (grid, page_count, page_offset, page_run_count, _more) =
+                            all_grid_info(runs.len(), size.width, size.height, all_state.page);
+                        all_state.page = all_state.page.min(page_count.saturating_sub(1));
+                        match all_state.handle_key(
+                            key.code,
+                            key.modifiers,
+                            grid.columns,
+                            page_run_count,
+                            page_count,
+                        ) {
+                            keys::AllKeyOutcome::Quit(code) => break 'all AllAction::Quit(code),
+                            keys::AllKeyOutcome::BackToSelect => {
+                                break 'all AllAction::BackToSelect;
+                            }
+                            keys::AllKeyOutcome::Open(focus) => {
+                                if let Some(run) = runs.get(page_offset + focus) {
+                                    break 'all AllAction::Open(Box::new(run.clone()));
+                                }
+                            }
+                            keys::AllKeyOutcome::None => {}
+                        }
+                        needs_draw = true;
+                    }
+                    CEvent::Resize(_, _) => needs_draw = true,
+                    _ => {}
+                },
+            }
+        }
+        if terminal_gone {
+            lost_terminal = true;
+            break 'all AllAction::Quit(0);
+        }
+
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let now_str = now_rfc3339();
+            let size = terminal.size().unwrap_or_default();
+            let (grid, page_count, page_offset, page_run_count, more_count) =
+                all_grid_info(runs.len(), size.width, size.height, all_state.page);
+            all_state.page = all_state.page.min(page_count.saturating_sub(1));
+            all_state.focus = all_state.focus.min(page_run_count.saturating_sub(1));
+            let ctx = tui::DrawCtx {
+                theme: &theme,
+                theme_banner: None,
+                zone: &LocalZone,
+                no_animation: true,
+            };
+            let page_slots = &mut slots[page_offset..page_offset + page_run_count];
+            let tiles: Vec<tui::AllTile> = page_slots
+                .iter_mut()
+                .map(|slot| slot.build(all_state.screen, &now_str))
+                .collect();
+            let status_entries: Vec<(
+                String,
+                Option<oscilloscope_core::screens::SignalLastFinished>,
+            )> = tiles
+                .iter()
+                .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
+                .collect();
+            let status_line =
+                oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+            let running_count = runs.len();
+            let drew = terminal.draw(|f| {
+                tui::draw_all(
+                    f,
+                    f.area(),
+                    &tiles,
+                    grid,
+                    all_state.focus,
+                    more_count,
+                    all_state.screen,
+                    running_count,
+                    status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    &now_str,
+                    &ctx,
+                );
+                if all_state.help_open {
+                    tui::draw_all_help(f, &ctx);
+                }
+            });
+            last_draw = Instant::now();
+            needs_draw = false;
+            if drew.is_err() {
+                lost_terminal = true;
+                break 'all AllAction::Quit(0);
+            }
+        }
+    };
+
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
+    (outcome, event_rx)
 }
 
 /// The common ending every `osi watch` session reaches, however its
