@@ -3401,7 +3401,18 @@ pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &st
         SelectBody::Running(rows) => rows.len().saturating_sub(1),
         SelectBody::Empty(_) => 0,
     };
-    draw_select_header_band(frame, Rect { x: area.x, y: area.y, width: area.width, height: 1 }, running, now, ctx);
+    draw_select_header_band(
+        frame,
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        },
+        running,
+        now,
+        ctx,
+    );
     let body_area = Rect {
         x: area.x,
         y: area.y + 1,
@@ -3435,6 +3446,61 @@ pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &st
             ("q", "Quit"),
         ],
         ctx,
+    );
+}
+
+/// The Select screen's own `?` overlay (issue #698, §4): exactly its
+/// own key bar's keys, same shape as every other screen's own Help
+/// (`draw_dialog_overlay`'s `Dialog::Help` arms) -- not frame-tested,
+/// since no `select--*` frame shows it open.
+pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 5,
+        width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+        height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+    };
+    frame.render_widget(Clear, popup);
+    let border = ctx.theme.border_focused;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+        popup,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Help · Select", border, ctx))
+        .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    fill_border_rows(frame, inner, border);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    let row = |k: &str, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{k:<14}"), key_style),
+            Span::styled(d.to_string(), desc_style),
+        ])
+    };
+    let lines = vec![
+        row("↑↓ j k", "Select"),
+        row("Home End g G", "Jump to the ends"),
+        row("enter", "Open the selected run"),
+        row("?", "This help"),
+        row("q", "Quit"),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
+        content_area,
     );
 }
 
@@ -3582,7 +3648,9 @@ fn select_row_spans(
                 w = config_width + 11 + 1
             )
         }
-        SelectRow::Run { config_label, run, .. } => format!(
+        SelectRow::Run {
+            config_label, run, ..
+        } => format!(
             "{:<cw$}{:>11} ",
             config_label.clone().unwrap_or_else(|| "—".to_string()),
             run.engine.as_deref().unwrap_or("—"),
@@ -3696,19 +3764,26 @@ fn draw_select_empty_panel(
     let mut y = inner.y;
     render_line(
         frame,
-        Rect { x: inner.x, y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
         vec![
             Span::styled(" Looked ", muted_style),
-            Span::styled(
-                "registry · process scan · live state in cwd",
-                text_style,
-            ),
+            Span::styled("registry · process scan · live state in cwd", text_style),
         ],
     );
     y += 1;
     render_line(
         frame,
-        Rect { x: inner.x, y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
         vec![
             Span::styled(" Found  ", muted_style),
             Span::styled("0 running", text_style),
@@ -3717,13 +3792,23 @@ fn draw_select_empty_panel(
     y += 2;
     render_line(
         frame,
-        Rect { x: inner.x, y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
         vec![Span::styled(" Recent Runs · open read-only", title_style)],
     );
     y += 1;
     render_line(
         frame,
-        Rect { x: inner.x, y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
         vec![Span::styled(
             "      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME",
             header_style,
@@ -3735,13 +3820,27 @@ fn draw_select_empty_panel(
             break;
         }
         let spans = recent_row_spans(row, i == cursor, ctx.zone, ctx);
-        render_line(frame, Rect { x: inner.x, y, width: inner.width, height: 1 }, spans);
+        render_line(
+            frame,
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+            spans,
+        );
         y += 1;
     }
     y += 1;
     render_line(
         frame,
-        Rect { x: inner.x, y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
         vec![Span::styled(" Start One", title_style)],
     );
     y += 1;
@@ -3755,7 +3854,12 @@ fn draw_select_empty_panel(
         }
         render_line(
             frame,
-            Rect { x: inner.x, y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
             vec![Span::styled(line_text.to_string(), muted_style)],
         );
         y += 1;
@@ -3823,7 +3927,9 @@ fn recent_row_spans(
                 Style::default().fg(glyph_color).bg(sel_bg),
             ),
             Span::styled(
-                format!("{doc_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"),
+                format!(
+                    "{doc_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"
+                ),
                 Style::default().fg(ctx.theme.selection_fg).bg(sel_bg),
             ),
         ]
@@ -13887,9 +13993,7 @@ mod tape_frame_goldens {
                 engine: Some(entry["engine"].as_str().unwrap().to_string()),
                 pid: Some(entry["pid"].as_u64().unwrap() as u32),
                 launcher: Some("osi 0.1.0".to_string()),
-                run_dir: Some(std::path::PathBuf::from(
-                    entry["run_dir"].as_str().unwrap(),
-                )),
+                run_dir: Some(std::path::PathBuf::from(entry["run_dir"].as_str().unwrap())),
                 events: None,
                 live_state: None,
                 started_at: Some(format!("2026-11-08T23:51:5{}.000Z", 5 + i)),

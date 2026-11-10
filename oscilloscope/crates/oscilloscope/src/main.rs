@@ -29,8 +29,8 @@ mod terminal;
 mod theme;
 mod tui;
 
-use clap::{CommandFactory, Parser, ValueEnum};
-use crossterm::event::{self, Event as CEvent, KeyEventKind};
+use clap::{Parser, ValueEnum};
+use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{
     CofEngine, ElectricityEngine, Engine, EngineCaps, EngineError, RunSpec,
@@ -962,7 +962,7 @@ fn watch_glance(
     ExitCode::from(watch_exit_code(local_signal, &model, &last_state))
 }
 
-fn do_run(args: RunArgs, raw_args: &[String]) -> ExitCode {
+fn do_run(args: RunArgs) -> ExitCode {
     // Issue #535: resolved before anything else runs, same spirit as
     // the signal watcher just below -- a bad `OSI_THEME` is a usage
     // error and should exit 2 before this function does anything
@@ -980,15 +980,17 @@ fn do_run(args: RunArgs, raw_args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // No document at all. On a TTY with no `--log`, this stays the
-    // usage error it always was -- the Select screen that will
-    // replace it is a later part of this same design. Otherwise, osi
-    // finds what's already running instead.
+    // No document at all. On a TTY with no `--log`, bare `osi` opens
+    // the Select screen (issue #698): it attaches straight away
+    // with exactly one running orchestration, lists several, or
+    // shows the empty Select with Recent Runs from history with
+    // none. Without a TTY, or with `--log`, osi finds what's
+    // already running instead and prints it, same as always.
     let Some(orchestration_arg) = args.orchestration.clone() else {
         if effective_log_mode(args.log) {
             return print_discovered_runs();
         }
-        return report_clap_error(missing_orchestration_error(raw_args));
+        return run_select(theme_name, args.no_animation, args.no_history);
     };
 
     // Registered before *anything* else in this function, not just
@@ -3364,9 +3366,9 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             WatchOutcome::Exited(code) => code,
             // `opened_from_select` is false here, so `run_tui_watch`
             // never actually returns this for a plain `osi watch`.
-            WatchOutcome::BackToSelect(_) => unreachable!(
-                "a plain `osi watch` never opens from the Select screen"
-            ),
+            WatchOutcome::BackToSelect(_) => {
+                unreachable!("a plain `osi watch` never opens from the Select screen")
+            }
         };
     }
 
@@ -4178,6 +4180,376 @@ fn run_tui_watch(
     std::process::exit(i32::from(code));
 }
 
+/// Bare `osi` with no document, on a TTY without `--log` (issue
+/// #698, §2.5): attaches straight away with exactly one running
+/// orchestration, otherwise opens the interactive Select screen --
+/// several running, or none at all.
+fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool) -> ExitCode {
+    let runs = discover_running();
+    if runs.len() == 1 {
+        return match attach_discovered_run(
+            &runs[0],
+            false,
+            no_animation,
+            theme_name,
+            no_history,
+            spawn_event_reader(),
+        ) {
+            WatchOutcome::Exited(code) => code,
+            WatchOutcome::BackToSelect(_) => {
+                unreachable!("bare osi's own single-run attach never opens from Select")
+            }
+        };
+    }
+    let mut event_rx = spawn_event_reader();
+    loop {
+        let (action, reader) = run_select_screen(no_history, theme_name, event_rx);
+        let outcome = match action {
+            SelectAction::Quit => return ExitCode::from(0),
+            SelectAction::AttachRun(run) => {
+                attach_discovered_run(&run, true, no_animation, theme_name, no_history, reader)
+            }
+            SelectAction::AttachRecent(row) => {
+                attach_recent_run(&row, no_animation, theme_name, no_history, reader)
+            }
+        };
+        match outcome {
+            WatchOutcome::Exited(code) => return code,
+            WatchOutcome::BackToSelect(reader) => event_rx = reader,
+        }
+    }
+}
+
+/// The registry plus a process scan plus a `state.live.json` scan of
+/// the current directory (§7.2) -- the same three sources
+/// [`print_discovered_runs`] prints, used here to decide which of
+/// the Select screen's own three shapes bare `osi` shows.
+fn discover_running() -> Vec<oscilloscope_core::discovery::DiscoveredRun> {
+    oscilloscope_core::discovery::discover_runs(
+        registry_io::resolve_runs_dir().as_deref(),
+        &oscilloscope_core::registry::RealLiveness,
+        &oscilloscope_core::discovery::RealProcessScanner,
+        &oscilloscope_core::discovery::RealProcessCwd,
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::time::SystemTime::now(),
+    )
+}
+
+/// Every finished run recorded in history, across every document
+/// (issue #698's own Recent Runs rule) -- `[]` with history off
+/// (`--no-history`/`OSI_HISTORY=off`) or none recorded yet.
+fn read_recent_runs(no_history: bool) -> Vec<oscilloscope_core::select::RecentRow> {
+    let records = history_io::resolve_history_dir(no_history)
+        .as_deref()
+        .map(oscilloscope_core::history::read_all_records)
+        .unwrap_or_default();
+    oscilloscope_core::select::build_recent_rows(&records, &|dir: &str| Path::new(dir).is_dir())
+}
+
+/// What the Select screen's own loop ([`run_select_screen`]) decided
+/// once a key actually ended it -- `AttachRun`/`AttachRecent` carry
+/// the chosen row by value since the loop's own borrow of `runs`/
+/// `recent` ends with it.
+enum SelectAction {
+    Quit,
+    AttachRun(oscilloscope_core::discovery::DiscoveredRun),
+    AttachRecent(oscilloscope_core::select::RecentRow),
+}
+
+/// The list refreshes every two seconds while Select is open (§7.2).
+const SELECT_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The Select screen's own key/redraw loop (issue #698, §2.5/§4): its
+/// own terminal session, entered and left independently of any
+/// attached run's (`run_select`'s own loop re-enters this every time
+/// an attached run's own `esc` comes back) -- `event_rx` is handed
+/// back either way, never a second reader thread spawned for it.
+fn run_select_screen(
+    no_history: bool,
+    theme_name: theme::ThemeName,
+    event_rx: EventReader,
+) -> (SelectAction, EventReader) {
+    let guard_and_terminal = TerminalGuard::enter()
+        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
+    let (_guard, mut terminal) = match guard_and_terminal {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return (SelectAction::Quit, event_rx);
+        }
+    };
+    let color_mode = theme::ColorMode::from_env();
+    let resolved_theme = theme::resolve(theme_name, color_mode);
+    let theme = resolved_theme.theme;
+
+    let mut runs = discover_running();
+    let mut recent = if runs.is_empty() {
+        read_recent_runs(no_history)
+    } else {
+        Vec::new()
+    };
+    // Rule 6: the cursor starts on the first run, not `All`.
+    let mut cursor: usize = if runs.is_empty() { 0 } else { 1 };
+    let mut help_open = false;
+    let mut last_refresh = Instant::now();
+    let mut signals = SignalWatcher::new().ok();
+    let mut needs_draw = true;
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut lost_terminal = false;
+
+    let outcome = 'select: loop {
+        if let Some(watcher) = signals.as_mut() {
+            if watcher.pending().into_iter().next().is_some() {
+                break 'select SelectAction::Quit;
+            }
+        }
+        if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
+            runs = discover_running();
+            recent = if runs.is_empty() {
+                read_recent_runs(no_history)
+            } else {
+                Vec::new()
+            };
+            let max_index = if runs.is_empty() {
+                recent.len().saturating_sub(1)
+            } else {
+                runs.len()
+            };
+            cursor = cursor.min(max_index);
+            last_refresh = Instant::now();
+            needs_draw = true;
+        }
+
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        if help_open {
+                            help_open = false;
+                        } else {
+                            let max_index = if runs.is_empty() {
+                                recent.len().saturating_sub(1)
+                            } else {
+                                runs.len()
+                            };
+                            match key.code {
+                                KeyCode::Char('q') => break 'select SelectAction::Quit,
+                                KeyCode::Char('?') => help_open = true,
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    cursor = cursor.saturating_sub(1);
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    cursor = (cursor + 1).min(max_index);
+                                }
+                                KeyCode::Home | KeyCode::Char('g') => cursor = 0,
+                                KeyCode::End | KeyCode::Char('G') => cursor = max_index,
+                                KeyCode::Enter => {
+                                    if runs.is_empty() {
+                                        if let Some(row) = recent.get(cursor) {
+                                            if !row.gone {
+                                                break 'select SelectAction::AttachRecent(
+                                                    row.clone(),
+                                                );
+                                            }
+                                        }
+                                    } else if cursor > 0 {
+                                        // Row 0 is `All`, out of scope
+                                        // here (issue #698's own
+                                        // acceptance): `enter` on it
+                                        // is inert, same as `esc`
+                                        // everywhere on this screen.
+                                        if let Some(run) = runs.get(cursor - 1) {
+                                            break 'select SelectAction::AttachRun(run.clone());
+                                        }
+                                    }
+                                }
+                                // `0`-`3` and `c` do nothing here (§5:
+                                // no run attached to switch a screen
+                                // or cancel); `esc` likewise has
+                                // nowhere on this screen to go back
+                                // to.
+                                _ => {}
+                            }
+                        }
+                        needs_draw = true;
+                    }
+                    CEvent::Resize(_, _) => needs_draw = true,
+                    _ => {}
+                },
+            }
+        }
+        if terminal_gone {
+            lost_terminal = true;
+            break 'select SelectAction::Quit;
+        }
+
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let now_str = now_rfc3339();
+            let rows = oscilloscope_core::select::build_rows(&runs);
+            let ctx = tui::DrawCtx {
+                theme: &theme,
+                theme_banner: None,
+                zone: &LocalZone,
+                no_animation: true,
+            };
+            let drew = terminal.draw(|f| {
+                let body = if runs.is_empty() {
+                    tui::SelectBody::Empty(&recent)
+                } else {
+                    tui::SelectBody::Running(&rows)
+                };
+                tui::draw_select(f, &body, cursor, &now_str, &ctx);
+                if help_open {
+                    tui::draw_select_help(f, &ctx);
+                }
+            });
+            last_draw = Instant::now();
+            needs_draw = false;
+            if drew.is_err() {
+                lost_terminal = true;
+                break 'select SelectAction::Quit;
+            }
+        }
+    };
+
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
+    drop(_guard);
+    (outcome, event_rx)
+}
+
+/// Attaches to a [`oscilloscope_core::discovery::DiscoveredRun`] the
+/// same way `osi watch <run_dir>` would (issue #698, §2.5): read-
+/// only, `c` inert. Used both for bare `osi`'s own single-run case
+/// (`opened_from_select` false, `esc` then does nothing) and for a
+/// row chosen on the Select screen (`opened_from_select` true, `esc`
+/// returns there).
+fn attach_discovered_run(
+    run: &oscilloscope_core::discovery::DiscoveredRun,
+    opened_from_select: bool,
+    no_animation: bool,
+    theme_name: theme::ThemeName,
+    no_history: bool,
+    event_rx: EventReader,
+) -> WatchOutcome {
+    let Some(run_dir) = run.run_dir.clone() else {
+        // Nothing `discover_runs` itself ever returns reaches this --
+        // every source it reads always knows a run directory -- but
+        // there is nowhere left to watch without one.
+        return WatchOutcome::Exited(ExitCode::from(1));
+    };
+    let live_state_path = run
+        .live_state
+        .clone()
+        .unwrap_or_else(|| run_dir.join("state.live.json"));
+    let fallback_document = run
+        .orchestration
+        .clone()
+        .unwrap_or_else(|| run_dir.display().to_string());
+    // Issue #698's own Settled point 8: the registry entry's config,
+    // else `run_start`'s (not yet known at attach time -- the plan
+    // compiled from it, like `--plan`, needs a document path this
+    // function has no reason to resolve on its own), else the
+    // process arguments -- already folded into `run.config` by
+    // whichever source `discover_runs` found this run through.
+    let config =
+        oscilloscope_core::registry::resolve_attached_config(run.config.as_deref(), None, None)
+            .map(str::to_string);
+    let plan_fallback = run.orchestration.as_ref().map(PathBuf::from);
+    let history = history_io::HistoryHandle::for_watch(
+        history_io::resolve_history_dir(no_history),
+        plan_fallback,
+        config.clone(),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        config.as_deref().map(Path::new),
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
+        true,
+    );
+    run_tui_watch(
+        run_dir,
+        live_state_path,
+        PlanTree::empty(),
+        fallback_document,
+        no_animation,
+        theme_name,
+        &history,
+        &mut registry,
+        event_rx,
+        opened_from_select,
+    )
+}
+
+/// Attaches to a finished run named by the empty Select screen's own
+/// Recent Runs table (issue #698, point 20): `osi watch <run_dir>`
+/// read-only, with no `--config` of its own (the table never records
+/// one it would attach with -- only the history record's own,
+/// already shown in the CONFIG column).
+fn attach_recent_run(
+    row: &oscilloscope_core::select::RecentRow,
+    no_animation: bool,
+    theme_name: theme::ThemeName,
+    no_history: bool,
+    event_rx: EventReader,
+) -> WatchOutcome {
+    let Some(run_dir) = row.run_dir.as_ref().map(PathBuf::from) else {
+        // `build_recent_rows` already marks this `gone`, and
+        // `run_select_screen` never lets `enter` reach here for one
+        // -- nothing left to open either way.
+        return WatchOutcome::Exited(ExitCode::from(1));
+    };
+    let live_state_path = run_dir.join("state.live.json");
+    let history = history_io::HistoryHandle::for_watch(
+        history_io::resolve_history_dir(no_history),
+        None,
+        None,
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        None,
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
+        true,
+    );
+    run_tui_watch(
+        run_dir,
+        live_state_path,
+        PlanTree::empty(),
+        row.document_label.clone(),
+        no_animation,
+        theme_name,
+        &history,
+        &mut registry,
+        event_rx,
+        true,
+    )
+}
+
 /// The common ending every `osi watch` session reaches, however its
 /// own loop stopped (a completed run, a local Ctrl-C, or a dead pid
 /// with nothing left to watch): one more drain for anything that
@@ -4334,29 +4706,6 @@ fn report_clap_error(err: clap::Error) -> ExitCode {
     ExitCode::from(err.exit_code() as u8)
 }
 
-/// The same usage error clap produced on its own when `orchestration`
-/// was a required positional, before a bare `osi` without a TTY (or
-/// with `--log`) gained a second meaning (discovery) that needed it
-/// optional instead: re-parses `raw_args` against a copy of
-/// [`RunArgs`]'s own command with that one argument marked required
-/// again, so the message, usage line and exit code are clap's own,
-/// not a hand-written imitation of them -- a TTY caller with no
-/// document still sees exactly what it always did.
-fn missing_orchestration_error(raw_args: &[String]) -> clap::Error {
-    // `mut_arg` re-inserts the argument at the end of the command's
-    // own internal list, which would otherwise hand it a *later*
-    // positional index than `config`'s own -- both positions are
-    // pinned back explicitly so `config` still comes after
-    // `orchestration`, exactly as the two derived fields are
-    // ordered.
-    let command = RunArgs::command()
-        .mut_arg("orchestration", |a| a.required(true).index(1))
-        .mut_arg("config", |a| a.index(2));
-    command
-        .try_get_matches_from(raw_args.to_vec())
-        .expect_err("orchestration is missing, so this must fail")
-}
-
 fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
     if args.get(1).map(String::as_str) == Some("watch") {
@@ -4367,7 +4716,7 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         }
     } else {
         match RunArgs::try_parse_from(args.clone()) {
-            Ok(parsed) => do_run(parsed, &args),
+            Ok(parsed) => do_run(parsed),
             Err(err) => report_clap_error(err),
         }
     }
@@ -5108,15 +5457,6 @@ mod tests {
     #[test]
     fn help_flag_exits_zero() {
         assert_eq!(run(args(&["--help"])), ExitCode::SUCCESS);
-    }
-
-    #[test]
-    fn missing_orchestration_error_is_claps_own_missing_required_argument() {
-        let err = missing_orchestration_error(&args(&[]));
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-        assert_eq!(err.exit_code(), 2);
-        let rendered = err.to_string();
-        assert!(rendered.contains("ORCHESTRATION"));
     }
 
     #[test]

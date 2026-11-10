@@ -20,7 +20,7 @@ pub enum Row {
         running: usize,
     },
     Run {
-        run: DiscoveredRun,
+        run: Box<DiscoveredRun>,
         /// The document's own basename, except when disambiguated
         /// per [`build_rows`]'s own tie-break rule.
         document_label: String,
@@ -95,7 +95,7 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
             plain_doc_labels[i].clone()
         };
         rows.push(Row::Run {
-            run: run.clone(),
+            run: Box::new(run.clone()),
             document_label,
             config_label: config_labels[i].clone(),
         });
@@ -222,10 +222,7 @@ mod tests {
 
     #[test]
     fn build_rows_uses_plain_basenames_by_default() {
-        let rows = build_rows(&[run(
-            "/work/triage.yml",
-            Some("/work/config-triage.json"),
-        )]);
+        let rows = build_rows(&[run("/work/triage.yml", Some("/work/config-triage.json"))]);
         let Row::Run {
             document_label,
             config_label,
@@ -275,6 +272,7 @@ mod tests {
         assert_eq!(labels, vec!["triage.yml", "triage.yml"]);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sample_record(
         run_id: &str,
         document: &str,
@@ -391,11 +389,23 @@ mod tests {
     fn build_recent_rows_orders_newest_finished_first() {
         let records = vec![
             sample_record(
-                "r1", "d.yml", None, None, "t0", "2026-01-01T00:00:00Z", Outcome::Ok,
+                "r1",
+                "d.yml",
+                None,
+                None,
+                "t0",
+                "2026-01-01T00:00:00Z",
+                Outcome::Ok,
                 BTreeMap::new(),
             ),
             sample_record(
-                "r2", "d.yml", None, None, "t0", "2026-01-02T00:00:00Z", Outcome::Ok,
+                "r2",
+                "d.yml",
+                None,
+                None,
+                "t0",
+                "2026-01-02T00:00:00Z",
+                Outcome::Ok,
                 BTreeMap::new(),
             ),
         ];
@@ -424,7 +434,14 @@ mod tests {
     #[test]
     fn build_recent_rows_reads_gone_with_no_run_dir_at_all() {
         let records = vec![sample_record(
-            "r1", "d.yml", None, None, "t0", "t1", Outcome::Ok, BTreeMap::new(),
+            "r1",
+            "d.yml",
+            None,
+            None,
+            "t0",
+            "t1",
+            Outcome::Ok,
+            BTreeMap::new(),
         )];
         let rows = build_recent_rows(&records, &|_| true);
         assert!(rows[0].gone);
