@@ -14209,6 +14209,42 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #698's own §5: Select's narrowest frame is 80x24, so it
+    /// needs that many columns, not every other screen's shared 60
+    /// ([`SELECT_MIN_WIDTH`], not [`MIN_WIDTH`]).
+    #[test]
+    fn select_shows_the_too_small_notice_below_80_columns_not_60() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let draw_at = |cols: u16| {
+            let backend = TestBackend::new(cols, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| draw_select(f, &SelectBody::Empty(&[]), 0, "2026-01-01T00:00:00Z", &ctx))
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        assert!(
+            draw_at(79).contains("Terminal too small"),
+            "79 columns is below Select's own 80-column floor"
+        );
+        assert!(
+            !draw_at(80).contains("Terminal too small"),
+            "80 columns is Select's own narrowest frame"
+        );
+        assert!(
+            draw_at(65).contains("Terminal too small"),
+            "65 columns clears every other screen's shared 60-column floor, \
+             but not Select's own higher one"
+        );
+    }
+
     fn load_events(path: &std::path::Path) -> Vec<serde_json::Value> {
         std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("couldn't read {path:?}: {e}"))
