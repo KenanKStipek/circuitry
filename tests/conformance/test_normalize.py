@@ -284,6 +284,23 @@ def test_assert_events_equal_accepts_null_or_the_electricity_placeholder_for_no_
         assert_events_equal(bogus, expected)
 
 
+def test_assert_events_equal_rejects_a_run_start_missing_config_on_either_side() -> None:
+    """A stream from before this field existed is missing the `config` key
+    outright, distinct from carrying it as `null` -- caught rather than
+    silently treated as a match."""
+    expected = _events_text([_RUN_START, _RUN_END])
+    pre_field_start = dict(_RUN_START)
+    del pre_field_start["config"]
+
+    actual_missing = _events_text([pre_field_start, _RUN_END])
+    with pytest.raises(AssertionError):
+        assert_events_equal(actual_missing, expected)
+
+    expected_missing = _events_text([pre_field_start, _RUN_END])
+    with pytest.raises(AssertionError):
+        assert_events_equal(_events_text([_RUN_START, _RUN_END]), expected_missing)
+
+
 def test_assert_events_equal_detects_same_path_reordering() -> None:
     """A path's own events have exactly one valid order (`start`, then
     `dispatch`, then `end`) -- a multiset comparison can't tell `dispatch`

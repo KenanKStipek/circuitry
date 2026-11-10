@@ -845,6 +845,8 @@ effects:
 
     out_path = tmp_path / "out.json"
     events_path = tmp_path / "events.jsonl"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -855,6 +857,8 @@ effects:
             str(out_path),
             "--events",
             str(events_path),
+            "--config",
+            str(config_path),
             "--allow-capabilities",
             "shell",
         ],
@@ -863,6 +867,7 @@ effects:
 
     events = _events(events_path)
     assert events[0]["ev"] == "run_start"
+    assert events[0]["config"] == "config.json"
     assert events[-1]["ev"] == "run_end"
     assert events[-1]["ok"] is True
     start = next(e for e in events if e["ev"] == "start" and e["path"] == "prime.step")
