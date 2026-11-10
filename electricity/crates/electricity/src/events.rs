@@ -553,6 +553,13 @@ mod tests {
                 .get(&Value::Str("ev".to_string())),
             Some(&Value::Str("run_end".to_string()))
         );
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.lines()
+                .next()
+                .unwrap()
+                .contains(r#""orchestration":"doc.yml","config":null,"engine":"electricity "#)
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -570,6 +577,10 @@ mod tests {
                 .get(&Value::Str("config".to_string())),
             Some(&Value::Str("config.json".to_string()))
         );
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.lines().next().unwrap().contains(
+            r#""orchestration":"doc.yml","config":"config.json","engine":"electricity "#
+        ));
         fs::remove_file(&path).unwrap();
     }
 
