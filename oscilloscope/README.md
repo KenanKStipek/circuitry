@@ -104,14 +104,18 @@ whole run -- shown in the header, `--glance`, and the Tape.
   Linux. One JSONL file per document, named by the SHA-256 of its own
   absolute path. `OSI_HISTORY_DIR=<dir>` puts it somewhere else.
 - **What's in a record:** the document's path and content hash, the
-  engine, when it started and ended, how it ended, its wall time, tokens
-  and cost, and the same figures per step, keyed by its own path (a
-  loop's passes written `iter_*`). A step a plan doesn't know by name (a
-  generated `dynamic` child, a `use: inline:` child's own made-up names)
-  is never recorded by name -- it's folded into one `(other)` entry.
-  **Never recorded:** values, prompts, rendered params or commands, tool
+  config path as given on the command line (if any) and the run's own
+  run directory, the engine, when it started and ended, how it ended, its
+  wall time, tokens and cost, and the same figures per step, keyed by its
+  own path (a loop's passes written `iter_*`). A step a plan doesn't know
+  by name (a generated `dynamic` child, a `use: inline:` child's own
+  made-up names) is never recorded by name -- it's folded into one
+  `(other)` entry. The config path and run directory are both optional
+  (a record written before they existed reads neither). **Never
+  recorded:** values, prompts, rendered params or commands, tool
   targets, error text, stdout/stderr, report messages or data, model
-  replies, transcript content, the environment, or the config.
+  replies, transcript content, the environment, or a config's own
+  contents.
 - **Limits:** at most 50 runs per document (the file is compacted once it
   reaches 100 lines) and 500 steps per run; at most 500 documents and 64
   MiB in total, oldest-written evicted first.
@@ -127,6 +131,34 @@ whole run -- shown in the header, `--glance`, and the Tape.
   writes only once the watched run has really ended -- detaching (`q`,
   Ctrl-C) from one still running writes nothing, and
   `osi watch --glance --once` only ever reads.
+
+## The run registry
+
+While a run (or an `osi watch`) is going, `osi` keeps one small file for it
+so another `osi` process -- or a script -- can find it.
+
+- **Where:** `$XDG_RUNTIME_DIR/circuitry/osi/runs/`, else
+  `$XDG_STATE_HOME/circuitry/osi/runs/`, else
+  `~/.local/state/circuitry/osi/runs/` (macOS has no `XDG_RUNTIME_DIR`, so
+  this is the common case there). `OSI_RUNS_DIR=<dir>` puts it somewhere
+  else. One `0600` JSON file per run, in a `0700` directory, named by the
+  run's own `run_id`.
+- **What's in an entry:** the document and config paths (both absolute),
+  the engine, the engine's own pid, the launcher (`"osi <version>"` or
+  `"osi <version> watch"`), the run directory, the events and live-state
+  paths, and when the run started.
+- Written once the run has actually started (its own `run_start`), not at
+  the moment `osi` itself launches it; removed again when the run ends,
+  when `osi` detaches from it, or when `osi` itself exits, including on a
+  signal. An entry whose pid is no longer a live `cof`/`electricity`
+  process is pruned (deleted) the next time anything reads the registry.
+- **Bare `osi`, no document:** without a TTY, or with `--log`, `osi`
+  finds the orchestrations already running on this machine -- the
+  registry, a `ps` scan for `cof run`/`electricity` processes, and any
+  `state.live.json` in the current directory or one level of
+  subdirectories -- and prints one plain line per run (document, config,
+  engine, pid, run directory), then exits 0. On a TTY with no `--log`,
+  `osi` with no document is still a usage error, for now.
 
 ## The terminal UI
 

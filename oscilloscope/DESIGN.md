@@ -1595,6 +1595,16 @@ transcript content reaches a record (a test built from a state whose
 every one of those fields holds a marker string asserts the marker
 never appears in the serialized line).
 
+**`config`/`run_dir`** (issue #698's own part-5 groundwork, format
+`v` 1, `#[serde(default)]`, so a record written before these existed
+still reads): `config` is the config path exactly as given on the
+command line, never resolved further and never the config's own
+contents; `run_dir` is the run's own, already-absolute run directory,
+so "Recent Runs" (a later part of the same design) can still open a
+finished run read-only (`osi watch <run_dir>`) long after any
+registry entry for it (§6.3e below) is gone. Both are `None` for a
+run with neither, or for any record that predates them.
+
 **Where `busy_s`/`passes` come from** (`RunModel::step_intervals`, a
 bounded log, issue #649's own "keyed by event id"): an id-paired
 `start`/`end` event pair, when `--events` carried one for a path,
@@ -2588,6 +2598,61 @@ gives a long one. Below three finished runs, the Run End row reads
 legend states the run's own actual unit and, once there have been
 enough runs to pool, the real count pooled, not fixed `50 t`/`3`
 figures.
+
+**Part 5 groundwork (issue #698): the run registry, discovery and
+history's `config`/`run_dir`.** Part 5 of the epic (#677) is the
+Select and All screens and the Combined Signal; none of the three
+has shipped yet. What has is the groundwork those screens, and
+scripts, read from: `oscilloscope_core::registry` writes one `0600`
+JSON entry per run `osi` launches or watches, in a `0700` directory
+at `$OSI_RUNS_DIR`, else `$XDG_RUNTIME_DIR/circuitry/osi/runs`, else
+`$XDG_STATE_HOME/circuitry/osi/runs`, else
+`~/.local/state/circuitry/osi/runs` -- one root next to history's own
+(§6.3c), named by the run's own `run_id`. The entry is written once
+the run's `run_start` is known (`document`, `config`, `engine`,
+`pid`, `launcher` -- `"osi <version>"` or `"osi <version> watch"`,
+`run_dir`, `events`, `live_state`, `started_at`, document and config
+as absolute paths) and removed again at the run's own end, at a
+detach, or at osi's own exit -- including every signal path, and the
+two places (`run_tui`/`run_tui_watch`'s own tail) that end the
+process with `std::process::exit` rather than a plain return, which
+skips every other value's own `Drop` still on the stack: those two
+call the handle's own removal explicitly, right before. A pid alone
+can be fooled by a recycled one, so liveness (behind an injectable
+`Liveness` trait) means the pid exists *and* `ps -o args= -p <pid>`
+still names `cof` or `electricity`; an entry whose pid fails that
+check is pruned (removed from disk, not just skipped) the next time
+anything reads the registry.
+
+`oscilloscope_core::discovery::discover_runs` merges three sources,
+most trusted first: the registry; one `ps -axo pid=,args=` scan per
+call for `cof run`/`electricity` processes carrying `--events`/
+`--live-state` (a relative path among them resolves against that
+process's own working directory where the platform exposes it --
+macOS does not, so there it is shown as given); and a
+`state.live.json` under the current directory, or one level of
+subdirectories, modified in the last ten seconds. A run named by more
+than one source counts once (its pid, then its `--live-state` path).
+Both the process scan and the live-state scan are pure, injectable
+(`ProcessScanner`/`ProcessCwd`), so no test ever depends on the real
+machine's own processes. Bare `osi` with no orchestration argument,
+without a TTY (or with `--log`), now runs this discovery and prints
+one plain line per result -- document, config, engine, pid, run
+directory, `"—"` for anything not known -- then exits 0; on a TTY
+with no `--log` it is still the usage error it always was, until the
+Select screen replaces it.
+
+The history record (§6.3c) gains two optional fields, `config` (the
+path as given on the command line, never resolved further) and
+`run_dir` (already absolute), format `v` 1 with serde defaults so
+every record written before this still reads; only the paths are
+ever recorded, never a config's own contents. `run_start`'s own
+event also gains an optional `config` field, read already for when
+either engine starts writing one (issue #697, not yet shipped by
+either); `registry::resolve_attached_config` gives the fallback order
+a later screen showing an attached run's config will use: the
+registry entry's own `config`, else `run_start.config`, else the
+process's own arguments, else nothing.
 
 ### 6.4 Tests
 
