@@ -16754,6 +16754,97 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Flow and Store tiles have no frame of their own (issue #698's
+    /// own Settled point 5) -- this only proves every tile actually
+    /// draws real content at every grid size the Tape/Signal
+    /// goldens already exercise, never panicking and never leaving
+    /// a tile blank.
+    #[test]
+    fn all_flow_tiles_draw_real_content_for_every_run() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let tiles = snap6_tiles(oscilloscope_core::screens::Screen::Flow, now);
+        let grid = oscilloscope_core::multi::tile_grid(tiles.len(), 180, 45);
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_all(
+                    f,
+                    f.area(),
+                    &tiles,
+                    grid,
+                    0,
+                    0,
+                    oscilloscope_core::screens::Screen::Flow,
+                    tiles.len(),
+                    None,
+                    now,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains("Flow"),
+            "every tile draws its own Flow title:\n{text}"
+        );
+        assert!(
+            !text.trim().is_empty(),
+            "the grid draws real content, not a blank screen"
+        );
+    }
+
+    #[test]
+    fn all_store_tiles_draw_real_content_for_every_run() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let tiles = snap6_tiles(oscilloscope_core::screens::Screen::Store, now);
+        let grid = oscilloscope_core::multi::tile_grid(tiles.len(), 180, 45);
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_all(
+                    f,
+                    f.area(),
+                    &tiles,
+                    grid,
+                    0,
+                    0,
+                    oscilloscope_core::screens::Screen::Store,
+                    tiles.len(),
+                    None,
+                    now,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains("Store"),
+            "every tile draws its own Store title:\n{text}"
+        );
+        assert!(
+            !text.trim().is_empty(),
+            "the grid draws real content, not a blank screen"
+        );
+    }
+
     #[test]
     fn select_normal_120x30_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);

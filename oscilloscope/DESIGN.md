@@ -3157,6 +3157,123 @@ live in a file with nothing else in it, serialised among themselves
 with a shared lock, rather than alongside every other PTY test in
 `e2e_tui_pty.rs`.
 
+**The All screen** (issue #698, part 5 of the epic -- the tiled
+wall). `enter` on Select's own `All` row opens it; it tiles every
+running orchestration `discover_runs` finds, one full osi per run,
+so a single `0`-`3` press switches every tile's own screen at once.
+`oscilloscope_core::multi` carries its own pure logic -- the grid
+layout (`tile_grid`), a tile's own Tape folding (`fold_tape_tile`),
+the shared Signal scale (`shared_signal_axis_top`,
+`format_shared_axis_label`), the cross-run status line
+(`newest_finished_across_runs`) and one run's own tile build
+(`build_tile`, the same `render::build_folded`/`screens::build_*`
+calls a single-run attach makes, minus any row selection of its
+own) -- so both `main.rs`'s live loop and the frame goldens below
+call the identical functions. `main.rs`'s own `AllRunSlot` is the
+live side of this: one `LiveStatePoller`/`EventsTailer`/`Differ`/
+`RunModel` per discovered run, refreshed on the Select screen's own
+two-second cadence, reconciled by `run_dir` on every refresh (a run
+ending drops its slot, a newly discovered one gets a fresh one) --
+unlike a Select-opened single-run attach, each slot also compiles
+the real plan from the registry's own orchestration/config paths,
+since a tile needs it to show its own rows ahead at all.
+
+**The grid** (`multi::tile_grid`, §2.6/§5): as many 56-cell columns
+as the width fits, as many rows as `⌈n ÷ columns⌉` needs, then one
+fewer column at a time while that still strictly reduces the grid's
+own empty cells (never past the point it stops helping) -- six runs
+at 180 columns stay 3×2 (no empty cells either way), four rebalance
+to 2×2, three fit one row. Each tile row's own real height is a
+tile panel (at least 20 rows) plus the one-row document band above
+it; more tiles than a page's own rows×columns can hold page, the
+last slot showing `… n more` instead of a real tile, turned with
+`PageUp`/`PageDown`.
+
+**Keys** (`keys::AllState`, pure and unit-tested the same way
+`SelectState` is): `0`-`3` set every tile's own screen at once;
+`←→↑↓` move the focus within the current page's own grid, wrapping
+at its own edges (never crossing a page -- that's `PageUp`/
+`PageDown`'s own job); `enter` opens the focused tile full-screen,
+through the same `attach_discovered_run` Select's own run rows use,
+so `esc` from it comes back to the grid rather than to Select (one
+more leg of `main.rs`'s own `run_all_loop`, the same round-trip
+shape `run_select`'s already is); `esc` on the grid itself returns
+to Select; `q` quits at once everywhere on this screen (watching
+only, never a confirm); `u` (the Combined Signal) is inert -- Help
+says so -- since that screen is the epic's own next pull request,
+not this one.
+
+**Tile content**, per Settled point 5: a Tape tile keeps the Tape's
+own order (Run Started, the finished rows, the Now band, the
+running rows, the slots rule, the rows ahead, Run End, the Totals
+row) without the clock column or a detail pane, folding the oldest
+finished rows into `… n earlier` and the farthest rows ahead into
+`… n more` once the tile's own fixed height runs out
+(`multi::fold_tape_tile`); unlike a single run, a tile always draws
+one rule between its own running rows and whatever's ahead, labelled
+with the slots rule's own text when a loop is running there, a bare
+rule otherwise. A Signal tile is the fifteen-row chart
+(`draw_signal_chart`'s own fixed height here, never grown the way a
+single run's own is) on the shared scale every tile has been
+overridden to share, two finished-step labels and a Now pane listing
+the running rows then the rows ahead. Flow and Store tiles are the
+ordinary rail and area diagram, clipped to the tile -- snapshot-
+tested (`all_flow_tiles_draw_real_content_for_every_run`/
+`all_store_tiles_draw_real_content_for_every_run`), since neither has
+a frame of its own.
+
+**The shared Signal scale** (Settled point 6): one round top at or
+above 1.5× the largest single finished effect's own sent or received
+tokens anywhere across every tile (`multi::largest_single_effect_
+tokens`, deliberately not a raw Signal bucket, which can sum several
+effects that happen to finish within the same 100 ms column), the
+smallest of `{1, 2, 2.5, 4, 5, 8} × 10ⁿ` at or above that, growing
+only; labelled with one decimal place in `k` from 1,000 up
+(`format_shared_axis_label`), the plain token figure below it
+unchanged. The fixture's own data reproduces the frame's `5.0k`
+exactly this way; the received top it needs (`400 t`) does not
+follow from the same rule from any largest single effect found in
+it, so that cell is reported (allow-listed below) rather than the
+rule bent to match it, per Settled point 6's own instruction.
+
+Goldens: `all--tape--180x48` and `all--signal--180x48`
+(`tui::tape_frame_goldens::all_tape_180x48_matches_the_frame`/
+`all_signal_180x48_matches_the_frame`), replayed from the Select
+screen's own six-run fixture (`design/fixtures/multi/snap6`) to its
+single frozen instant, the orchestration documents and configs
+read from beside it (`design/fixtures/multi/*.yml`). Both carry
+allow-listed cells, each with its own reason at the constant that
+names it: a loop's own token sparkline scales by the panel's own
+absolute unit rather than relative to the loop's own passes, the
+same existing `tape_token_column` rule the Tape's own goldens never
+had a loop tight enough in range to expose; a tile's own axis row
+marks a finished effect wherever its own real timestamp puts it,
+which the hand-drawn frame simply never marks at that column; `triage.
+yml`'s own ahead `if` row drops its condition text, a tile-only
+choice (unlike the pending `count:` loop case below it, which is the
+existing `tape_row_content` branch read as shipped, and genuinely
+reads bare `loop` with no pass count for a loop that has dispatched no
+pass anywhere in the plan yet); `header.effects_done`'s own count
+differs from the Tape title's own "Done" count, the same rule 16
+issue #698 already names for a single run; a two-wide loop's own
+finished children interleave by real finish time
+(`build_tape`'s/`build_signal`'s own shared `bucket1` sort), not by
+the hand-drawn frame's own pass-paired order; a finished-step label's
+own glyph reads plain here, not `status.success`/bold the way a
+single run's own frame draws it; `triage.yml`'s and `triage-b`'s own
+`drafts` loop, declared but not yet dispatched, still reads `0 of 0
+Slots Busy` rather than nothing, the existing `now_pane.slots_text`
+rule read as shipped; and the cross-run status line ties the same
+way a single run's own `gate › reply` timestamp tie already does in
+parts 1-3, allow-listed rather than bent.
+
+A PTY end-to-end test (`e2e_tui_pty_all.rs`, the same isolation
+`e2e_tui_pty_select.rs` uses): three live runs, Select lists all
+three and `All`; `g` then `enter` opens the grid; `enter` on the
+focused tile opens that run full-screen; `esc` returns to the grid;
+a second `esc` returns to Select, every run still listed; `q` quits
+at once.
+
 **Browsing every effect after a run, with one selection across
 screens** (issue #704, beyond anything `design/tui-design.md` itself
 describes). The Tape's own `TapeHead::Ended` state (`App::
