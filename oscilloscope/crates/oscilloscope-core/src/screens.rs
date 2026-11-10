@@ -1605,10 +1605,14 @@ fn build_tape_selected_detail(
         // of this run so far" while the step is still running.
         let figures = crate::model::step_tokens_so_far(node, &row.path, model, now);
         let has_tokens = figures.total().is_some_and(|t| t > 0);
+        // A figure neither live source has ever reported (Claude
+        // Code's own `tokens_received: null` mid-turn) stays `None`
+        // here too, drawn as `—` rather than a false `0` -- only the
+        // whole line hides when nothing at all is known yet.
         return TapeSelectedDetail {
             finished_ts,
-            tokens_sent: has_tokens.then(|| figures.tokens_sent.unwrap_or(0)),
-            tokens_received: has_tokens.then(|| figures.tokens_received.unwrap_or(0)),
+            tokens_sent: has_tokens.then_some(figures.tokens_sent).flatten(),
+            tokens_received: has_tokens.then_some(figures.tokens_received).flatten(),
             ..Default::default()
         };
     }
@@ -2549,6 +2553,13 @@ pub struct SignalNowPane {
 pub struct SignalReadings {
     pub sent: u64,
     pub received: u64,
+    /// Whether `sent`/`received` (respectively) still carry a
+    /// running part of their own (`header`'s own live estimate) --
+    /// drawn with the `≈` marker and the faint style for exactly as
+    /// long as this holds, the same rule the Totals row's own
+    /// headline follows.
+    pub sent_live: bool,
+    pub received_live: bool,
     /// Sent to received, to one decimal (§2.2: `11.5 : 1`) -- `None`
     /// with nothing received yet.
     pub ratio: Option<f64>,
@@ -3275,18 +3286,25 @@ pub fn build_signal(
         )
     });
 
-    // Readings: Sent, Received, Ratio, Peak and Quiet all read only
-    // up to the cursor's own column (Now's, when not scrubbed), the
-    // same moment the trace itself stops drawing at -- issue #702's
-    // rule 3 ("the Signal's Readings ... use the same columns"):
-    // Sent/Received are the trace's own columns summed, not `header.
-    // tokens_sent`/`_received` directly, so a running agent's own
-    // tokens (already in the Now column through `agent_live_
-    // sightings` above) count here the same way a running prompt's
-    // live estimate already did before this issue.
+    // Readings: Peak, Largest and Quiet read only up to the cursor's
+    // own column (Now's, when not scrubbed), the same moment the
+    // trace itself stops drawing at. Sent and Received instead always
+    // read the Totals row's own figure (`header.tokens_sent`/`_
+    // received` plus their own live estimate), never cut at the
+    // scrub cursor and never only the trace's own columns summed, so
+    // they never under-count a step whose tokens never earned a
+    // column of their own -- a model-mode `if`'s own tokens, an
+    // unnamed loop's earlier passes, a `use` child's effects, or a
+    // finished agent session osi never saw running. `sent_live`/
+    // `received_live` mark whether either side still has a live part
+    // in it, the same way the Totals row's own headline does, so a
+    // front end can draw the `≈` marker and the faint style for
+    // exactly as long as that holds.
     let cursor_buckets = &buckets[..cursor.map(|c| (c + 1).min(buckets.len())).unwrap_or(0)];
-    let sent_sum: u64 = cursor_buckets.iter().map(|b| b.sent).sum();
-    let received_sum: u64 = cursor_buckets.iter().map(|b| b.received).sum();
+    let sent_sum = header.tokens_sent + header.tokens_sent_live_estimate;
+    let received_sum = header.tokens_received + header.tokens_received_live_estimate;
+    let sent_live = header.tokens_sent_live_estimate > 0;
+    let received_live = header.tokens_received_live_estimate > 0;
     let ratio =
         (received_sum > 0).then(|| (sent_sum as f64 / received_sum as f64 * 10.0).round() / 10.0);
     let peak = cursor_buckets
@@ -3389,6 +3407,8 @@ pub fn build_signal(
         readings: SignalReadings {
             sent: sent_sum,
             received: received_sum,
+            sent_live,
+            received_live,
             ratio,
             peak,
             largest,
@@ -5703,6 +5723,67 @@ mod tests {
         let (peak_tokens, peak_ts) = signal.readings.peak.expect("a peak column");
         assert_eq!(peak_tokens, 584);
         assert_eq!(peak_ts, "2026-01-01T00:00:03.000Z");
+    }
+
+    /// Readings' own Sent/Received, following Now, read the Totals
+    /// row's own figure, never the trace's own columns summed -- a
+    /// model-mode `if` writes its own tokens straight onto its own
+    /// node (`core`'s own conditional handling), with no column of
+    /// its own in the trace (only a decision mark), so summing
+    /// columns alone would under-count it.
+    #[test]
+    fn build_signal_readings_sent_and_received_match_the_totals_row_not_the_trace() {
+        let rows = vec![
+            tape_row("prime.gate", 1, "gate", RowKind::If, StatusKind::Done),
+            tape_row(
+                "prime.gate.reply",
+                2,
+                "reply",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+        ];
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": "2026-01-01T00:00:01Z"},
+                "gate": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                    "branch": "then", "tokens_sent_total": 20, "tokens_received_total": 4
+                },
+                    "reply": {"value": "y", "meta": {
+                        "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                        "tokens_sent": 100, "tokens_received": 30
+                    }}
+                }
+            }}),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.tokens_sent = 120;
+        header.tokens_received = 34;
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            "2026-01-01T00:00:01.100Z",
+        );
+        let (bucket_sent, bucket_received) = signal
+            .buckets
+            .iter()
+            .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
+        assert_eq!(
+            (bucket_sent, bucket_received),
+            (100, 30),
+            "the trace's own columns never carry the if's own tokens"
+        );
+        assert_eq!(signal.readings.sent, 120);
+        assert_eq!(signal.readings.received, 34);
     }
 
     /// The Now pane's own lines: a running leaf with its slot, the
