@@ -240,16 +240,22 @@ latest `progress` line, with no live state to read at all.
 A running agent tool's own row reads the same way: elapsed time,
 the turn (`repair` during the repair turn, `attempt N` on a retry),
 the current tool with its own elapsed, and context usage --
-`1m12s · turn 4 · bash 12s · ctx 41k`; a stale leftover from an
-interrupted run reads `stopped` in place of the tool and context.
-A finished agent's own row reads its turns, tool calls and files
-changed instead -- `14.1s · 3 turns · 12 tools · 2 files +3 −1`.
-The detail pane, the full-screen step and the Flow screen's own
-Selected pane all show the same Agent block for one: Asked, Turn,
-Tool, Tools, Context, Files, Tests, Said (the transcript's own last
-reply) and Cost, each left out when the engine never reported it,
-followed by the transcript tail (every tailed tool call, newest at
-the bottom, a running one with its own elapsed).
+`1m12s · turn 4 · bash 12.0s · ctx 41k`; a stale leftover -- including
+one left behind by an interrupted run, which ends the whole run
+without ever completing the step -- reads `stopped` in place of the
+tool and context. A finished agent's own row reads its turns, tool
+calls and files changed instead -- `14.1s · 3 turns · 12 tools · 2
+files +3 −1`.
+The detail pane, the full-screen step (shared by the Signal and the
+Store) and the Flow screen's own Selected pane all show the same
+Agent block for one: Asked, Turn, Tool, Tools, Context, Files,
+Tests, Said (the transcript's own last reply) and Cost, each left
+out when the engine never reported it, followed by the transcript
+tail (every tailed tool call, newest at the bottom, a running one
+with its own elapsed, an ended one with `✓`/`✗` and its own
+duration). The tail keeps only as many of the newest calls as the
+pane's own height allows, with a leading `…` once either the read
+window or that height cut the list short.
 
 At 100 columns and up the detail pane shows beside the list, and
 preview rows are on by default (`p` toggles; off at 24–29 rows, to
