@@ -3506,6 +3506,54 @@ fn totals_tokens(screen: &str) -> Option<u64> {
     digits.replace(',', "").parse().ok()
 }
 
+/// Whether events_path already carries an end event for step_path --
+/// used to confirm a growth the Totals row showed was actually
+/// observed while the step was still running, not merely after it
+/// had already finished (a slow poll could otherwise still pass the
+/// "it grew" assertion with nothing left running at all).
+fn step_has_ended(events_path: &Path, step_path: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(events_path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        if line.trim().is_empty() {
+            return false;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+        value.get("ev").and_then(|v| v.as_str()) == Some("end")
+            && value.get("path").and_then(|v| v.as_str()) == Some(step_path)
+    })
+}
+
+/// Polls the replayed screen until the Totals row's own token figure
+/// reads strictly above `above`, bounded at `timeout` -- panics with
+/// the last screen it saw if it never does, same shape as
+/// `wait_for_screen_text`.
+fn wait_for_totals_tokens_above(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    above: u64,
+    timeout: Duration,
+) -> (String, u64) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        if let Some(tokens) = totals_tokens(&screen) {
+            if tokens > above {
+                return (screen, tokens);
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "the Totals row never grew past {above} within {timeout:?}; last screen:\n{screen}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Issue #702's acceptance item: a PTY test with the fake `pi` used
 /// by the recorded `agent_live_pi` fixture -- the Totals row's own
 /// token figure grows while the agent tool runs (its own two tool
@@ -3550,39 +3598,25 @@ fn the_totals_row_grows_while_an_agent_session_runs() {
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
     );
 
+    let events_path = out_dir.path().join("events.jsonl");
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    wait_for_step_start(
-        &out_dir.path().join("events.jsonl"),
-        "prime.fixer",
-        Duration::from_secs(20),
-    );
-    // The agent's first tool call (`bash`) is already running by the
-    // time its own first `meta.live` write lands; give it a moment to
-    // reach the screen, well inside the fake's own first 2.5s sleep.
-    std::thread::sleep(Duration::from_millis(1500));
-    let early = {
-        let whole = captured_buf.lock().unwrap().clone();
-        support::screen_grid(&whole, 200, 60).join("\n")
-    };
-    let early_tokens = totals_tokens(&early)
-        .unwrap_or_else(|| panic!("no Totals token figure on an early screen:\n{early}"));
+    wait_for_step_start(&events_path, "prime.fixer", Duration::from_secs(20));
+    // Named, polling waits capped by a generous deadline, never a
+    // fixed sleep: the fake's own two tool calls together run for
+    // only ~5s, so 20s per wait leaves ample room under load while
+    // still failing well short of the outer per-test timeout.
+    let (early, early_tokens) =
+        wait_for_totals_tokens_above(&captured_buf, 0, Duration::from_secs(20));
     assert!(
-        early_tokens > 0,
-        "the Totals row should already count the running agent's tokens; got {early_tokens} on:\n{early}"
+        !step_has_ended(&events_path, "prime.fixer"),
+        "the agent should still be running the moment the Totals row first counts it:\n{early}"
     );
 
-    // Past the fake's own second tool call too (another 2.5s sleep) --
-    // the agent's own live totals must have grown further since.
-    std::thread::sleep(Duration::from_millis(3000));
-    let later = {
-        let whole = captured_buf.lock().unwrap().clone();
-        support::screen_grid(&whole, 200, 60).join("\n")
-    };
-    let later_tokens = totals_tokens(&later)
-        .unwrap_or_else(|| panic!("no Totals token figure on a later screen:\n{later}"));
+    let (later, later_tokens) =
+        wait_for_totals_tokens_above(&captured_buf, early_tokens, Duration::from_secs(20));
     assert!(
-        later_tokens > early_tokens,
-        "the Totals row should keep growing while the agent runs: {early_tokens} then {later_tokens}"
+        !step_has_ended(&events_path, "prime.fixer"),
+        "the agent should still be running when the Totals row grows further: {early_tokens} then {later_tokens}:\n{later}"
     );
 
     wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
