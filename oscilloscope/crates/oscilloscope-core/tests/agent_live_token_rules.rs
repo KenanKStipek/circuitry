@@ -327,6 +327,7 @@ fn signal_columns_sum_to_the_agents_final_tokens_and_readings_match_totals() {
         Some(&state),
         100,
         None,
+        None,
         PI_ENDED_NOW,
     );
     let (sent, received) = signal

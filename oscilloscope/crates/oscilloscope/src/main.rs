@@ -1906,6 +1906,7 @@ fn build_signal_screen_if_active(
         state,
         app.signal_column_ms,
         app.signal_cursor_col,
+        app.selected_path.as_deref(),
         now,
     ))
 }
@@ -4300,10 +4301,17 @@ mod tests {
     use super::*;
 
     fn agent_running_state_for_transcript_path_test() -> serde_json::Value {
+        // Issue #704 rule 2: the Store only lists a step as a store
+        // at all once it has tokens of its own -- a running agent's
+        // own live estimate counts, the same figure its Tape row
+        // already shows, so `fix` needs one here too for the
+        // Store's own selection to resolve to it rather than falling
+        // through to "nothing has tokens yet".
         serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
             "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
                 "provider": "agent",
-                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z"}
+                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z",
+                    "tokens_sent": 12, "tokens_received": 34}
             }}
         }})
     }
@@ -4365,6 +4373,7 @@ mod tests {
             &model,
             Some(&state),
             100,
+            None,
             None,
             "2026-01-01T00:00:01Z",
         );

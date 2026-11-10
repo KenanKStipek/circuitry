@@ -2984,6 +2984,7 @@ pub fn build_signal(
     state: Option<&Value>,
     column_ms: u64,
     cursor_col: Option<usize>,
+    selected_path: Option<&str>,
     now: &str,
 ) -> SignalScreen {
     // Once a run has ended, its own Now sweep stays at the run's
@@ -3002,10 +3003,36 @@ pub fn build_signal(
     let col_of_100 = |offset_s: f64| (offset_s / 0.1).floor().max(0.0) as usize;
     let now_offset = elapsed_offset(now);
     let now_col = now_offset.map(col_of);
+    // Issue #704 rule 2: with no explicit scrub cursor of its own,
+    // the cursor sits at the shared selection's own column instead
+    // of always defaulting to Now -- its end time once finished, its
+    // start while it's still running (the same `since_ts` rule
+    // `build_focused_step` already reads its own elapsed from).
+    // `←→` (`cursor_col` actually `Some`) still scrubs freely, and
+    // `tui::draw_signal` syncs the shared selection back to whatever
+    // `selected` below resolves to once it does.
+    let selection_col = selected_path.and_then(|p| {
+        let row = rows.iter().find(|r| r.path == p)?;
+        let node = flat.get(p);
+        let running = matches!(
+            row.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        );
+        if running {
+            let since_ts = node
+                .and_then(|n| n.created_at.clone())
+                .or_else(|| model.event_started_at(p).map(str::to_string));
+            since_ts.as_deref().and_then(elapsed_offset).map(col_of)
+        } else {
+            node.and_then(|n| n.completed_at.as_deref())
+                .and_then(elapsed_offset)
+                .map(col_of)
+        }
+    });
     // ←→'s own scrub cursor (§4): a column at or before Now --
     // Readings' own Peak, Largest and Quiet all read up to here, not
     // past it, once scrubbed away from Now.
-    let cursor = cursor_col.or(now_col);
+    let cursor = cursor_col.or(selection_col).or(now_col);
 
     let model_label = rows
         .iter()
@@ -3585,29 +3612,45 @@ pub fn build_signal(
         .max();
     let unit = tape_unit(largest_usual_step);
 
-    // §4's own "opens the step under the cursor": the step row with
-    // the greatest start column at or before the cursor (Now's own
-    // column when not scrubbed) is whichever step the cursor is
-    // currently sitting over.
-    let selected = cursor
-        .and_then(|c| {
-            step_rows
-                .iter()
-                .filter(|r| r.col <= c)
-                .max_by_key(|r| r.col)
-        })
-        .and_then(|r| rows.iter().find(|row| row.path == r.path))
-        .map(|row| {
-            build_focused_step(
-                row,
-                flat,
-                plan,
-                model,
-                state,
-                now,
-                header.run_end_ts.as_deref(),
-            )
-        });
+    // §4's own "opens the step under the cursor": while actually
+    // scrubbing (`cursor_col` itself `Some`), the step row with the
+    // greatest start column at or before the cursor is whichever
+    // step the cursor is sitting over -- issue #704 rule 2's own
+    // "the selection follows the effect under the cursor". Not
+    // scrubbing, the shared selection already names the step
+    // directly (`selection_col` above is exactly its own column), so
+    // this reads it the same direct way every other screen's own
+    // `selected` does, with the nearest-column lookup only as a
+    // fallback for a `selected_path` this screen doesn't resolve
+    // (Starting, say, before anything names one).
+    let step_under_cursor = || {
+        cursor
+            .and_then(|c| {
+                step_rows
+                    .iter()
+                    .filter(|r| r.col <= c)
+                    .max_by_key(|r| r.col)
+            })
+            .and_then(|r| rows.iter().find(|row| row.path == r.path))
+    };
+    let selected_row = if cursor_col.is_none() {
+        selected_path
+            .and_then(|p| rows.iter().find(|r| r.path == p))
+            .or_else(step_under_cursor)
+    } else {
+        step_under_cursor()
+    };
+    let selected = selected_row.map(|row| {
+        build_focused_step(
+            row,
+            flat,
+            plan,
+            model,
+            state,
+            now,
+            header.run_end_ts.as_deref(),
+        )
+    });
 
     SignalScreen {
         model_label,
@@ -6085,6 +6128,7 @@ mod tests {
             None,
             100,
             None,
+            None,
             "2026-01-01T00:00:03.100Z",
         );
         assert_eq!(signal.sent_axis_top, 600, "no single column passed 600");
@@ -6131,6 +6175,7 @@ mod tests {
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:03.100Z",
         );
@@ -6193,6 +6238,7 @@ mod tests {
             None,
             100,
             None,
+            None,
             "2026-01-01T00:00:03.100Z",
         );
         let mark = signal
@@ -6232,7 +6278,7 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.650Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
         assert_eq!(signal.now_col, Some(6));
         let bucket = &signal.buckets[6];
         assert_eq!(bucket.sent, 40);
@@ -6280,7 +6326,7 @@ mod tests {
         let mut header = base_header();
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:02.100Z";
-        let signal = build_signal(&[], &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(&[], &header, &flat, &plan, &model, None, 100, None, None, now);
         // The two live sightings land at their own observation
         // columns (350ms and 1350ms since the run started, at 100ms
         // per column); the remainder lands at the agent's own end
@@ -6365,7 +6411,7 @@ mod tests {
         let mut header = base_header();
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:01.100Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
         let (total_sent, total_received) = signal
             .buckets
             .iter()
@@ -6422,6 +6468,7 @@ mod tests {
             None,
             100,
             None,
+            None,
             "2026-01-01T00:00:03.100Z",
         );
         assert_eq!(signal.readings.ratio, Some(9.0));
@@ -6475,6 +6522,7 @@ mod tests {
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:01.100Z",
         );
@@ -6558,7 +6606,7 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:02.100Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
 
         assert_eq!(signal.now_pane.running.len(), 1);
         assert_eq!(signal.now_pane.running[0].path, "prime.drafts.iter_1.draft");
@@ -6584,6 +6632,101 @@ mod tests {
             .expect("a next signal");
         assert!(next_signal.starts_with("next"), "{next_signal:?}");
         assert!(next_signal.contains("queued"), "{next_signal:?}");
+    }
+
+    /// Issue #704 rule 2: with no explicit scrub, the cursor sits at
+    /// the shared selection's own column -- a finished step's own
+    /// end time, a running one's own start -- never always at Now.
+    #[test]
+    fn build_signal_cursor_follows_the_selected_effect_not_always_now() {
+        let rows = vec![
+            tape_row(
+                "prime.ask",
+                1,
+                "ask",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.fix",
+                1,
+                "fix",
+                RowKind::Prompt,
+                StatusKind::Running,
+            ),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.ask".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:01.000Z"),
+                80,
+                50,
+            ),
+        );
+        flat.insert(
+            "prime.fix".to_string(),
+            tape_node("2026-01-01T00:00:01.500Z", None),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:02.100Z";
+
+        // `prime.ask` finished at 1.0s (column 10 at 100ms/column) --
+        // not Now's own column 21, and not scrubbed either.
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            Some("prime.ask"),
+            now,
+        );
+        assert_eq!(signal.cursor_col, Some(10));
+        assert_eq!(signal.selected.as_ref().map(|s| s.path.as_str()), Some("prime.ask"));
+
+        // `prime.fix` is still running, started at 1.5s (column 15) --
+        // its own start, not Now, and not `prime.ask`'s own end either.
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            Some("prime.fix"),
+            now,
+        );
+        assert_eq!(signal.cursor_col, Some(15));
+        assert_eq!(signal.selected.as_ref().map(|s| s.path.as_str()), Some("prime.fix"));
+
+        // An explicit scrub (`←→`) still wins outright, and finds
+        // whichever step the cursor itself lands on, ignoring the
+        // shared selection entirely -- issue #704 rule 2's own "free
+        // scrubbing still possible".
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            Some(10),
+            Some("prime.fix"),
+            now,
+        );
+        assert_eq!(signal.cursor_col, Some(10));
+        assert_eq!(signal.selected.as_ref().map(|s| s.path.as_str()), Some("prime.ask"));
     }
 
     /// A running prompt's own live estimate marks its column
@@ -6625,6 +6768,7 @@ mod tests {
             None,
             100,
             None,
+            None,
             now,
         );
         assert!(running.buckets[6].received_live);
@@ -6648,7 +6792,7 @@ mod tests {
             ),
         );
         let done = build_signal(
-            &rows_done, &header, &flat_done, &plan, &model, None, 100, None, now,
+            &rows_done, &header, &flat_done, &plan, &model, None, 100, None, None, now,
         );
         assert!(!done.buckets[6].received_live);
         assert_eq!(done.buckets[6].received, 9);
@@ -6681,8 +6825,8 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.400Z";
-        let at_100ms = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
-        let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, now);
+        let at_100ms = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, None, now);
+        let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, None, now);
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");
     }
