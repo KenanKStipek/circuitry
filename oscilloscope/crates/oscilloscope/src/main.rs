@@ -4817,7 +4817,12 @@ impl AllRunSlot {
         }
     }
 
-    fn build(&mut self, screen: oscilloscope_core::screens::Screen, now: &str) -> tui::AllTile {
+    fn build(
+        &mut self,
+        screen: oscilloscope_core::screens::Screen,
+        now: &str,
+        run_index: usize,
+    ) -> tui::AllTile {
         let engine_label = self.run.engine.clone().unwrap_or_else(|| "cof".to_string());
         let render = oscilloscope_core::multi::build_tile(
             &self.document_label,
@@ -4833,6 +4838,7 @@ impl AllRunSlot {
             document_label: self.document_label.clone(),
             config_label: self.config_label.clone(),
             render,
+            run_index,
         }
     }
 }
@@ -5045,7 +5051,8 @@ fn run_all_grid_screen(
             let page_slots = &mut slots[page_offset..page_offset + page_run_count];
             let mut tiles: Vec<tui::AllTile> = page_slots
                 .iter_mut()
-                .map(|slot| slot.build(all_state.screen, &now_str))
+                .enumerate()
+                .map(|(i, slot)| slot.build(all_state.screen, &now_str, page_offset + i))
                 .collect();
             if all_state.screen == oscilloscope_core::screens::Screen::Signal {
                 let largest_sent = tiles

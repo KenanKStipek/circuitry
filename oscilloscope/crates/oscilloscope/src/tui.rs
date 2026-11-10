@@ -4018,6 +4018,10 @@ pub struct AllTile {
     pub document_label: String,
     pub config_label: Option<String>,
     pub render: oscilloscope_core::multi::TileRender,
+    /// This run's own position in launch order, across every page
+    /// (never a page-relative slot index) -- a Signal tile's own
+    /// sent trace keeps the same run colour wherever it's drawn.
+    pub run_index: usize,
 }
 
 /// The All screen's own body (issue #698, §2.6): the header band,
@@ -4347,9 +4351,15 @@ fn draw_all_tile_panel(
         oscilloscope_core::multi::TileScreen::Tape(s) => {
             draw_all_tape_tile(frame, area, s, &tile.render.header, focused, ctx)
         }
-        oscilloscope_core::multi::TileScreen::Signal(s) => {
-            draw_all_signal_tile(frame, area, s, &tile.render.header, focused, ctx)
-        }
+        oscilloscope_core::multi::TileScreen::Signal(s) => draw_all_signal_tile(
+            frame,
+            area,
+            s,
+            &tile.render.header,
+            focused,
+            tile.run_index,
+            ctx,
+        ),
         oscilloscope_core::multi::TileScreen::Flow(s) => {
             draw_all_flow_tile(frame, area, s, &tile.render.header, focused, now, ctx)
         }
@@ -4526,13 +4536,20 @@ fn draw_all_tape_tile(
                     );
                 }
                 frame.render_widget(
+                    // A tile's own width (56-60 cells) is well
+                    // below the 100-column floor a single-run
+                    // attach needs even to consider the wide
+                    // detail layout -- `wide_detail` is false here
+                    // for the same reason it is at any single-run
+                    // width that narrow, so a loop row's own
+                    // redundant ` · N done` gives way the same way.
                     Paragraph::new(tape_row_line(
                         row,
                         selected,
                         screen.unit,
                         false,
                         true,
-                        true,
+                        false,
                         name_width,
                         what_width,
                         token_width,
@@ -4692,6 +4709,7 @@ fn draw_all_signal_tile(
     screen: &oscilloscope_core::screens::SignalScreen,
     header: &oscilloscope_core::render::Header,
     focused: bool,
+    run_index: usize,
     ctx: &DrawCtx,
 ) {
     let border_color = if focused {
@@ -4716,6 +4734,7 @@ fn draw_all_signal_tile(
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(15), Constraint::Min(3)])
         .split(area);
+    let sent_color = ctx.theme.run_colors()[oscilloscope_core::multi::run_role_index(run_index)];
     draw_signal_chart(
         frame,
         sections[0],
@@ -4725,14 +4744,10 @@ fn draw_all_signal_tile(
         border_color,
         Some("Signal · Sent Above · Received Below · Shared Scale"),
         oscilloscope_core::multi::format_shared_axis_label,
+        sent_color,
         ctx,
     );
-    // Issue #698's own §2.6: a tile's own Now pane lists the
-    // running rows then the rows ahead, the same `wide` content a
-    // single-run Signal's own Now pane shows beside Readings, not
-    // the narrow (running rows alone) one a short single-run
-    // terminal falls back to.
-    draw_signal_now_pane(frame, sections[1], screen, ctx, true);
+    draw_signal_tile_now_pane(frame, sections[1], screen, ctx);
 }
 
 /// A Flow tile (issue #698's Settled point 5/Issue #698 rule 17):
@@ -5053,6 +5068,7 @@ fn draw_signal(
         ctx.theme.border_focused,
         None,
         oscilloscope_core::format::format_tokens_t,
+        ctx.theme.accent_primary,
         ctx,
     );
     if wide {
@@ -5267,6 +5283,10 @@ fn draw_signal_chart(
     border_color: Color,
     title_override: Option<&str>,
     axis_label_format: fn(u64) -> String,
+    // A tile's own run colour for its sent trace (issue #698's own
+    // Settled points 6 and 13) -- `ctx.theme.accent_primary`, a
+    // single-run Signal's own fixed colour, everywhere else.
+    sent_color: Color,
     ctx: &DrawCtx,
 ) {
     let title = title_override
@@ -5337,7 +5357,7 @@ fn draw_signal_chart(
     buf.set_string(data_x - 1, axis_row_y, " ", dim);
     axis_label(buf, inner.y + chart_rows as u16 - 1, &received_top_label);
 
-    let sent_style = Style::default().fg(ctx.theme.accent_primary);
+    let sent_style = Style::default().fg(sent_color);
     let received_style = Style::default().fg(ctx.theme.status_done);
     let dim_sent_style = sent_style.add_modifier(Modifier::DIM);
     let dim_received_style = received_style.add_modifier(Modifier::DIM);
@@ -5532,19 +5552,34 @@ fn draw_signal_chart(
     let step_rows_available = (inner.y + inner.height)
         .saturating_sub(step_rows_y)
         .saturating_sub(2); // the separator and Totals rows
-    draw_signal_step_rows(
-        frame,
-        Rect {
-            x: inner.x,
-            y: step_rows_y,
-            width: inner.width,
-            height: step_rows_available,
-        },
-        data_x,
-        start_col,
-        screen,
-        ctx,
-    );
+    if title_override.is_some() {
+        draw_signal_tile_finished_labels(
+            frame,
+            Rect {
+                x: inner.x,
+                y: step_rows_y,
+                width: inner.width,
+                height: step_rows_available,
+            },
+            data_x,
+            &screen.tile_finished_labels,
+            ctx,
+        );
+    } else {
+        draw_signal_step_rows(
+            frame,
+            Rect {
+                x: inner.x,
+                y: step_rows_y,
+                width: inner.width,
+                height: step_rows_available,
+            },
+            data_x,
+            start_col,
+            screen,
+            ctx,
+        );
+    }
     let totals_y = inner.y + inner.height - 1;
     let sep_y = totals_y - 1;
     frame.buffer_mut().set_string(
@@ -5795,6 +5830,44 @@ struct SignalVisibleStepRow<'a> {
     clipped: bool,
 }
 
+/// A Signal tile's own two rows under the chart (issue #698's own
+/// Signal tile rule): its two most recent finished-prompt label
+/// groups, oldest first, each `✓ name [+N] · T t` in `fg.muted` --
+/// never a single-run Signal's own time-positioned step rows, which
+/// a tile has no room for.
+fn draw_signal_tile_finished_labels(
+    frame: &mut Frame,
+    area: Rect,
+    data_x: u16,
+    groups: &[oscilloscope_core::multi::SignalFinishedLabelGroup],
+    ctx: &DrawCtx,
+) {
+    if area.height == 0 || area.x + area.width <= data_x {
+        return;
+    }
+    let style = Style::default().fg(ctx.theme.fg_muted);
+    let width = (area.x + area.width - data_x) as usize;
+    for row in 0..area.height as usize {
+        let y = area.y + row as u16;
+        let text = groups.get(row).map(|g| {
+            let extra = if g.extra > 0 {
+                format!(" +{}", g.extra)
+            } else {
+                String::new()
+            };
+            format!(
+                "\u{2713} {}{extra} \u{b7} {}",
+                g.label,
+                oscilloscope_core::format::format_tokens_t(g.tokens)
+            )
+        });
+        let clipped: String = text.as_deref().unwrap_or("").chars().take(width).collect();
+        frame
+            .buffer_mut()
+            .set_string(data_x, y, format!("{clipped:<width$}"), style);
+    }
+}
+
 fn draw_signal_step_rows(
     frame: &mut Frame,
     area: Rect,
@@ -6035,6 +6108,82 @@ fn draw_signal_now_pane(
                 .buffer_mut()
                 .set_line(inner.x + 1, y, &line, inner.width - 1);
         }
+    }
+}
+
+/// A Signal tile's own Now pane: the running leaf rows, then the
+/// rows ahead, each a glyph, an 18-cell name field (20 together
+/// with the glyph and its own trailing space) and the Tape's own
+/// `what` text for it -- never the single-run pane's breadcrumbs or
+/// its waiting/loop-summary/Last-Burst/Next-Signal sections, which
+/// a tile has no room for.
+fn draw_signal_tile_now_pane(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::screens::SignalScreen,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border;
+    let title = screen
+        .tile_now_slots_text
+        .as_deref()
+        .map(|s| format!("Now · {s}"))
+        .unwrap_or_else(|| "Now".to_string());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let running_glyph_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let faint = Style::default().fg(ctx.theme.dim);
+    const NAME_WIDTH: usize = 18;
+    let mut y = inner.y;
+    let bottom = inner.y + inner.height;
+    for row in &screen.tile_now_running {
+        if y >= bottom {
+            break;
+        }
+        let line = pad_line(
+            vec![
+                Span::styled("● ", running_glyph_style),
+                Span::styled(format!("{:<NAME_WIDTH$}", row.label), bold),
+                Span::styled(row.what.clone(), muted),
+            ],
+            (inner.width - 1) as usize,
+        );
+        frame
+            .buffer_mut()
+            .set_line(inner.x + 1, y, &line, inner.width - 1);
+        y += 1;
+    }
+    for row in &screen.tile_now_ahead {
+        if y >= bottom {
+            break;
+        }
+        let line = pad_line(
+            vec![
+                Span::styled("· ", faint),
+                Span::styled(format!("{:<NAME_WIDTH$}", row.label), faint),
+                Span::styled(row.what.clone(), faint),
+            ],
+            (inner.width - 1) as usize,
+        );
+        frame
+            .buffer_mut()
+            .set_line(inner.x + 1, y, &line, inner.width - 1);
+        y += 1;
     }
 }
 
@@ -14843,6 +14992,148 @@ mod tape_frame_goldens {
         );
     }
 
+    #[derive(Debug, Clone, PartialEq)]
+    struct CellSnapshot {
+        ch: char,
+        fg: Color,
+        bg: Color,
+        bold: bool,
+        dim: bool,
+    }
+
+    fn buffer_row_cells(
+        buffer: &ratatui::buffer::Buffer,
+        y: u16,
+        x: std::ops::Range<u16>,
+    ) -> Vec<CellSnapshot> {
+        x.map(|x| {
+            let cell = &buffer[(x, y)];
+            let ch = cell.symbol().chars().next().unwrap_or(' ');
+            // Issue #695's own space rule (`assert_matches_mock`):
+            // a blank cell's own foreground, weight and dimness are
+            // invisible, so this compares only its background and
+            // character, the same as every other cell comparison
+            // here does.
+            if ch == ' ' {
+                CellSnapshot {
+                    ch,
+                    fg: Color::Reset,
+                    bg: cell.bg,
+                    bold: false,
+                    dim: false,
+                }
+            } else {
+                CellSnapshot {
+                    ch,
+                    fg: cell.fg,
+                    bg: cell.bg,
+                    bold: cell.modifier.contains(Modifier::BOLD),
+                    dim: cell.modifier.contains(Modifier::DIM),
+                }
+            }
+        })
+        .collect()
+    }
+
+    fn mock_row_cells(mock: &MockFrame, y: u16, x: std::ops::Range<u16>) -> Vec<CellSnapshot> {
+        x.map(|x| {
+            let (ch, style) = mock.cells[y as usize][x as usize];
+            if ch == ' ' {
+                CellSnapshot {
+                    ch,
+                    fg: Color::Reset,
+                    bg: style.bg,
+                    bold: false,
+                    dim: false,
+                }
+            } else {
+                CellSnapshot {
+                    ch,
+                    fg: style.fg,
+                    bg: style.bg,
+                    bold: style.bold,
+                    dim: style.dim,
+                }
+            }
+        })
+        .collect()
+    }
+
+    /// A block of rows that finish in real timestamp order, not the
+    /// frame's own hand-chosen pass-paired order (issue #698: two
+    /// loop children per pass, one quick and one slow, genuinely
+    /// interleave once several passes are in flight at once) --
+    /// compared as a set of whole rows, each one still cell-exact in
+    /// its own text and styles, rather than cell by cell at a fixed
+    /// position. The row count must still match.
+    fn assert_rows_match_as_a_set(
+        buffer: &ratatui::buffer::Buffer,
+        mock: &MockFrame,
+        name: &str,
+        x: std::ops::Range<u16>,
+        y: std::ops::Range<u16>,
+        // A column the row-content comparison never checks (an
+        // absolute `x`, applied to every row alike, since a row's
+        // own content reorders between the two sides here -- the
+        // same column index lands on a different logical row in
+        // each) -- a stray cell the two frames disagree on in a way
+        // unrelated to row order, allowed here the same way the
+        // main comparison allows one.
+        exception_columns: &[u16],
+    ) {
+        let mut want: Vec<Vec<CellSnapshot>> = y
+            .clone()
+            .map(|y| mock_row_cells(mock, y, x.clone()))
+            .collect();
+        let mut got: Vec<Vec<CellSnapshot>> = y
+            .clone()
+            .map(|y| buffer_row_cells(buffer, y, x.clone()))
+            .collect();
+        let wildcard = CellSnapshot {
+            ch: '\0',
+            fg: Color::Reset,
+            bg: Color::Reset,
+            bold: false,
+            dim: false,
+        };
+        for &ex in exception_columns {
+            if x.contains(&ex) {
+                let col = (ex - x.start) as usize;
+                for row in want.iter_mut().chain(got.iter_mut()) {
+                    row[col] = wildcard.clone();
+                }
+            }
+        }
+        assert_eq!(
+            got.len(),
+            want.len(),
+            "{name}: row count over y={y:?} must match"
+        );
+        for row in &got {
+            let Some(pos) = want.iter().position(|w| w == row) else {
+                let closest = want
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, w)| w.iter().zip(row).filter(|(a, b)| a != b).count())
+                    .map(|(i, w)| {
+                        let diffs: Vec<String> = w
+                            .iter()
+                            .zip(row)
+                            .enumerate()
+                            .filter(|(_, (a, b))| a != b)
+                            .map(|(idx, (a, b))| format!("[{idx}] got {b:?} want {a:?}"))
+                            .collect();
+                        format!("closest unmatched row {i}: {}", diffs.join(", "))
+                    });
+                panic!(
+                    "{name}: no row in the frame's own y={y:?} block matches this one: {row:?}\n{}",
+                    closest.unwrap_or_default()
+                );
+            };
+            want.remove(pos);
+        }
+    }
+
     #[test]
     fn tape_toosmall_60x16_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -14995,7 +15286,8 @@ mod tape_frame_goldens {
         let multi_dir = fixtures_dir().join("multi");
         manifest
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(run_index, entry)| {
                 let key = entry["key"].as_str().unwrap();
                 let orchestration = entry["orchestration"].as_str().unwrap();
                 let config = entry["config"].as_str().unwrap();
@@ -15025,6 +15317,7 @@ mod tape_frame_goldens {
                     now,
                 );
                 AllTile {
+                    run_index,
                     document_label: multi_basename(orchestration),
                     config_label: Some(multi_basename(config)),
                     render,
@@ -15033,52 +15326,7 @@ mod tape_frame_goldens {
             .collect()
     }
 
-    /// `extract`'s own reply, "1. Faster parser. 2. New --events
-    /// flag. 3. Fixed duration bug.", is a numbered list -- `first_
-    /// words` (shared with every single-run Tape frame) cuts a
-    /// reply at its own first sentence terminator when that alone
-    /// is short enough, so the row's own preview reads `1.`, not the
-    /// frame's own `1. Faster parser.` -- a width cut, as every
-    /// other frame's preview is, would need the fuller reply
-    /// `first_words` never gives it. Pre-existing, shared code; not
-    /// changed here.
-    const ALL_TAPE_FIRST_WORDS_SENTENCE_CUT: &[(u16, u16)] = &[(159, 5), (160, 5)];
-
-    /// `triage.yml`'s own `drafts` loop, pending (ahead of Now),
-    /// dispatches a plain `count: 3` loop, not an `each:` one --
-    /// `tape_row_content`'s own pending-loop branch (shared with
-    /// every single-run Tape frame) only ever adds a pass count
-    /// through `tape_loop_each_text`'s own `each_as` text, which a
-    /// `count:` loop has none of, so the row reads bare `loop`, not
-    /// the frame's own `loop · 3 passes`. No single-run frame
-    /// exercises a pending `count:` loop to have caught this before;
-    /// pre-existing, shared code, not changed here.
-    const ALL_TAPE_PENDING_COUNT_LOOP_HAS_NO_PASS_COUNT: &[(u16, u16)] = &[
-        (30, 10),
-        (31, 10),
-        (32, 10),
-        (33, 10),
-        (34, 10),
-        (35, 10),
-        (36, 10),
-        (37, 10),
-        (38, 10),
-        (39, 10),
-        (40, 10),
-        (90, 10),
-        (91, 10),
-        (92, 10),
-        (93, 10),
-        (94, 10),
-        (95, 10),
-        (96, 10),
-        (97, 10),
-        (98, 10),
-        (99, 10),
-        (100, 10),
-    ];
-
-    /// Issue #698's own rule 16: the Tape title's own "Done" count
+    /// The Tape title's own "Done" count
     /// (`TapeScreen::done`, which excludes a loop's own container
     /// row) and the Totals row's own `header.effects_done` (which
     /// doesn't) read differently for the same tile -- `triage.yml`'s
@@ -15091,331 +15339,37 @@ mod tape_frame_goldens {
     const ALL_TAPE_EFFECTS_DONE_COUNTER: &[(u16, u16)] =
         &[(26, 21), (86, 21), (151, 21), (32, 44), (91, 44), (152, 44)];
 
-    /// `review.yml`'s and `classify.yml`'s own loops dispatch two
-    /// children per pass (`review`/`lint`, `label`/`store`) at
-    /// different speeds (a quick prompt, a one-second tool) --
-    /// `build_tape`'s own `bucket1` sorts finished rows by real
-    /// finish time (shared with every single-run Tape frame), which
-    /// genuinely interleaves `iter_0 · label` (near-instant) ahead of
-    /// `iter_1 · label` (also near-instant) and only *then* `iter_0
-    /// · store` (a second later), rather than the frame's own
-    /// pass-paired order (`iter_0 label`, `iter_0 store`, `iter_1
-    /// label`, ...). The same reasoning parts 1-3 already used for
-    /// `gate · reply`'s own timestamp order: the fixture's real
-    /// timestamps disagree with the frame, so this is reported, not
-    /// bent to match it. A loop's own token sparkline (`tape_token_
-    /// column`'s shared code) also scales each pass by the panel's
-    /// own absolute token unit, not relative to the loop's own
-    /// passes, so a tight range of similar pass tokens (`review.yml`'s
-    /// own 1,180-1,515, `classify.yml`'s own 176-205) reads shorter
-    /// bars than the frame's own relative scaling.
-    const ALL_TAPE_LOOP_ORDER_AND_SPARKLINE_SCALE: &[(u16, u16)] = &[
-        (99, 26),
-        (100, 26),
-        (160, 26),
+    /// `review.yml`'s own loop sparkline (`labels`'s is similarly
+    /// scaled) draws each pass's own level at the panel's own
+    /// absolute token unit (shared with `tape_token_column`'s own
+    /// single-run bars): the frame instead scales a loop's own
+    /// sparkline relative to its own passes, a rule no single-run
+    /// frame uses and the design text never states. Kept on the
+    /// shared absolute rule the single-run frames pin; these cells
+    /// alone are allow-listed.
+    const ALL_TAPE_LOOP_SPARKLINE_SCALE: &[(u16, u16)] = &[
+        (43, 27),
+        (44, 27),
         (162, 26),
         (163, 26),
         (164, 26),
         (165, 26),
         (166, 26),
         (167, 26),
-        (40, 27),
-        (43, 27),
-        (44, 27),
-        (40, 28),
-        (129, 28),
-        (133, 28),
-        (134, 28),
-        (135, 28),
-        (136, 28),
-        (137, 28),
-        (143, 28),
-        (144, 28),
-        (145, 28),
-        (146, 28),
-        (148, 28),
-        (149, 28),
-        (150, 28),
-        (151, 28),
-        (152, 28),
-        (153, 28),
-        (154, 28),
-        (155, 28),
-        (156, 28),
-        (157, 28),
-        (158, 28),
-        (159, 28),
-        (162, 28),
-        (163, 28),
-        (164, 28),
-        (165, 28),
-        (166, 28),
-        (167, 28),
-        (168, 28),
-        (169, 28),
-        (173, 28),
-        (174, 28),
-        (175, 28),
-        (177, 28),
-        (129, 29),
-        (133, 29),
-        (134, 29),
-        (135, 29),
-        (136, 29),
-        (137, 29),
-        (143, 29),
-        (144, 29),
-        (145, 29),
-        (146, 29),
-        (148, 29),
-        (149, 29),
-        (150, 29),
-        (151, 29),
-        (152, 29),
-        (153, 29),
-        (154, 29),
-        (155, 29),
-        (156, 29),
-        (157, 29),
-        (158, 29),
-        (159, 29),
-        (162, 29),
-        (163, 29),
-        (164, 29),
-        (165, 29),
-        (166, 29),
-        (167, 29),
-        (168, 29),
-        (169, 29),
-        (173, 29),
-        (174, 29),
-        (175, 29),
-        (177, 29),
-        (40, 30),
-        (129, 30),
-        (133, 30),
-        (134, 30),
-        (135, 30),
-        (136, 30),
-        (137, 30),
-        (143, 30),
-        (144, 30),
-        (145, 30),
-        (146, 30),
-        (148, 30),
-        (149, 30),
-        (150, 30),
-        (151, 30),
-        (152, 30),
-        (153, 30),
-        (154, 30),
-        (155, 30),
-        (156, 30),
-        (157, 30),
-        (158, 30),
-        (159, 30),
-        (160, 30),
-        (162, 30),
-        (163, 30),
-        (164, 30),
-        (165, 30),
-        (166, 30),
-        (167, 30),
-        (168, 30),
-        (169, 30),
-        (173, 30),
-        (174, 30),
-        (175, 30),
-        (177, 30),
-        (129, 31),
-        (133, 31),
-        (134, 31),
-        (135, 31),
-        (136, 31),
-        (137, 31),
-        (143, 31),
-        (144, 31),
-        (145, 31),
-        (146, 31),
-        (148, 31),
-        (149, 31),
-        (150, 31),
-        (151, 31),
-        (152, 31),
-        (153, 31),
-        (154, 31),
-        (155, 31),
-        (156, 31),
-        (157, 31),
-        (158, 31),
-        (159, 31),
-        (160, 31),
-        (162, 31),
-        (163, 31),
-        (164, 31),
-        (165, 31),
-        (166, 31),
-        (167, 31),
-        (168, 31),
-        (169, 31),
-        (173, 31),
-        (174, 31),
-        (175, 31),
-        (177, 31),
-        (28, 32),
-        (30, 32),
-        (31, 32),
-        (32, 32),
-        (33, 32),
-        (34, 32),
-        (36, 32),
-        (129, 32),
-        (133, 32),
-        (134, 32),
-        (135, 32),
-        (136, 32),
-        (137, 32),
-        (143, 32),
-        (144, 32),
-        (146, 32),
-        (148, 32),
-        (149, 32),
-        (150, 32),
-        (151, 32),
-        (152, 32),
-        (153, 32),
-        (154, 32),
-        (155, 32),
-        (156, 32),
-        (162, 32),
-        (163, 32),
-        (164, 32),
-        (165, 32),
-        (166, 32),
-        (167, 32),
-        (168, 32),
-        (169, 32),
-        (173, 32),
-        (174, 32),
-        (175, 32),
-        (177, 32),
-        (28, 33),
-        (30, 33),
-        (31, 33),
-        (32, 33),
-        (33, 33),
-        (34, 33),
-        (36, 33),
-        (129, 33),
-        (133, 33),
-        (134, 33),
-        (135, 33),
-        (136, 33),
-        (137, 33),
-        (143, 33),
-        (144, 33),
-        (146, 33),
-        (148, 33),
-        (149, 33),
-        (150, 33),
-        (151, 33),
-        (152, 33),
-        (153, 33),
-        (154, 33),
-        (155, 33),
-        (156, 33),
-        (162, 33),
-        (163, 33),
-        (164, 33),
-        (165, 33),
-        (166, 33),
-        (167, 33),
-        (168, 33),
-        (169, 33),
-        (173, 33),
-        (174, 33),
-        (175, 33),
-        (177, 33),
-        (28, 34),
-        (30, 34),
-        (31, 34),
-        (32, 34),
-        (33, 34),
-        (34, 34),
-        (36, 34),
-        (129, 34),
-        (133, 34),
-        (134, 34),
-        (135, 34),
-        (136, 34),
-        (137, 34),
-        (143, 34),
-        (144, 34),
-        (145, 34),
-        (146, 34),
-        (148, 34),
-        (149, 34),
-        (150, 34),
-        (151, 34),
-        (152, 34),
-        (153, 34),
-        (154, 34),
-        (155, 34),
-        (156, 34),
-        (162, 34),
-        (163, 34),
-        (164, 34),
-        (165, 34),
-        (166, 34),
-        (167, 34),
-        (168, 34),
-        (169, 34),
-        (173, 34),
-        (174, 34),
-        (175, 34),
-        (177, 34),
-        (129, 35),
-        (133, 35),
-        (134, 35),
-        (135, 35),
-        (136, 35),
-        (137, 35),
-        (143, 35),
-        (144, 35),
-        (145, 35),
-        (146, 35),
-        (148, 35),
-        (149, 35),
-        (150, 35),
-        (151, 35),
-        (152, 35),
-        (153, 35),
-        (154, 35),
-        (155, 35),
-        (156, 35),
-        (162, 35),
-        (163, 35),
-        (164, 35),
-        (165, 35),
-        (166, 35),
-        (167, 35),
-        (168, 35),
-        (169, 35),
-        (173, 35),
-        (174, 35),
-        (175, 35),
-        (177, 35),
     ];
 
-    /// Issue #698's own rule 15: `iter_4 · label`/`iter_5 · label`
-    /// finish at the same instant as `iter_3 · store` in the
-    /// fixture's own real timestamps; [`oscilloscope_core::multi::
-    /// newest_finished_across_runs`]' own tie-break (run order, then
-    /// plan order within a run) picks a different one of the two
-    /// than the frame's own hand-chosen `iter_3 · store finished`.
-    /// Allow-listed rather than bent, the same way the fixture's own
-    /// timestamp ties were in parts 1-3.
-    const ALL_TAPE_STATUS_LINE_TIE: &[(u16, u16)] =
+    /// `classify.yml`'s own fixture carries microsecond timestamps
+    /// underneath the millisecond ones its own events log shows:
+    /// `iter_3 · store` and `iter_5 · label` both read `23:51:57.
+    /// 812Z` there, but the run's own live state has them at
+    /// `.812675` and `.812844` respectively -- genuinely not a tie,
+    /// so the newest-finished pick (earliest plan order only breaks
+    /// a *real* tie) reads the later one, `iter_5 · label`, not the
+    /// frame's own hand-chosen `iter_3 · store finished`. The same
+    /// reasoning parts 1-3 already used for `gate · reply`'s own
+    /// timestamp order: the fixture's real data disagrees with the
+    /// frame, so this is reported, not bent to match it.
+    const ALL_TAPE_STATUS_LINE_PRECISION: &[(u16, u16)] =
         &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
 
     #[test]
@@ -15459,14 +15413,40 @@ mod tape_frame_goldens {
                 )
             })
             .unwrap();
-        let allowed = [
-            ALL_TAPE_FIRST_WORDS_SENTENCE_CUT,
-            ALL_TAPE_PENDING_COUNT_LOOP_HAS_NO_PASS_COUNT,
-            ALL_TAPE_EFFECTS_DONE_COUNTER,
-            ALL_TAPE_LOOP_ORDER_AND_SPARKLINE_SCALE,
-            ALL_TAPE_STATUS_LINE_TIE,
-        ]
-        .concat();
+        // `classify.yml`'s own loop dispatches two children per pass
+        // (`label`, a quick prompt, then `store`, a one-second tool)
+        // -- several passes run at once, so the rows finish in real
+        // timestamp order, genuinely interleaved, rather than the
+        // frame's own hand-chosen pass-paired order. Compared as a
+        // set of whole rows instead, each one still cell-exact.
+        let classify_rows = 27..37u16;
+        let classify_cols = 120..180u16;
+        // `iter_2 › label`'s own reply word, `question`, fills its
+        // field with one cell to spare -- the frame draws it in
+        // full, but the same column width elsewhere in a single-run
+        // Tape (`tape_what_text`'s own shared rule) always marks a
+        // one-cell-to-spare fit with `⋯` regardless. The two frames
+        // disagree with each other on this and the design text says
+        // nothing either way; kept on the single-run goldens' own
+        // rule, this one cell allowed here.
+        const CLASSIFY_SET_EXCEPTION_COLUMNS: &[u16] = &[160];
+        assert_rows_match_as_a_set(
+            terminal.backend().buffer(),
+            &mock,
+            "all--tape--180x48",
+            classify_cols.clone(),
+            classify_rows.clone(),
+            CLASSIFY_SET_EXCEPTION_COLUMNS,
+        );
+        let mut allowed: Vec<(u16, u16)> = Vec::new();
+        for y in classify_rows {
+            for x in classify_cols.clone() {
+                allowed.push((x, y));
+            }
+        }
+        allowed.extend_from_slice(ALL_TAPE_EFFECTS_DONE_COUNTER);
+        allowed.extend_from_slice(ALL_TAPE_LOOP_SPARKLINE_SCALE);
+        allowed.extend_from_slice(ALL_TAPE_STATUS_LINE_PRECISION);
         assert_matches_mock(
             terminal.backend().buffer(),
             &mock,
@@ -18561,6 +18541,7 @@ mod tape_frame_goldens {
                     theme.border_focused,
                     None,
                     oscilloscope_core::format::format_tokens_t,
+                    theme.accent_primary,
                     &ctx,
                 );
             })

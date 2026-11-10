@@ -163,6 +163,22 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// The All screen's own six run roles (`run.1`..`run.6`,
+    /// issue #698's own Settled points 6 and 13): the frames'
+    /// assignment, read off roles this theme already carries
+    /// elsewhere -- a categorical palette (tui-design.md §9.5) is a
+    /// change to this one list, not to every theme's own fields.
+    pub fn run_colors(&self) -> [Color; 6] {
+        [
+            self.accent_primary,
+            self.warning,
+            self.accent_secondary,
+            self.status_info,
+            self.status_done,
+            self.text,
+        ]
+    }
+
     pub fn for_name(name: ThemeName) -> Theme {
         match name {
             ThemeName::Terminal => Theme::terminal(),

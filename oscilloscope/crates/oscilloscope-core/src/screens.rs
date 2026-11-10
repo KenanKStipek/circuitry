@@ -1490,25 +1490,38 @@ fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> S
 /// off the already-flattened node so a row's own text costs no more
 /// than this one lookup -- `details_for` re-flattens the whole state
 /// on every call, which a per-row loop here must never pay for).
-fn tape_tool_what(row: &Row, node: Option<&NodeMeta>) -> String {
-    let command = node.and_then(|n| {
-        let command = n.meta.pointer("/params_rendered/command")?.as_str()?;
-        let args = n
-            .meta
-            .pointer("/params_rendered/args")
-            .and_then(Value::as_array)
-            .map(|args| {
-                args.iter()
-                    .map(crate::render::display_value)
-                    .collect::<Vec<_>>()
-                    .join(" ")
+fn tape_tool_what(row: &Row, node: Option<&NodeMeta>, plan: &PlanTree) -> String {
+    let command = node
+        .and_then(|n| {
+            let command = n.meta.pointer("/params_rendered/command")?.as_str()?;
+            let args = n
+                .meta
+                .pointer("/params_rendered/args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .map(crate::render::display_value)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .filter(|a| !a.is_empty());
+            Some(match args {
+                Some(args) => format!("{command} {args}"),
+                None => command.to_string(),
             })
-            .filter(|a| !a.is_empty());
-        Some(match args {
-            Some(args) => format!("{command} {args}"),
-            None => command.to_string(),
         })
-    });
+        // A tool whose own `start` event carries no rendered params
+        // yet (a loop pass's own tool child, concurrently started
+        // with its siblings, say) still has the plan's own static
+        // command to show meanwhile -- the same literal lookup a
+        // pending row already makes.
+        .or_else(|| {
+            (row.kind == RowKind::Tool)
+                .then(|| plan.match_path(&row.path))
+                .flatten()
+                .and_then(|m| m.entries.first())
+                .and_then(|e| e.tool_command.clone())
+        });
     match (row.duration_s, command) {
         (Some(d), Some(cmd)) => format!("{} · {cmd}", crate::format::format_duration(d)),
         (Some(d), None) => crate::format::format_duration(d),
@@ -1658,7 +1671,7 @@ fn tape_row_tool_tokens(
 /// included, uses the same glyph.
 fn first_words(text: &str, max_chars: usize) -> String {
     let text = text.trim();
-    if let Some(end) = text.find(['.', '!', '?']) {
+    if let Some(end) = first_sentence_end(text) {
         let cut = &text[..=end];
         if cut.chars().count() <= max_chars {
             return cut.to_string();
@@ -1669,6 +1682,33 @@ fn first_words(text: &str, max_chars: usize) -> String {
         format!("{truncated}⋯")
     } else {
         truncated
+    }
+}
+
+/// The byte offset of the first real sentence end in `text`,
+/// skipping two shapes of punctuation that look like one but
+/// aren't: a list number's own period (`1.`, `12.` -- a run of
+/// nothing but digits before it is a list marker, not a sentence,
+/// so a reply that opens `1. Faster parser.` cuts at the real end
+/// instead of after the `1`), and a period embedded in a word
+/// (`api.py`, immediately followed by another letter or digit with
+/// no space, never a sentence's own end).
+fn first_sentence_end(text: &str) -> Option<usize> {
+    let mut search_from = 0;
+    loop {
+        let rel = text[search_from..].find(['.', '!', '?'])?;
+        let end = search_from + rel;
+        let prefix = &text[..end];
+        let is_list_marker = !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit());
+        let embedded_in_a_word = text[end + 1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric());
+        if is_list_marker || embedded_in_a_word {
+            search_from = end + 1;
+            continue;
+        }
+        return Some(end);
     }
 }
 
@@ -2065,7 +2105,7 @@ fn tape_row_content(
                     (tape_finished_agent_what(row.duration_s, &raw), None, tokens)
                 }
             } else {
-                (tape_tool_what(row, node), None, tokens)
+                (tape_tool_what(row, node, plan), None, tokens)
             }
         }
         RowKind::Root
@@ -2081,7 +2121,11 @@ fn tape_row_content(
 /// `render::Row::label` as-is (already relative to its parent, and
 /// a loop pass's own direct child is already named `iter_0 ›
 /// draft` by `fold`/`render`, never repeating the loop's own name).
-fn tape_row_label(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> String {
+pub(crate) fn tape_row_label(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> String {
     if row.kind == RowKind::If {
         if let Some(branch) = flat.get(&row.path).and_then(|n| n.branch.clone()) {
             return format!("{} → {branch}", row.label);
@@ -2392,7 +2436,7 @@ fn build_tape_ended_detail(
             .and_then(|n| n.meta.get("provider"))
             .and_then(Value::as_str)
             .unwrap_or("tool");
-        let command = tape_tool_what(row, node);
+        let command = tape_tool_what(row, node, plan);
         let what = format!(
             "{} · {provider} · {}",
             row.kind.label(),
@@ -3184,6 +3228,19 @@ pub struct SignalScreen {
     /// for the `Ahead` label's own `usually ends <clock>`.
     pub ahead_eta_ts: Option<String>,
     pub step_rows: Vec<SignalStepRow>,
+    /// A tile's own two most recent finished-prompt label groups
+    /// (issue #698's own Signal tile rule): empty for a single-run
+    /// Signal, which draws `step_rows` under the chart instead.
+    pub tile_finished_labels: Vec<crate::multi::SignalFinishedLabelGroup>,
+    /// A tile's own Now pane title suffix, running rows then rows
+    /// ahead -- the same text the Tape's own list already shows for
+    /// each, never this screen's own `now_pane` (whose breadcrumbs
+    /// and `waiting`/`loop_summary`/`Last Burst`/`Next Signal`
+    /// sections a tile has no room for). Empty for a single-run
+    /// Signal, which draws `now_pane` instead.
+    pub tile_now_slots_text: Option<String>,
+    pub tile_now_running: Vec<crate::multi::TileNowRow>,
+    pub tile_now_ahead: Vec<crate::multi::TileNowRow>,
     /// The faint plan-ahead list trailing the *last* step row: the
     /// current loop's own next pass, then every top-level row still
     /// ahead, then `■ End` -- `None` once nothing is ahead any more
@@ -3322,10 +3379,19 @@ pub(crate) fn last_finished_row(
             node.completed_at.as_deref()
         }
     };
+    // Two rows that finish at the exact same instant (a loop's own
+    // concurrent passes, say) are broken by plan order: the earlier
+    // row in `rows` wins, not the later one -- `Iterator::max_by`
+    // keeps the *last* of equally-maximum elements, so this folds
+    // by hand instead, replacing the running best only on a strict
+    // improvement.
     rows.iter()
         .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
         .filter_map(|r| Some((r, elapsed_offset(finish_ts(&r)?)?)))
-        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .fold(None, |best: Option<(&Row, f64)>, (row, t)| match best {
+            Some((_, bt)) if t <= bt => best,
+            _ => Some((row, t)),
+        })
         .map(|(row, _)| {
             let node = flat.get(&row.path);
             let tokens = node.map(|n| crate::model::node_tokens(&n.meta));
@@ -3673,7 +3739,7 @@ pub fn build_signal(
                 SignalStepKind::Loop { status_text }
             }
             _ => {
-                let what = tape_tool_what(row, Some(node));
+                let what = tape_tool_what(row, Some(node), plan);
                 let (cmd, duration) = match what.split_once(" \u{b7} ") {
                     Some((d, c)) => (c.to_string(), d.to_string()),
                     None => (String::new(), what),
@@ -4041,6 +4107,10 @@ pub fn build_signal(
         cursor_col: cursor,
         ahead_eta_ts,
         step_rows,
+        tile_finished_labels: Vec::new(),
+        tile_now_slots_text: None,
+        tile_now_running: Vec::new(),
+        tile_now_ahead: Vec::new(),
         ahead_suffix,
         now_pane: SignalNowPane {
             slots_text,
@@ -7400,6 +7470,34 @@ mod tests {
         assert_eq!(
             last_finished.label, "a",
             "must read folded_rows' own newest step, not the unfolded list's later 'z': {last_finished:?}"
+        );
+    }
+
+    /// Issue #698's own status line across runs breaks a tied finish
+    /// time by plan order, earliest wins -- two rows ending at the
+    /// exact same instant (a loop's own concurrent passes, say) must
+    /// not read as whichever happens to come later in `rows`.
+    #[test]
+    fn last_finished_row_breaks_an_exact_tie_by_earliest_plan_order() {
+        let plan = PlanTree::empty();
+        let rows = vec![
+            tape_row("prime.store", 1, "store", RowKind::Tool, StatusKind::Done),
+            tape_row("prime.label", 1, "label", RowKind::Tool, StatusKind::Done),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.store".to_string(),
+            tape_node("2026-10-08T11:05:00Z", Some("2026-10-08T11:05:01Z")),
+        );
+        flat.insert(
+            "prime.label".to_string(),
+            tape_node("2026-10-08T11:05:00Z", Some("2026-10-08T11:05:01Z")),
+        );
+        let last_finished = last_finished_row(&rows, &flat, &plan, Some("2026-10-08T11:04:00Z"))
+            .expect("a newest step");
+        assert_eq!(
+            last_finished.label, "store",
+            "the earlier row in plan order wins an exact tie"
         );
     }
 }
