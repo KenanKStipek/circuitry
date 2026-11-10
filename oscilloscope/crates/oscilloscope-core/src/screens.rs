@@ -3667,9 +3667,16 @@ fn build_selected_pass(
 /// `rows` is always `render::RenderState::unfolded_rows`, never
 /// `RenderState::rows` -- the tree screen's own folding plays no
 /// part in the rail (`rail::build_rail`'s own doc comment).
+/// `folded_rows` is `RenderState::rows`, the same input the Tape's
+/// and the Signal's own builders take: the status line's "newest
+/// finished step", the Totals row's deviation and the shared head
+/// rule all read it instead, so the three screens never disagree
+/// over something folding changed (a breadcrumb's own quick steps,
+/// say) just because the Flow alone read the unfolded list.
 #[allow(clippy::too_many_arguments)]
 pub fn build_flow(
     rows: &[Row],
+    folded_rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
@@ -3787,8 +3794,8 @@ pub fn build_flow(
             }
         }
     }
-    let last_finished = last_finished_row(rows, flat, plan, header.run_start_ts.as_deref());
-    let usual_so_far: u64 = rows
+    let last_finished = last_finished_row(folded_rows, flat, plan, header.run_start_ts.as_deref());
+    let usual_so_far: u64 = folded_rows
         .iter()
         .filter(|row| {
             !matches!(
@@ -3803,7 +3810,7 @@ pub fn build_flow(
         .filter_map(|row| tape_row_usual_tokens(&row.path, plan, header))
         .sum();
     let usual_so_far_tokens = (usual_so_far > 0).then_some(usual_so_far);
-    let head = build_run_head(header.run_start_ts.as_deref(), header, rows, flat);
+    let head = build_run_head(header.run_start_ts.as_deref(), header, folded_rows, flat);
     FlowScreen {
         rail,
         unit,
@@ -4752,6 +4759,7 @@ mod tests {
         let elapsed_at = |now: &str| {
             let screen = build_flow(
                 &rows,
+                &rows,
                 &flat,
                 &plan,
                 &model,
@@ -4928,6 +4936,7 @@ mod tests {
         );
         let screen = build_flow(
             &rows,
+            &rows,
             &flat,
             &plan,
             &model,
@@ -5037,6 +5046,7 @@ mod tests {
             })
             .expect("an inferred decision station");
         let screen = build_flow(
+            &rows,
             &rows,
             &flat,
             &plan,
@@ -5874,5 +5884,56 @@ mod tests {
         let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, now);
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");
+    }
+
+    /// Issue #691's own follow-up: the Flow's status line and
+    /// Totals deviation read `folded_rows` (the same `RenderState::
+    /// rows` the Tape's and the Signal's own builders take), never
+    /// the rail's own unfolded list -- a row folding absorbed into a
+    /// breadcrumb and dropped from `folded_rows` must not still read
+    /// as the newest finished step just because the unfolded list
+    /// still carries it.
+    #[test]
+    fn flow_status_line_reads_folded_rows_not_the_rails_own_unfolded_list() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut header = base_header();
+        header.run_end_ts = None;
+        let unfolded_rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done),
+            tape_row("prime.z", 1, "z", RowKind::Tool, StatusKind::Done),
+        ];
+        // `folded_rows` never carries `z` at all (folded away into a
+        // breadcrumb, say) -- only `a` is left to read as the newest
+        // finished step.
+        let folded_rows = vec![tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done)];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            tape_node("2026-10-08T11:05:00Z", Some("2026-10-08T11:05:01Z")),
+        );
+        flat.insert(
+            "prime.z".to_string(),
+            tape_node("2026-10-08T11:06:00Z", Some("2026-10-08T11:06:01Z")),
+        );
+        let screen = build_flow(
+            &unfolded_rows,
+            &folded_rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            None,
+            &[],
+            None,
+            &utc(),
+            None,
+            "2026-10-08T11:06:02Z",
+        );
+        let last_finished = screen.last_finished.expect("a newest finished step");
+        assert_eq!(
+            last_finished.label, "a",
+            "must read folded_rows' own newest step, not the unfolded list's later 'z': {last_finished:?}"
+        );
     }
 }

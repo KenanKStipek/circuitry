@@ -1773,6 +1773,7 @@ fn build_flow_screen_if_active(
     };
     Some(oscilloscope_core::screens::build_flow(
         &render_state.unfolded_rows,
+        &render_state.rows,
         &flat,
         plan,
         model,
@@ -4138,6 +4139,7 @@ mod tests {
         );
         let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.unfolded_rows,
+            &rendered.rows,
             &flat,
             &plan,
             &model,

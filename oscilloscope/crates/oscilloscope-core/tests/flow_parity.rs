@@ -122,6 +122,7 @@ fn build_case_flow_screen(dir_name: &str) -> FlowScreen {
     let flat = flatten_state(&state);
     build_flow(
         &rendered.unfolded_rows,
+        &rendered.rows,
         &flat,
         &plan,
         &model,

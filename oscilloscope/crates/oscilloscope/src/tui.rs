@@ -9681,6 +9681,7 @@ mod golden_tests {
         }];
         let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.unfolded_rows,
+            &rendered.rows,
             &oscilloscope_core::model::flatten_state(&state),
             &plan,
             &model,
@@ -10012,6 +10013,7 @@ mod golden_tests {
         );
         let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.unfolded_rows,
+            &rendered.rows,
             &oscilloscope_core::model::flatten_state(state.unwrap_or(&Value::Null)),
             plan,
             model,
@@ -12827,6 +12829,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(state);
         let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.unfolded_rows,
+            &rendered.rows,
             &flat,
             plan,
             &model,
