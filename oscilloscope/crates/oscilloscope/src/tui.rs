@@ -638,6 +638,68 @@ mod tape_token_bar_tests {
             );
         }
     }
+
+    /// Issue #702: Claude Code never reports `tokens_received` live
+    /// (`docs/plugins/agent.md`) -- the Tape detail pane's own
+    /// Tokens line must draw `—` for it, never a false `0`, while
+    /// the agent is still running.
+    #[test]
+    fn a_running_claude_code_agents_null_received_draws_as_a_dash() {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "claude_code", "updated_at": "2026-10-08T11:46:50Z",
+                    "tokens_sent": 1600, "tokens_received": null}}}
+        }});
+        let rendered = oscilloscope_core::render::build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:51Z",
+            &[],
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let tape = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            Some("prime.fixer"),
+            true,
+            "2026-10-08T11:46:51Z",
+        );
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let lines = tape_normal_detail_lines(&tape, 60, &ctx);
+        let text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("↑1,600"), "{text}");
+        assert!(
+            text.contains("↓—"),
+            "a never-reported received figure must draw as a dash: {text}"
+        );
+    }
 }
 
 #[cfg(test)]

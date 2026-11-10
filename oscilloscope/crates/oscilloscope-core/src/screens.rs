@@ -5674,6 +5674,74 @@ mod tests {
         assert_eq!(total_received, 130);
     }
 
+    /// The agent's own sightings and a real prompt row's own
+    /// finished-column contribution must both land in the trace with
+    /// no overlap: `rows` carries a real `Prompt` row this time (the
+    /// earlier sighting test above passes none at all, so it alone
+    /// could never catch a prompt row's own column being counted
+    /// twice, or an agent's own sighting being dropped because a row
+    /// now exists for a different path).
+    #[test]
+    fn build_signal_an_agents_sightings_and_a_prompt_rows_own_column_both_count_with_no_overlap() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_at = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": "ok", "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z",
+                    "completed_at": "2026-01-01T00:00:00.500Z",
+                    "adapter": "scripted", "model": "scripted-model",
+                    "tokens_sent": 100, "tokens_received": 10
+                }},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z", "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &running_at(2100, 40, "2026-01-01T00:00:00.350Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:00.500Z",
+                "adapter": "scripted", "model": "scripted-model",
+                "tokens_sent": 100, "tokens_received": 10
+            }},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:01.000Z", "provider": "agent",
+                "tokens_sent_total": 2100, "tokens_received_total": 40
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let flat = crate::model::flatten_state(&finished);
+        let rows = vec![
+            tape_row("prime.ask", 1, "ask", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.fixer", 1, "fixer", RowKind::Tool, StatusKind::Done),
+        ];
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let now = "2026-01-01T00:00:01.100Z";
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let (total_sent, total_received) = signal
+            .buckets
+            .iter()
+            .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
+        // The prompt's own 100/10 (its own finished column) plus the
+        // agent's own 2100/40 (its sightings): 2200/50 total, neither
+        // counted twice nor dropped now that a row exists for both.
+        assert_eq!(total_sent, 2200);
+        assert_eq!(total_received, 50);
+        assert_eq!(signal.buckets[5].sent, 100, "the prompt's own column");
+        assert_eq!(signal.buckets[5].received, 10);
+    }
+
     /// Readings' own ratio (to one decimal) and peak (the largest
     /// column's own sent figure and clock) -- §2.2's `11.5 : 1` and
     /// `584 t at 12:50:50`.
