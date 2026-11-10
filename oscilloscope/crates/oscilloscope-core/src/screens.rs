@@ -553,6 +553,10 @@ pub struct FocusedStep {
     pub provider_or_model: Option<String>,
     pub since_ts: Option<String>,
     pub elapsed_s: Option<f64>,
+    /// Issue #704 rule 4's own Status section, "start → end": the
+    /// node's own `completed_at` -- `None` while still running, or
+    /// for a step the run never recorded one for at all.
+    pub finished_ts: Option<String>,
     pub detail: FocusDetail,
     /// The step's own status (issue #635's selected pane: "produced"
     /// only shows once the step has actually finished, and a
@@ -706,6 +710,7 @@ pub(crate) fn build_focused_step(
     let since_ts = node
         .and_then(|n| n.created_at.clone())
         .or_else(|| model.event_started_at(&row.path).map(str::to_string));
+    let finished_ts = node.and_then(|n| n.completed_at.clone());
     // A step that has already finished reads its own real duration
     // (`completed_at` - `created_at`), never `now - created_at`: once
     // the whole run has ended, `now` is wall-clock time at render,
@@ -853,6 +858,7 @@ pub(crate) fn build_focused_step(
         provider_or_model,
         since_ts,
         elapsed_s,
+        finished_ts,
         detail,
         status: row.status.clone(),
         error: details.error.clone(),

@@ -4738,6 +4738,27 @@ fn focused_step_full_lines(
     if let Some(secs) = step.elapsed_s {
         status_value.push_str(&oscilloscope_core::format::format_duration(secs));
     }
+    // Issue #704 rule 4's own Status section, "start → end": both
+    // clock times when the step has actually finished, its own
+    // start alone while it hasn't.
+    let start_clock = step
+        .since_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let end_clock = step
+        .finished_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    if let Some(start) = &start_clock {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(start);
+        if let Some(end) = &end_clock {
+            status_value.push_str(" → ");
+            status_value.push_str(end);
+        }
+    }
     let mut lines = vec![tape_detail_line(
         vec![
             Span::styled("Status  ", muted),
@@ -9871,6 +9892,7 @@ mod golden_tests {
             kind_label: "agent",
             provider_or_model: None,
             since_ts: None,
+            finished_ts: None,
             elapsed_s: None,
             detail: FocusDetail::Agent {
                 asked: None,
@@ -10458,6 +10480,49 @@ mod golden_tests {
         );
     }
 
+    /// Issue #704 rule 4's own Status section, "start → end": the
+    /// shared full-screen renderer shows both clock times for a
+    /// finished step, against the recorded parity_tool_failed_
+    /// continue_cof fixture's own handled failure.
+    #[test]
+    fn fullscreen_status_shows_start_and_end_clocks_from_the_recorded_parity_tool_failed_continue_fixture()
+     {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "parity_tool_failed_continue_cof",
+            "prime.flaky",
+            ProcessState::exited(false),
+            now,
+        );
+        let step = tape_screen
+            .selected
+            .as_ref()
+            .expect("prime.flaky resolves its own step");
+        assert!(step.since_ts.is_some(), "{step:?}");
+        assert!(step.finished_ts.is_some(), "{step:?}");
+        let text =
+            agent_block_lines_text(&focused_step_full_lines(step, None, now, false, 80, &ctx));
+        let start = oscilloscope_core::format::format_clock_time(
+            step.since_ts.as_deref().unwrap(),
+            ctx.zone,
+        )
+        .unwrap();
+        let end = oscilloscope_core::format::format_clock_time(
+            step.finished_ts.as_deref().unwrap(),
+            ctx.zone,
+        )
+        .unwrap();
+        assert!(text.contains(&format!("{start} → {end}")), "{text}");
+    }
+
     /// Issue #704 rule 4's own Loop section, against the recorded
     /// each_tree_loop_concurrency fixture: a finished loop's own
     /// full-screen step lists every pass, in plan order.
@@ -10579,6 +10644,7 @@ mod golden_tests {
             kind_label: "tool",
             provider_or_model: None,
             since_ts: None,
+            finished_ts: None,
             elapsed_s: None,
             detail: FocusDetail::Plain,
             status: RowStatus {
