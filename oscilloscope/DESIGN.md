@@ -2247,42 +2247,55 @@ detail pane's own Tokens line (`screens::build_tape_selected_
 detail`) carries `None`, not a false `0`, for whichever of sent/
 received an agent's own CLI has never reported at all (Claude Code's
 mid-turn `tokens_received: null`), drawing `—` for it rather than a
-wrong figure. Issue #702 also widened the bar's own 16-cell budget's
-gap to allow `0`, not a forced minimum of `1`, and -- once the count
-itself needs more than 7 of those 16 cells -- lets the bar give up
-cells of its own (down to 1) rather than let the pane's own clipping
-cut the count instead: an agent's own total, cached input tokens
-included, routinely reaches six digits or more.
+wrong figure; the Store's own tile (`store::build_leaf`) carries the
+same distinction for the same reason, wherever a running agent's own
+sent/received split is shown on its own, rather than summed into a
+screen's own totals (which still read a missing figure as `0`, the
+same rule every sum and share in this section already follows). The design always prints the count in full, with a
+space before it: the bar's own 16-cell budget now gives up cells as
+the count widens, dropped entirely once even one cell would no
+longer leave room for both it and that one required space, rather
+than let the pane's own clipping cut the count instead (an agent's
+own total, cached input tokens included, routinely reaches six
+digits or more).
 
 **The Signal's own agent trace** (issue #702, replacing the single
 Now-column estimate an agent otherwise would have gotten).
 `RunModel` keeps the last live totals seen per running agent path
 (`observe_agent_live`, called from `observe` for every flattened
 node): each increase since the last sighting becomes its own entry
-(`AgentLiveSighting`), at the live record's own `updated_at`; once
-the session ends, only the remainder not yet plotted is added, at
-its own `completed_at` -- so the sum of one path's own sightings
-always equals its final tokens exactly, never double-counted. A
-session `osi` never once saw running (`osi watch` of an
-already-finished run, an attach after the fact, or one shorter than
-one poll) still gets this same end-of-session entry, its whole
-`node_tokens` rather than a remainder, the moment it's seen finished
-with nothing plotted for it yet. `build_signal` plots one column per
-sighting (`RunModel::agent_live_sightings`), sent above and received
-below, never marked live (an agent's own figures are the provider's
-exact count, never a character-count estimate the way a running
-prompt's are) -- unlike a prompt, whose own running estimate only
-ever occupies the current Now column, overwritten on every redraw.
-Peak, Largest and Quiet still read the trace's own columns up to the
-cursor; Sent and Received, while following Now, instead read the
-same live-inclusive figure the Totals row does, since the trace's
-own columns alone leave out anything that never earns a column of
-its own (a model-mode `if`'s own tokens, an unnamed loop's earlier
-passes, a declared-outputs `use` child's effects) -- switching back
-to the trace's own columns up to the cursor once scrubbed away from
-Now, matching what the trace actually drew there. A finished agent
-session counts toward Largest the same way a finished prompt already
-does.
+(`AgentLiveSighting`), at the live record's own `updated_at`, and
+adds to `agent_live_plotted_total`, a running total of everything
+already turned into a sighting for that path that a retry never
+clears; once the session ends, only whatever `node_tokens`' own
+final total still owes beyond that running total is added, at its
+own `completed_at` -- so the sum of one path's own sightings always
+equals its final tokens exactly, never double-counted, retries
+included: an abandoned attempt's own tokens are already in its own
+sightings, so the retried attempt's own eventual remainder
+(`node_tokens`'s own `_total`-first pair, which folds both attempts
+in) subtracts them rather than counting them twice. A session `osi`
+never once saw running (`osi watch` of an already-finished run, an
+attach after the fact, or one shorter than one poll) has nothing in
+`agent_live_plotted_total` yet, so its whole `node_tokens` becomes
+the remainder the moment it's seen finished. `build_signal` plots
+one column per sighting (`RunModel::agent_live_sightings`), sent
+above and received below, never marked live (an agent's own figures
+are the provider's exact count, never a character-count estimate
+the way a running prompt's are) -- unlike a prompt, whose own
+running estimate only ever occupies the current Now column,
+overwritten on every redraw. Peak, Largest and Quiet read the
+trace's own columns up to the cursor; Sent and Received instead
+always read the same live-inclusive figure the Totals row does,
+never cut at the scrub cursor, since the trace's own columns alone
+leave out anything that never earns a column of its own (a
+model-mode `if`'s own tokens, an unnamed loop's earlier passes, a
+declared-outputs `use` child's effects). `sent_live`/`received_live`
+mark whether either side still has a live part in it, the same way
+the Totals row's own headline does, so a front end can draw the `≈`
+marker and the faint style for exactly as long as that holds. A
+finished agent session counts toward Largest the same way a finished
+prompt already does.
 
 None of this changes a run with no agent tool at all, or an
 electricity run (electricity has no agent tool): the Tape, Signal,
