@@ -4879,6 +4879,22 @@ mod all_run_slot_tests {
     }
 
     #[test]
+    fn all_grid_info_pages_everything_when_only_one_cell_fits_at_all() {
+        // 80 columns -> one 56-wide tile column; a 20-row body ->
+        // one tile row too: capacity 1, so two or more runs page
+        // with nothing real shown, never one run silently standing
+        // in for every other one.
+        let (grid, page_count, page_offset, page_run_count, more_count) =
+            all_grid_info(3, 80, 23, 0);
+        assert_eq!(grid.columns, 1);
+        assert_eq!(grid.rows, 1);
+        assert_eq!(page_count, 1);
+        assert_eq!(page_offset, 0);
+        assert_eq!(page_run_count, 0);
+        assert_eq!(more_count, 3);
+    }
+
+    #[test]
     fn match_existing_slots_matches_each_existing_slot_at_most_once() {
         let a = Path::new("/run/a/state.live.json");
         let existing = [Some(a)];
@@ -4990,7 +5006,15 @@ fn all_grid_info(
 ) {
     let body_height = height.saturating_sub(3);
     let grid = oscilloscope_core::multi::tile_grid(run_count, width, body_height);
-    let page_size = grid.page_size.max(1);
+    let page_size = grid.page_size;
+    if page_size == 0 {
+        // A grid with room for only one tile-sized cell at all, and
+        // more runs than that cell alone could ever show one of --
+        // that one cell is the "... n more" marker itself, every
+        // run named there, rather than silently showing one run as
+        // if it were the only one running at all.
+        return (grid, 1, 0, 0, run_count);
+    }
     let page_count = run_count.div_ceil(page_size).max(1);
     let page = page.min(page_count - 1);
     let page_offset = page * page_size;
