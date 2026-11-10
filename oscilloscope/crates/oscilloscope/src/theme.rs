@@ -1215,7 +1215,7 @@ mod tests {
             check("text", theme.text, 4.5);
             check("error", theme.error, 4.5);
             check("dim", theme.dim, 3.0);
-            // Finding 11: every `StatusKind`'s own role colour, not
+            // Every `StatusKind`'s own role colour is checked, not
             // just running/done/failed -- `pending`/`skipped` reuse
             // `dim`'s own 3:1 floor (they already are `dim` in every
             // theme); every other status kind is a 4.5:1 role like
