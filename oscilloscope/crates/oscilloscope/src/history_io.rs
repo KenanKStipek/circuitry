@@ -44,7 +44,7 @@ pub fn resolve_history_dir(no_history_flag: bool) -> Option<PathBuf> {
 /// mid-run, a run directory not yet created) still resolves to
 /// *something* usable. Shared by [`resolve_run_document_path`] (issue
 /// #649) and the registry's own absolute `orchestration`/`config`/
-/// `run_dir` (issue #698's "Settled 1").
+/// `run_dir`.
 pub(crate) fn absolute_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| {
         if path.is_absolute() {
@@ -125,13 +125,13 @@ pub struct HistoryHandle {
     /// even if a later state write would have resolved differently.
     document_settled: std::cell::Cell<bool>,
     warned_no_document: std::cell::Cell<bool>,
-    /// The config path as given (issue #698's "Settled 4"), recorded
-    /// in the history record exactly as given -- never resolved
-    /// further, and never the config's own contents.
+    /// The config path as given, recorded in the history record
+    /// exactly as given -- never resolved further, and never the
+    /// config's own contents.
     config: Option<String>,
-    /// This run's own, already-absolute run directory (issue #698's
-    /// "Settled 4") -- lets "Recent Runs" open a finished run
-    /// read-only once the registry entry for it is long gone.
+    /// This run's own, already-absolute run directory -- lets
+    /// "Recent Runs" open a finished run read-only once the
+    /// registry entry for it is long gone.
     run_dir: Option<String>,
     records: RefCell<Option<Vec<HistoryRecord>>>,
     stats: RefCell<Option<(Option<String>, DocumentStats)>>,
@@ -147,9 +147,9 @@ pub struct HistoryHandle {
 
 impl HistoryHandle {
     /// `osi <doc>`: the document is already known, so there is
-    /// nothing left to resolve lazily. `config`/`run_dir` are issue
-    /// #698's "Settled 4" fields: `config` as given on the command
-    /// line (`None` for a run with none), `run_dir` already absolute.
+    /// nothing left to resolve lazily. `config` is as given on the
+    /// command line (`None` for a run with none); `run_dir` is
+    /// already absolute.
     pub fn for_run(
         dir: Option<PathBuf>,
         document: String,

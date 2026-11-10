@@ -16,8 +16,8 @@
 //! `created_at`/`completed_at`/`tokens_sent`/`tokens_received`/
 //! `cost_usd`, and [`RunModel::step_intervals`] carries the same
 //! handful of fields. [`HistoryRecord::config`] and
-//! [`HistoryRecord::run_dir`] (issue #698's "Settled 4") are the one
-//! exception, and even there only the *path* is ever recorded --
+//! [`HistoryRecord::run_dir`] are the one exception, and even there
+//! only the *path* is ever recorded --
 //! never a config's own contents, and never anything read from
 //! inside the run directory beyond this module's own existing
 //! fields.
@@ -114,15 +114,14 @@ pub struct HistoryRecord {
     /// never read back out of `runtime.last_run.orchestration_path`
     /// itself, which neither engine guarantees is absolute.
     pub document: String,
-    /// The config path as given to this run (issue #698's "Settled
-    /// 4"), never resolved further -- `None` for a run with no
-    /// config at all, and for every record written before this
-    /// field existed (`#[serde(default)]`, format `v` 1). Only the
-    /// path is ever recorded, never the config's own contents.
+    /// The config path as given to this run, never resolved further
+    /// -- `None` for a run with no config at all, and for every
+    /// record written before this field existed
+    /// (`#[serde(default)]`, format `v` 1). Only the path is ever
+    /// recorded, never the config's own contents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<String>,
-    /// This run's own run directory (issue #698's "Settled 4"):
-    /// lets "Recent Runs" open a finished run read-only
+    /// This run's own run directory: lets "Recent Runs" open a finished run read-only
     /// (`osi watch <run_dir>`) without the registry, which is gone
     /// by the time a later `osi` looks for it. `None` the same way
     /// `config` is.
@@ -436,8 +435,8 @@ fn add_optional_f64(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 /// only run, or a run with no `document_hash`.  `document_path` is
 /// the caller's own, already-resolved document path -- see
 /// [`HistoryRecord::document`]'s own doc comment. `config`/`run_dir`
-/// (issue #698's "Settled 4") are the caller's own, recorded exactly
-/// as given -- `config` as given on the command line, never
+/// are the caller's own, recorded exactly as given -- `config` as
+/// given on the command line, never
 /// resolved further; `run_dir` is already absolute (every caller
 /// builds it from its own, already-resolved run directory).
 pub fn build_record(
@@ -1716,6 +1715,50 @@ mod tests {
         append_record(dir.path(), "/doc.yml", &rec).unwrap();
         let read_back = read_records(dir.path(), "/doc.yml");
         assert_eq!(read_back, vec![rec]);
+    }
+
+    #[test]
+    fn read_records_round_trips_config_and_run_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = HistoryRecord {
+            config: Some("/work/config.json".to_string()),
+            run_dir: Some("/work/run-dir".to_string()),
+            ..record("r1", "2026-01-01T00:00:00Z", 12.0, Outcome::Ok, "h1")
+        };
+        append_record(dir.path(), "/doc.yml", &rec).unwrap();
+        let read_back = read_records(dir.path(), "/doc.yml");
+        assert_eq!(read_back, vec![rec]);
+    }
+
+    #[test]
+    fn read_records_reads_an_old_line_with_neither_config_nor_run_dir() {
+        // A line in the format written before `config`/`run_dir`
+        // existed: no key for either at all, not even `null`.
+        let dir = tempfile::tempdir().unwrap();
+        ensure_history_dir(dir.path()).unwrap();
+        let file_path = history_file_path(dir.path(), "/doc.yml");
+        let old_line = serde_json::json!({
+            "v": FORMAT_VERSION,
+            "run_id": "r1",
+            "document": "/doc.yml",
+            "document_hash": "h1",
+            "engine": "cof",
+            "started_at": "2026-01-01T00:00:00Z",
+            "ended_at": "2026-01-01T00:00:12Z",
+            "outcome": "ok",
+            "wall_s": 12.0,
+            "effects_run": 0,
+            "tokens_sent": 0,
+            "tokens_received": 0,
+            "steps": {},
+        });
+        std::fs::write(&file_path, format!("{old_line}\n")).unwrap();
+
+        let read_back = read_records(dir.path(), "/doc.yml");
+        assert_eq!(read_back.len(), 1);
+        assert_eq!(read_back[0].config, None);
+        assert_eq!(read_back[0].run_dir, None);
+        assert_eq!(read_back[0].run_id, "r1");
     }
 
     #[test]
