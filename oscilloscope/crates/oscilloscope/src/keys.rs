@@ -3350,4 +3350,151 @@ mod tests {
             "the key that closed Help must not also act"
         );
     }
+
+    fn all_key(code: KeyCode) -> (KeyCode, KeyModifiers) {
+        (code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn all_0_to_3_set_the_shared_screen() {
+        let mut state = AllState::new();
+        for (ch, expected) in [
+            ('1', oscilloscope_core::screens::Screen::Signal),
+            ('2', oscilloscope_core::screens::Screen::Flow),
+            ('3', oscilloscope_core::screens::Screen::Store),
+            ('0', oscilloscope_core::screens::Screen::Tape),
+        ] {
+            let (code, modifiers) = all_key(KeyCode::Char(ch));
+            state.handle_key(code, modifiers, 3, 6, 1);
+            assert_eq!(state.screen, expected);
+        }
+    }
+
+    #[test]
+    fn all_right_wraps_within_the_row() {
+        let mut state = AllState::new();
+        state.focus = 2; // last column of a 3-wide row
+        let (code, modifiers) = all_key(KeyCode::Right);
+        state.handle_key(code, modifiers, 3, 6, 1);
+        assert_eq!(state.focus, 0, "wraps to the first column of the same row");
+    }
+
+    #[test]
+    fn all_left_wraps_within_the_row() {
+        let mut state = AllState::new();
+        state.focus = 0;
+        let (code, modifiers) = all_key(KeyCode::Left);
+        state.handle_key(code, modifiers, 3, 6, 1);
+        assert_eq!(state.focus, 2, "wraps to the last column of the same row");
+    }
+
+    #[test]
+    fn all_down_moves_a_full_row_and_wraps() {
+        let mut state = AllState::new();
+        state.focus = 1; // row 0, col 1
+        let (code, modifiers) = all_key(KeyCode::Down);
+        state.handle_key(code, modifiers, 3, 6, 1);
+        assert_eq!(state.focus, 4, "row 1, same column");
+        state.handle_key(code, modifiers, 3, 6, 1);
+        assert_eq!(state.focus, 1, "wraps back to row 0");
+    }
+
+    #[test]
+    fn all_up_moves_a_full_row_and_wraps() {
+        let mut state = AllState::new();
+        state.focus = 1; // row 0, col 1
+        let (code, modifiers) = all_key(KeyCode::Up);
+        state.handle_key(code, modifiers, 3, 6, 1);
+        assert_eq!(state.focus, 4, "wraps up to the last row, same column");
+    }
+
+    #[test]
+    fn all_enter_opens_the_focused_tile() {
+        let mut state = AllState::new();
+        state.focus = 2;
+        let (code, modifiers) = all_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 6, 1),
+            AllKeyOutcome::Open(2)
+        );
+    }
+
+    #[test]
+    fn all_enter_does_nothing_with_no_tiles_on_the_page() {
+        let mut state = AllState::new();
+        let (code, modifiers) = all_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 0, 1),
+            AllKeyOutcome::None
+        );
+    }
+
+    #[test]
+    fn all_esc_goes_back_to_select() {
+        let mut state = AllState::new();
+        let (code, modifiers) = all_key(KeyCode::Esc);
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 6, 1),
+            AllKeyOutcome::BackToSelect
+        );
+    }
+
+    #[test]
+    fn all_q_quits_at_once_with_no_confirm() {
+        let mut state = AllState::new();
+        let (code, modifiers) = all_key(KeyCode::Char('q'));
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 6, 1),
+            AllKeyOutcome::Quit(0)
+        );
+    }
+
+    #[test]
+    fn all_u_is_inert() {
+        let mut state = AllState::new();
+        let (code, modifiers) = all_key(KeyCode::Char('u'));
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 6, 1),
+            AllKeyOutcome::None
+        );
+    }
+
+    #[test]
+    fn all_page_down_and_up_turn_the_page_and_reset_focus() {
+        let mut state = AllState::new();
+        state.focus = 4;
+        let (code, modifiers) = all_key(KeyCode::PageDown);
+        state.handle_key(code, modifiers, 3, 6, 3);
+        assert_eq!(state.page, 1);
+        assert_eq!(state.focus, 0);
+        let (code, modifiers) = all_key(KeyCode::PageUp);
+        state.handle_key(code, modifiers, 3, 6, 3);
+        assert_eq!(state.page, 0);
+        let (code, modifiers) = all_key(KeyCode::PageUp);
+        state.handle_key(code, modifiers, 3, 6, 3);
+        assert_eq!(state.page, 2, "wraps to the last page");
+    }
+
+    #[test]
+    fn all_ctrl_c_quits_with_exit_130_even_with_help_open() {
+        let mut state = AllState::new();
+        state.help_open = true;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL, 3, 6, 1),
+            AllKeyOutcome::Quit(130)
+        );
+        assert!(!state.help_open);
+    }
+
+    #[test]
+    fn all_any_key_closes_help_without_acting_on_it() {
+        let mut state = AllState::new();
+        state.help_open = true;
+        let (code, modifiers) = all_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 6, 1),
+            AllKeyOutcome::None
+        );
+        assert!(!state.help_open);
+    }
 }
