@@ -3645,3 +3645,139 @@ fn a_running_agent_shows_its_turn_and_tool_live_and_the_block_grows_on_enter() {
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
 }
+/// The Totals row's own token figure, parsed out of a replayed
+/// screen -- `" ↑<sent> ↓<received> · <total> t "`
+/// (`tui::draw_totals_row`), read as the figure right after the
+/// row's own `·`, the same one a human reads as the run's tokens so
+/// far. `None` before the Totals row has drawn at all.
+fn totals_tokens(screen: &str) -> Option<u64> {
+    let line = screen.lines().find(|l| l.contains("Totals"))?;
+    let after_dot = line.split('·').nth(1)?;
+    let digits: String = after_dot
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',')
+        .collect();
+    digits.replace(',', "").parse().ok()
+}
+
+/// Whether events_path already carries an end event for step_path --
+/// used to confirm a growth the Totals row showed was actually
+/// observed while the step was still running, not merely after it
+/// had already finished (a slow poll could otherwise still pass the
+/// "it grew" assertion with nothing left running at all).
+fn step_has_ended(events_path: &Path, step_path: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(events_path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        if line.trim().is_empty() {
+            return false;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+        value.get("ev").and_then(|v| v.as_str()) == Some("end")
+            && value.get("path").and_then(|v| v.as_str()) == Some(step_path)
+    })
+}
+
+/// Polls the replayed screen until the Totals row's own token figure
+/// reads strictly above `above`, bounded at `timeout` -- panics with
+/// the last screen it saw if it never does, same shape as
+/// `wait_for_screen_text`.
+fn wait_for_totals_tokens_above(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    above: u64,
+    timeout: Duration,
+) -> (String, u64) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        if let Some(tokens) = totals_tokens(&screen) {
+            if tokens > above {
+                return (screen, tokens);
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "the Totals row never grew past {above} within {timeout:?}; last screen:\n{screen}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Issue #702's acceptance item: a PTY test with the fake `pi` used
+/// by the recorded `agent_live_pi` fixture -- the Totals row's own
+/// token figure grows while the agent tool runs (its own two tool
+/// calls, ~5s total), not only once the step finishes.
+#[test]
+fn the_totals_row_grows_while_an_agent_session_runs() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let fake_pi = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/agent_live_fakes/fake_pi.py")
+        .canonicalize()
+        .expect("fake_pi.py must exist");
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: fixer\n    type: tool\n    provider: agent\n    params:\n      engine: pi\n      prompt: \"Fix the bug.\"\n      tools: [read, bash, edit]\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"scripted\",\"default_model\":\"scripted-model\",\"runtime\":{{\"plugins\":{{\"agent\":{{\"pi\":{{\"binary\":{:?}}}}}}}}}}}",
+            fake_pi.to_string_lossy()
+        ),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    let events_path = out_dir.path().join("events.jsonl");
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(&events_path, "prime.fixer", Duration::from_secs(20));
+    // Named, polling waits capped by a generous deadline, never a
+    // fixed sleep: the fake's own two tool calls together run for
+    // only ~5s, so 20s per wait leaves ample room under load while
+    // still failing well short of the outer per-test timeout.
+    let (early, early_tokens) =
+        wait_for_totals_tokens_above(&captured_buf, 0, Duration::from_secs(20));
+    assert!(
+        !step_has_ended(&events_path, "prime.fixer"),
+        "the agent should still be running the moment the Totals row first counts it:\n{early}"
+    );
+
+    let (later, later_tokens) =
+        wait_for_totals_tokens_above(&captured_buf, early_tokens, Duration::from_secs(20));
+    assert!(
+        !step_has_ended(&events_path, "prime.fixer"),
+        "the agent should still be running when the Totals row grows further: {early_tokens} then {later_tokens}:\n{later}"
+    );
+
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
