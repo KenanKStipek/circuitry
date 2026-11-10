@@ -1844,7 +1844,12 @@ fn build_flow_screen_if_active(
     // root's own step pane or whatever leaf follow happens to be on.
     let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
     let flow_selected_path = if app.follow || selected_path.as_deref() == root_path {
-        None
+        // Issue #703's rule 5: following lands on whichever step is
+        // actually running, not only on the default pass -- `None`
+        // (the default-pass fallback below) only when the running
+        // step is itself inside a loop pass, or nothing is running.
+        oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
+            .map(str::to_string)
     } else {
         selected_path
     };

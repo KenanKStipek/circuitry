@@ -457,6 +457,16 @@ pub enum FocusDetail {
         /// shape as `meta.live.tools` -- empty once finished with no
         /// tool calls at all, same as a running session with none.
         raw_tool_counts: BTreeMap<String, crate::model::AgentLiveToolUsage>,
+        /// `meta.raw.lines_added`.
+        raw_lines_added: Option<u64>,
+        /// `meta.raw.lines_removed`.
+        raw_lines_removed: Option<u64>,
+        /// `meta.raw.context_tokens` (issue #703's Agent block Context
+        /// field, read from here once the session has finished --
+        /// while running, the same figure comes from `live` instead).
+        raw_context_tokens: Option<u64>,
+        /// `meta.raw.context_window`.
+        raw_context_window: Option<u64>,
     },
     Plain,
 }
@@ -484,9 +494,13 @@ fn agent_asked_text(meta: &Value) -> Option<String> {
 struct AgentRawSummary {
     transcript: Option<String>,
     files_changed: Option<u64>,
+    lines_added: Option<u64>,
+    lines_removed: Option<u64>,
     turns: Option<u64>,
     tool_calls: Option<u64>,
     tool_counts: BTreeMap<String, crate::model::AgentLiveToolUsage>,
+    context_tokens: Option<u64>,
+    context_window: Option<u64>,
 }
 
 fn agent_raw_summary(meta: &Value) -> AgentRawSummary {
@@ -496,12 +510,16 @@ fn agent_raw_summary(meta: &Value) -> AgentRawSummary {
             .and_then(Value::as_str)
             .map(str::to_string),
         files_changed: meta.pointer("/raw/files_changed").and_then(Value::as_u64),
+        lines_added: meta.pointer("/raw/lines_added").and_then(Value::as_u64),
+        lines_removed: meta.pointer("/raw/lines_removed").and_then(Value::as_u64),
         turns: meta.pointer("/raw/turns").and_then(Value::as_u64),
         tool_calls: meta.pointer("/raw/tool_calls").and_then(Value::as_u64),
         tool_counts: meta
             .pointer("/raw/tool_counts")
             .map(crate::model::AgentLiveToolUsage::map_from_value)
             .unwrap_or_default(),
+        context_tokens: meta.pointer("/raw/context_tokens").and_then(Value::as_u64),
+        context_window: meta.pointer("/raw/context_window").and_then(Value::as_u64),
     }
 }
 
@@ -563,7 +581,7 @@ fn node_for<'a>(row: &Row, flat: &'a BTreeMap<String, NodeMeta>) -> Option<&'a N
 /// so no `meta.provider`) for as long as it runs, so without the
 /// fallback it would never read as an agent here even though the
 /// token bar already counts it as one.
-fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> bool {
+pub(crate) fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree) -> bool {
     if row.kind != RowKind::Tool {
         return false;
     }
@@ -646,6 +664,10 @@ pub(crate) fn build_focused_step(
             raw_turns: raw.turns,
             raw_tool_calls: raw.tool_calls,
             raw_tool_counts: raw.tool_counts,
+            raw_lines_added: raw.lines_added,
+            raw_lines_removed: raw.lines_removed,
+            raw_context_tokens: raw.context_tokens,
+            raw_context_window: raw.context_window,
         }
     } else if row.kind == RowKind::Tool {
         FocusDetail::Tool {
@@ -992,6 +1014,99 @@ pub(crate) fn tape_unit(largest_usual: Option<u64>) -> u64 {
         .into_iter()
         .find(|&unit| (largest as f64 / unit as f64).round() <= 8.0)
         .unwrap_or(500)
+}
+
+/// A running agent row's own "what" text (issue #703's rule 1): the
+/// elapsed time, the current turn (`repair` in place of it during
+/// the repair turn, an `attempt N` segment added on a retry), the
+/// current tool with its own elapsed, and context usage -- in that
+/// order, so the row's own cut-from-the-right rule (applied to the
+/// whole `what` string once the pane is too narrow for all of it)
+/// drops exactly this list's own tail first, never reordering
+/// anything itself. Before the very first `meta.live` write (no
+/// `live` at all), the elapsed time alone. A stale leftover
+/// (`AgentLive::is_recent` false, issue #637: an interrupted run's
+/// own leftover) reads `stopped` in place of the tool and context
+/// figures, which nothing is still producing.
+fn tape_running_agent_what(
+    duration_s: Option<f64>,
+    live: &crate::model::AgentLive,
+    now: &str,
+) -> String {
+    let mut what = duration_s
+        .map(crate::format::format_duration)
+        .unwrap_or_default();
+    if let Some(attempt) = live.attempt.filter(|&a| a > 1) {
+        what.push_str(&format!(" · attempt {attempt}"));
+    }
+    let turn_word = if live.phase.as_deref() == Some("repair") {
+        Some("repair".to_string())
+    } else {
+        live.turns.map(|t| format!("turn {t}"))
+    };
+    if !live.is_recent(now) {
+        what.push_str(" · stopped");
+        if let Some(turn_word) = turn_word {
+            what.push_str(&format!(" · {turn_word}"));
+        }
+        return what;
+    }
+    if let Some(turn_word) = turn_word {
+        what.push_str(&format!(" · {turn_word}"));
+    }
+    if let Some(current) = &live.current_tool {
+        match crate::observe::duration_seconds(&current.started_at, now) {
+            Some(elapsed) => what.push_str(&format!(
+                " · {} {}",
+                current.name,
+                crate::format::format_duration(elapsed)
+            )),
+            None => what.push_str(&format!(" · {}", current.name)),
+        }
+    }
+    if let Some(context_tokens) = live.context_tokens {
+        match live.context_window {
+            Some(window) => what.push_str(&format!(
+                " · ctx {}/{}",
+                crate::format::format_tokens_k(context_tokens),
+                crate::format::format_tokens_k(window)
+            )),
+            None => what.push_str(&format!(
+                " · ctx {}",
+                crate::format::format_tokens_k(context_tokens)
+            )),
+        }
+    }
+    what
+}
+
+/// A finished agent row's own "what" text (issue #703's rule 2):
+/// elapsed time, turns, tool calls and files changed, all from
+/// `meta.raw`, cut from the right in that order -- a failed session
+/// never reaches this at all, `tape_row_content`'s own Failed/
+/// Failed-handled branches keep today's error text for one of
+/// those.
+fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> String {
+    let mut what = duration_s
+        .map(crate::format::format_duration)
+        .unwrap_or_default();
+    if let Some(turns) = raw.turns {
+        what.push_str(&format!(" · {turns} turns"));
+    }
+    if let Some(calls) = raw.tool_calls {
+        what.push_str(&format!(" · {calls} tools"));
+    }
+    if let Some(files) = raw.files_changed {
+        what.push_str(&format!(" · {files} files"));
+        if raw.lines_added.is_some() || raw.lines_removed.is_some() {
+            what.push_str(&format!(
+                " +{} −{}",
+                raw.lines_added.unwrap_or(0),
+                raw.lines_removed.unwrap_or(0)
+            ));
+        }
+    }
+    what
 }
 
 /// A tool row's own "what" text once finished or running: `3.0s ·
@@ -1476,6 +1591,38 @@ fn tape_row_content(
                     None,
                     TapeTokens::default(),
                 )
+            } else if is_agent_row(row, flat, plan) {
+                let is_running = matches!(
+                    row.status.kind,
+                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                );
+                if is_running {
+                    match node.and_then(|n| n.live.clone()) {
+                        Some(live) => (
+                            tape_running_agent_what(row.duration_s, &live, now),
+                            None,
+                            TapeTokens::default(),
+                        ),
+                        // Issue #703: before the agent tool's very
+                        // first `meta.live` write, the elapsed time
+                        // alone -- the same shape a non-streaming
+                        // tool's own running row reads.
+                        None => (
+                            row.duration_s
+                                .map(crate::format::format_duration)
+                                .unwrap_or_default(),
+                            None,
+                            TapeTokens::default(),
+                        ),
+                    }
+                } else {
+                    let raw = node.map(|n| agent_raw_summary(&n.meta)).unwrap_or_default();
+                    (
+                        tape_finished_agent_what(row.duration_s, &raw),
+                        None,
+                        TapeTokens::default(),
+                    )
+                }
             } else {
                 (tape_tool_what(row, node), None, TapeTokens::default())
             }
@@ -3470,6 +3617,29 @@ pub(crate) fn default_pass_path(rows: &[Row]) -> Option<&str> {
     running.or_else(|| passes().next()).map(|r| r.path.as_str())
 }
 
+/// Issue #703's own rule 5: while following, the Selected pane lands
+/// on whichever prompt or tool station is actually running --
+/// `None` when that running step is itself inside a loop pass
+/// (`default_pass_path`'s own rule already lands on the pass that
+/// contains it, which the caller falls back to), or when nothing is
+/// running at all (the same fallback then lands on the first pass,
+/// or on nothing).
+pub fn default_follow_path(rows: &[Row]) -> Option<&str> {
+    let live = |r: &Row| {
+        matches!(
+            r.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        )
+    };
+    let running = rows.iter().find(|r| {
+        live(r) && matches!(r.kind, RowKind::Prompt | RowKind::Reflector | RowKind::Tool)
+    })?;
+    if tape_row_is_under_a_queued_pass(&running.path) {
+        return None;
+    }
+    Some(running.path.as_str())
+}
+
 fn capitalize(label: &str) -> String {
     let mut chars = label.chars();
     match chars.next() {
@@ -3593,7 +3763,7 @@ pub fn build_flow(
     run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
-    let mut rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
+    let mut rail = crate::rail::build_rail(rows, flat, plan, header, state, zone, model, now);
     crate::rail::cap_running_lanes(&mut rail.items, &|path| model.running_or_queued_bound(path));
     let largest_usual_step = header
         .history_step_usual
@@ -3795,6 +3965,68 @@ mod tests {
             Some("prime.loop_a.iter_0")
         );
     }
+
+    /// Issue #703's rule 5: while following, a running step outside
+    /// any loop pass is the follow target itself, not the default
+    /// pass.
+    #[test]
+    fn default_follow_path_is_the_running_step_outside_a_loop() {
+        let rows = vec![
+            tape_row("prime", 0, "prime", RowKind::Root, StatusKind::Running),
+            tape_row(
+                "prime.fixer",
+                1,
+                "fixer",
+                RowKind::Tool,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.loop_a",
+                1,
+                "loop_a",
+                RowKind::Loop,
+                StatusKind::Pending,
+            ),
+        ];
+        assert_eq!(default_follow_path(&rows), Some("prime.fixer"));
+    }
+
+    /// A running step inside a loop pass defers to the default-pass
+    /// fallback (`None`), which lands on that same pass.
+    #[test]
+    fn default_follow_path_defers_to_the_pass_when_the_running_step_is_inside_one() {
+        let rows = vec![
+            tape_row("prime", 0, "prime", RowKind::Root, StatusKind::Running),
+            tape_row(
+                "prime.loop_a",
+                1,
+                "loop_a",
+                RowKind::Loop,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.loop_a.iter_0.draft",
+                3,
+                "draft",
+                RowKind::Prompt,
+                StatusKind::Running,
+            ),
+        ];
+        assert_eq!(default_follow_path(&rows), None);
+    }
+
+    /// Nothing running and nothing selected: no follow target either,
+    /// which leaves `default_pass_path`'s own fallback (the first
+    /// pass, or nothing) in charge.
+    #[test]
+    fn default_follow_path_is_none_with_nothing_running() {
+        let rows = vec![
+            tape_row("prime", 0, "prime", RowKind::Root, StatusKind::Done),
+            tape_row("prime.fixer", 1, "fixer", RowKind::Tool, StatusKind::Done),
+        ];
+        assert_eq!(default_follow_path(&rows), None);
+    }
+
     use super::*;
     use crate::model::ProcessState;
     use crate::plan::PlanTree;
@@ -4273,6 +4505,277 @@ mod tests {
         );
         assert_eq!(what, "1.0s");
         assert_eq!(tokens, TapeTokens::default());
+    }
+
+    fn running_agent_row() -> Row {
+        let mut row = tape_row(
+            "prime.fixer",
+            1,
+            "fixer",
+            RowKind::Tool,
+            StatusKind::Running,
+        );
+        row.duration_s = Some(72.0);
+        row
+    }
+
+    /// Issue #703's rule 1: an agent row's own running text, elapsed
+    /// then turn then current tool (with its own elapsed) then
+    /// context, in that order.
+    #[test]
+    fn tape_row_content_shows_the_running_agent_summary() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "turns": 4, "updated_at": "2026-01-01T11:52:54Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:42Z"},
+                        "context_tokens": 41000, "context_window": 200000
+                    }
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_agent_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:54Z",
+        );
+        assert_eq!(what, "1m12s · turn 4 · bash 12.0s · ctx 41k/200k");
+    }
+
+    /// Before the agent tool's very first `meta.live` write, the
+    /// elapsed time alone -- the same shape a non-streaming tool's
+    /// own running row reads.
+    #[test]
+    fn tape_row_content_shows_only_elapsed_for_an_agent_with_no_live_data_yet() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": null, "provider": "agent"
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_agent_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:54Z",
+        );
+        assert_eq!(what, "1m12s");
+    }
+
+    /// `repair` replaces `turn N` while `phase` is `repair`.
+    #[test]
+    fn tape_row_content_shows_repair_in_place_of_the_turn_number() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "turns": 4, "phase": "repair",
+                        "updated_at": "2026-01-01T11:52:54Z"
+                    }
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_agent_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:54Z",
+        );
+        assert_eq!(what, "1m12s · repair");
+    }
+
+    /// `attempt N` follows on a retry.
+    #[test]
+    fn tape_row_content_shows_the_attempt_number_on_a_retried_agent() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "turns": 1, "attempt": 2,
+                        "updated_at": "2026-01-01T11:52:54Z"
+                    }
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_agent_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:54Z",
+        );
+        assert_eq!(what, "1m12s · attempt 2 · turn 1");
+    }
+
+    /// A stale leftover (`AgentLive::is_recent` false, issue #637: an
+    /// interrupted run's own leftover) reads `stopped` in place of
+    /// the tool and context figures.
+    #[test]
+    fn tape_row_content_shows_stopped_for_a_stale_agent_leftover() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": null, "provider": "agent",
+                    "live": {
+                        "engine": "pi", "turns": 4, "updated_at": "2026-01-01T11:40:00Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T11:39:00Z"},
+                        "context_tokens": 41000
+                    }
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let (what, _preview, _tokens) = tape_row_content(
+            &running_agent_row(),
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:54Z",
+        );
+        assert_eq!(what, "1m12s · stopped · turn 4");
+    }
+
+    /// Narrow widths cut the running agent row's own text from the
+    /// right, dropping context first, then the tool, then the turn
+    /// -- never reordering anything, since each piece is simply the
+    /// longest prefix of the one before it.
+    #[test]
+    fn tape_row_content_running_agent_cuts_from_the_right_at_narrow_widths() {
+        let live = crate::model::AgentLive::from_value(&json!({
+            "engine": "pi", "turns": 4, "updated_at": "2026-01-01T11:52:54Z",
+            "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:42Z"},
+            "context_tokens": 41000, "context_window": 200000
+        }))
+        .unwrap();
+        let full = tape_running_agent_what(Some(72.0), &live, "2026-01-01T11:52:54Z");
+        assert_eq!(full, "1m12s · turn 4 · bash 12.0s · ctx 41k/200k");
+        let no_context = tape_running_agent_what(
+            Some(72.0),
+            &crate::model::AgentLive::from_value(&json!({
+                "engine": "pi", "turns": 4, "updated_at": "2026-01-01T11:52:54Z",
+                "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:42Z"}
+            }))
+            .unwrap(),
+            "2026-01-01T11:52:54Z",
+        );
+        assert!(full.starts_with(&no_context), "{full:?} vs {no_context:?}");
+        let no_tool = tape_running_agent_what(
+            Some(72.0),
+            &crate::model::AgentLive::from_value(&json!({
+                "engine": "pi", "turns": 4, "updated_at": "2026-01-01T11:52:54Z"
+            }))
+            .unwrap(),
+            "2026-01-01T11:52:54Z",
+        );
+        assert!(
+            no_context.starts_with(&no_tool),
+            "{no_context:?} vs {no_tool:?}"
+        );
+        let elapsed_only = tape_running_agent_what(
+            Some(72.0),
+            &crate::model::AgentLive::from_value(&json!({
+                "updated_at": "2026-01-01T11:52:54Z"
+            }))
+            .unwrap(),
+            "2026-01-01T11:52:54Z",
+        );
+        assert!(
+            no_tool.starts_with(&elapsed_only),
+            "{no_tool:?} vs {elapsed_only:?}"
+        );
+        assert_eq!(elapsed_only, "1m12s");
+    }
+
+    /// Issue #703's rule 2: a finished agent row's own text, from
+    /// `meta.raw`, cut from the right.
+    #[test]
+    fn tape_row_content_shows_the_finished_agent_summary() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": "ok", "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": "2026-01-01T11:51:56.1Z",
+                    "provider": "agent",
+                    "raw": {"turns": 3, "tool_calls": 12, "files_changed": 2, "lines_added": 3, "lines_removed": 1}
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut row = tape_row("prime.fixer", 1, "fixer", RowKind::Tool, StatusKind::Done);
+        row.duration_s = Some(14.1);
+        let (what, _preview, _tokens) = tape_row_content(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:00Z",
+        );
+        assert_eq!(what, "14.1s · 3 turns · 12 tools · 2 files +3 −1");
+    }
+
+    /// A failed agent keeps today's error text, never the finished
+    /// summary.
+    #[test]
+    fn tape_row_content_a_failed_agent_keeps_the_error_text() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": "2026-01-01T11:51:56Z",
+                    "provider": "agent", "error": "the session failed"
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut row = tape_row("prime.fixer", 1, "fixer", RowKind::Tool, StatusKind::Failed);
+        row.duration_s = Some(14.1);
+        let (what, _preview, _tokens) = tape_row_content(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:00Z",
+        );
+        assert_eq!(what, "✗ the session failed");
     }
 
     #[test]
@@ -5002,8 +5505,16 @@ mod tests {
             &model,
             None,
         );
-        let rail =
-            crate::rail::build_rail(&rows, &flat, &plan, &base_header(), Some(&state), &utc());
+        let rail = crate::rail::build_rail(
+            &rows,
+            &flat,
+            &plan,
+            &base_header(),
+            Some(&state),
+            &utc(),
+            &model,
+            "2026-10-08T11:00:10Z",
+        );
         let inferred_path = rail
             .items
             .iter()
