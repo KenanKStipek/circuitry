@@ -999,6 +999,24 @@ impl App {
                         // scroll, in whichever unrelated pane the
                         // next screen draws.
                         self.details_scroll = 0;
+                        // Issue #704 rule 2: switching to the Flow
+                        // takes the shared selection (scrolled into
+                        // view by `tui::flow_resolve_scroll`, the
+                        // only thing that knows the rail's own real
+                        // width) and turns follow off -- but only
+                        // for a real selection (never the root path
+                        // every screen starts on, `main.rs`'s own
+                        // first-selection fallback, which names
+                        // nothing the user actually picked at all),
+                        // or switching to the Flow early in a live
+                        // run, before touching anything, would stop
+                        // it from ever following that run at all.
+                        let root_path = rows.first().map(|r| r.path.as_str());
+                        let has_real_selection = self.selected_path.is_some()
+                            && self.selected_path.as_deref() != root_path;
+                        if screen == Screen::Flow && has_real_selection {
+                            self.follow = false;
+                        }
                     }
                     self.screen = screen;
                 }
@@ -2906,5 +2924,34 @@ mod tests {
         app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Tape);
         assert_eq!(app.details_scroll, 0);
+    }
+
+    /// Issue #704 rule 2: switching to the Flow turns follow off,
+    /// taking the shared selection -- but only for a real selection,
+    /// never the root path every screen starts on, or switching to
+    /// the Flow early in a live run, before touching anything,
+    /// would stop it from ever following that run at all.
+    #[test]
+    fn switching_to_flow_turns_follow_off_only_for_a_real_selection() {
+        let rows = [
+            row("prime", 0, StatusKind::Running),
+            row("prime.a", 1, StatusKind::Done),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+
+        let mut app = App::new(false);
+        assert!(app.follow);
+        app.handle_key(key(KeyCode::Char('2')), &visible, &[], true, false, &[]);
+        assert_eq!(app.screen, Screen::Flow);
+        assert!(
+            app.follow,
+            "the root path names nothing the user actually picked, so follow stays on"
+        );
+
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.handle_key(key(KeyCode::Char('2')), &visible, &[], true, false, &[]);
+        assert_eq!(app.screen, Screen::Flow);
+        assert!(!app.follow, "a real selection turns follow off");
     }
 }
