@@ -1024,6 +1024,9 @@ fn attempts_for(meta: &Value) -> Vec<AttemptDetail> {
 const META_EXTRA_EXCLUDE: &[&str] = &[
     "created_at",
     "completed_at",
+    // Already its own Error section (`FocusedStep::error`, read
+    // from `render::Details::error`, never from this key directly).
+    "error",
     "provider",
     "model",
     "model_reason",
@@ -4510,6 +4513,17 @@ pub fn build_flow(
 
 #[cfg(test)]
 mod tests {
+
+    /// Issue #704 rule 4's own Meta section: `meta.error` is already
+    /// its own Error section, never repeated here under its own raw
+    /// key.
+    #[test]
+    fn meta_extra_excludes_error_already_shown_as_its_own_section() {
+        let meta = json!({"error": "boom", "other_key": "kept"});
+        let extra = meta_extra_for(&meta);
+        assert!(!extra.iter().any(|(k, _)| k == "error"), "{extra:?}");
+        assert!(extra.iter().any(|(k, _)| k == "other_key"), "{extra:?}");
+    }
 
     /// Issue #704 rule 4's own Loop section: a pass's own status is
     /// read from its own leaves, never assumed "done" just because

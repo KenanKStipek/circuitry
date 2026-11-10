@@ -3270,7 +3270,10 @@ fn draw_tape_detail(
     let viewport = content_area.height as usize;
     app.details_viewport = viewport;
     let total = lines.len();
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    // Issue #704 rule 4: `End` lands on the last full page, not the
+    // last single line with the rest of the viewport left blank --
+    // the clamp is against a whole page's worth, never `total - 1`.
+    app.details_scroll = app.details_scroll.min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let visible: Vec<Line> = lines.into_iter().skip(start).collect();
     frame.render_widget(Paragraph::new(visible), content_area);
@@ -4690,7 +4693,7 @@ fn draw_focused_step_detail(
     let viewport = inner.height as usize;
     app.details_viewport = viewport;
     let total = lines.len();
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    app.details_scroll = app.details_scroll.min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let visible: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
     frame.render_widget(
@@ -6836,7 +6839,7 @@ fn draw_flow_selected_pane(
     let border_color = ctx.theme.border;
     app.details_viewport = viewport;
     let total = lines.len();
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    app.details_scroll = app.details_scroll.min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -10529,6 +10532,75 @@ mod golden_tests {
             "enter with nothing scrolled opens the first pass's own line"
         );
         assert!(app.tape_fullscreen_step, "enter on a pass never closes the full-screen view");
+    }
+
+    /// Issue #704 rule 4: `End` lands on the last full page of the
+    /// full-screen step's own content, not the last single line
+    /// with the rest of the pane left blank.
+    #[test]
+    fn end_scrolls_to_the_last_full_page_not_the_last_line_alone() {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{FocusDetail, FocusedStep};
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let step = FocusedStep {
+            path: "prime.a".to_string(),
+            breadcrumb: "a".to_string(),
+            kind_label: "tool",
+            provider_or_model: None,
+            since_ts: None,
+            elapsed_s: None,
+            detail: FocusDetail::Plain,
+            status: RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: (0..50)
+                .map(|i| (format!("key{i}"), format!("value{i}")))
+                .collect(),
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        };
+        let mut app = crate::keys::App::new(false);
+        app.tape_fullscreen_step = true;
+        app.step_meta_unfolded = true;
+        app.details_scroll = usize::MAX;
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_focused_step_detail(f, f.area(), Some(&step), None, "now", &mut app, &ctx)
+            })
+            .unwrap();
+        assert!(
+            app.details_scroll + app.details_viewport >= 50,
+            "the last page must reach the end: scroll={} viewport={}",
+            app.details_scroll,
+            app.details_viewport
+        );
+        assert!(
+            app.details_scroll + 1 < 50,
+            "End must show a full page, not just the last line: scroll={}",
+            app.details_scroll
+        );
     }
 
     /// Issue #704's own snapshot of the full-screen step view against
