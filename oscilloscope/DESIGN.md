@@ -2201,6 +2201,60 @@ before, the bare elapsed time, never a crash. None of the nine
 `tape--*` frame goldens changes: the design's own fixture run has no
 running prompt with a `meta.live` of its own to begin with.
 
+**A running or finished agent's own activity** (issue #703, on top of
+#637's `meta.live`/`meta.raw`). A running agent's own Tape row
+(`screens::tape_running_agent_what`) reads the elapsed time, the
+turn (`repair` in its own place during the repair turn, an `attempt
+N` segment added on a retry), the current tool with its own elapsed,
+and context usage (`/200k` once `context_window` is known) -- in
+that order, so the row's own cut-from-the-right rule drops exactly
+this list's own tail first. Before the agent tool's very first
+`meta.live` write, the elapsed time alone; a stale leftover
+(`AgentLive::is_recent` false, #637's interrupted-run case) reads
+`stopped` in place of the tool and context figures. A finished
+agent's own row (`screens::tape_finished_agent_what`) reads its
+turns, tool calls and files/lines changed from `meta.raw`, same
+cut-from-the-right rule; a failed session keeps the existing error
+text, never this summary.
+
+One Agent block (`tui::agent_block_lines`) is shared by every pane
+that shows a running or finished agent step: the Tape's own detail
+pane (`tape_normal_detail_lines`), the full-screen step shared by the
+Signal and the Store (`draw_focused_step_detail`), and the Flow
+screen's own Selected pane (`flow_selected_step_lines`) -- replacing
+that pane's own former `agent_live_lines`, which only ever covered a
+running session. Each field (Asked, Turn, Tool, Tools, Context,
+Files, Tests, Said -- the transcript's own `last_reply` -- and Cost)
+reads from `meta.live` while running, the matching `meta.raw` field
+once finished, and is left out entirely when the engine never
+reported it, never shown as a bogus zero. Below the fields, the
+transcript tail (`observe::tail_transcript_lines` plus
+`transcript::build_transcript_view`, already wired through
+`main.rs`'s own `tail_focused_transcript` to read whichever surface
+is actually on screen) lists every tailed call oldest first, a
+running one with its own elapsed, a leading `…` once the tailed
+window no longer reaches the session's own start.
+
+The Flow rail's own stations (`rail::prompt_headline_detail`/
+`tool_headline_detail`) grow the same live figures: a running
+prompt's headline is its received figure (`Headline::Received`,
+`↓≈212 t`), its detail the rate (`Detail::Rate`), `waiting`
+(`Detail::Waiting`) before the first delta, or the attempt number on
+a retry (`Detail::Attempt`); a running agent's headline is its turn
+and current tool (`Headline::AgentTurn`, `turn 4 · bash`), its detail
+context usage or files/lines changed, whichever it has
+(`Detail::AgentActivity`); a finished agent's station reads exactly
+like a finished prompt's, tokens and the bar. While following
+(`screens::default_follow_path`), the Selected pane lands on
+whichever station is actually running, not only on the default pass
+-- the default pass still stands in when that running step is itself
+inside a loop pass, or when nothing is running and nothing is
+selected either.
+
+None of the frame goldens (Tape, Signal, Flow, Store) changes: the
+design's own fixture run has no agent step at all, and electricity
+has no agent tool to begin with.
+
 **Keys.** `0`-`3`, `?`, `q`/`c`/`esc` are unchanged. Theme cycling
 moves from `t` to `T` (issue #535's own key); the Tape's own `t`
 swaps its token column for the deviation-from-usual view instead,

@@ -237,6 +237,20 @@ in place of the Tokens line, which has nothing exact to show yet.
 `osi watch` on `--events` alone drives the same figures from the
 latest `progress` line, with no live state to read at all.
 
+A running agent tool's own row reads the same way: elapsed time,
+the turn (`repair` during the repair turn, `attempt N` on a retry),
+the current tool with its own elapsed, and context usage --
+`1m12s · turn 4 · bash 12s · ctx 41k`; a stale leftover from an
+interrupted run reads `stopped` in place of the tool and context.
+A finished agent's own row reads its turns, tool calls and files
+changed instead -- `14.1s · 3 turns · 12 tools · 2 files +3 −1`.
+The detail pane, the full-screen step and the Flow screen's own
+Selected pane all show the same Agent block for one: Asked, Turn,
+Tool, Tools, Context, Files, Tests, Said (the transcript's own last
+reply) and Cost, each left out when the engine never reported it,
+followed by the transcript tail (every tailed tool call, newest at
+the bottom, a running one with its own elapsed).
+
 At 100 columns and up the detail pane shows beside the list, and
 preview rows are on by default (`p` toggles; off at 24–29 rows, to
 leave more height for the Now band, on again at 30 and up). At
@@ -323,8 +337,15 @@ it while Signal is on screen.
 The rail (issue #691, design v1 part 3) runs left to right instead of
 top to bottom: a station per step, plan order, forking into lanes at a
 decision or a loop and rejoining. Each station is three lines (name,
-headline, detail) -- a tool's own command and duration, a prompt's own
-tokens and deviation from its own usual. A decision forks into two
+headline, detail) -- a finished tool's own command and duration, a
+finished prompt's own tokens and deviation from its own usual. A
+running, streaming prompt's own headline is its received figure
+(`↓≈212 t`), its detail the rate (`41 t/s`), `waiting` before the
+first delta, or the attempt number on a retry. A running agent's
+own headline is its turn and current tool (`turn 4 · bash`), its
+detail context usage or files/lines changed, whichever it has; a
+finished agent's own station reads exactly like a finished prompt's,
+tokens and the bar. A decision forks into two
 lanes, the taken branch and the untaken one's own ghost (`· <else-
 name>`/`not taken`, one line each, no row per untaken step) -- a named
 `if`'s own branch comes straight from `meta.branch`; an unnamed one
@@ -358,11 +379,13 @@ shows whichever pass, station or decision is selected: a pass as
 Status (its own currently active step, elapsed time and slot), one row
 per named step it ran with tokens and deviation, and Produced (the
 last such step's own output); a plain station the same asked/doing/
-produced shape the Tape's own full-screen step view already has,
-including a running agent's own live transcript tail -- a station
-inlined from a sequential container keeps its own ten-cell name on the
-rail, but the Selected pane's own title still says which container
-it's inside (`gate › reply`). The Story pane (bottom right, 100
+produced shape the Tape's own full-screen step view already has, or,
+for an agent step, the same shared Agent block as the Tape's own
+detail pane and full-screen step -- Asked, Turn, Tool, Tools,
+Context, Files, Tests, Said and Cost, then the transcript tail -- a
+station inlined from a sequential container keeps its own ten-cell
+name on the rail, but the Selected pane's own title still says which
+container it's inside (`gate › reply`). The Story pane (bottom right, 100
 columns and 30 rows and up only) is the run's own notable events in
 order -- run start, each decision (inferred ones included), each loop
 starting (`⟳ drafts · 3 passes · 2 wide`, an unbounded loop's own width
@@ -389,9 +412,11 @@ otherwise default to; `PageUp`/`PageDown`/`Home`/`End`/`g`/`G` are
 no-ops here, there being no tree left to page or jump through. `⏎`
 opens the current selection full-screen, the same toggle the Tape's
 and Signal's own `⏎` already share, armed only while something is
-actually selected. `f` follows the running station; `0`-`3` switch
-screens; `?` opens Flow's own Help, listing exactly its own keys and
-the globals every key bar shares.
+actually selected. `f` follows the running station -- itself, when
+it's running outside any loop; the pass that holds it, when it's a
+loop's own step; the default pass, with nothing running and nothing
+selected. `0`-`3` switch screens; `?` opens Flow's own Help, listing
+exactly its own keys and the globals every key bar shares.
 
 | Key | Action |
 |---|---|
