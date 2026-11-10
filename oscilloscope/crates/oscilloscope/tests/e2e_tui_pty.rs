@@ -335,9 +335,7 @@ fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
     let now_row = screen
         .iter()
         .position(|line| line.contains("\u{2501}\u{2501} Now"))
-        .unwrap_or_else(|| {
-            panic!("expected a Now band on screen; got:\n{}", screen.join("\n"))
-        });
+        .unwrap_or_else(|| panic!("expected a Now band on screen; got:\n{}", screen.join("\n")));
     assert_eq!(
         now_row,
         2 + 15,

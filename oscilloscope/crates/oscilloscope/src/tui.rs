@@ -1976,20 +1976,12 @@ fn draw_tape_list(
 
     // -1 rule, -1 totals row.
     let viewport = inner.height.saturating_sub(2) as usize;
-    // The 80-119 column floor (neither narrow's own tightly packed
-    // layout nor 120's own full-height one) keeps one more row of
-    // slack at the bottom of its own scrollable area than either
-    // (issue #678's own 80x24 vs 60x24: both fit `Run Started`
-    // through `Run End` in exactly the same height, but only the
-    // narrow one actually shows every row of it) -- the rule and
-    // Totals row below still sit right where `viewport` alone
-    // would put them; only how many rows this area's own content
-    // fills before that blank slack changes.
-    let content_rows = if narrow || wide_detail {
-        viewport
-    } else {
-        viewport.saturating_sub(1)
-    };
+    // Issue #710: the list's own `L` for the centred window is the
+    // whole of this area, at every width -- the 80-119 column
+    // floor's own one extra row of slack (issue #678's own 80x24 vs
+    // 60x24) is now exactly the centred window's own blank padding,
+    // not a separate fixed gap.
+    let content_rows = viewport;
     let selected_idx = app.selected_path.as_deref().and_then(|p| {
         lines
             .iter()
