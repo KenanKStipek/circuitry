@@ -4954,6 +4954,11 @@ fn run_all_grid_screen(
     let mut needs_draw = true;
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut lost_terminal = false;
+    // The shared Signal scale (issue #698, Settled point 6) only
+    // ever grows across this loop's own redraws, the same rule a
+    // single run's own axis already follows.
+    let mut shared_sent_top: u64 = 0;
+    let mut shared_received_top: u64 = 0;
 
     let outcome = 'all: loop {
         if let Some(watcher) = signals.as_mut() {
@@ -5038,10 +5043,35 @@ fn run_all_grid_screen(
                 no_animation: true,
             };
             let page_slots = &mut slots[page_offset..page_offset + page_run_count];
-            let tiles: Vec<tui::AllTile> = page_slots
+            let mut tiles: Vec<tui::AllTile> = page_slots
                 .iter_mut()
                 .map(|slot| slot.build(all_state.screen, &now_str))
                 .collect();
+            if all_state.screen == oscilloscope_core::screens::Screen::Signal {
+                let largest_sent = tiles
+                    .iter()
+                    .map(|t| t.render.largest_sent)
+                    .max()
+                    .unwrap_or(0);
+                let largest_received = tiles
+                    .iter()
+                    .map(|t| t.render.largest_received)
+                    .max()
+                    .unwrap_or(0);
+                shared_sent_top =
+                    oscilloscope_core::multi::shared_signal_axis_top(largest_sent, shared_sent_top);
+                shared_received_top = oscilloscope_core::multi::shared_signal_axis_top(
+                    largest_received,
+                    shared_received_top,
+                );
+                for tile in &mut tiles {
+                    if let oscilloscope_core::multi::TileScreen::Signal(s) = &mut tile.render.screen
+                    {
+                        s.sent_axis_top = shared_sent_top;
+                        s.received_axis_top = shared_received_top;
+                    }
+                }
+            }
             let status_entries: Vec<(
                 String,
                 Option<oscilloscope_core::screens::SignalLastFinished>,

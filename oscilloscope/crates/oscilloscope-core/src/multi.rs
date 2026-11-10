@@ -186,8 +186,7 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
         .iter()
         .any(|it| matches!(it, TapeItem::SlotsRule { .. }));
 
-    let mandatory =
-        1 + kept_head.len() + usize::from(!has_slots_rule) + usize::from(has_run_end);
+    let mandatory = 1 + kept_head.len() + usize::from(!has_slots_rule) + usize::from(has_run_end);
     let budget = max_rows.saturating_sub(mandatory);
 
     let mut fin_shown = finished.len();
@@ -240,8 +239,8 @@ fn round_top_series_min(floor: u64, need: u64) -> u64 {
         return floor;
     }
     let mut candidates: Vec<u64> = Vec::new();
-    let mut magnitude = 1_000u64;
-    while magnitude <= need.max(1_000) * 10 {
+    let mut magnitude = 100u64;
+    while magnitude <= need.max(100) * 10 {
         for step in STEPS {
             let value = (step * magnitude as f64).round() as u64;
             if value >= floor {
@@ -259,13 +258,48 @@ fn round_top_series_min(floor: u64, need: u64) -> u64 {
 
 /// The Combined Signal's and the Signal tiles' own shared scale
 /// (issue #698, Settled point 6): one round top for the largest
-/// stacked (or, for tiles, largest per-tile) column across every
-/// run, at or above 1.5× that largest column, growing only. `floor`
-/// is the previous frame's own top (`0` for a first computation),
-/// so the scale only ever grows across a live run's own redraws.
+/// stacked (or, for tiles, largest single finished effect's own
+/// sent or received tokens, [`largest_single_effect_tokens`]) column
+/// across every run, at or above 1.5× that largest column, growing
+/// only. `floor` is the previous frame's own top (`0` for a first
+/// computation), so the scale only ever grows across a live run's
+/// own redraws.
 pub fn shared_signal_axis_top(largest_column: u64, floor: u64) -> u64 {
     let need = (largest_column as f64 * 1.5).ceil() as u64;
-    round_top_series_min(floor.max(1_000), need)
+    round_top_series_min(floor, need)
+}
+
+/// The largest single finished effect's own sent and received tokens
+/// anywhere in one run's own flattened state (issue #698, Settled
+/// point 6's own "largest column seen so far"): a Signal bucket can
+/// sum several effects that happen to finish within the same 100 ms
+/// window (a loop's own concurrent passes, say), which is not what
+/// the shared scale's own headroom is over -- this is the same
+/// figure the Tape's own `is_largest` marker already tracks, read
+/// straight off every node instead of only the run's single largest
+/// one.
+pub fn largest_single_effect_tokens(flat: &BTreeMap<String, crate::model::NodeMeta>) -> (u64, u64) {
+    let mut max_sent = 0u64;
+    let mut max_received = 0u64;
+    for node in flat.values() {
+        let (sent, received) = crate::model::node_tokens(&node.meta);
+        max_sent = max_sent.max(sent);
+        max_received = max_received.max(received);
+    }
+    (max_sent, max_received)
+}
+
+/// The shared Signal scale's own axis label (issue #698, Settled
+/// point 6): one decimal place in `k` from 1,000 up (`5.0k`,
+/// `8.0k`), the plain token figure below it (`400 t`) -- a single
+/// run's own smaller, never-shared axis keeps its existing plain
+/// thousands-separated figure (`format::format_tokens_t`) instead.
+pub fn format_shared_axis_label(n: u64) -> String {
+    if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        format!("{n} t")
+    }
 }
 
 /// Six roles (`run.1`..`run.6`, Settled point 13 of issue #698) --
@@ -302,6 +336,10 @@ pub struct TileRender {
     /// Flow or Store tiles still has this to feed
     /// [`newest_finished_across_runs`].
     pub last_finished: Option<crate::screens::SignalLastFinished>,
+    /// This run's own [`largest_single_effect_tokens`], for the
+    /// Signal tiles' shared scale.
+    pub largest_sent: u64,
+    pub largest_received: u64,
 }
 
 /// Builds one tile's own [`TileRender`] (issue #698): no row
@@ -407,10 +445,13 @@ pub fn build_tile(
         plan,
         rendered.header.run_start_ts.as_deref(),
     );
+    let (largest_sent, largest_received) = largest_single_effect_tokens(&flat);
     TileRender {
         header: rendered.header,
         screen,
         last_finished,
+        largest_sent,
+        largest_received,
     }
 }
 
@@ -571,7 +612,10 @@ mod tests {
     fn fold_tape_tile_keeps_everything_when_it_fits() {
         let items = sample_items(2, 1, 2);
         let folded = fold_tape_tile(&items, 20);
-        assert_eq!(folded.len(), items.len());
+        // One more line than `items` itself: no loop runs here, so
+        // the running-block separator (never a real `TapeItem`) is
+        // the one synthetic line this ever inserts unprompted.
+        assert_eq!(folded.len(), items.len() + 1);
     }
 
     #[test]
@@ -705,6 +749,22 @@ mod tests {
         ];
         let (doc, _) = newest_finished_across_runs(&entries).unwrap();
         assert_eq!(doc, "b.yml");
+    }
+
+    #[test]
+    fn shared_signal_axis_top_reaches_below_1_000_for_a_small_column() {
+        // Issue #698's own data note: the received top (`400 t`)
+        // is below 1,000 -- the label format starts using `k` at
+        // 1,000, but the value itself is never floored there.
+        assert_eq!(shared_signal_axis_top(206, 0), 400);
+    }
+
+    #[test]
+    fn format_shared_axis_label_matches_the_frames() {
+        assert_eq!(format_shared_axis_label(5_000), "5.0k");
+        assert_eq!(format_shared_axis_label(8_000), "8.0k");
+        assert_eq!(format_shared_axis_label(2_500), "2.5k");
+        assert_eq!(format_shared_axis_label(400), "400 t");
     }
 
     #[test]
