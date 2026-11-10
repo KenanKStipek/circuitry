@@ -1922,6 +1922,8 @@ fn tape_status_glyph_word_style(kind: StatusKind, theme: &Theme) -> (char, &'sta
 fn tape_normal_detail_lines(
     screen: &oscilloscope_core::screens::TapeScreen,
     width: usize,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    now: &str,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
@@ -1973,6 +1975,35 @@ fn tape_normal_detail_lines(
         ],
         width,
     ));
+
+    // Issue #703's rule 3: an agent step's own detail pane is the
+    // one shared Agent block, right after Status/Type -- never the
+    // generic Live/Tokens/Usual/Share lines below, which only a
+    // prompt row still uses.
+    if let oscilloscope_core::screens::FocusDetail::Agent {
+        stale, live, note, ..
+    } = &step.detail
+    {
+        if *stale {
+            lines.push(tape_detail_line(
+                vec![Span::styled("stopped", muted)],
+                width,
+            ));
+        }
+        for line in agent_block_lines(step, transcript_view, ctx, now) {
+            lines.push(tape_detail_line(line.spans, width));
+        }
+        let running = matches!(
+            step.status.kind,
+            oscilloscope_core::model::StatusKind::Running
+                | oscilloscope_core::model::StatusKind::LikelyRunning
+                | oscilloscope_core::model::StatusKind::RunningOrQueued
+        );
+        if live.is_none() && running {
+            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        }
+        return lines;
+    }
 
     // Issue #675's Live block: a running prompt shows its own live
     // figures here, in place of the Tokens line below (never both --
@@ -2570,11 +2601,14 @@ fn tape_failed_detail_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_tape_detail(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
     app: &App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    now: &str,
     ctx: &DrawCtx,
 ) {
     use oscilloscope_core::screens::TapeHead;
@@ -2632,7 +2666,7 @@ fn draw_tape_detail(
             .as_ref()
             .map(|d| tape_failed_detail_lines(d, width, ctx))
             .unwrap_or_default(),
-        TapeHead::Normal => tape_normal_detail_lines(screen, width, ctx),
+        TapeHead::Normal => tape_normal_detail_lines(screen, width, transcript_view, now, ctx),
     };
     frame.render_widget(Paragraph::new(lines), content_area);
 }
@@ -2736,6 +2770,7 @@ fn draw_tape(
     screen: &oscilloscope_core::screens::TapeScreen,
     header: &oscilloscope_core::render::Header,
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     icon_frame: u64,
     now: &str,
@@ -2773,7 +2808,7 @@ fn draw_tape(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_tape_detail(frame, body, screen, app, ctx);
+        draw_tape_detail(frame, body, screen, app, transcript_view, now, ctx);
         return;
     }
     // §5: the detail pane stays down to 100 columns, not just
@@ -2796,7 +2831,7 @@ fn draw_tape(
             full_area.height >= 30,
             ctx,
         );
-        draw_tape_detail(frame, cols[1], screen, app, ctx);
+        draw_tape_detail(frame, cols[1], screen, app, transcript_view, now, ctx);
     } else {
         draw_tape_list(
             frame,
@@ -2818,6 +2853,7 @@ fn draw_signal(
     screen: &oscilloscope_core::screens::SignalScreen,
     header: &oscilloscope_core::render::Header,
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     icon_frame: u64,
     now: &str,
@@ -2856,7 +2892,14 @@ fn draw_signal(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_focused_step_detail(frame, body, screen.selected.as_ref(), ctx);
+        draw_focused_step_detail(
+            frame,
+            body,
+            screen.selected.as_ref(),
+            transcript_view,
+            now,
+            ctx,
+        );
         return;
     }
     // §5: the full layout (chart beside/above the Now pane and
@@ -3976,10 +4019,13 @@ fn draw_signal_readings(
 /// row), good enough to read a step's prompt and reply in full
 /// without leaving the screen. Shared by the Signal and the Store,
 /// whose own full-screen step views are otherwise identical.
+#[allow(clippy::too_many_arguments)]
 fn draw_focused_step_detail(
     frame: &mut Frame,
     area: Rect,
     selected: Option<&oscilloscope_core::screens::FocusedStep>,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    now: &str,
     ctx: &DrawCtx,
 ) {
     let Some(step) = selected else {
@@ -4010,7 +4056,28 @@ fn draw_focused_step_detail(
             default,
         ),
     ])];
-    if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
+    if let oscilloscope_core::screens::FocusDetail::Agent {
+        stale, live, note, ..
+    } = &step.detail
+    {
+        if *stale {
+            lines.push(Line::styled(" stopped", muted));
+        }
+        for line in agent_block_lines(step, transcript_view, ctx, now) {
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(line.spans);
+            lines.push(Line::from(spans));
+        }
+        let running = matches!(
+            step.status.kind,
+            oscilloscope_core::model::StatusKind::Running
+                | oscilloscope_core::model::StatusKind::LikelyRunning
+                | oscilloscope_core::model::StatusKind::RunningOrQueued
+        );
+        if live.is_none() && running {
+            lines.push(Line::styled(format!(" {}", *note), muted));
+        }
+    } else if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
         lines.push(Line::from(""));
         lines.push(Line::styled(" Reply", muted));
         if let Some(snippet) = snippet {
@@ -4030,210 +4097,240 @@ fn draw_focused_step_detail(
     );
 }
 
-/// A running (or just-stopped) agent's own `meta.live` summary
-/// (issue #637), shared by every pane that shows one: the Flow
-/// screen's own selected pane and the Tape's detail pane -- model/
-/// engine/turns, tokens and cost, recent tool activity (from the
-/// transcript when one is tailed, else `meta.live` itself), context
-/// window usage, and files/lines changed. `show_doing_header` labels
-/// the tool-activity block its own `doing:` header, which a pane
-/// already titled that way (the Flow screen's own) leaves off.
-#[allow(clippy::too_many_arguments)]
-fn agent_live_lines(
-    live: &oscilloscope_core::model::AgentLive,
+/// The one Agent block (issue #703's rule 3), shared by every pane
+/// that shows a running or finished agent step: the Tape's own
+/// detail pane (`tape_normal_detail_lines`), the full-screen step
+/// (`draw_focused_step_detail`) and the Flow screen's own Selected
+/// pane -- Asked, Turn, Tool, Tools, Context, Files, Tests, Said
+/// (the transcript's own `last_reply`) and Cost, each left out
+/// whenever the engine didn't report it, then the transcript tail
+/// (newest at the bottom, a running call with its own elapsed, a
+/// leading `…` once the tailed window no longer reaches the
+/// session's own start). `step.detail` must be `FocusDetail::Agent`;
+/// an empty `Vec` otherwise, which no caller here ever actually asks
+/// for (each already matched on the same variant first).
+/// One Agent block field line (issue #703's rule 3): an eight-cell
+/// label, then the value in the pane's own default text colour.
+fn agent_field_line(
+    label: &'static str,
+    value: String,
+    label_style: Style,
+    value_style: Style,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<8}"), label_style),
+        Span::styled(value, value_style),
+    ])
+}
+
+fn agent_block_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
-    show_doing_header: bool,
-    stale: bool,
-    current_tool_elapsed_s: Option<f64>,
     now: &str,
 ) -> Vec<Line<'static>> {
-    use oscilloscope_core::format::format_tokens;
+    use oscilloscope_core::format::{format_duration, format_tokens_k};
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Agent {
+        asked,
+        live,
+        current_tool_elapsed_s,
+        raw_turns,
+        raw_tool_calls,
+        raw_tool_counts,
+        raw_files_changed,
+        raw_lines_added,
+        raw_lines_removed,
+        raw_context_tokens,
+        raw_context_window,
+        ..
+    } = &step.detail
+    else {
+        return Vec::new();
+    };
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
     let dim = Style::default().fg(ctx.theme.dim);
     let mut lines = Vec::new();
 
-    let mut header = Vec::new();
-    if let Some(engine) = &live.engine {
-        header.push(engine.clone());
-    }
-    if let Some(model) = &live.model {
-        header.push(model.clone());
-    }
-    if let Some(turns) = live.turns {
-        header.push(format!("turn {turns}"));
-    }
-    if let Some(tool_calls) = live.tool_calls {
-        header.push(format!("{tool_calls} tools"));
-    }
-    if !header.is_empty() {
-        lines.push(Line::from(header.join(" · ")));
+    if let Some(asked) = asked {
+        lines.push(agent_field_line("Asked", asked.clone(), muted, default));
     }
 
-    let sent = live
-        .tokens_sent
-        .map(format_tokens)
-        .unwrap_or_else(|| "—".to_string());
-    let received = live
-        .tokens_received
-        .map(format_tokens)
-        .unwrap_or_else(|| "—".to_string());
-    let cost = live
-        .cost_usd
-        .map(|c| format!("${c:.2}"))
-        .unwrap_or_else(|| "$—".to_string());
-    lines.push(Line::from(format!("↑{sent} ↓{received} · {cost}")));
-
-    // The tool activity comes right after the headline
-    // figures, before context/files/tests -- in Flow's own selected
-    // pane, nested under its own `doing:` header and a tighter height
-    // budget than the overview's now pane has, this is the one part
-    // of the summary that would otherwise be the first thing clipped
-    // off the bottom.
-    match transcript_view.filter(|v| !v.calls.is_empty()) {
-        Some(view) => {
-            let strip: String = view
-                .calls
-                .iter()
-                .rev()
-                .take(32)
-                .rev()
-                .map(|c| oscilloscope_core::transcript::tool_glyph(&c.tool))
-                .collect();
-            lines.push(Line::styled(strip, dim));
-            if show_doing_header {
-                lines.push(Line::styled("doing:", dim));
+    let turn_text = match live.as_deref() {
+        Some(live) => {
+            let mut text = if live.phase.as_deref() == Some("repair") {
+                "repair".to_string()
+            } else {
+                live.turns.map(|t| t.to_string()).unwrap_or_default()
+            };
+            if let Some(attempt) = live.attempt.filter(|&a| a > 1) {
+                if !text.is_empty() {
+                    text.push_str(" · ");
+                }
+                text.push_str(&format!("attempt {attempt}"));
             }
-            for call in view.calls.iter().rev().take(3).rev() {
-                let clock = call
-                    .start_t
-                    .as_deref()
-                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                    .map(|c| format!("{c} "))
-                    .unwrap_or_default();
-                let mut text = format!("{clock}› {}", call.tool);
-                if let Some(target) = &call.target {
-                    text.push(' ');
-                    text.push_str(target);
-                }
-                match call.ok {
-                    Some(true) => text.push_str(" ✓"),
-                    Some(false) => text.push_str(" ✗"),
-                    // Issue #647: a stopped session's own transcript
-                    // can end mid-call, with no later `tool_start` to
-                    // ever mark it `call.stopped` -- `stale` alone
-                    // (the session itself has stopped) is enough to
-                    // call this unfinished, not still running.
-                    None if call.stopped || stale => text.push_str(" stopped"),
-                    // Issue #647/#647 follow-up: the session's own
-                    // elapsed is shown next to `since`, but each call
-                    // in this list is its own, possibly concurrent,
-                    // tool call -- its own elapsed is `now` minus its
-                    // own `start_t`, not the session's single `meta.
-                    // live.current_tool` time, which two calls
-                    // running at once would otherwise both show.
-                    None => match call
-                        .start_t
-                        .as_deref()
-                        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
-                    {
-                        Some(elapsed) => text.push_str(&format!(
-                            " running {}",
-                            oscilloscope_core::format::format_duration(elapsed)
-                        )),
-                        None => text.push_str(" running"),
-                    },
-                }
-                if call.lines_added.is_some() || call.lines_removed.is_some() {
-                    text.push_str(&format!(
-                        " +{} −{}",
-                        call.lines_added.unwrap_or(0),
-                        call.lines_removed.unwrap_or(0)
-                    ));
-                }
-                lines.push(Line::from(text));
-            }
+            (!text.is_empty()).then_some(text)
         }
-        None => {
-            // Issue #637: without a transcript to read calls from at
-            // all (not yet tailed, or an engine that never wrote
-            // one), the same activity is shown from `meta.live`'s own
-            // `tools`/`current_tool` instead -- names and counts
-            // only, since that's all either field carries.
-            if !live.tools.is_empty() {
-                let counts = live
-                    .tools
-                    .iter()
-                    .map(|(name, usage)| format!("{name} ×{}", usage.calls))
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                if show_doing_header {
-                    lines.push(Line::styled("doing:", dim));
-                }
-                lines.push(Line::from(counts));
-            }
-            if let Some(current) = &live.current_tool {
-                // Issue #647: a stopped agent's last tool was never
-                // finished, so it never actually matched the running
-                // label in the first place -- it is the last thing
-                // the session was doing, not something still running.
-                if stale {
-                    lines.push(Line::from(format!("last: {}", current.name)));
-                } else {
-                    match current_tool_elapsed_s {
-                        Some(elapsed) => lines.push(Line::from(format!(
-                            "running: {} · {}",
-                            current.name,
-                            oscilloscope_core::format::format_duration(elapsed)
-                        ))),
-                        None => lines.push(Line::from(format!("running: {}", current.name))),
-                    }
-                }
-            }
-        }
+        None => raw_turns.map(|t| t.to_string()),
+    };
+    if let Some(turn_text) = turn_text {
+        lines.push(agent_field_line("Turn", turn_text, muted, default));
     }
 
-    if let Some(context_tokens) = live.context_tokens {
-        match live.context_window {
-            Some(window) => {
-                lines.push(Line::from(format!(
-                    "context {} / {}",
-                    format_tokens(context_tokens),
-                    format_tokens(window)
-                )));
-                lines.push(Line::styled(bar(context_tokens, window, 20), dim));
-            }
-            None => {
-                lines.push(Line::from(format!(
-                    "context {}",
-                    format_tokens(context_tokens)
-                )));
-            }
-        }
+    if let Some(current) = live.as_deref().and_then(|l| l.current_tool.as_ref()) {
+        let text = match current_tool_elapsed_s {
+            Some(elapsed) => format!("{} · {}", current.name, format_duration(*elapsed)),
+            None => current.name.clone(),
+        };
+        lines.push(agent_field_line("Tool", text, muted, default));
     }
 
-    let mut activity = Vec::new();
-    if live.files_changed.is_some() || live.lines_added.is_some() || live.lines_removed.is_some() {
-        if let Some(files) = live.files_changed {
-            activity.push(format!("files {files}"));
-        }
-        if live.lines_added.is_some() || live.lines_removed.is_some() {
-            activity.push(format!(
-                "+{} −{}",
-                live.lines_added.unwrap_or(0),
-                live.lines_removed.unwrap_or(0)
+    let tool_counts_text = match live.as_deref() {
+        Some(live) if !live.tools.is_empty() => Some(&live.tools),
+        Some(_) => None,
+        None if !raw_tool_counts.is_empty() => Some(raw_tool_counts),
+        None => None,
+    }
+    .map(|tools| {
+        tools
+            .iter()
+            .map(|(name, usage)| format!("{name} ×{}", usage.calls))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    })
+    .or_else(|| {
+        // `raw_tool_calls` is the only figure left once a finished
+        // session made calls but kept no per-name breakdown at all.
+        (live.is_none() && raw_tool_counts.is_empty())
+            .then(|| raw_tool_calls.map(|n| format!("{n} calls")))
+            .flatten()
+    });
+    if let Some(tools) = tool_counts_text {
+        lines.push(agent_field_line("Tools", tools, muted, default));
+    }
+
+    let (context_tokens, context_window) = match live.as_deref() {
+        Some(live) => (live.context_tokens, live.context_window),
+        None => (*raw_context_tokens, *raw_context_window),
+    };
+    if let Some(tokens) = context_tokens {
+        let value = match context_window {
+            Some(window) => format!("{}/{}", format_tokens_k(tokens), format_tokens_k(window)),
+            None => format_tokens_k(tokens),
+        };
+        lines.push(agent_field_line("Context", value, muted, default));
+        if let Some(window) = context_window {
+            lines.push(Line::styled(
+                format!("        {}", bar(tokens, window, 20)),
+                dim,
             ));
         }
     }
+
+    let (files_changed, lines_added, lines_removed) = match live.as_deref() {
+        Some(live) => (live.files_changed, live.lines_added, live.lines_removed),
+        None => (*raw_files_changed, *raw_lines_added, *raw_lines_removed),
+    };
+    if files_changed.is_some() || lines_added.is_some() || lines_removed.is_some() {
+        let mut text = files_changed
+            .map(|files| format!("{files} changed"))
+            .unwrap_or_default();
+        if lines_added.is_some() || lines_removed.is_some() {
+            if !text.is_empty() {
+                text.push_str(" · ");
+            }
+            text.push_str(&format!(
+                "+{} −{}",
+                lines_added.unwrap_or(0),
+                lines_removed.unwrap_or(0)
+            ));
+        }
+        lines.push(agent_field_line("Files", text, muted, default));
+    }
+
     if let Some(tests) = transcript_view.and_then(|v| v.tests) {
         use oscilloscope_core::transcript::TestOutcome;
-        activity.push(match tests {
-            TestOutcome::Running => "tests …".to_string(),
-            TestOutcome::Ok => "tests ✓".to_string(),
-            TestOutcome::Failed => "tests ✗".to_string(),
-        });
+        let text = match tests {
+            TestOutcome::Running => "…".to_string(),
+            TestOutcome::Ok => "✓".to_string(),
+            TestOutcome::Failed => "✗".to_string(),
+        };
+        lines.push(agent_field_line("Tests", text, muted, default));
     }
-    if !activity.is_empty() {
-        lines.push(Line::from(activity.join(" · ")));
+
+    if let Some(said) = transcript_view.and_then(|v| v.last_reply.as_deref()) {
+        lines.push(agent_field_line("Said", said.to_string(), muted, default));
+    }
+
+    let cost = match live.as_deref() {
+        Some(live) => live.cost_usd,
+        None => step.cost_usd,
+    };
+    if let Some(cost) = cost {
+        lines.push(agent_field_line(
+            "Cost",
+            format!("${cost:.2}"),
+            muted,
+            default,
+        ));
+    }
+
+    if let Some(view) = transcript_view.filter(|v| !v.calls.is_empty()) {
+        lines.push(Line::from(""));
+        if view.truncated {
+            lines.push(Line::styled("…", dim));
+        }
+        for call in &view.calls {
+            let clock = call
+                .start_t
+                .as_deref()
+                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+                .map(|c| format!("{c} "))
+                .unwrap_or_default();
+            let mut text = format!("{clock}› {}", call.tool);
+            if let Some(target) = &call.target {
+                text.push(' ');
+                text.push_str(target);
+            }
+            match call.ok {
+                Some(true) => text.push_str(" ✓"),
+                Some(false) => text.push_str(" ✗"),
+                // Issue #647: a stopped session's own transcript can
+                // end mid-call, with no later `tool_start` to ever
+                // mark it `call.stopped` -- the step's own status
+                // (not running any more) is enough on its own to
+                // call this unfinished, not still running.
+                None if call.stopped
+                    || !matches!(
+                        step.status.kind,
+                        oscilloscope_core::model::StatusKind::Running
+                            | oscilloscope_core::model::StatusKind::LikelyRunning
+                            | oscilloscope_core::model::StatusKind::RunningOrQueued
+                    ) =>
+                {
+                    text.push_str(" stopped")
+                }
+                None => match call
+                    .start_t
+                    .as_deref()
+                    .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
+                {
+                    Some(elapsed) => {
+                        text.push_str(&format!(" running {}", format_duration(elapsed)))
+                    }
+                    None => text.push_str(" running"),
+                },
+            }
+            if call.lines_added.is_some() || call.lines_removed.is_some() {
+                text.push_str(&format!(
+                    " +{} −{}",
+                    call.lines_added.unwrap_or(0),
+                    call.lines_removed.unwrap_or(0)
+                ));
+            }
+            lines.push(Line::from(text));
+        }
     }
 
     lines
@@ -5277,6 +5374,7 @@ fn draw_store(
     screen: &oscilloscope_core::store::StoreScreen,
     header: &oscilloscope_core::render::Header,
     app: &mut App,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     icon_frame: u64,
     now: &str,
@@ -5316,7 +5414,14 @@ fn draw_store(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_focused_step_detail(frame, body, screen.selected.as_ref(), ctx);
+        draw_focused_step_detail(
+            frame,
+            body,
+            screen.selected.as_ref(),
+            transcript_view,
+            now,
+            ctx,
+        );
         return;
     }
     let title_full = full_area.width >= 120;
@@ -5422,6 +5527,7 @@ pub fn draw(
                 tape_screen,
                 &state.header,
                 app,
+                transcript_view,
                 ctx,
                 icon_frame,
                 now,
@@ -5462,6 +5568,7 @@ pub fn draw(
                 signal_screen,
                 &state.header,
                 app,
+                transcript_view,
                 ctx,
                 icon_frame,
                 now,
@@ -5537,6 +5644,7 @@ pub fn draw(
                 store_screen,
                 &state.header,
                 app,
+                transcript_view,
                 ctx,
                 icon_frame,
                 now,
@@ -6018,11 +6126,37 @@ fn flow_selected_step_lines(
         StatusKind::Done | StatusKind::Failed | StatusKind::FailedHandled
     );
 
+    // Issue #703's rule 3: an agent step's own detail, running or
+    // finished, is the one shared Agent block -- never this generic
+    // asked:/doing:/produced: shape, which only Prompt/Tool/Plain
+    // steps still use below.
+    if let FocusDetail::Agent {
+        stale, live, note, ..
+    } = &step.detail
+    {
+        if *stale {
+            lines.push(Line::styled("stopped", dim));
+        }
+        lines.extend(agent_block_lines(step, transcript_view, ctx, now));
+        // The fallback note only ever applies in the brief window
+        // before the agent tool's very first `meta.live` write, which
+        // the block above has nothing to show for at all yet.
+        if live.is_none() && running {
+            lines.push(Line::styled(*note, dim));
+        }
+        if let Some(error) = &step.error {
+            lines.push(Line::styled(
+                error.clone(),
+                Style::default().fg(ctx.theme.error),
+            ));
+        }
+        return lines;
+    }
+
     let asked = match &step.detail {
         FocusDetail::Prompt { snippet, .. } => snippet.clone(),
         FocusDetail::Tool { command } => command.clone(),
-        FocusDetail::Agent { asked, .. } => asked.clone(),
-        FocusDetail::Plain => None,
+        _ => None,
     };
     if let Some(asked) = asked {
         lines.push(Line::styled("asked:", dim));
@@ -6054,53 +6188,6 @@ fn flow_selected_step_lines(
             };
             doing.push(Line::from(text));
         }
-        // `live.is_some()` without `running` is an agent node whose
-        // own run has already ended (cancelled, failed or aborted,
-        // issue #637): `meta.live` is left behind with no
-        // `completed_at`, and `stale` (computed from `now` the
-        // instant this step was built) is always `true` by then, so
-        // this never reads as running -- only `stopped`, with
-        // whatever figures the session last reported.
-        FocusDetail::Agent {
-            live,
-            note,
-            stale,
-            current_tool_elapsed_s,
-            ..
-        } if running || live.is_some() => {
-            if let (Some(since), Some(elapsed)) = (
-                step.since_ts
-                    .as_deref()
-                    .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone)),
-                step.elapsed_s,
-            ) {
-                doing.push(Line::from(format!(
-                    "since {since} · {}",
-                    oscilloscope_core::format::format_duration(elapsed)
-                )));
-            }
-            match live.as_deref() {
-                Some(live) => {
-                    if *stale {
-                        doing.push(Line::styled("stopped", dim));
-                    }
-                    // `false`: Flow's own `doing:` header below
-                    // already covers this content -- `agent_live_
-                    // lines` must not print a second one.
-                    doing.extend(agent_live_lines(
-                        live,
-                        transcript_view,
-                        ctx,
-                        false,
-                        *stale,
-                        *current_tool_elapsed_s,
-                        now,
-                    ));
-                }
-                None if running => doing.push(Line::styled(*note, dim)),
-                None => {}
-            }
-        }
         _ => {}
     }
     if !doing.is_empty() {
@@ -6118,33 +6205,7 @@ fn flow_selected_step_lines(
                     }
                 }
             }
-            FocusDetail::Agent {
-                raw_transcript,
-                raw_files_changed,
-                raw_turns,
-                ..
-            } => {
-                if let Some(value) = &step.value {
-                    if !value.is_empty() {
-                        produced.push(Line::from(value.clone()));
-                    }
-                }
-                // Issue #637: "produced: meta.raw.transcript,
-                // files_changed, the tokens and turns" -- the tokens
-                // line below is the same `step.tokens` every other
-                // finished tool step's own produced block already
-                // shows.
-                if let Some(transcript) = raw_transcript {
-                    produced.push(Line::styled(transcript.clone(), dim));
-                }
-                if let Some(files) = raw_files_changed {
-                    produced.push(Line::from(format!("files {files}")));
-                }
-                if let Some(turns) = raw_turns {
-                    produced.push(Line::from(format!("turns {turns}")));
-                }
-            }
-            FocusDetail::Tool { .. } | FocusDetail::Plain => {
+            _ => {
                 if let Some(value) = &step.value {
                     if !value.is_empty() {
                         produced.push(Line::from(value.clone()));
@@ -6787,6 +6848,17 @@ fn flow_headline_spans(
             vec![(text, faint)]
         }
         Headline::NotTaken => vec![("not taken".to_string(), faint)],
+        Headline::Received { tokens, estimated } => {
+            let marker = if *estimated { "≈" } else { "" };
+            vec![(
+                format!(
+                    "↓{marker}{} t",
+                    oscilloscope_core::format::format_tokens_thousands(*tokens)
+                ),
+                default_text,
+            )]
+        }
+        Headline::AgentTurn(text) => vec![(text.clone(), default_text)],
         Headline::Blank => vec![(String::new(), faint)],
     }
 }
@@ -6839,6 +6911,10 @@ fn flow_detail_spans(
             vec![(text, faint)]
         }
         Detail::Queued => vec![("queued".to_string(), faint)],
+        Detail::Rate(rate) => vec![(format!("{} t/s", rate.round() as i64), faint)],
+        Detail::Waiting => vec![("waiting".to_string(), faint)],
+        Detail::Attempt(attempt) => vec![(format!("attempt {attempt}"), faint)],
+        Detail::AgentActivity(text) => vec![(text.clone(), muted)],
         Detail::Blank => vec![(String::new(), faint)],
     }
 }
@@ -8704,11 +8780,61 @@ mod golden_tests {
         PlanTree::from_program(&program)
     }
 
-    /// Issue #647: with no transcript tailed yet, a running tool's
-    /// own elapsed shows right next to `running:`, from `meta.live.
-    /// current_tool.started_at` -- not just the session's own total.
+    /// A minimal running agent [`oscilloscope_core::screens::FocusedStep`]
+    /// (issue #703), for `agent_block_lines`'s own unit tests -- every
+    /// field this module itself never reads stays at its own default.
+    fn agent_focused_step(
+        live: Option<oscilloscope_core::model::AgentLive>,
+        stale: bool,
+        current_tool_elapsed_s: Option<f64>,
+        status_kind: StatusKind,
+    ) -> oscilloscope_core::screens::FocusedStep {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{AGENT_LIVE_DATA_NOTE, FocusDetail, FocusedStep};
+        FocusedStep {
+            path: "prime.agent1".to_string(),
+            breadcrumb: "agent1".to_string(),
+            kind_label: "agent",
+            provider_or_model: None,
+            since_ts: None,
+            elapsed_s: None,
+            detail: FocusDetail::Agent {
+                asked: None,
+                live: live.map(Box::new),
+                stale,
+                current_tool_elapsed_s,
+                note: AGENT_LIVE_DATA_NOTE,
+                raw_transcript: None,
+                raw_files_changed: None,
+                raw_turns: None,
+                raw_tool_calls: None,
+                raw_tool_counts: Default::default(),
+                raw_lines_added: None,
+                raw_lines_removed: None,
+                raw_context_tokens: None,
+                raw_context_window: None,
+            },
+            status: RowStatus {
+                kind: status_kind,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        }
+    }
+
+    /// Issue #647, carried over by #703's shared Agent block: with no
+    /// transcript tailed yet, a running tool's own elapsed shows next
+    /// to its own name in the Tool field, from `meta.live.current_
+    /// tool.started_at` -- not just the session's own total.
     #[test]
-    fn agent_live_lines_shows_the_running_tools_own_elapsed() {
+    fn agent_block_lines_shows_the_running_tools_own_elapsed() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let zone = test_zone();
         let ctx = DrawCtx {
@@ -8722,28 +8848,22 @@ mod golden_tests {
             "current_tool": {"name": "bash", "started_at": "2026-01-01T11:52:30Z"}
         }))
         .unwrap();
-        let lines = agent_live_lines(
-            &live,
-            None,
-            &ctx,
-            true,
-            false,
-            Some(24.0),
-            "2026-01-01T11:52:54Z",
-        );
+        let step = agent_focused_step(Some(live), false, Some(24.0), StatusKind::Running);
+        let lines = agent_block_lines(&step, None, &ctx, "2026-01-01T11:52:54Z");
         let text = lines
             .iter()
             .map(|l| l.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("running: bash · 24.0s"), "{text}");
+        assert!(text.contains("bash · 24.0s"), "{text}");
     }
 
-    /// Issue #647: once stale (the session has stopped), the last
-    /// tool it ran is labelled `last:`, never `running:` -- it never
-    /// finished, but it is not running any more either.
+    /// Issue #647, carried over by #703's shared Agent block: once
+    /// stale (the session has stopped), the last tool it ran shows
+    /// with no elapsed of its own -- it never finished, but nothing
+    /// is still running it either.
     #[test]
-    fn agent_live_lines_labels_a_stale_current_tool_as_last_not_running() {
+    fn agent_block_lines_shows_a_stale_current_tool_with_no_elapsed() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let zone = test_zone();
         let ctx = DrawCtx {
@@ -8757,14 +8877,16 @@ mod golden_tests {
             "current_tool": {"name": "bash", "started_at": "2026-01-01T11:46:50Z"}
         }))
         .unwrap();
-        let lines = agent_live_lines(&live, None, &ctx, true, true, None, "2026-01-01T11:52:54Z");
+        let step = agent_focused_step(Some(live), true, None, StatusKind::Running);
+        let lines = agent_block_lines(&step, None, &ctx, "2026-01-01T11:52:54Z");
         let text = lines
             .iter()
             .map(|l| l.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("last: bash"), "{text}");
-        assert!(!text.contains("running:"), "{text}");
+        assert!(text.contains("bash"), "{text}");
+        assert!(!text.contains("24.0s"), "{text}");
+        assert!(!text.contains("running"), "{text}");
     }
 
     /// Issue #641: two tool calls genuinely running at once (neither
@@ -8774,7 +8896,7 @@ mod golden_tests {
     /// not the session's single `meta.live.current_tool` time, which
     /// would otherwise show the same figure for both.
     #[test]
-    fn agent_live_lines_shows_each_running_calls_own_elapsed_in_a_transcript() {
+    fn agent_block_lines_shows_each_running_calls_own_elapsed_in_a_transcript() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let zone = test_zone();
         let ctx = DrawCtx {
@@ -8790,15 +8912,8 @@ mod golden_tests {
         let view = oscilloscope_core::transcript::build_transcript_view(&transcript_lines, false);
         let live =
             oscilloscope_core::model::AgentLive::from_value(&json!({"engine": "pi"})).unwrap();
-        let lines = agent_live_lines(
-            &live,
-            Some(&view),
-            &ctx,
-            true,
-            false,
-            None,
-            "2026-01-01T11:52:00Z",
-        );
+        let step = agent_focused_step(Some(live), false, None, StatusKind::Running);
+        let lines = agent_block_lines(&step, Some(&view), &ctx, "2026-01-01T11:52:00Z");
         let text = lines
             .iter()
             .map(|l| l.to_string())
@@ -11695,6 +11810,7 @@ mod tape_frame_goldens {
                     &tape_screen,
                     &_rendered.header,
                     &mut app,
+                    None,
                     &ctx,
                     0,
                     now,
