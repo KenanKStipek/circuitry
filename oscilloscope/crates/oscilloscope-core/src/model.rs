@@ -1098,14 +1098,17 @@ pub struct RunModel {
     /// each into one Signal column at its own `ts`, so the sum of one
     /// path's own sightings always equals its final tokens.
     agent_live_sightings: Vec<AgentLiveSighting>,
-    /// Paths an end-of-session remainder has already been recorded
-    /// for, by path -- an agent session osi never saw running (`osi
-    /// watch` of an already-finished run, an attach after the fact,
-    /// or a session shorter than one poll) still owes its whole
-    /// `node_tokens` as one sighting the moment it's seen finished,
-    /// but a redraw with no new state must never record it twice.
-    /// Cleared on retry, same as `agent_live_last_totals`.
-    agent_live_finish_recorded: BTreeSet<String>,
+    /// The running total of every [`AgentLiveSighting`] already
+    /// pushed for a path, by path -- never cleared on retry, unlike
+    /// `agent_live_last_totals`: an abandoned attempt's own tokens
+    /// are already in here from its own sightings, so the retried
+    /// attempt's own end-of-session remainder (`node_tokens`'s own
+    /// `_total`-first pair, which folds both attempts in) subtracts
+    /// them instead of counting them twice. Also what makes a
+    /// redraw safe: once a path's remainder has been pushed once,
+    /// this equals `node_tokens` exactly, so the next redraw's own
+    /// remainder reads `0` and pushes nothing further.
+    agent_live_plotted_total: BTreeMap<String, (u64, u64)>,
 }
 
 /// One entry of [`RunModel::agent_live_sightings`]: `path`'s own
@@ -1209,7 +1212,7 @@ impl RunModel {
             agent_live_last_totals: BTreeMap::new(),
             agent_live_last_seen_at: BTreeMap::new(),
             agent_live_sightings: Vec::new(),
-            agent_live_finish_recorded: BTreeSet::new(),
+            agent_live_plotted_total: BTreeMap::new(),
         }
     }
 
@@ -1787,30 +1790,31 @@ impl RunModel {
     /// called once per `observe` for every flattened node (issue
     /// #702's Signal trace, rule 4): while `node` still carries a
     /// `meta.live` of its own, any increase since the last sighting
-    /// becomes a new one, at that live record's own `updated_at`; once
-    /// it no longer does (the attempt finished, or was never an agent
-    /// session at all), whatever remainder `agent_live_last_totals`
-    /// still owes `path` is recorded once, at `completed_at`, and the
-    /// bookkeeping for `path` is dropped -- so a node with no `meta.
+    /// becomes a new one, at that live record's own `updated_at`,
+    /// added to `agent_live_plotted_total` alongside it; once it no
+    /// longer does (the attempt finished, or was never an agent
+    /// session at all), whatever `node_tokens`' own final total still
+    /// owes beyond what `agent_live_plotted_total` already carries is
+    /// recorded once, at `completed_at` -- so a node with no `meta.
     /// live` and nothing owed (the overwhelming majority of every
-    /// non-agent step) costs one `BTreeMap` lookup that finds nothing,
-    /// same as `last_created_at`'s own per-node bookkeeping above.
-    /// `retrying` resets the bookkeeping with no remainder recorded --
-    /// an abandoned attempt's own partial tokens are folded into the
-    /// retried attempt's own first sighting instead of appearing as a
-    /// column of their own, the one simplification this makes (no
-    /// recorded fixture ever retries an agent session). A session osi
-    /// never saw running at all (`osi watch` of an already-finished
-    /// run, an attach after the fact, or one shorter than one poll)
-    /// owes its whole `node_tokens` as a single sighting at
-    /// `completed_at` instead of a remainder, since nothing was ever
-    /// plotted for it; `agent_live_finish_recorded` keeps that from
-    /// happening twice on a redraw with no new state.
+    /// non-agent step) costs one `BTreeMap` lookup that finds
+    /// nothing, same as `last_created_at`'s own per-node bookkeeping
+    /// above. `retrying` resets `agent_live_last_totals` (the current
+    /// attempt's own delta baseline) but never `agent_live_plotted_
+    /// total`: an abandoned attempt's own tokens are already in its
+    /// own sightings, so the retried attempt's own eventual remainder
+    /// (`node_tokens`'s own `_total`-first pair, which folds both
+    /// attempts in) subtracts them instead of counting them twice. A
+    /// session osi never saw running at all (`osi watch` of an
+    /// already-finished run, an attach after the fact, or one
+    /// shorter than one poll) has nothing in `agent_live_plotted_
+    /// total` yet, so its whole `node_tokens` becomes the remainder;
+    /// a redraw with no new state then owes `0` and pushes nothing
+    /// further, needing no separate "already recorded" flag.
     fn observe_agent_live(&mut self, path: &str, node: &NodeMeta, retrying: bool) {
         if retrying {
             self.agent_live_last_totals.remove(path);
             self.agent_live_last_seen_at.remove(path);
-            self.agent_live_finish_recorded.remove(path);
         }
         if let Some(live) = &node.live {
             let current = (
@@ -1825,16 +1829,26 @@ impl RunModel {
             let moved = live.updated_at.as_deref()
                 != self.agent_live_last_seen_at.get(path).map(String::as_str);
             if moved && (current.0 > last.0 || current.1 > last.1) {
+                let delta = (
+                    current.0.saturating_sub(last.0),
+                    current.1.saturating_sub(last.1),
+                );
                 if let Some(ts) = live.updated_at.clone().or_else(|| node.created_at.clone()) {
                     self.agent_live_sightings.push(AgentLiveSighting {
                         path: path.to_string(),
                         ts,
-                        tokens_sent: current.0.saturating_sub(last.0),
-                        tokens_received: current.1.saturating_sub(last.1),
+                        tokens_sent: delta.0,
+                        tokens_received: delta.1,
                     });
                 }
                 self.agent_live_last_totals
                     .insert(path.to_string(), current);
+                let plotted = self
+                    .agent_live_plotted_total
+                    .entry(path.to_string())
+                    .or_insert((0, 0));
+                plotted.0 += delta.0;
+                plotted.1 += delta.1;
             }
             if let Some(updated_at) = &live.updated_at {
                 self.agent_live_last_seen_at
@@ -1845,43 +1859,41 @@ impl RunModel {
         let Some(completed_at) = &node.completed_at else {
             return;
         };
-        if let Some(last) = self.agent_live_last_totals.remove(path) {
+        let was_seen_running = self.agent_live_last_totals.remove(path).is_some();
+        if was_seen_running {
             self.agent_live_last_seen_at.remove(path);
-            let (final_sent, final_received) = node_tokens(&node.meta);
-            let remainder_sent = final_sent.saturating_sub(last.0);
-            let remainder_received = final_received.saturating_sub(last.1);
-            if remainder_sent > 0 || remainder_received > 0 {
-                self.agent_live_sightings.push(AgentLiveSighting {
-                    path: path.to_string(),
-                    ts: completed_at.clone(),
-                    tokens_sent: remainder_sent,
-                    tokens_received: remainder_received,
-                });
-            }
-            self.agent_live_finish_recorded.insert(path.to_string());
-            return;
         }
-        if self.agent_live_finish_recorded.contains(path) {
-            return;
-        }
-        let is_agent = node
-            .meta
-            .get("provider")
-            .and_then(Value::as_str)
-            .is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"));
+        let is_agent = was_seen_running
+            || node
+                .meta
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"));
         if !is_agent {
             return;
         }
         let (final_sent, final_received) = node_tokens(&node.meta);
-        if final_sent > 0 || final_received > 0 {
+        let plotted = self
+            .agent_live_plotted_total
+            .get(path)
+            .copied()
+            .unwrap_or((0, 0));
+        let remainder_sent = final_sent.saturating_sub(plotted.0);
+        let remainder_received = final_received.saturating_sub(plotted.1);
+        if remainder_sent > 0 || remainder_received > 0 {
             self.agent_live_sightings.push(AgentLiveSighting {
                 path: path.to_string(),
                 ts: completed_at.clone(),
-                tokens_sent: final_sent,
-                tokens_received: final_received,
+                tokens_sent: remainder_sent,
+                tokens_received: remainder_received,
             });
+            let p = self
+                .agent_live_plotted_total
+                .entry(path.to_string())
+                .or_insert((0, 0));
+            p.0 += remainder_sent;
+            p.1 += remainder_received;
         }
-        self.agent_live_finish_recorded.insert(path.to_string());
     }
 
     /// Recomputes every row's status from one snapshot, the plan, and
@@ -2592,6 +2604,69 @@ mod tests {
         // the remainder a second time.
         model.observe(&finished, &plan, ProcessState::Running);
         assert_eq!(model.agent_live_sightings().len(), 3);
+    }
+
+    /// Issue #702's retry case: an abandoned first attempt's own
+    /// sightings must not be counted again when the retried
+    /// attempt's own final total (which folds both attempts in)
+    /// settles -- the sum of every sighting for the path still
+    /// equals the final total exactly.
+    #[test]
+    fn a_retried_agents_abandoned_attempt_is_never_counted_twice() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let first_attempt = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &first_attempt(2100, 40, "2026-10-08T11:46:44Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        // The first attempt is abandoned (a new `created_at` at the
+        // same path, still running): its own 2100/40 is already in
+        // `agent_live_sightings`, nothing more ever observed for it.
+        let second_attempt = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:50Z", "completed_at": null, "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &second_attempt(1500, 30, "2026-10-08T11:46:51Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        // The retried attempt's own final total, the same `_total`-
+        // first pair `node_tokens` always reads, folds both attempts
+        // in: 2100+1500 sent, 40+30 received.
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-10-08T11:46:50Z", "completed_at": "2026-10-08T11:46:55Z",
+                "provider": "agent", "tokens_sent_total": 3600, "tokens_received_total": 70
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let (total_sent, total_received) = model
+            .agent_live_sightings()
+            .iter()
+            .fold((0u64, 0u64), |(s, r), sig| {
+                (s + sig.tokens_sent, r + sig.tokens_received)
+            });
+        assert_eq!(
+            total_sent, 3600,
+            "the abandoned attempt's own tokens must count once, not twice"
+        );
+        assert_eq!(total_received, 70);
     }
 
     #[test]
