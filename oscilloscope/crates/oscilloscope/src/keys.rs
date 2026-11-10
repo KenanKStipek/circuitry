@@ -941,32 +941,45 @@ impl App {
         /// real draw the way the Tree/State/Details panes do.
         const STORE_PAGE_SIZE: i32 = 4;
         match key.code {
+            // Issue #704 rule 2: the Store's own cursor is the shared
+            // selection now, so a manual move here must turn follow
+            // off the same way every other screen's own movement
+            // already does -- otherwise the very next tick's own
+            // follow update (main.rs) overwrites it right back to
+            // whatever is running, undoing the move before it is
+            // ever seen.
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_store_selection(rows, -1);
+                self.follow = false;
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.move_store_selection(rows, 1);
+                self.follow = false;
                 true
             }
             KeyCode::PageUp => {
                 self.move_store_selection(rows, -STORE_PAGE_SIZE);
+                self.follow = false;
                 true
             }
             KeyCode::PageDown => {
                 self.move_store_selection(rows, STORE_PAGE_SIZE);
+                self.follow = false;
                 true
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 if let Some(first) = rows.first() {
                     self.select_tree_path(Some(first.clone()));
                 }
+                self.follow = false;
                 true
             }
             KeyCode::End | KeyCode::Char('G') => {
                 if let Some(last) = rows.last() {
                     self.select_tree_path(Some(last.clone()));
                 }
+                self.follow = false;
                 true
             }
             // `⏎` opens the selected store's own step full-screen
@@ -1008,12 +1021,14 @@ impl App {
         if rows.is_empty() {
             return;
         }
-        let current = self.store_cursor_index(rows);
-        let next = match current {
-            Some(idx) => (idx as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize,
-            None if delta >= 0 => 0,
-            None => rows.len() - 1,
-        };
+        // The Store screen's own cursor always resolves to some row
+        // (the same fallback-to-first-row `store::build_store` itself
+        // uses once nothing in `self.selected_path`'s own lineage has
+        // tokens at all) -- arrow keys move from THAT position, or a
+        // first press while unresolved would just resync to the row
+        // already on screen instead of actually moving.
+        let current = self.store_cursor_index(rows).unwrap_or(0);
+        let next = (current as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize;
         self.select_tree_path(Some(rows[next].clone()));
     }
 
@@ -2392,8 +2407,9 @@ mod tests {
     fn up_down_select_table_rows_in_order_and_clamp_at_the_ends() {
         let mut app = store_app();
         let rows = vec!["prime.a".to_string(), "prime.b".to_string()];
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        // The screen's own cursor already shows `prime.a` (`store::
+        // build_store`'s own fallback-to-first-row, issue #704 rule
+        // 2) before any key at all, so the first ↓ moves past it.
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
@@ -2420,8 +2436,10 @@ mod tests {
             "prime.b".to_string(),
             "prime.c".to_string(),
         ];
+        // Same reasoning as the plain ↑↓ test above: the first `j`
+        // moves past the screen's own already-shown first row.
         app.handle_key(key(KeyCode::Char('j')), &[], &[], true, false, &rows);
-        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::Char('G')), &[], &[], true, false, &rows);
         assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Char('g')), &[], &[], true, false, &rows);
