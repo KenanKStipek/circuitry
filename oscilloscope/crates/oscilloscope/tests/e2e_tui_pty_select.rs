@@ -4,16 +4,19 @@
 //! `cof` on `PATH`, a temporary `HOME`, stripped credentials, a hard
 //! per-test timeout.
 //!
-//! Every test here reads `discover_runs`'s own machine-wide `ps`
-//! scan, which would also see any `cof`/`electricity` process a
-//! *different* test running concurrently on this binary's own thread
-//! pool happens to have live at the same moment -- `cargo test` runs
-//! each test binary in turn, but a single binary's own `#[test]`
-//! functions run concurrently across threads by default, which is
-//! exactly the scenario a scan-sensitive test can't tell apart from a
-//! stray leftover process. Kept in a file with nothing else in it,
-//! and serialised among themselves with [`SELECT_LOCK`], they see a
-//! clean process table for the whole of each test's own run.
+//! Every test here spawns its own `osi` through `spawn_osi_on_pty`,
+//! which sets `OSI_PROCESS_SCAN=0` -- Select itself never reads
+//! `discover_runs`'s own machine-wide `ps` scan in this file, only
+//! the run registry. (One test, `bare_osi_shows_the_empty_select_
+//! with_a_recorded_run`, still runs a real `cof` through
+//! `osi_command`, unaffected by that flag, but to completion, before
+//! Select ever opens -- never concurrently with it.) [`SELECT_LOCK`]
+//! still serialises every test in this file against every other
+//! (`cargo test` runs a single binary's own tests concurrently by
+//! default): kept as a defence against the kind of cross-test
+//! leftover-process flakiness [`AutoKill`]'s own doc comment
+//! describes, now that no test here depends on a live scan to find
+//! one.
 
 mod support;
 
@@ -31,18 +34,18 @@ use support::{
 
 /// Serialises every test in this file against every other (see the
 /// module's own doc comment) -- held for a whole test's own
-/// duration, not just around the `ps` scan itself, since a second
-/// test's `cof`/`electricity` could just as easily start mid-scan as
-/// before it.
+/// duration, not around any one step of it, since the leftover
+/// process [`AutoKill`]'s own doc comment describes could appear at
+/// any point during a concurrently-running test.
 static SELECT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Ends its own child on drop, including while unwinding from a
 /// failed assertion (this crate's own test profile doesn't set
 /// `panic = "abort"`): every background `osi`/`cof` this file spawns
 /// is wrapped in one from the moment it's spawned, so a panic
-/// partway through a test can never leave it running for a *later*
-/// test's own `ps` scan to find once [`SELECT_LOCK`] is released --
-/// exactly how this file's own early flakiness traced back to a
+/// partway through a test can never leave it running underneath a
+/// *later* test in this same file, once [`SELECT_LOCK`] is released
+/// -- exactly how this file's own early flakiness traced back to a
 /// stray, still-running `sleep` left behind by an earlier panic, long
 /// before this guard existed. [`Self::into_inner`] hands the child
 /// back, bare, for a caller that means to wait on it normally; a
@@ -94,9 +97,9 @@ impl Drop for AutoKill {
 const QUICK_DOC: &str = "effects:\n  - name: hi\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n      allowed_commands: [\"echo\"]\n";
 
 /// The document name of whichever registry entry under `runs_dir` has
-/// the earliest `started_at` -- Select's own row order (issue #698's
-/// Settled point 3: registry `started_at`, launch order), so this is
-/// also the cursor's own row, the first one, with no navigation.
+/// the earliest `started_at` -- Select's own row order (registry
+/// `started_at`, launch order), so this is also the cursor's own
+/// row, the first one, with no navigation.
 fn earliest_registered_document(runs_dir: &Path) -> String {
     let mut best: Option<(String, String)> = None;
     for entry in std::fs::read_dir(runs_dir)
@@ -260,9 +263,9 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     assert_no_leftover_process(out_b.path());
 }
 
-/// Issue #698's Settled point 3: with exactly one live run
-/// registered, bare `osi` on a TTY attaches to it straight away --
-/// the Select screen never draws at all.
+/// With exactly one live run registered, bare `osi` on a TTY
+/// attaches to it straight away -- the Select screen never draws at
+/// all.
 #[test]
 fn bare_osi_attaches_at_once_with_exactly_one_live_run() {
     if !e2e_enabled() {
@@ -319,8 +322,8 @@ fn bare_osi_attaches_at_once_with_exactly_one_live_run() {
     assert_no_leftover_process(out.path());
 }
 
-/// Issue #698's Settled point 4: with no live run registered, bare
-/// `osi` on a TTY shows the empty Select's own Recent Runs table,
+/// With no live run registered, bare `osi` on a TTY shows the
+/// empty Select's own Recent Runs table,
 /// built from this run's own history; `enter` on its one row opens
 /// that run read-only.
 #[test]

@@ -2999,17 +2999,18 @@ no `--log` runs the same discovery as the groundwork above
 shapes: with exactly one running orchestration, attaches to it
 straight away, the same as `osi watch <run_dir>` (read-only, `c`
 inert); with none, the empty Select (below); with more than one, the
-running list -- `All` first (`N runs · tiled`, inert for now: `All`
-itself is part of a later pull request), then one row per run with
-the document and config basenames, the engine, and a `●` (every row
-here is live by definition); the cursor starts on the first run, not
-`All`. `↑↓`/`j k`/`Home End`/`g G` move the cursor, kept across every
-leg of a Select<->attach round trip rather than reset to the first
-run each time Select is redrawn; `enter` attaches to a run row (inert
-on `All`), `q` quits at once (no confirm: leaving Select only ever
-stops watching, never cancels anything), `?` shows Select's own Help
-(which lists `c` as inert here, same as the key bar), `0`-`3` and a
-plain `c` do nothing (no run is attached from here). A raw Ctrl-C
+running list -- `All` first (`N runs · tiled`), then one row per run
+with the document and config basenames, the engine, and a `●` (every
+row here is live by definition); the cursor starts on the first run,
+not `All`. `↑↓`/`j k`/`Home End`/`g G` move the cursor, kept across
+every leg of a Select<->attach round trip rather than reset to the
+first run each time Select is redrawn; `enter` attaches to a run row,
+or opens the All screen (below) on its own row; `q` quits at once (no
+confirm: leaving Select only ever stops watching, never cancels
+anything), `?` shows Select's own Help (which lists `c` as inert
+here, same as the key bar), `0`-`3` and a plain `c` do nothing on any
+row, `All` included (Select attaches nothing of its own to switch a
+screen or cancel). A raw Ctrl-C
 (`Char('c')` with the `CONTROL` modifier, checked before `?`'s own
 Help dialog gets a look at it, same as every other screen) quits with
 exit 130; a forwarded SIGTERM/SIGHUP quits with 143/129, the same
@@ -3066,8 +3067,10 @@ two rows for the same document (`triage.yml` twice in the fixture)
 are told apart by their config column alone, so basenames suffice
 there; a document whose (basename, config-basename) pair collides
 with another row's own gets the parent directory added to the
-document column only (`select::build_rows`'s own tie-break, issue
-#698's rule 9 -- not shown in either frame, since the fixture's own
+document column only (`select::build_rows`'s own tie-break,
+basenames everywhere a row can be told apart some other way, the
+parent directory added only where two rows would otherwise read
+identically -- not shown in either frame, since the fixture's own
 rows never actually collide, but implemented and unit-tested
 against a synthetic case). The running list's own box is 56 cells
 wide at 80 columns and 60 at 120 and up; the empty Select's own
@@ -3149,13 +3152,16 @@ a freshly drawn Select with no stray Tape text left over, and `q`
 quits at once; exactly one live run attaches directly, Select never
 drawn at all; no live runs shows the empty Select's own Recent Runs
 table, built from a run recorded in this test's own history. Every
-one of these turns on `discover_runs`'s own machine-wide `ps` scan
-finding *exactly* what the test itself started -- `cargo test` runs
-each test binary in turn, but a single binary's own `#[test]`
-functions run concurrently across threads by default, so these three
-live in a file with nothing else in it, serialised among themselves
-with a shared lock, rather than alongside every other PTY test in
-`e2e_tui_pty.rs`.
+`osi` these spawn sets `OSI_PROCESS_SCAN=0` (below), so none of them
+turns on `discover_runs`'s own machine-wide `ps` scan at all -- a
+run registry scoped to the test's own temporary `HOME` already finds
+*exactly* what the test itself started. They still live in a file
+with nothing else in it, serialised among themselves with a shared
+lock, as a defence against one test's own leftover process (a stray
+panic mid-test, say) being visible to a *later* test in the same
+file -- `cargo test` runs each test binary in turn, but a single
+binary's own `#[test]` functions run concurrently across threads by
+default.
 
 **The All screen** (issue #698, part 5 of the epic -- the tiled
 wall). `enter` on Select's own `All` row opens it; it tiles every
@@ -3202,9 +3208,12 @@ row. Each tile row's own real height is a tile panel (at least 20
 rows) plus the one-row document band above it; more tiles than a
 page's own rows×columns can hold page, the last slot showing `… n
 more` instead of a real tile, turned with `PageUp`/`PageDown`. A
-grid too narrow to fit even one real tile's own cell pages every
-run from the first page on, the one slot it has showing `… n more`
-rather than one run standing in, unmarked, for all of them.
+grid with room for only one tile-sized cell at all (80×24, the
+common default terminal) still shows one real run per page -- never
+a reserved `… n more` slot standing in for every run with nothing
+real drawn; the remaining count moves into the status line instead
+(`… 2 more · PageDown`), and `PageUp`/`PageDown` step one run at a
+time.
 
 **Keys** (`keys::AllState`, pure and unit-tested the same way
 `SelectState` is): `0`-`3` set every tile's own screen at once;
@@ -3221,7 +3230,7 @@ everywhere on this screen (watching only, never a confirm); `u` (the
 Combined Signal) is inert -- Help says so -- since that screen is
 the epic's own next pull request, not this one.
 
-**Tile content**, per Settled point 5: a Tape tile keeps the Tape's
+**Tile content:** a Tape tile keeps the Tape's
 own order (Run Started, the finished rows, the Now band, the
 running rows, the slots rule, the rows ahead, Run End, the Totals
 row) without the clock column or a detail pane, folding the oldest
@@ -3252,13 +3261,20 @@ this screen's own breadcrumb-based running/waiting rows -- a loop's
 own slots rule never names a queued pass here, unlike the Tape
 tile's, and an ahead `if` row drops its own condition text the same
 way the Tape tile's does. Flow and Store tiles are the ordinary rail
-and area diagram, clipped to the tile -- snapshot-tested cell-exact
-against the first tile's own known content
-(`all_flow_tiles_draw_real_content_for_every_run`/
+and area diagram, clipped to the tile -- snapshot-tested text-exact
+(characters only, no style) against the first tile's own known
+content (`all_flow_tiles_draw_real_content_for_every_run`/
 `all_store_tiles_draw_real_content_for_every_run`), since neither has
 a frame of its own.
 
-**Run colours** (Settled points 6 and 13): a Signal tile's own sent
+**Not yet shipped:** a tile's own "usual"/ETA figures aren't wired
+to history yet, unlike a single-run attach's own `apply_history_
+eta` -- every tile reads `ETA — · no history yet` regardless of how
+many real history runs exist (`run_all_grid_screen`'s own doc
+comment). `no_history`/`--no-history` is accepted on this screen but
+not read for that reason: there is nothing yet for it to turn off.
+
+**Run colours:** a Signal tile's own sent
 trace draws in its run's own role, one of six (`Theme::run_colors`,
 read off roles each theme already carries elsewhere --
 `accent_primary`, `warning`, `accent_secondary`, `status_info`,
@@ -3267,23 +3283,30 @@ change to that one list, not to every theme's own fields), by launch
 order, repeating past the sixth run. Nothing else on a tile --
 received bars, the running glyph, the axis sweep -- varies by run.
 
-**The shared Signal scale** (Settled point 6): one round top at or
-above 1.5× the largest single finished effect's own sent or received
-tokens anywhere across every tile (`multi::largest_single_effect_
-tokens`, deliberately not a raw Signal bucket, which can sum several
-effects that happen to finish within the same 100 ms column -- doing
-so reproduces the frame's own received top but not its sent one, for
-the same column), the smallest of `{1, 2, 2.5, 4, 5, 8} × 10ⁿ` at or
-above that, growing only; labelled with one decimal place in `k`
-from 1,000 up (`format_shared_axis_label`), the plain token figure
-below it unchanged. The fixture's own data reproduces the frame's
-`5.0k` sent top exactly this way; the received top it needs (`400
-t`) does not follow from the same rule applied to any largest single
-effect found in it (summing a run's own largest 100 ms column
-instead reaches `400 t`, but then unseats the sent top's own match),
-so that cell, and the chart levels downstream of it, are reported
-(allow-listed below) rather than the rule bent to match both at
-once, per Settled point 6's own instruction.
+**The shared Signal scale:** one round top at or above 1.5× the
+largest 100 ms-bucketed sent or received column anywhere across
+every tile -- the same figure a single run's own axis already sizes
+itself from (`SignalScreen::largest_col_sent`/`largest_col_
+received`, finished tokens plus a running prompt's own live
+estimate, never a raw sum across unrelated effects that merely
+share a column by coincidence -- but it is that sum, since a bucket
+is a bucket either way), never a run's own largest *single* effect
+(which can leave a bucket with more than one effect in it clipping
+its own axis). The smallest of `{1, 2, 2.5, 4, 5, 8} × 10ⁿ` at or
+above that, growing only, and never 0 even before any column exists
+anywhere (the smallest value in the series at or above the single-
+run Signal's own no-history starting axis, 600 sent/80 received --
+800 and 80, `shared_signal_axis_starting_top`); labelled with one
+decimal place in `k` from 1,000 up (`format_shared_axis_label`), the
+plain token figure below it unchanged. Pinned on snap6's own real
+columns (`review.yml`'s own largest, 4,440 sent and 206 received):
+`shared_signal_axis_top_pinned_on_snap6s_real_columns` gives `8.0k`
+sent and `400 t` received. The `all--signal--180x48` frame itself
+draws `5.0k` sent, which doesn't follow from any column in this
+fixture; its own `400 t` received does. The frame's own tops (`5.0k`
+sent, `400 t` received) are injected into the golden directly,
+rather than the rule's own output, so every other chart cell can
+still be compared against them strictly.
 
 Goldens: `all--tape--180x48` and `all--signal--180x48`
 (`tui::tape_frame_goldens::all_tape_180x48_matches_the_frame`/
@@ -3297,27 +3320,41 @@ once and its own finished rows genuinely interleave by real
 timestamp, not the frame's own hand-chosen pass-paired order; that
 block (`assert_rows_match_as_a_set`) compares as a set of whole
 rows instead of cell by cell at a fixed position, each row still
-cell-exact, with the row count checked to match. Everything else
-carries allow-listed cells, each with its own reason at the constant
-that names it: a loop's own token sparkline scales by the panel's
-own absolute unit rather than relative to the loop's own passes, the
-same existing `tape_token_column` rule the Tape's own single-run
-goldens never had a loop tight enough in range to expose;
-`header.effects_done`'s own count differs from the Tape title's own
-"Done" count, the same rule issue #698 already names for a single
-run; the cross-run status line ties the same way a single run's own
-`gate › reply` timestamp tie already does in parts 1-3 -- here, the
-fixture's own events log two finishes to the same millisecond, but
-the run's own live state carries real microsecond precision
-underneath that shows they are not actually tied, so the newest-
-finished pick (earliest plan order, only ever breaking a genuine
-tie) reads the later one, not the frame's own hand-chosen row; a
-Signal tile's own axis `✓` mark, which the design text says belongs
-wherever a prompt finishes, at a column the hand-drawn frame simply
-never marked; its own dashed "ahead" rule stopping one cell short of
-the tile's own right border, where a single-run Signal frame always
-draws it flush to its own edge instead; and the received axis top
-discussed above, with the chart levels it changes.
+cell-exact, with the row count checked to match. Everything else carries allow-listed cells, each with its own reason
+at the constant that names it: a loop's own token sparkline scales
+by the panel's own absolute unit rather than relative to the loop's
+own passes, the same existing `tape_token_column` rule the single-
+run Tape's own `drafts` loop (`3 passes · 2 wide`, `▃▃ 130 t/p`)
+already pins; the Totals row's own `N/M Effects` count, where every
+snap6 frame counts exactly one more finished effect than this osi's
+own walk of the fixture's real state and events finds (reported
+here rather than bent to match the frame's own extra one -- the
+part-1 fixtures' own frames count exactly, so this is a property of
+snap6's own frames, not of the counter); the cross-run status line
+ties the same way a single run's own `gate › reply` timestamp tie
+already does in parts 1-3 -- here, the fixture's own events log two
+finishes to the same millisecond, but the run's own live state
+carries real microsecond precision underneath that shows they are
+not actually tied, so the newest-finished pick (earliest plan order,
+only ever breaking a genuine tie) reads the later one, not the
+frame's own hand-chosen row; a Signal tile's own axis `✓` mark, which
+the design text says belongs wherever a prompt finishes, at a column
+the hand-drawn frame simply never marked; its own dashed "ahead"
+rule stopping one cell short of the tile's own right border, where a
+single-run Signal frame always draws it flush to its own edge
+instead; and one received-row cell where `review.yml`'s own tiny
+(0.03 of a row) remainder past its one full block is left blank,
+where the same size remainder is drawn solid elsewhere in the same
+frame -- a hand-drawn inconsistency, not a rule.
+
+**From the frames, not from the design text.** A run's own role
+(one of six colours, by launch order, repeating past the sixth run)
+is read off the two All frames and `all--combined-signal--180x48`'s
+own bar colours, never stated in the design's own prose. A tile's
+own loop sparkline keeps the single-run Tape's absolute-unit rule
+rather than the All frames' own relative-to-the-loop's-own-passes
+scale, for the same reason the single-run goldens pin the absolute
+rule and nothing in the text says otherwise for a tile.
 
 A PTY end-to-end test (`e2e_tui_pty_all.rs`, the same per-test
 isolation `e2e_tui_pty_select.rs` uses, plus `OSI_PROCESS_SCAN=0` so
@@ -3415,7 +3452,7 @@ its own ordinary one for as long as it stays open.
 - **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
 - **The Store (`oscilloscope-core/src/store.rs`, issue #695).** Unit tests pin the layout's own rectangles to both frames' geometry (`layout_matches_the_120x30_frame_geometry`/`_80x24`), the largest-remainder apportionment itself (`apportion_uses_largest_remainder_with_earliest_index_tie_break`, including the zero-weight/zero-cells cases), a container too small for its own children collapsing to its own title and `<n>/<m> with tokens`, too-small top-level stores folding into one `… N more` tile, the store tree's own container/fold rules (a loop pass with exactly one token-bearing step folding into a leaf, more than one staying a container, zero-token stores and containers excluded, a running prompt's own live estimate getting a faint tile, a running step with nothing yet getting none, a running container's own marker leaving the moment the run ends even with no `completed_at`), the table's own order/ties/share rounding/breadcrumb, Readings with and without a loop, and `build_store`'s own performance over 2,000 flat leaves (the same bound `render::build`'s own test polices). `oscilloscope-core/tests/store_fixtures.rs` (renamed from `cost_fixtures.rs`) keeps the acceptance item that the store tree's own token sum matches the run's totals on every recorded fixture with a `prompt` effect, on both engines, including a retried prompt. `oscilloscope/src/keys.rs` covers the Store's own keys: `↑↓` and its aliases moving the table's own cursor and clamping at either end, `enter` opening the selected store's own step full-screen only with a row selected, `esc` closing it, switching screens resetting the shared toggle, and `i`/`o`/`$`/`Tab`/`z`/`v`/`e`/`/`/`←→` all doing nothing on the Store. `tui.rs`'s own golden tests cover the Store screen at 120×30 and 80×24 against the design's own frames (`tui::tape_frame_goldens::store_normal_120x30_matches_the_frame`/`_80x24`); further unit-level `tui.rs` tests cover the Help overlay listing exactly the Store's own keys, the full title dropping `Tokens by Store` below 120 columns, Readings dropping below 30 rows or 80 columns, and a leaf's own name and tokens wrapping onto two lines once they don't fit one.
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
-- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency; `tests/e2e_tui_pty_select.rs`, the Select screen's own PTY tests, kept in their own file and serialised among themselves since they read a machine-wide process scan), gated on `OSI_E2E_COF=1` (`cof` on `PATH` required once set):
+- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency; `tests/e2e_tui_pty_select.rs`, the Select screen's own PTY tests, kept in their own file and serialised among themselves as a defence against one test's own leftover process being visible to a later one in the same file), gated on `OSI_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;
   - a temporary `HOME`;
   - credential variables removed (the four named in this repository's CLAUDE.md);

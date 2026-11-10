@@ -4013,7 +4013,7 @@ fn recent_row_spans(
 /// labels the tile's own mini header band shows (the document and
 /// config are muted text in the band itself, never repeated inside
 /// the tile's own Run Started row -- that row carries the time and
-/// engine instead, issue #698's own Settled point 11).
+/// engine instead).
 pub struct AllTile {
     pub document_label: String,
     pub config_label: Option<String>,
@@ -4332,8 +4332,8 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
     frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
 }
 
-/// A `… n more` tile (§9.6/Settled point 5): the grid's own last
-/// slot once a page can't show every running run at once.
+/// A `… n more` tile (§9.6): the grid's own last slot once a page
+/// can't show every running run at once.
 fn draw_all_more_tile(frame: &mut Frame, area: Rect, more_count: usize, ctx: &DrawCtx) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -4363,8 +4363,8 @@ fn draw_all_more_tile(frame: &mut Frame, area: Rect, more_count: usize, ctx: &Dr
     );
 }
 
-/// One tile's own panel (issue #698, Settled point 5): a bordered
-/// box whose title is the tile's own screen-specific counts
+/// One tile's own panel (issue #698): a bordered box whose title is
+/// the tile's own screen-specific counts
 /// (`Tape · 1 Done · 1 Running · 10 Ahead · ▰ = 50 t`), dispatched to
 /// whichever of the four screens `screen` names -- the same shared
 /// `0`-`3` every tile draws at once.
@@ -4727,8 +4727,8 @@ fn draw_all_tape_tile(
     );
 }
 
-/// A Signal tile's own content (issue #698, Settled point 5): the
-/// fifteen-row chart on the shared scale every tile's own
+/// A Signal tile's own content (issue #698): the fifteen-row chart
+/// on the shared scale every tile's own
 /// [`oscilloscope_core::screens::SignalScreen`] has already been
 /// overridden to carry, two finished-step labels and a Now pane
 /// whose title carries the slots.
@@ -4779,9 +4779,9 @@ fn draw_all_signal_tile(
     draw_signal_tile_now_pane(frame, sections[1], screen, ctx);
 }
 
-/// A Flow tile (issue #698's Settled point 5/Issue #698 rule 17):
-/// the 80-column Flow (folded lanes, no Story pane), clipped to the
-/// tile -- snapshot-tested, no frame of its own.
+/// A Flow tile (issue #698): the 80-column Flow (folded lanes, no
+/// Story pane), clipped to the tile -- snapshot-tested, no frame of
+/// its own.
 fn draw_all_flow_tile(
     frame: &mut Frame,
     area: Rect,
@@ -4811,9 +4811,8 @@ fn draw_all_flow_tile(
     );
 }
 
-/// A Store tile (issue #698's Settled point 5/Issue #698 rule 17):
-/// the area diagram alone, clipped to the tile -- snapshot-tested,
-/// no frame of its own.
+/// A Store tile (issue #698): the area diagram alone, clipped to
+/// the tile -- snapshot-tested, no frame of its own.
 fn draw_all_store_tile(
     frame: &mut Frame,
     area: Rect,
@@ -5316,9 +5315,9 @@ fn draw_signal_chart(
     border_color: Color,
     title_override: Option<&str>,
     axis_label_format: fn(u64) -> String,
-    // A tile's own run colour for its sent trace (issue #698's own
-    // Settled points 6 and 13) -- `ctx.theme.accent_primary`, a
-    // single-run Signal's own fixed colour, everywhere else.
+    // A tile's own run colour for its sent trace (issue #698) --
+    // `ctx.theme.accent_primary`, a single-run Signal's own fixed
+    // colour, everywhere else.
     sent_color: Color,
     ctx: &DrawCtx,
 ) {
@@ -15376,16 +15375,14 @@ mod tape_frame_goldens {
             .collect()
     }
 
-    /// The Tape title's own "Done" count
-    /// (`TapeScreen::done`, which excludes a loop's own container
-    /// row) and the Totals row's own `header.effects_done` (which
-    /// doesn't) read differently for the same tile -- `triage.yml`'s
-    /// own title reads `1 Done` while its Totals row reads `2/13`.
-    /// This osi's own `effects_done_raw` walk finds only `kind`
-    /// really finished by the fixture's own state and events (`gate`
-    /// has no `completed_at` of its own at all): the shipped counter
-    /// used unchanged here, reported rather than bent, exactly as
-    /// the issue's own rule says to.
+    /// The Totals row's own `N/M Effects` count, the shipped
+    /// counter used unchanged: every snap6 frame counts exactly one
+    /// more finished effect than this osi's own walk of the
+    /// fixture's real state and events finds (triage 1 real → the
+    /// frame's own `2/13`; digest 2 → `3/5`; review 4 → `5/12`;
+    /// classify 10 → `11/15`) -- the part-1 fixtures' own frames
+    /// count exactly (run2 at 3.62s: 6 real ends → `6/14`). Reported
+    /// here rather than bent to match the frame's own extra one.
     const ALL_TAPE_EFFECTS_DONE_COUNTER: &[(u16, u16)] =
         &[(26, 21), (86, 21), (151, 21), (32, 44), (91, 44), (152, 44)];
 
@@ -15507,18 +15504,10 @@ mod tape_frame_goldens {
         );
     }
 
-    /// `effects_done` (the same reason `all--tape--180x48` allow-
-    /// lists it: the shipped counter used unchanged, reported
-    /// rather than bent to match the title's own different "Done"
-    /// count).
+    /// `N/M Effects`, the same frame-counts-one-more-than-real cause
+    /// as `ALL_TAPE_EFFECTS_DONE_COUNTER`.
     const ALL_SIGNAL_EFFECTS_DONE_COUNTER: &[(u16, u16)] =
         &[(26, 15), (86, 15), (151, 15), (32, 37), (91, 37), (152, 37)];
-
-    /// `classify.yml`'s own loop sparkline, same reason and cells'
-    /// own shape as `all--tape--180x48`'s own allow-list: the frame
-    /// scales a loop's own sparkline relative to its own passes, the
-    /// shared code keeps the single-run frames' absolute rule.
-    const ALL_SIGNAL_LOOP_SPARKLINE_SCALE: &[(u16, u16)] = &[(127, 29), (137, 29), (147, 29)];
 
     /// The axis row's own `✓` mark: the design text says "a `✓` on
     /// the axis marks a finished prompt", and these tiles are the
@@ -15654,7 +15643,6 @@ mod tape_frame_goldens {
             .unwrap();
         let allowed = [
             ALL_SIGNAL_EFFECTS_DONE_COUNTER,
-            ALL_SIGNAL_LOOP_SPARKLINE_SCALE,
             ALL_SIGNAL_AXIS_DONE_MARKS,
             ALL_SIGNAL_AXIS_AHEAD_DASH_EDGE,
             ALL_SIGNAL_RECEIVED_FAR_ROW_REMAINDER,
@@ -15669,8 +15657,8 @@ mod tape_frame_goldens {
         );
     }
 
-    /// Flow and Store tiles have no frame of their own (issue #698's
-    /// own Settled point 5) -- this only proves every tile actually
+    /// Flow and Store tiles have no frame of their own -- this
+    /// only proves every tile actually
     /// draws real content at every grid size the Tape/Signal
     /// goldens already exercise, never panicking and never leaving
     /// a tile blank.

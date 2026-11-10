@@ -3236,8 +3236,8 @@ pub struct SignalScreen {
     pub ahead_eta_ts: Option<String>,
     pub step_rows: Vec<SignalStepRow>,
     /// A tile's own two most recent finished-prompt label groups
-    /// (issue #698's own Signal tile rule): empty for a single-run
-    /// Signal, which draws `step_rows` under the chart instead.
+    /// (issue #698): empty for a single-run Signal, which draws
+    /// `step_rows` under the chart instead.
     pub tile_finished_labels: Vec<crate::multi::SignalFinishedLabelGroup>,
     /// A tile's own Now pane title suffix, running rows then rows
     /// ahead -- the same text the Tape's own list already shows for

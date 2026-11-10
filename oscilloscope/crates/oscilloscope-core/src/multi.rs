@@ -1,7 +1,7 @@
 //! The All screen's own pure logic (design v1 part 5, issue #698):
 //! the tile grid (§2.6/§5), folding a tile's own Tape rows to its
-//! fixed height, and the shared Signal scale across tiles (Settled
-//! point 6) -- all terminal- and IO-independent, so a test builds
+//! fixed height, and the shared Signal scale across tiles -- all
+//! terminal- and IO-independent, so a test builds
 //! its own inputs with no real run or terminal involved. `tui.rs`
 //! is the only thing that ever turns a [`GridLayout`] into real
 //! [`ratatui`] rects, or a [`TapeTileLine`] into drawn cells.
@@ -36,9 +36,10 @@ pub struct GridLayout {
     pub columns: usize,
     pub rows: usize,
     /// How many real tiles this page shows -- less than
-    /// `columns * rows` only when paging (§9.6/Settled point 5):
-    /// the last slot then holds a `… n more` tile instead of a real
-    /// one.
+    /// `columns * rows` only when paging (§9.6): the last slot then
+    /// holds a `… n more` tile instead of a real one, unless the
+    /// grid itself holds only one cell, in which case every page
+    /// shows one real tile and no slot is reserved for the count.
     pub page_size: usize,
 }
 
@@ -157,8 +158,8 @@ pub fn tile_grid(run_count: usize, width: u16, body_height: u16) -> GridLayout {
     }
 }
 
-/// A folded line of a Tape tile's own list (issue #698, Settled
-/// point 5): wraps the owning [`TapeItem`]s this tile actually
+/// A folded line of a Tape tile's own list (issue #698): wraps the
+/// owning [`TapeItem`]s this tile actually
 /// draws, or one of the two fold markers that stand in for the rows
 /// a short tile has no room for -- "the oldest fold into `… n
 /// earlier`", "rows ahead ... folding into `… n more`".
@@ -187,7 +188,7 @@ fn is_now_marker(item: &TapeItem) -> bool {
 }
 
 /// Folds a Tape tile's own [`TapeItem`]s down to `max_rows` lines
-/// (issue #698, Settled point 5): the Run Started row, the running
+/// (issue #698): the Run Started row, the running
 /// rows (and the slots rule, when present) and the Run End row are
 /// never folded -- only the finished rows above Now (oldest first)
 /// and the rows ahead (farthest first) ever give way, each into its
@@ -327,8 +328,8 @@ pub fn shared_signal_axis_starting_top(no_history_start: u64) -> u64 {
     round_top_series_min(0, no_history_start)
 }
 
-/// The shared Signal scale's own axis label (issue #698, Settled
-/// point 6): one decimal place in `k` from 1,000 up (`5.0k`,
+/// The shared Signal scale's own axis label (issue #698): one
+/// decimal place in `k` from 1,000 up (`5.0k`,
 /// `8.0k`), the plain token figure below it (`400 t`) -- a single
 /// run's own smaller, never-shared axis keeps its existing plain
 /// thousands-separated figure (`format::format_tokens_t`) instead.
@@ -360,14 +361,14 @@ pub struct SignalFinishedLabelGroup {
 }
 
 /// The tile's own two most recent [`SignalFinishedLabelGroup`]s,
-/// oldest first (issue #698, Settled point 5's own Now pane
-/// reasoning extended to the chart's own finished labels: a tile
-/// has room for two lines under its chart, so only the two most
-/// recent groups ever show, dropping any older ones entirely rather
-/// than cramming more in). Only finished prompts count -- a
-/// finished tool never gets a `✓` mark on the axis either (issue
-/// #698's own Signal tile rule), so it never anchors a label group
-/// here.
+/// oldest first (issue #698: a tile's own Now pane reasoning
+/// extended to the chart's own finished labels -- a tile has room
+/// for two lines under its chart, so only the two most recent
+/// groups ever show, dropping any older ones entirely rather than
+/// cramming more in). Only finished prompts count -- a finished
+/// tool never gets a `✓` mark on the axis either (the design text:
+/// "a `✓` on the axis marks a finished prompt"), so it never
+/// anchors a label group here.
 pub fn signal_tile_finished_labels(
     rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
@@ -524,8 +525,8 @@ pub fn tile_now_pane_rows(
     (slots_text, running, ahead)
 }
 
-/// Six roles (`run.1`..`run.6`, Settled point 13 of issue #698) --
-/// past six runs the set repeats (epic #677's §9 point 5 settles
+/// Six roles (`run.1`..`run.6`, issue #698) -- past six runs the
+/// set repeats (epic #677's §9 point 5 settles
 /// that for the Combined Signal; a tile itself only ever needs one
 /// role per run, never a full palette of its own).
 pub fn run_role_index(run_position: usize) -> usize {
@@ -720,12 +721,13 @@ pub fn build_tile(
 }
 
 /// The newest finished (or handled-failed) row across every run
-/// (issue #698, §3.2: "the status line shows the newest finished
+/// (DESIGN.md §3.2: "the status line shows the newest finished
 /// step across every run"), ties broken by run order (`entries`'
 /// own order, which the caller already keeps in launch order) then
 /// by plan order (already resolved inside each run's own
-/// [`crate::screens::last_finished_row`], whose `max_by` keeps the
-/// later of two exactly-tied rows in plan-walk order).
+/// [`crate::screens::last_finished_row`], which keeps the earlier of
+/// two exactly-tied rows in plan-walk order, not `Iterator::max_by`'s
+/// own later-one-wins rule).
 pub fn newest_finished_across_runs(
     entries: &[(String, Option<crate::screens::SignalLastFinished>)],
 ) -> Option<(String, crate::screens::SignalLastFinished)> {
@@ -787,10 +789,12 @@ mod tests {
     }
 
     #[test]
-    fn tile_grid_at_120x30_holds_two_tiles_and_pages_the_rest() {
-        // §5: "120×30 holds two tiles and pages the rest" -- a
-        // 27-row body (30 - 3 chrome rows) fits one 21-row tile row,
-        // two 60-wide columns fit in 120.
+    fn tile_grid_at_120x30_has_a_2x1_grid_but_pages_to_one_real_tile() {
+        // §5: a 27-row body (30 - 3 chrome rows) fits one 21-row
+        // tile row, two 60-wide columns fit in 120 -- the grid
+        // itself is 2x1 (capacity 2), but six runs still page: one
+        // of those two slots holds a real tile, the other the `… n
+        // more` marker.
         let grid = tile_grid(6, 120, 27);
         assert_eq!(grid.columns, 2);
         assert_eq!(grid.rows, 1);

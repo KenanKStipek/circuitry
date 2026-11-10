@@ -4321,7 +4321,7 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
         }
     };
     let mut event_rx = spawn_event_reader();
-    // Issue #698's Settled point 3: the cursor starts on the first
+    // The cursor starts on the first
     // run, not `All` -- `run_select_screen` itself still decides that
     // default (it alone knows, at the moment it first draws, whether
     // the running list or the empty Recent Runs table is showing);
@@ -4414,7 +4414,8 @@ fn discover_running() -> Vec<oscilloscope_core::discovery::DiscoveredRun> {
 }
 
 /// Every finished run recorded in history, across every document
-/// (issue #698's own Recent Runs rule) -- `[]` with history off
+/// (issue #698: the empty Select's own Recent Runs table) -- `[]`
+/// with history off
 /// (`--no-history`/`OSI_HISTORY=off`) or none recorded yet.
 fn read_recent_runs(no_history: bool) -> Vec<oscilloscope_core::select::RecentRow> {
     let records = history_io::resolve_history_dir(no_history)
@@ -4498,7 +4499,7 @@ fn run_select_screen(
     } else {
         runs.len()
     };
-    // Issue #698's Settled point 3: the cursor starts on the first
+    // The cursor starts on the first
     // run, not `All` -- row 1, since row 0 is `All`; the empty
     // Recent Runs table has no such row, so its own first entry is
     // row 0.
@@ -4663,8 +4664,8 @@ fn attach_discovered_run(
         .orchestration
         .clone()
         .unwrap_or_else(|| run_dir.display().to_string());
-    // Issue #698's own Settled point 8: the registry entry's config,
-    // else `run_start`'s (not yet known at attach time -- the plan
+    // The registry entry's own config, else `run_start`'s (not yet
+    // known at attach time -- the plan
     // compiled from it, like `--plan`, needs a document path this
     // function has no reason to resolve on its own), else the
     // process arguments -- already folded into `run.config` by
@@ -4714,7 +4715,7 @@ fn attach_discovered_run(
 }
 
 /// Attaches to a finished run named by the empty Select screen's own
-/// Recent Runs table (issue #698, point 20): `osi watch <run_dir>`
+/// Recent Runs table (issue #698): `osi watch <run_dir>`
 /// read-only, with no `--config` of its own (the table never records
 /// one it would attach with -- only the history record's own,
 /// already shown in the CONFIG column).

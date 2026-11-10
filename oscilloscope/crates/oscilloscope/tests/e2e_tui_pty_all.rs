@@ -140,9 +140,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         "expected 1 to switch every tile to Signal:\n{screen}"
     );
 
-    // `enter` at the grid's own default focus (index 0, Settled
-    // point 6), to learn which of the two documents is at that
-    // position -- discovery's own launch-order tie-break between
+    // `enter` at the grid's own default focus (index 0), to learn
+    // which of the two documents is at that position --
+    // discovery's own launch-order tie-break between
     // two runs started a moment apart is real timing, not something
     // this test can assume either way.
     send_bytes(&mut master, b"\r");

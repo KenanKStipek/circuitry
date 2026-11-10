@@ -35,7 +35,7 @@ pub enum Row {
 }
 
 /// Bare `osi`'s own choice of shape once discovery has run (issue
-/// #698, Settled point 3): exactly one running run attaches to it
+/// #698): exactly one running run attaches to it
 /// directly, with no Select screen drawn at all; any other count --
 /// none, or more than one -- shows Select, with the empty or running
 /// body respectively.

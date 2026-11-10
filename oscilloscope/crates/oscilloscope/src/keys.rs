@@ -1602,7 +1602,7 @@ pub enum SelectKeyOutcome {
 
 impl SelectState {
     /// One key's worth of the Select screen's own behaviour (issue
-    /// #698 §4, Settled points 3/6/7/8): `↑↓`/`j`/`k`/`Home`/`End`/
+    /// #698 §4): `↑↓`/`j`/`k`/`Home`/`End`/
     /// `g`/`G` move and clamp `cursor` at `[0, max_index]`; `enter`
     /// attaches (ignored on `All`, row 0, and on a Recent Runs row
     /// that isn't `openable`); `q` quits at once with exit 0; a raw
@@ -1735,7 +1735,7 @@ impl AllState {
     /// #698, §2.6/§4): `0`-`3` set `screen`; `←→↑↓` move `focus`
     /// within the current page's own `columns` x rows grid, wrapping
     /// at the page's own edges (never crossing a page -- that's
-    /// `PageUp`/`PageDown`'s own job, Settled point 5); `enter` opens
+    /// `PageUp`/`PageDown`'s own job); `enter` opens
     /// the focused tile; `u` is inert (the Combined Signal isn't
     /// built yet); `esc` goes back to Select; `q` quits at once
     /// (watching only, never a confirm); a raw Ctrl-C quits with
@@ -1845,10 +1845,10 @@ impl AllState {
                 }
             }
             // `u` (the Combined Signal) is inert until it ships;
-            // `c` is never offered here either (issue #698's own
-            // Settled point 3: only for a run this osi launched,
-            // and the focused run's own ownership is a question for
-            // the attached single-run screen, not this one).
+            // `c` is never offered here either (`c` cancels only a
+            // run this osi launched, and the focused run's own
+            // ownership is a question for the attached single-run
+            // screen, not this one).
             _ => AllKeyOutcome::None,
         }
     }
