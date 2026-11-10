@@ -1,6 +1,6 @@
-//! osi's run registry (issue #698's "Settled 1"): one `0600` JSON
-//! file per run this `osi` launched or watched, in a `0700`
-//! directory under `$XDG_RUNTIME_DIR/circuitry/osi/runs/`, else
+//! osi's run registry: one `0600` JSON file per run this `osi`
+//! launched or watched, in a `0700` directory under
+//! `$XDG_RUNTIME_DIR/circuitry/osi/runs/`, else
 //! `$XDG_STATE_HOME/circuitry/osi/runs/`, else
 //! `~/.local/state/circuitry/osi/runs/` -- `OSI_RUNS_DIR` overrides
 //! every one of those for tests, the same convention
@@ -18,9 +18,13 @@
 //!
 //! A pid alone can be fooled by a recycled pid; [`read_entries`]
 //! prunes an entry whose pid is dead *or* whose command line no
-//! longer names `cof`/`electricity` (`ps -o args= -p <pid>`), through
-//! the injectable [`Liveness`] trait -- no test ever checks a fixture
-//! pid against the real machine.
+//! longer names `cof`/`electricity`, through the injectable
+//! [`Liveness`] trait -- no test ever checks a fixture pid against
+//! the real machine. `cof` is a pip console script, so a real `cof
+//! run`'s own command line (`ps -o args=`) names the Python
+//! interpreter first and `cof` second; [`command_line_names_engine`]
+//! recognises both shapes, and the same recognition is shared with
+//! the process scan ([`crate::discovery::match_scanned_process`]).
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -53,7 +57,7 @@ pub struct RegistryEntry {
 /// Whether a pid named in a registry entry (or found by a process
 /// scan) is still a real, running `cof`/`electricity` -- behind a
 /// trait so a test injects the answer rather than ever checking a
-/// fixture's pid against the real machine (issue #698's "Settled 1").
+/// fixture's pid against the real machine.
 pub trait Liveness {
     fn is_alive(&self, pid: u32) -> bool;
 }
@@ -62,42 +66,88 @@ pub trait Liveness {
 /// means the pid exists *and* its command line still names `cof` or
 /// `electricity` -- a bare `kill(pid, 0)` can be fooled by a recycled
 /// pid, but `ps` always reports whatever process actually holds that
-/// pid right now, recycled or not.
+/// pid right now, recycled or not. When `ps` itself can't be run at
+/// all, this can't tell either way, so it answers `true` -- an
+/// entry is never pruned on "couldn't check" alone.
 pub struct RealLiveness;
 
 impl Liveness for RealLiveness {
     fn is_alive(&self, pid: u32) -> bool {
-        let Ok(output) = std::process::Command::new("ps")
+        let result = std::process::Command::new("ps")
             .args(["-o", "args=", "-p", &pid.to_string()])
-            .output()
-        else {
-            return false;
-        };
-        if !output.status.success() {
-            return false;
-        }
-        command_line_names_engine(&String::from_utf8_lossy(&output.stdout))
+            .output();
+        is_alive_from_ps_result(result)
     }
 }
 
-/// Whether a `ps`-reported command line's own first token names
-/// `cof` or `electricity` -- pulled out of [`RealLiveness`] so a test
-/// exercises every case (a bare name, a full path, an unrelated
-/// command) without a real pid at all.
-pub fn command_line_names_engine(args_line: &str) -> bool {
-    let Some(first) = args_line.split_whitespace().next() else {
-        return false;
+/// [`RealLiveness::is_alive`]'s own decision, pulled out so a test
+/// can hand it a synthesized "couldn't even run `ps`" error without
+/// touching `PATH` or any other process-wide state a parallel test
+/// run shares.
+fn is_alive_from_ps_result(result: std::io::Result<std::process::Output>) -> bool {
+    let Ok(output) = result else {
+        return true;
     };
-    let base = Path::new(first)
+    if !output.status.success() {
+        return false;
+    }
+    command_line_names_engine(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The basename of one command-line token.
+fn token_basename(token: &str) -> &str {
+    Path::new(token)
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(first);
-    base == "cof" || base == "electricity"
+        .unwrap_or(token)
+}
+
+/// `cof`/`electricity`'s own engine name for a token that already
+/// names one of them, directly.
+fn engine_name_for_token(token: &str) -> Option<&'static str> {
+    match token_basename(token) {
+        "cof" => Some("cof"),
+        "electricity" => Some("electricity"),
+        _ => None,
+    }
+}
+
+/// The engine a tokenized command line's own executable word names,
+/// and the index of the first token after it. `cof` is invoked as a
+/// pip console script, so a `ps`/process-scan report of a real `cof
+/// run` names the Python interpreter first and `cof` second -- this
+/// recognises both shapes, so [`RealLiveness`] and
+/// [`crate::discovery::match_scanned_process`] treat them alike.
+pub fn engine_invocation(tokens: &[&str]) -> Option<(&'static str, usize)> {
+    let first = *tokens.first()?;
+    if let Some(name) = engine_name_for_token(first) {
+        return Some((name, 1));
+    }
+    if token_basename(first)
+        .to_ascii_lowercase()
+        .starts_with("python")
+    {
+        let second = *tokens.get(1)?;
+        if let Some(name) = engine_name_for_token(second) {
+            return Some((name, 2));
+        }
+    }
+    None
+}
+
+/// Whether a `ps`-reported command line names `cof` or `electricity`,
+/// directly or through a Python interpreter -- pulled out of
+/// [`RealLiveness`] so a test exercises every case (a bare name, a
+/// full path, an interpreter in front, an unrelated command) without
+/// a real pid at all.
+pub fn command_line_names_engine(args_line: &str) -> bool {
+    let tokens: Vec<&str> = args_line.split_whitespace().collect();
+    engine_invocation(&tokens).is_some()
 }
 
 /// `OSI_RUNS_DIR`, else `$XDG_RUNTIME_DIR/circuitry/osi/runs`, else
 /// `$XDG_STATE_HOME/circuitry/osi/runs`, else
-/// `~/.local/state/circuitry/osi/runs` (issue #698's "Settled 1") --
+/// `~/.local/state/circuitry/osi/runs` --
 /// every parameter is the caller's own, already-read value (`env` is
 /// read exactly once, by the binary crate); `None` only when neither
 /// an override nor `$HOME` is available at all. macOS has no
@@ -128,27 +178,32 @@ pub fn resolve_runs_dir(
 }
 
 /// Creates `dir` with mode `0700` when it doesn't exist yet -- the
-/// same rule [`crate::history::ensure_history_dir`] already follows,
-/// including its own warning (never a failure) for an existing
-/// directory that is group- or world-accessible.
+/// same rule [`crate::history::ensure_history_dir`] already follows.
+/// Never warns about an existing, too-open directory itself (see
+/// [`insecure_runs_dir_mode`]): this runs from inside
+/// [`write_entry`], which a live TUI redraw loop can reach, and a
+/// stderr write there would land in the middle of the alternate
+/// screen.
 pub fn ensure_runs_dir(dir: &Path) -> std::io::Result<()> {
     if dir.exists() {
-        let mode = fs::metadata(dir)?.permissions().mode();
-        if mode & 0o077 != 0 {
-            let _ = writeln!(
-                std::io::stderr(),
-                "osi: run registry directory {} is group- or world-accessible (mode {:o}); \
-                 it can hold document and config paths",
-                dir.display(),
-                mode & 0o777
-            );
-        }
         return Ok(());
     }
     fs::DirBuilder::new()
         .mode(0o700)
         .recursive(true)
         .create(dir)
+}
+
+/// `dir`'s own mode, when it already exists and is group- or
+/// world-accessible -- `None` when it doesn't exist yet (nothing to
+/// warn about: [`ensure_runs_dir`] is about to create it at `0700`)
+/// or its metadata can't be read. Checked once, by the binary crate,
+/// before it ever touches the screen (osi's own startup, not from
+/// inside a live redraw loop), so a warning about it can never land
+/// in the middle of the TUI's own alternate-screen output.
+pub fn insecure_runs_dir_mode(dir: &Path) -> Option<u32> {
+    let mode = fs::metadata(dir).ok()?.permissions().mode() & 0o777;
+    (mode & 0o077 != 0).then_some(mode)
 }
 
 /// The registry file for `run_id`.
@@ -195,9 +250,8 @@ pub fn remove_entry(dir: &Path, run_id: &str) -> std::io::Result<()> {
 /// oldest `started_at` first -- a corrupt, partial or otherwise
 /// unparseable file is skipped, not an error, the same tolerance
 /// [`crate::history::read_records`] already gives a bad line. An
-/// entry whose pid is *not* alive is removed from disk right here
-/// (issue #698's "pruned on read when its pid is dead"), not just
-/// left out of the returned list.
+/// entry whose pid is *not* alive is removed from disk right here,
+/// not just left out of the returned list.
 pub fn read_entries(dir: &Path, liveness: &dyn Liveness) -> Vec<RegistryEntry> {
     let Ok(read_dir) = fs::read_dir(dir) else {
         return Vec::new();
@@ -222,11 +276,11 @@ pub fn read_entries(dir: &Path, liveness: &dyn Liveness) -> Vec<RegistryEntry> {
     entries
 }
 
-/// The config shown for an attached run (issue #698's "Settled 8"):
-/// the registry entry's own `config`, else `run_start`'s (the engine
-/// half, issue #697), else whatever the process's own arguments gave,
-/// else `None` -- every source is optional, so this never fails just
-/// because one (or all) of them is absent.
+/// The config shown for an attached run: the registry entry's own
+/// `config`, else `run_start`'s (the engine half, issue #697), else
+/// whatever the process's own arguments gave, else `None` -- every
+/// source is optional, so this never fails just because one (or
+/// all) of them is absent.
 pub fn resolve_attached_config<'a>(
     registry_config: Option<&'a str>,
     run_start_config: Option<&'a str>,
@@ -403,6 +457,31 @@ mod tests {
         assert!(command_line_names_engine("electricity config.json doc.yml"));
         assert!(!command_line_names_engine("python3 some_other_tool.py"));
         assert!(!command_line_names_engine(""));
+    }
+
+    #[test]
+    fn command_line_names_engine_matches_cof_run_through_its_own_interpreter() {
+        // `cof` is a pip console script: the kernel reports the
+        // Python interpreter first and `cof` second.
+        assert!(command_line_names_engine(
+            "/x/.venv/bin/python /x/.venv/bin/cof run doc.yml --live-state /x/state.live.json"
+        ));
+        assert!(command_line_names_engine(
+            "/usr/bin/python3.11 /usr/local/bin/cof run doc.yml"
+        ));
+        assert!(!command_line_names_engine(
+            "/usr/bin/python3.11 some_other_tool.py"
+        ));
+        assert!(!command_line_names_engine("/usr/bin/python3.11"));
+    }
+
+    #[test]
+    fn is_alive_from_ps_result_treats_a_ps_that_could_not_even_run_as_alive() {
+        // `Command::output` itself failing (no `ps` on `PATH` at
+        // all) must never read as "the pid is dead": that would
+        // prune a live entry on nothing more than a missing `ps`.
+        let err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
+        assert!(is_alive_from_ps_result(Err(err)));
     }
 
     #[test]

@@ -1,11 +1,11 @@
-//! Finding the orchestrations running on this machine (issue #698's
-//! "Settled 2"), from three sources, most trusted first: (1) the run
-//! registry ([`crate::registry`]); (2) a `ps -axo pid=,args=` scan
-//! for `cof run`/`electricity` processes carrying `--events`/
-//! `--live-state`; (3) a `state.live.json` modified in the last ten
-//! seconds, under the current directory or one level of
-//! subdirectories. A run found more than once counts once --
-//! deduplicated first by pid, then by its `--live-state` path.
+//! Finding the orchestrations running on this machine, from three
+//! sources, most trusted first: (1) the run registry
+//! ([`crate::registry`]); (2) a `ps -axo pid=,args=` scan for `cof
+//! run`/`electricity` processes carrying `--events`/`--live-state`;
+//! (3) a `state.live.json` modified in the last ten seconds, under
+//! the current directory or one level of subdirectories. A run
+//! found more than once counts once -- deduplicated first by pid,
+//! then by its `--live-state` path.
 //!
 //! The process scan and its own command-line parsing are pure
 //! functions ([`parse_ps_scan`], [`match_scanned_process`]) behind
@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::registry::{Liveness, RegistryEntry, read_entries};
+use crate::registry::{Liveness, RegistryEntry, engine_invocation, read_entries};
 
 /// One orchestration run found by [`discover_runs`], from whichever
 /// source first named it -- every field but `pid` is optional, since
@@ -53,9 +53,9 @@ impl From<RegistryEntry> for DiscoveredRun {
     }
 }
 
-/// Every `pid`/`args` pair currently on the machine (issue #698's
-/// "Settled 2") -- behind a trait so a test supplies a canned sample
-/// instead of scanning the real machine's own processes.
+/// Every `pid`/`args` pair currently on the machine -- behind a
+/// trait so a test supplies a canned sample instead of scanning the
+/// real machine's own processes.
 pub trait ProcessScanner {
     fn scan(&self) -> Vec<(u32, String)>;
 }
@@ -91,11 +91,11 @@ pub fn parse_ps_scan(text: &str) -> Vec<(u32, String)> {
 }
 
 /// A scanned process's own working directory, used to resolve a
-/// relative `--events`/`--live-state` path (issue #698's "Settled
-/// 2") -- behind a trait since not every platform exposes this at
-/// all (macOS has no `/proc`); [`RealProcessCwd`] answers `None`
-/// wherever it can't, and [`match_scanned_process`] then shows that
-/// path as given rather than failing.
+/// relative `--events`/`--live-state` path -- behind a trait since
+/// not every platform exposes this at all (macOS has no `/proc`);
+/// [`RealProcessCwd`] answers `None` wherever it can't, and
+/// [`match_scanned_process`] then shows that path as given rather
+/// than failing.
 pub trait ProcessCwd {
     fn cwd_of(&self, pid: u32) -> Option<PathBuf>;
 }
@@ -126,10 +126,10 @@ fn resolve_maybe_relative(path: &str, cwd: Option<&Path>) -> PathBuf {
 }
 
 /// Matches one scanned `(pid, args)` pair against `cof run`/
-/// `electricity` invocations carrying `--events`/`--live-state`
-/// (issue #698's "Settled 2") -- `None` for anything else (an
-/// unrelated process, or a `cof`/`electricity` invocation with
-/// neither flag, which this scan can't observe at all). A relative
+/// `electricity` invocations carrying `--events`/`--live-state` --
+/// `None` for anything else (an unrelated process, or a
+/// `cof`/`electricity` invocation with neither flag, which this scan
+/// can't observe at all). A relative
 /// `--events`/`--live-state`/`--out`/`--config` path is resolved
 /// against `cwd` when given, else shown as-is.
 ///
@@ -140,25 +140,24 @@ fn resolve_maybe_relative(path: &str, cwd: Option<&Path>) -> PathBuf {
 /// builders) are the only two shapes this ever needs to parse: a
 /// plain `split_whitespace` is enough for both, since neither engine
 /// is ever invoked by osi with a path argument containing a space.
+/// `cof` is a pip console script, so a real `cof run`'s own command
+/// line names the Python interpreter first and `cof` second;
+/// [`engine_invocation`] recognises that shape the same way
+/// liveness does.
 pub fn match_scanned_process(
     pid: u32,
     args_line: &str,
     cwd: Option<&Path>,
 ) -> Option<DiscoveredRun> {
     let tokens: Vec<&str> = args_line.split_whitespace().collect();
-    let bin = Path::new(tokens.first()?)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default();
-    let (engine, positional_start) = if bin == "cof" {
-        if tokens.get(1) != Some(&"run") {
+    let (bin_engine, after_bin) = engine_invocation(&tokens)?;
+    let (engine, positional_start) = if bin_engine == "cof" {
+        if tokens.get(after_bin) != Some(&"run") {
             return None;
         }
-        ("cof", 2)
-    } else if bin == "electricity" {
-        ("electricity", 1)
+        ("cof", after_bin + 1)
     } else {
-        return None;
+        ("electricity", after_bin)
     };
 
     let mut events: Option<&str> = None;
@@ -240,9 +239,20 @@ pub fn match_scanned_process(
 }
 
 /// How fresh a `state.live.json` found in the current directory (or
-/// one level of subdirectories) must be to count as running (issue
-/// #698's "Settled 2").
+/// one level of subdirectories) must be to count as running.
 const LIVE_STATE_FRESHNESS: Duration = Duration::from_secs(10);
+
+/// The document named by `events`'s own first line, when it parses
+/// as a `run_start` event carrying one -- `None` for a missing,
+/// empty or unparseable file, or a first line that isn't a
+/// `run_start` at all (never read any further into the file: the
+/// first line is always `run_start` when the stream has one).
+fn orchestration_from_events_first_line(events: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(events).ok()?;
+    let first_line = text.lines().next()?;
+    let value: serde_json::Value = serde_json::from_str(first_line).ok()?;
+    value.get("orchestration")?.as_str().map(str::to_string)
+}
 
 fn live_state_run_if_fresh(dir: &Path, now: SystemTime) -> Option<DiscoveredRun> {
     let live_state = dir.join("state.live.json");
@@ -252,19 +262,23 @@ fn live_state_run_if_fresh(dir: &Path, now: SystemTime) -> Option<DiscoveredRun>
         return None;
     }
     let events = dir.join("events.jsonl");
+    let events = events.exists().then_some(events);
+    let orchestration = events
+        .as_deref()
+        .and_then(orchestration_from_events_first_line);
     Some(DiscoveredRun {
         run_dir: Some(dir.to_path_buf()),
         live_state: Some(live_state),
-        events: events.exists().then_some(events),
+        events,
+        orchestration,
         ..Default::default()
     })
 }
 
 /// Scans `cwd` and one level of its subdirectories for a
 /// `state.live.json` modified within [`LIVE_STATE_FRESHNESS`] of
-/// `now` (issue #698's "Settled 2", third source) -- `now` is the
-/// caller's own, so a test fixes it rather than racing the real
-/// clock.
+/// `now` (the third discovery source) -- `now` is the caller's own,
+/// so a test fixes it rather than racing the real clock.
 pub fn scan_live_state_in_cwd(cwd: &Path, now: SystemTime) -> Vec<DiscoveredRun> {
     let mut found = Vec::new();
     if let Some(run) = live_state_run_if_fresh(cwd, now) {
@@ -283,10 +297,10 @@ pub fn scan_live_state_in_cwd(cwd: &Path, now: SystemTime) -> Vec<DiscoveredRun>
     found
 }
 
-/// One plain line per running run (issue #698's "Settled 2": bare
-/// `osi` without a TTY, or with `--log`, prints one of these per
-/// [`discover_runs`] result and exits 0) -- document, config,
-/// engine, pid, run directory, `"—"` for anything not known.
+/// One plain line per running run (bare `osi` without a TTY, or
+/// with `--log`, prints one of these per [`discover_runs`] result
+/// and exits 0) -- document, config, engine, pid, run directory,
+/// `"—"` for anything not known.
 pub fn format_plain_line(run: &DiscoveredRun) -> String {
     let document = run.orchestration.as_deref().unwrap_or("—");
     let config = run.config.as_deref().unwrap_or("—");
@@ -304,8 +318,7 @@ pub fn format_plain_line(run: &DiscoveredRun) -> String {
 }
 
 /// Merges the registry, a process scan and a `state.live.json` scan
-/// of the current directory into one deduplicated list (issue #698's
-/// "Settled 2" and "Settled 3"'s launch-time ordering): a run found
+/// of the current directory into one deduplicated list: a run found
 /// twice counts once (pid, then its `--live-state` path), and the
 /// result is ordered by `started_at` (oldest -- i.e. earliest launch
 /// -- first), runs with no known `started_at` (a bare scan match, or
@@ -480,6 +493,21 @@ mod tests {
     }
 
     #[test]
+    fn match_scanned_process_reads_a_cof_run_line_through_its_own_interpreter() {
+        // `cof` is a pip console script: a real `ps` report names the
+        // Python interpreter first and `cof` second.
+        let run = match_scanned_process(
+            123,
+            "/x/.venv/bin/python /x/.venv/bin/cof run /work/doc.yml \
+             --live-state /work/run-dir/state.live.json",
+            None,
+        )
+        .unwrap();
+        assert_eq!(run.engine, Some("cof".to_string()));
+        assert_eq!(run.orchestration, Some("/work/doc.yml".to_string()));
+    }
+
+    #[test]
     fn match_scanned_process_reads_an_electricity_line_config_then_doc() {
         let run = match_scanned_process(
             456,
@@ -548,6 +576,31 @@ mod tests {
         let found = scan_live_state_in_cwd(dir.path(), std::time::SystemTime::now());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].run_dir, Some(fresh_dir));
+    }
+
+    #[test]
+    fn scan_live_state_in_cwd_names_the_document_from_the_events_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r1\",\"orchestration\":\"do.yml\"}\n",
+        )
+        .unwrap();
+
+        let found = scan_live_state_in_cwd(dir.path(), std::time::SystemTime::now());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].orchestration, Some("do.yml".to_string()));
+    }
+
+    #[test]
+    fn scan_live_state_in_cwd_leaves_the_document_unknown_with_no_events_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), b"{}").unwrap();
+
+        let found = scan_live_state_in_cwd(dir.path(), std::time::SystemTime::now());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].orchestration, None);
     }
 
     #[test]
