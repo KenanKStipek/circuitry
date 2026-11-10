@@ -133,10 +133,20 @@ pub fn tile_grid(run_count: usize, width: u16, body_height: u16) -> GridLayout {
     let rows = run_count.div_ceil(cols).min(max_rows).max(1);
     let capacity = cols * rows;
     let page_size = if run_count > capacity {
-        // §9.6/Settled point 5: paging shows the first page and a
-        // `… n more` tile in the grid's own last slot -- one of the
-        // grid's own slots, not an extra one beyond it.
-        capacity.saturating_sub(1)
+        if capacity == 1 {
+            // A grid with room for only one tile at all (80x24, the
+            // common default terminal): that one cell is a real
+            // tile, one run per page, never the "... n more" marker
+            // standing in for every run with nothing real shown.
+            // The remaining count goes in the status line instead of
+            // a reserved slot.
+            1
+        } else {
+            // §9.6: paging shows the first page and a `… n more`
+            // tile in the grid's own last slot -- one of the grid's
+            // own slots, not an extra one beyond it.
+            capacity.saturating_sub(1)
+        }
     } else {
         run_count
     };
@@ -261,18 +271,21 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
     out
 }
 
-/// §3.5's own doubling series, extended for the shared scale across
-/// tiles (issue #698, Settled point 6): the smallest of `{1, 2, 2.5,
-/// 4, 5, 8} × 10^n` at or above `need`, growing only and only by
+/// The shared scale's own series: the smallest of `{1, 2, 2.5, 4,
+/// 5, 8} × 10^n` at or above `need`, growing only and only by
 /// whole steps from whatever `floor` already is (never sliding back
-/// down, and never skipping a step on the way up).
+/// down, and never skipping a step on the way up). Starting at `n =
+/// 1` (10, 20, ...), not `n = 2`, so the received axis's own 80 t
+/// no-history start is itself a member -- a single-run axis's own
+/// doubling series is unrelated, starting wherever its own history
+/// (or lack of it) does.
 fn round_top_series_min(floor: u64, need: u64) -> u64 {
     const STEPS: [f64; 6] = [1.0, 2.0, 2.5, 4.0, 5.0, 8.0];
     if need <= floor {
         return floor;
     }
     let mut candidates: Vec<u64> = Vec::new();
-    let mut magnitude = 100u64;
+    let mut magnitude = 10u64;
     while magnitude <= need.max(100) * 10 {
         for step in STEPS {
             let value = (step * magnitude as f64).round() as u64;
@@ -289,37 +302,29 @@ fn round_top_series_min(floor: u64, need: u64) -> u64 {
         .unwrap_or(need)
 }
 
-/// The Combined Signal's and the Signal tiles' own shared scale
-/// (issue #698, Settled point 6): one round top for the largest
-/// stacked (or, for tiles, largest single finished effect's own
-/// sent or received tokens, [`largest_single_effect_tokens`]) column
-/// across every run, at or above 1.5× that largest column, growing
-/// only. `floor` is the previous frame's own top (`0` for a first
-/// computation), so the scale only ever grows across a live run's
-/// own redraws.
+/// The Combined Signal's and the Signal tiles' own shared scale: one
+/// round top for the largest 100 ms-bucketed column (finished tokens
+/// plus a running prompt's own live estimate, the same figure a
+/// single run's own axis already sizes itself from --
+/// [`crate::screens::SignalScreen::largest_col_sent`]/
+/// `largest_col_received`) across every run, at or above 1.5× that
+/// largest column, growing only. `floor` is the previous frame's own
+/// top (the single-run Signal's own no-history starting axis, 600
+/// sent or 80 received, for a first computation -- so the scale is
+/// never 0 even before any column exists), so the scale only ever
+/// grows across a live run's own redraws.
 pub fn shared_signal_axis_top(largest_column: u64, floor: u64) -> u64 {
     let need = (largest_column as f64 * 1.5).ceil() as u64;
     round_top_series_min(floor, need)
 }
 
-/// The largest single finished effect's own sent and received tokens
-/// anywhere in one run's own flattened state (issue #698, Settled
-/// point 6's own "largest column seen so far"): a Signal bucket can
-/// sum several effects that happen to finish within the same 100 ms
-/// window (a loop's own concurrent passes, say), which is not what
-/// the shared scale's own headroom is over -- this is the same
-/// figure the Tape's own `is_largest` marker already tracks, read
-/// straight off every node instead of only the run's single largest
-/// one.
-pub fn largest_single_effect_tokens(flat: &BTreeMap<String, crate::model::NodeMeta>) -> (u64, u64) {
-    let mut max_sent = 0u64;
-    let mut max_received = 0u64;
-    for node in flat.values() {
-        let (sent, received) = crate::model::node_tokens(&node.meta);
-        max_sent = max_sent.max(sent);
-        max_received = max_received.max(received);
-    }
-    (max_sent, max_received)
+/// The shared scale's own starting floor, before any column exists
+/// anywhere (so the scale is never 0): the smallest value in the
+/// shared scale's own series at or above the single-run Signal's
+/// own no-history starting axis (600 sent, 80 received) -- 800 and
+/// 80 respectively.
+pub fn shared_signal_axis_starting_top(no_history_start: u64) -> u64 {
+    round_top_series_min(0, no_history_start)
 }
 
 /// The shared Signal scale's own axis label (issue #698, Settled
@@ -553,7 +558,9 @@ pub struct TileRender {
     /// Flow or Store tiles still has this to feed
     /// [`newest_finished_across_runs`].
     pub last_finished: Option<crate::screens::SignalLastFinished>,
-    /// This run's own [`largest_single_effect_tokens`], for the
+    /// This run's own largest 100 ms-bucketed sent/received column
+    /// (`0` when `screen_kind` isn't [`Screen::Signal`]), read
+    /// straight off its [`crate::screens::SignalScreen`] for the
     /// Signal tiles' shared scale.
     pub largest_sent: u64,
     pub largest_received: u64,
@@ -590,6 +597,10 @@ pub fn build_tile(
     );
     let empty = Value::Null;
     let flat = flatten_state(state.unwrap_or(&empty));
+    // Only a Signal tile ever feeds the shared scale (the other
+    // three screens have no chart of their own to size).
+    let mut largest_sent = 0u64;
+    let mut largest_received = 0u64;
     let screen = match screen_kind {
         Screen::Tape => {
             let mut tape = crate::screens::build_tape(
@@ -649,6 +660,8 @@ pub fn build_tile(
             signal.tile_now_slots_text = slots_text;
             signal.tile_now_running = running;
             signal.tile_now_ahead = ahead;
+            largest_sent = signal.largest_col_sent;
+            largest_received = signal.largest_col_received;
             TileScreen::Signal(signal)
         }
         Screen::Flow => {
@@ -697,7 +710,6 @@ pub fn build_tile(
         plan,
         rendered.header.run_start_ts.as_deref(),
     );
-    let (largest_sent, largest_received) = largest_single_effect_tokens(&flat);
     TileRender {
         header: rendered.header,
         screen,
@@ -967,9 +979,8 @@ mod tests {
     }
 
     #[test]
-    fn shared_signal_axis_top_matches_the_frames_5_0k_and_8_0k() {
-        // Issue #698's own data notes: 1.5 x 3,160 -> 4,740 -> 5.0k;
-        // 1.5 x 4,912 -> 7,368 -> 8.0k.
+    fn shared_signal_axis_top_rounds_15x_the_largest_column_up() {
+        // 1.5 x 3,160 -> 4,740 -> 5.0k; 1.5 x 4,912 -> 7,368 -> 8.0k.
         assert_eq!(shared_signal_axis_top(3_160, 0), 5_000);
         assert_eq!(shared_signal_axis_top(4_912, 0), 8_000);
     }
@@ -1045,10 +1056,16 @@ mod tests {
 
     #[test]
     fn shared_signal_axis_top_reaches_below_1_000_for_a_small_column() {
-        // Issue #698's own data note: the received top (`400 t`)
-        // is below 1,000 -- the label format starts using `k` at
-        // 1,000, but the value itself is never floored there.
+        // The received top (`400 t`) is below 1,000 -- the label
+        // format starts using `k` at 1,000, but the value itself is
+        // never floored there.
         assert_eq!(shared_signal_axis_top(206, 0), 400);
+    }
+
+    #[test]
+    fn shared_signal_axis_starting_top_is_never_0() {
+        assert_eq!(shared_signal_axis_starting_top(600), 800);
+        assert_eq!(shared_signal_axis_starting_top(80), 80);
     }
 
     #[test]
@@ -1057,6 +1074,91 @@ mod tests {
         assert_eq!(format_shared_axis_label(8_000), "8.0k");
         assert_eq!(format_shared_axis_label(2_500), "2.5k");
         assert_eq!(format_shared_axis_label(400), "400 t");
+    }
+
+    /// `tile_grid` for 1-9 runs at the issue's own four sizes
+    /// (body height is each size's height minus the 3 chrome rows
+    /// All always subtracts): one real tile per page whenever the
+    /// grid holds only one cell at all (80x24's `page_size` never
+    /// drops to 0 there, unlike every other capacity, which still
+    /// reserves one slot in the grid for `… n more`).
+    #[test]
+    fn tile_grid_table_for_1_to_9_runs_at_every_size() {
+        // (width, height, [(cols, rows, page_size); 9 for n=1..=9])
+        let cases: [(u16, u16, [(usize, usize, usize); 9]); 4] = [
+            (
+                80,
+                24,
+                [
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                    (1, 1, 1),
+                ],
+            ),
+            (
+                120,
+                30,
+                [
+                    (1, 1, 1),
+                    (2, 1, 2),
+                    (2, 1, 1),
+                    (2, 1, 1),
+                    (2, 1, 1),
+                    (2, 1, 1),
+                    (2, 1, 1),
+                    (2, 1, 1),
+                    (2, 1, 1),
+                ],
+            ),
+            (
+                180,
+                24,
+                [
+                    (1, 1, 1),
+                    (2, 1, 2),
+                    (3, 1, 3),
+                    (3, 1, 2),
+                    (3, 1, 2),
+                    (3, 1, 2),
+                    (3, 1, 2),
+                    (3, 1, 2),
+                    (3, 1, 2),
+                ],
+            ),
+            (
+                180,
+                48,
+                [
+                    (1, 1, 1),
+                    (2, 1, 2),
+                    (3, 1, 3),
+                    (2, 2, 4),
+                    (3, 2, 5),
+                    (3, 2, 6),
+                    (3, 2, 5),
+                    (3, 2, 5),
+                    (3, 2, 5),
+                ],
+            ),
+        ];
+        for (width, height, by_count) in cases {
+            let body = height - 3;
+            for (n, &(cols, rows, page_size)) in by_count.iter().enumerate() {
+                let run_count = n + 1;
+                let grid = tile_grid(run_count, width, body);
+                assert_eq!(
+                    (grid.columns, grid.rows, grid.page_size),
+                    (cols, rows, page_size),
+                    "{run_count} runs at {width}x{height}"
+                );
+            }
+        }
     }
 
     #[test]

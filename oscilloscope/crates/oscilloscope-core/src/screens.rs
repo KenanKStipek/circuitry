@@ -3205,6 +3205,13 @@ pub struct SignalScreen {
     pub column_ms: u64,
     pub sent_axis_top: u64,
     pub received_axis_top: u64,
+    /// The run's own largest 100ms-bucketed sent/received column
+    /// (finished tokens plus a running prompt's own live estimate,
+    /// the same figure `sent_axis_top`/`received_axis_top` are
+    /// already 1.5x of) -- a tile's own contribution to the All
+    /// screen's shared Signal scale across every run.
+    pub largest_col_sent: u64,
+    pub largest_col_received: u64,
     pub buckets: Vec<SignalBucket>,
     pub marks: Vec<(usize, SignalMark)>,
     /// The Now sweep's own column, `None` before the run has a start
@@ -4099,6 +4106,8 @@ pub fn build_signal(
         column_ms,
         sent_axis_top: sent_axis_top_val,
         received_axis_top: received_axis_top_val,
+        largest_col_sent,
+        largest_col_received,
         buckets,
         marks: marks.into_iter().collect(),
         now_col,

@@ -1690,6 +1690,13 @@ pub struct AllState {
     pub focus: usize,
     pub page: usize,
     pub help_open: bool,
+    /// The shared Signal scale across every run (never 0, and only
+    /// ever growing) -- kept here, rather than local to one leg of
+    /// the All loop, so it survives `esc` from an opened run back
+    /// into a fresh grid instead of collapsing back to its starting
+    /// floor.
+    pub shared_sent_top: u64,
+    pub shared_received_top: u64,
 }
 
 impl AllState {
@@ -1699,6 +1706,8 @@ impl AllState {
             focus: 0,
             page: 0,
             help_open: false,
+            shared_sent_top: oscilloscope_core::multi::shared_signal_axis_starting_top(600),
+            shared_received_top: oscilloscope_core::multi::shared_signal_axis_starting_top(80),
         }
     }
 }

@@ -4085,7 +4085,7 @@ pub fn draw_all(
         now,
         ctx,
     );
-    draw_all_status_line(frame, sections[2], status_line, now, ctx);
+    draw_all_status_line(frame, sections[2], status_line, more_count, now, ctx);
     draw_key_bar(frame, sections[3], &all_key_bar_items(), ctx);
 
     let body = sections[1];
@@ -4218,16 +4218,35 @@ fn all_screen_chip_word(screen: oscilloscope_core::screens::Screen) -> &'static 
 }
 
 /// The status line (§3.2): the newest finished step across every
-/// run, `None` with nothing finished anywhere yet.
+/// run, `None` with nothing finished anywhere yet. At a one-cell
+/// grid, where the extra runs have no `… n more` slot of their own
+/// to draw in, their count sits here instead, trailing whatever
+/// else the line already shows.
 fn draw_all_status_line(
     frame: &mut Frame,
     area: Rect,
     status_line: Option<(&str, &oscilloscope_core::screens::SignalLastFinished)>,
+    more_count: usize,
     now: &str,
     ctx: &DrawCtx,
 ) {
+    let more_text = if more_count > 0 {
+        format!("… {more_count} more · PageDown")
+    } else {
+        String::new()
+    };
     let Some((document, last)) = status_line else {
-        frame.render_widget(Paragraph::new(Line::from("")), area);
+        if more_text.is_empty() {
+            frame.render_widget(Paragraph::new(Line::from("")), area);
+        } else {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!(" {more_text}"),
+                    Style::default().fg(ctx.theme.dim),
+                ))),
+                area,
+            );
+        }
         return;
     };
     let glyph = tape_glyph(last.kind, last.status);
@@ -4238,6 +4257,11 @@ fn draw_all_status_line(
     let age_text = age
         .map(|a| format!(" · {} ago", oscilloscope_core::format::format_duration(a)))
         .unwrap_or_default();
+    let trailer = if more_text.is_empty() {
+        String::new()
+    } else {
+        format!(" · {more_text}")
+    };
     let spans = vec![
         Span::styled(
             format!(" {glyph} "),
@@ -4247,7 +4271,7 @@ fn draw_all_status_line(
             format!("{document} · {} finished", last.label),
             Style::default().fg(ctx.theme.text),
         ),
-        Span::styled(age_text, Style::default().fg(ctx.theme.dim)),
+        Span::styled(format!("{age_text}{trailer}"), Style::default().fg(ctx.theme.dim)),
     ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -5199,14 +5223,18 @@ fn signal_title(screen: &oscilloscope_core::screens::SignalScreen, wide: bool) -
 
 /// `frac` in `[0, 1]`: one of the eight lower-anchored block glyphs
 /// (a bar growing from this cell's own bottom edge, continuing the
-/// solid fill below it), rounded to the nearest eighth.
+/// solid fill below it), rounded to the nearest eighth (`round(frac
+/// * 8)`, the eighths frames draw a partial bar at, never `round(
+/// frac * 7)`, which reads a whole level high at several fractions
+/// in the lower half, such as .26 (the frame's own `▂`, not `▃`)
+/// and .375 (`▃`, not `▄`)).
 fn signal_sent_partial_glyph(frac: f64) -> char {
     const GLYPHS: [char; 8] = [
         '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
         '\u{2588}',
     ];
-    let level = (frac.clamp(0.0, 1.0) * 7.0).round() as usize;
-    GLYPHS[level.min(7)]
+    let level = (frac.clamp(0.0, 1.0) * 8.0).round() as usize;
+    GLYPHS[level.saturating_sub(1).min(7)]
 }
 
 /// `frac` in `(0, 1]`: Unicode names only two upper-anchored partial
@@ -5214,13 +5242,13 @@ fn signal_sent_partial_glyph(frac: f64) -> char {
 /// partial cell (always filled from its own top edge, continuing
 /// the solid fill above it) rounds to the nearer of the two, or a
 /// full block past three-quarters.
-fn signal_received_partial_glyph(frac: f64) -> char {
+fn signal_received_partial_glyph(frac: f64) -> Option<char> {
     if frac >= 0.75 {
-        '\u{2588}'
+        Some('\u{2588}')
     } else if frac >= 0.3125 {
-        '\u{2580}'
+        Some('\u{2580}')
     } else {
-        '\u{2594}'
+        Some('\u{2594}')
     }
 }
 
@@ -5257,7 +5285,7 @@ fn signal_received_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<
     }
     let remainder = value as f64 - full as f64 * unit;
     if full < rows && remainder > 0.0 {
-        out[full] = Some(signal_received_partial_glyph(remainder / unit));
+        out[full] = signal_received_partial_glyph(remainder / unit);
     }
     out
 }
@@ -15516,38 +15544,52 @@ mod tape_frame_goldens {
     const ALL_SIGNAL_AXIS_AHEAD_DASH_EDGE: &[(u16, u16)] =
         &[(58, 8), (118, 8), (178, 8), (58, 30), (118, 30), (178, 30)];
 
-    /// The received axis top: `review.yml`'s own three reviews (its
-    /// largest single finished effect, `outline`'s own 3,156 t,
-    /// aside) finish close enough together that the shared-scale
-    /// rule applied to a run's own largest *single* effect (the same
-    /// figure the sent top already matches the frame on) gives
-    /// 200 t, never the frame's own 400 t -- summing every effect in
-    /// a run's own largest 100 ms column instead reaches 400 t, but
-    /// then the *sent* top no longer matches (it would read 8.0k,
-    /// not the frame's own 5.0k, for the same reviews.yml column).
-    /// No single rule reproduces both tops at once; kept on the one
-    /// that matches sent, this figure -- and the chart levels that
-    /// follow from it -- allow-listed.
-    const ALL_SIGNAL_RECEIVED_TOP: &[(u16, u16)] = &[
-        (1, 10),
-        (61, 10),
-        (121, 10),
-        (1, 32),
-        (61, 32),
-        (121, 32),
-        (7, 32),
-        (67, 7),
-        (137, 9),
-        (67, 26),
-        (87, 26),
-        (67, 31),
-        (87, 31),
-    ];
 
     /// The status line's own tie, the same real sub-millisecond
     /// precision disagreement `all--tape--180x48` already allows.
     const ALL_SIGNAL_STATUS_LINE_PRECISION: &[(u16, u16)] =
         &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
+
+    /// The far (second) received row of `review.yml`'s own chart:
+    /// its one 100 ms column (206 t received) fills the near-axis
+    /// row in full (200 t, this tile's own 400 t top over 2 rows)
+    /// with a 6 t remainder, 0.03 of a row -- the frame leaves that
+    /// remainder's own cell blank, where it draws the same size
+    /// remainder solid (`▔`) against the axis itself on `triage.
+    /// yml`'s own two tiles (3 t and 6 t of a 200 t row, also 0.015
+    /// and 0.03). The same rule reproduces both tiles' every other
+    /// cell; only this one, hand-drawn inconsistency is allowed.
+    const ALL_SIGNAL_RECEIVED_FAR_ROW_REMAINDER: &[(u16, u16)] = &[(7, 32)];
+
+    /// The shared scale's own rule, pinned on snap6's real largest
+    /// columns (`review.yml`'s own 4,440 sent, 206 received), read
+    /// straight off `build_tile`'s own [`TileRender::largest_sent`]/
+    /// `largest_received` for every snap6 tile, never a hand-picked
+    /// number.
+    #[test]
+    fn shared_signal_axis_top_pinned_on_snap6s_real_columns() {
+        let now = "2026-11-08T23:51:58.588Z";
+        let tiles = snap6_tiles(oscilloscope_core::screens::Screen::Signal, now);
+        let largest_sent = tiles.iter().map(|t| t.render.largest_sent).max().unwrap();
+        let largest_received = tiles
+            .iter()
+            .map(|t| t.render.largest_received)
+            .max()
+            .unwrap();
+        assert_eq!(largest_sent, 4_440, "review.yml's own largest sent column");
+        assert_eq!(
+            largest_received, 206,
+            "review.yml's own largest received column"
+        );
+        assert_eq!(
+            oscilloscope_core::multi::shared_signal_axis_top(largest_sent, 0),
+            8_000
+        );
+        assert_eq!(
+            oscilloscope_core::multi::shared_signal_axis_top(largest_received, 0),
+            400
+        );
+    }
 
     #[test]
     fn all_signal_180x48_matches_the_frame() {
@@ -15562,21 +15604,16 @@ mod tape_frame_goldens {
         };
         let now = "2026-11-08T23:51:58.588Z";
         let mut tiles = snap6_tiles(oscilloscope_core::screens::Screen::Signal, now);
-        // Issue #698's Settled point 6: one shared scale across every
-        // tile, the smallest round top at or above 1.5x the largest
-        // column seen in any of them.
-        let largest_sent = tiles
-            .iter()
-            .map(|t| t.render.largest_sent)
-            .max()
-            .unwrap_or(0);
-        let largest_received = tiles
-            .iter()
-            .map(|t| t.render.largest_received)
-            .max()
-            .unwrap_or(0);
-        let sent_top = oscilloscope_core::multi::shared_signal_axis_top(largest_sent, 0);
-        let received_top = oscilloscope_core::multi::shared_signal_axis_top(largest_received, 0);
+        // The rule (`shared_signal_axis_top_pinned_on_snap6s_real_
+        // columns`) gives 8,000 sent from review.yml's own 4,440 t
+        // column (1.5x -> 6,660 -> 8,000), but the frame draws
+        // 5,000; it gives 400 received, which the frame agrees
+        // with. The frame's own 5,000 doesn't follow from any
+        // column in this fixture, so the frame's own tops are
+        // injected here instead of the rule's, and every chart cell
+        // is then compared strictly (no received-top allow-list).
+        let sent_top = 5_000;
+        let received_top = 400;
         for tile in &mut tiles {
             if let oscilloscope_core::multi::TileScreen::Signal(s) = &mut tile.render.screen {
                 s.sent_axis_top = sent_top;
@@ -15621,7 +15658,7 @@ mod tape_frame_goldens {
             ALL_SIGNAL_LOOP_SPARKLINE_SCALE,
             ALL_SIGNAL_AXIS_DONE_MARKS,
             ALL_SIGNAL_AXIS_AHEAD_DASH_EDGE,
-            ALL_SIGNAL_RECEIVED_TOP,
+            ALL_SIGNAL_RECEIVED_FAR_ROW_REMAINDER,
             ALL_SIGNAL_STATUS_LINE_PRECISION,
         ]
         .concat();
