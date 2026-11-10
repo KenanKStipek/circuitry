@@ -1080,6 +1080,36 @@ pub struct RunModel {
     /// (a retry, or an unnamed loop's next pass reusing it), so a
     /// stale reading from an earlier attempt never outlives it.
     progress: BTreeMap<String, ProgressSample>,
+    /// The last live `tokens_sent`/`tokens_received` seen for each
+    /// running agent session, by path (issue #702's Signal trace) --
+    /// removed once the session's own remainder has been recorded (at
+    /// its own `completed_at`) or a retry starts the attempt over.
+    agent_live_last_totals: BTreeMap<String, (u64, u64)>,
+    /// [`Self::agent_live_last_totals`]'s own `updated_at`, by path --
+    /// a redraw that re-observes the identical `meta.live` (nothing
+    /// written since the last poll) must never record a zero-delta
+    /// sighting twice.
+    agent_live_last_seen_at: BTreeMap<String, String>,
+    /// Every increase in a running agent's own live totals, observed
+    /// in order, plus its own end-of-session remainder (issue #702's
+    /// Signal trace: "each increase ... becomes a column at the time
+    /// it was observed"; "at the agent's end only the remainder not
+    /// yet plotted is added, at its end time") -- a front end turns
+    /// each into one Signal column at its own `ts`, so the sum of one
+    /// path's own sightings always equals its final tokens.
+    agent_live_sightings: Vec<AgentLiveSighting>,
+}
+
+/// One entry of [`RunModel::agent_live_sightings`]: `path`'s own
+/// live totals grew by exactly `tokens_sent`/`tokens_received` since
+/// the last sighting (or, for the first one, since the session
+/// started), observed at `ts` -- never a running total of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLiveSighting {
+    pub path: String,
+    pub ts: String,
+    pub tokens_sent: u64,
+    pub tokens_received: u64,
 }
 
 /// [`RunModel`]'s own `interval_offset_cache` field: the run start
@@ -1168,6 +1198,9 @@ impl RunModel {
             overflowed_total_passes: 0,
             interval_offset_cache: std::cell::RefCell::new((None, Vec::new())),
             progress: BTreeMap::new(),
+            agent_live_last_totals: BTreeMap::new(),
+            agent_live_last_seen_at: BTreeMap::new(),
+            agent_live_sightings: Vec::new(),
         }
     }
 
@@ -1731,6 +1764,84 @@ impl RunModel {
         self.latest_event_ts.is_some()
     }
 
+    /// Every sighting of a running agent's own live totals growing,
+    /// in order, plus each session's own end-of-run remainder (issue
+    /// #702's Signal trace) -- the Signal screen's own agent columns
+    /// read straight off this, never off `flat` directly, since a
+    /// past sighting's own observation time is gone from `flat` the
+    /// moment the next poll overwrites `meta.live`.
+    pub fn agent_live_sightings(&self) -> &[AgentLiveSighting] {
+        &self.agent_live_sightings
+    }
+
+    /// [`Self::agent_live_sightings`]'s own bookkeeping for `path`,
+    /// called once per `observe` for every flattened node (issue
+    /// #702's Signal trace, rule 4): while `node` still carries a
+    /// `meta.live` of its own, any increase since the last sighting
+    /// becomes a new one, at that live record's own `updated_at`; once
+    /// it no longer does (the attempt finished, or was never an agent
+    /// session at all), whatever remainder `agent_live_last_totals`
+    /// still owes `path` is recorded once, at `completed_at`, and the
+    /// bookkeeping for `path` is dropped -- so a node with no `meta.
+    /// live` and nothing owed (the overwhelming majority of every
+    /// non-agent step) costs one `BTreeMap` lookup that finds nothing,
+    /// same as `last_created_at`'s own per-node bookkeeping above.
+    /// `retrying` resets the bookkeeping with no remainder recorded --
+    /// an abandoned attempt's own partial tokens are folded into the
+    /// retried attempt's own first sighting instead of appearing as a
+    /// column of their own, the one simplification this makes (no
+    /// recorded fixture ever retries an agent session).
+    fn observe_agent_live(&mut self, path: &str, node: &NodeMeta, retrying: bool) {
+        if retrying {
+            self.agent_live_last_totals.remove(path);
+            self.agent_live_last_seen_at.remove(path);
+        }
+        if let Some(live) = &node.live {
+            let current = (live.tokens_sent.unwrap_or(0), live.tokens_received.unwrap_or(0));
+            let last = self
+                .agent_live_last_totals
+                .get(path)
+                .copied()
+                .unwrap_or((0, 0));
+            let moved = live.updated_at.as_deref()
+                != self.agent_live_last_seen_at.get(path).map(String::as_str);
+            if moved && (current.0 > last.0 || current.1 > last.1) {
+                if let Some(ts) = live.updated_at.clone().or_else(|| node.created_at.clone()) {
+                    self.agent_live_sightings.push(AgentLiveSighting {
+                        path: path.to_string(),
+                        ts,
+                        tokens_sent: current.0.saturating_sub(last.0),
+                        tokens_received: current.1.saturating_sub(last.1),
+                    });
+                }
+                self.agent_live_last_totals.insert(path.to_string(), current);
+            }
+            if let Some(updated_at) = &live.updated_at {
+                self.agent_live_last_seen_at
+                    .insert(path.to_string(), updated_at.clone());
+            }
+            return;
+        }
+        let Some(last) = self.agent_live_last_totals.remove(path) else {
+            return;
+        };
+        self.agent_live_last_seen_at.remove(path);
+        let Some(completed_at) = &node.completed_at else {
+            return;
+        };
+        let (final_sent, final_received) = node_tokens(&node.meta);
+        let remainder_sent = final_sent.saturating_sub(last.0);
+        let remainder_received = final_received.saturating_sub(last.1);
+        if remainder_sent > 0 || remainder_received > 0 {
+            self.agent_live_sightings.push(AgentLiveSighting {
+                path: path.to_string(),
+                ts: completed_at.clone(),
+                tokens_sent: remainder_sent,
+                tokens_received: remainder_received,
+            });
+        }
+    }
+
     /// Recomputes every row's status from one snapshot, the plan, and
     /// the process's current state. Rows for plan paths with no node in
     /// `state` are still produced; `use: inline`/reflector-generated
@@ -1810,6 +1921,8 @@ impl RunModel {
                     self.push_state_interval(path, created_at, completed_at, node);
                 }
             }
+
+            self.observe_agent_live(path, node, retrying);
 
             let kind = if node.is_running() {
                 match &process {

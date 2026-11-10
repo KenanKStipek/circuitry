@@ -2881,6 +2881,30 @@ pub fn build_signal(
         }
     }
 
+    // Issue #702's rule 4: an agent's own live totals, each increase
+    // RunModel::observe already turned into a sighting at its own
+    // observation time (DESIGN.md: never both a running total and a
+    // sighting of it in the same column, same as a prompt's live
+    // estimate and its own finished figure never overlap) -- unlike
+    // a prompt's single Now-column estimate, these are historical and
+    // exact, so every sighting lands at its own column, never only
+    // at `now_col`, and never marked `live` (an agent's own tokens
+    // are the provider's exact count, never a character-count guess).
+    for sighting in model.agent_live_sightings() {
+        let Some(offset) = elapsed_offset(&sighting.ts) else {
+            continue;
+        };
+        let col = col_of(offset);
+        ensure_len(&mut buckets, col + 1);
+        let b = &mut buckets[col];
+        b.sent += sighting.tokens_sent;
+        b.received += sighting.tokens_received;
+        b.last_ts = Some(sighting.ts.clone());
+        let fixed = fixed_cols.entry(col_of_100(offset)).or_default();
+        fixed.0 += sighting.tokens_sent;
+        fixed.1 += sighting.tokens_received;
+    }
+
     let largest_col_sent = fixed_cols.values().map(|(s, _)| *s).max().unwrap_or(0);
     let largest_col_received = fixed_cols.values().map(|(_, r)| *r).max().unwrap_or(0);
     let sent_axis_top_val = signal_axis_top(
@@ -3255,22 +3279,33 @@ pub fn build_signal(
         )
     });
 
-    // Readings: Peak, Largest and Quiet all read only up to the
-    // cursor's own column (Now's, when not scrubbed), the same
-    // moment the trace itself stops drawing at.
+    // Readings: Sent, Received, Ratio, Peak and Quiet all read only
+    // up to the cursor's own column (Now's, when not scrubbed), the
+    // same moment the trace itself stops drawing at -- issue #702's
+    // rule 3 ("the Signal's Readings ... use the same columns"):
+    // Sent/Received are the trace's own columns summed, not `header.
+    // tokens_sent`/`_received` directly, so a running agent's own
+    // tokens (already in the Now column through `agent_live_
+    // sightings` above) count here the same way a running prompt's
+    // live estimate already did before this issue.
     let cursor_buckets = &buckets[..cursor.map(|c| (c + 1).min(buckets.len())).unwrap_or(0)];
-    let ratio = (header.tokens_received > 0)
-        .then(|| (header.tokens_sent as f64 / header.tokens_received as f64 * 10.0).round() / 10.0);
+    let sent_sum: u64 = cursor_buckets.iter().map(|b| b.sent).sum();
+    let received_sum: u64 = cursor_buckets.iter().map(|b| b.received).sum();
+    let ratio = (received_sum > 0)
+        .then(|| (sent_sum as f64 / received_sum as f64 * 10.0).round() / 10.0);
     let peak = cursor_buckets
         .iter()
         .filter(|b| b.sent > 0)
         .max_by_key(|b| b.sent)
         .and_then(|b| Some((b.sent, b.last_ts.clone()?)));
+    // Issue #702: a finished agent session (`RowKind::Tool`) counts
+    // toward Largest the same way a finished prompt already does --
+    // an ordinary tool row never has any tokens of its own, so this
+    // wider filter costs nothing for a run with no agent at all (the
+    // `total == 0` guard below skips it just the same).
     let mut largest: Option<(String, u64)> = None;
-    for row in rows
-        .iter()
-        .filter(|r| matches!(r.kind, RowKind::Prompt | RowKind::Reflector))
-    {
+    let largest_kinds = [RowKind::Prompt, RowKind::Reflector, RowKind::Tool];
+    for row in rows.iter().filter(|r| largest_kinds.contains(&r.kind)) {
         let Some(node) = flat.get(&row.path) else {
             continue;
         };
@@ -3356,8 +3391,8 @@ pub fn build_signal(
             next_signal,
         },
         readings: SignalReadings {
-            sent: header.tokens_sent,
-            received: header.tokens_received,
+            sent: sent_sum,
+            received: received_sum,
             ratio,
             peak,
             largest,
@@ -5558,6 +5593,66 @@ mod tests {
         assert_eq!(bucket.sent, 40);
         assert_eq!(bucket.received, 7);
         assert!(bucket.received_live);
+    }
+
+    /// Issue #702's rule 4: an agent session's own live totals plot
+    /// one column per sighting (never only at the Now column, unlike
+    /// a prompt's running estimate), and the sum of its own columns
+    /// equals its final tokens exactly once it finishes.
+    #[test]
+    fn build_signal_an_agents_live_totals_plot_one_column_per_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_at = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z", "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &running_at(2100, 40, "2026-01-01T00:00:00.350Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        model.observe(
+            &running_at(4450, 90, "2026-01-01T00:00:01.350Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:02.050Z", "provider": "agent",
+                "tokens_sent_total": 11550, "tokens_received_total": 130
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let flat = crate::model::flatten_state(&finished);
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let now = "2026-01-01T00:00:02.100Z";
+        let signal = build_signal(&[], &header, &flat, &plan, &model, None, 100, None, now);
+        // The two live sightings land at their own observation
+        // columns (350ms and 1350ms since the run started, at 100ms
+        // per column); the remainder lands at the agent's own end
+        // (2050ms).
+        assert_eq!(signal.buckets[3].sent, 2100);
+        assert_eq!(signal.buckets[3].received, 40);
+        assert!(!signal.buckets[3].sent_live, "an agent's own tokens are exact, never live");
+        assert_eq!(signal.buckets[13].sent, 2350);
+        assert_eq!(signal.buckets[13].received, 50);
+        assert_eq!(signal.buckets[20].sent, 11550 - 4450);
+        assert_eq!(signal.buckets[20].received, 130 - 90);
+        let (total_sent, total_received) = signal
+            .buckets
+            .iter()
+            .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
+        assert_eq!(total_sent, 11550);
+        assert_eq!(total_received, 130);
     }
 
     /// Readings' own ratio (to one decimal) and peak (the largest
