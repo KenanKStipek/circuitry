@@ -616,7 +616,12 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
     // guarantees.
     let before_down = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\x1b[B");
-    wait_for_pattern_since(&captured_buf, before_down, b"again", Duration::from_secs(10));
+    wait_for_pattern_since(
+        &captured_buf,
+        before_down,
+        b"again",
+        Duration::from_secs(10),
+    );
     {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = support::screen_grid(&whole, 200, 60).join("\n");

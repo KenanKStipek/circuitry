@@ -83,6 +83,7 @@ fn assert_totals_match(name: &str) {
         &model,
         "2026-01-01T00:00:00Z",
         true,
+        Some(&state),
     );
 
     let totals = state

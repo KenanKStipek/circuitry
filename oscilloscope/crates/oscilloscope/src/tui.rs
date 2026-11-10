@@ -5077,13 +5077,7 @@ fn draw_store_table(
         .map(|idx| idx.saturating_sub(max_rows.saturating_sub(1)))
         .unwrap_or(0)
         .min(max_start);
-    for (i, row) in screen
-        .table
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(max_rows)
-    {
+    for (i, row) in screen.table.iter().enumerate().skip(start).take(max_rows) {
         let selected = app.store_selected.as_deref() == Some(row.path.as_str());
         let bg = selected.then_some(theme.selection_bg);
         let label_fg = if selected {

@@ -205,7 +205,9 @@ pub fn build_store_tree(
     run_ended: bool,
     state: Option<&Value>,
 ) -> Vec<StoreNode> {
-    build_children(root_path, flat, kinds, plan, header, model, now, run_ended, state)
+    build_children(
+        root_path, flat, kinds, plan, header, model, now, run_ended, state,
+    )
 }
 
 /// `path`'s own direct children, each turned into a node (a pass, a
@@ -232,7 +234,9 @@ fn build_children(
     children
         .into_iter()
         .flat_map(|child| {
-            build_node_or_splice(&child, flat, kinds, plan, header, model, now, run_ended, state)
+            build_node_or_splice(
+                &child, flat, kinds, plan, header, model, now, run_ended, state,
+            )
         })
         .collect()
 }
@@ -274,9 +278,11 @@ fn build_node_or_splice(
     state: Option<&Value>,
 ) -> Vec<StoreNode> {
     if is_pass_segment(path) {
-        return build_pass(path, flat, kinds, plan, header, model, now, run_ended, state)
-            .into_iter()
-            .collect();
+        return build_pass(
+            path, flat, kinds, plan, header, model, now, run_ended, state,
+        )
+        .into_iter()
+        .collect();
     }
     let has_structural_children = !direct_children_of(path, flat).is_empty();
     if has_structural_children {
@@ -287,7 +293,9 @@ fn build_node_or_splice(
             .into_iter()
             .collect();
         }
-        return build_children(path, flat, kinds, plan, header, model, now, run_ended, state);
+        return build_children(
+            path, flat, kinds, plan, header, model, now, run_ended, state,
+        );
     }
     build_leaf(path, flat, plan, header, model, now)
         .map(StoreNode::Leaf)
@@ -308,8 +316,9 @@ fn build_container(
     state: Option<&Value>,
     label_override: Option<String>,
 ) -> Option<StoreNode> {
-    let mut children =
-        build_children(path, flat, kinds, plan, header, model, now, run_ended, state);
+    let mut children = build_children(
+        path, flat, kinds, plan, header, model, now, run_ended, state,
+    );
     // The plan's own `resolve_each_len` is a loop's planned pass
     // count `m` (an `each` loop's own static array length); a loop
     // with only 2 of 3 passes started so far must still read `2/3`,
@@ -394,7 +403,9 @@ fn build_pass(
     run_ended: bool,
     state: Option<&Value>,
 ) -> Option<StoreNode> {
-    let children = build_children(path, flat, kinds, plan, header, model, now, run_ended, state);
+    let children = build_children(
+        path, flat, kinds, plan, header, model, now, run_ended, state,
+    );
     if children.is_empty() {
         return None;
     }
@@ -1067,7 +1078,9 @@ pub fn build_store(
     selected_path: Option<&str>,
 ) -> StoreScreen {
     let run_ended = header.status != crate::model::RunStatus::Running;
-    let tree = build_store_tree(root_path, flat, kinds, plan, header, model, now, run_ended, state);
+    let tree = build_store_tree(
+        root_path, flat, kinds, plan, header, model, now, run_ended, state,
+    );
     let run_tokens = state
         .and_then(crate::model::run_totals)
         .map(|totals| {
@@ -1453,7 +1466,10 @@ mod tests {
             .iter()
             .filter(|t| !matches!(t.kind, StoreTileKind::More { .. }))
             .collect();
-        assert!(!kept.is_empty(), "at least one store must keep its own tile");
+        assert!(
+            !kept.is_empty(),
+            "at least one store must keep its own tile"
+        );
         for tile in &kept {
             assert!(tile.rect.w >= MIN_TILE_WIDTH, "tiles were {tiles:#?}");
         }
@@ -1477,7 +1493,9 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", true, None,
+        );
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].path(), "prime.used");
     }
@@ -1502,7 +1520,9 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", true, None,
+        );
         assert_eq!(tree.len(), 1);
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
@@ -1539,7 +1559,9 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", true, None,
+        );
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
         };
@@ -1571,11 +1593,17 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", true, None,
+        );
         let StoreNode::Container(gate) = &tree[0] else {
             panic!("expected gate to stay a container");
         };
-        assert_eq!(gate.children.len(), 2, "the gate's own tokens join `reply` as a second leaf");
+        assert_eq!(
+            gate.children.len(),
+            2,
+            "the gate's own tokens join `reply` as a second leaf"
+        );
         let check = gate
             .children
             .iter()
@@ -1587,7 +1615,11 @@ mod tests {
         assert_eq!(check.path, "prime.gate");
         assert_eq!(check.tokens(), 24);
         let gate_tokens: u64 = gate.children.iter().map(StoreNode::tokens).sum();
-        assert_eq!(gate_tokens, 24 + 130, "the container's own area includes its own tokens");
+        assert_eq!(
+            gate_tokens,
+            24 + 130,
+            "the container's own area includes its own tokens"
+        );
         // The check leaf is the container's own node, not a planned
         // child, so it must not inflate "<n>/<m> with tokens".
         assert_eq!(gate.children_with_tokens, 1);
@@ -1649,7 +1681,15 @@ mod tests {
         let header = empty_header();
         let model = RunModel::new();
         let tree = build_store_tree(
-            "prime", &flat, &kinds, &plan, &header, &model, "t1", false, Some(&state),
+            "prime",
+            &flat,
+            &kinds,
+            &plan,
+            &header,
+            &model,
+            "t1",
+            false,
+            Some(&state),
         );
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
@@ -1686,7 +1726,9 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", true, None,
+        );
         let StoreNode::Container(outer) = &tree[0] else {
             panic!("expected outer to stay a container");
         };
@@ -1843,15 +1885,17 @@ mod tests {
         let header = empty_header();
         let model = RunModel::new();
 
-        let running_tree =
-            build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", false, None);
+        let running_tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", false, None,
+        );
         let StoreNode::Container(drafts) = &running_tree[0] else {
             panic!("expected a container");
         };
         assert!(drafts.running, "a running container carries the marker");
 
-        let ended_tree =
-            build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let ended_tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", true, None,
+        );
         let StoreNode::Container(drafts) = &ended_tree[0] else {
             panic!("expected a container");
         };
