@@ -1133,7 +1133,6 @@ pub fn build_store(
         .map(|row| {
             crate::screens::build_focused_step(
                 row,
-                rows,
                 flat,
                 plan,
                 model,

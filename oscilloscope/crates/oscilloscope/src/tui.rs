@@ -9821,6 +9821,53 @@ mod golden_tests {
         (tape_screen, flow_step)
     }
 
+    /// The same recorded-fixture pipeline [`agent_fixture_screens`]
+    /// already builds, for any path -- issue #704's own full-screen
+    /// sections, checked straight off a real run's own state rather
+    /// than hand-written JSON.
+    fn fixture_tape_screen(
+        name: &str,
+        selected_path: &str,
+        process: ProcessState,
+        now: &str,
+    ) -> (
+        oscilloscope_core::render::RenderState,
+        oscilloscope_core::screens::TapeScreen,
+    ) {
+        let state = agent_fixture_snapshots(name)
+            .into_iter()
+            .last()
+            .unwrap_or_else(|| panic!("{name}: no snapshot at all"));
+        let plan = agent_fixture_plan(name);
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            process,
+            1.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            Some(selected_path),
+            true,
+            now,
+        );
+        (rendered, tape_screen)
+    }
+
     fn agent_block_lines_text(lines: &[Line]) -> String {
         lines
             .iter()
@@ -9907,6 +9954,118 @@ mod golden_tests {
             tape_text.contains("\u{203a} edit src/MARKER_PATH.py \u{2713} 2.5s +3 \u{2212}1"),
             "{tape_text}"
         );
+    }
+
+    /// Issue #704 rule 4's own Attempts section, against the
+    /// recorded prompt_retried_cof fixture: a retried prompt's own
+    /// full-screen step names the attempt that decided the outcome
+    /// and the retry count a later pass's own chain otherwise
+    /// overwrites out of meta.fallback_attempts.
+    #[test]
+    fn fullscreen_sections_show_attempts_from_the_recorded_prompt_retried_fixture() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-10-19T16:15:06.890638+00:00";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "prompt_retried_cof",
+            "prime.ask",
+            ProcessState::exited(false),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(
+            text.contains("Attempts") && text.contains("1 retried"),
+            "{text}"
+        );
+        assert!(
+            text.contains("scripted")
+                && text.contains("scripted-model")
+                && text.contains("succeeded"),
+            "{text}"
+        );
+    }
+
+    /// Issue #704 rule 4's own Error section, against the recorded
+    /// parity_tool_failed_continue_cof fixture: a handled tool
+    /// failure's own full-screen step shows the error in full even
+    /// though the run went on.
+    #[test]
+    fn fullscreen_sections_show_the_error_from_the_recorded_parity_tool_failed_continue_fixture() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "parity_tool_failed_continue_cof",
+            "prime.flaky",
+            ProcessState::exited(false),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Error"), "{text}");
+        assert!(text.contains("json: parse failed"), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Loop section, against the recorded
+    /// each_tree_loop_concurrency fixture: a finished loop's own
+    /// full-screen step lists every pass, in plan order.
+    #[test]
+    fn fullscreen_sections_show_the_loop_from_the_recorded_each_tree_loop_concurrency_fixture() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "each_tree_loop_concurrency",
+            "prime.each_tree",
+            ProcessState::exited(true),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Loop"), "{text}");
+        for pass in ["pass 1", "pass 2", "pass 3", "pass 4"] {
+            assert!(text.contains(pass), "missing {pass} in:\n{text}");
+        }
     }
 
     /// Issue #703's rule 3, against the recorded `agent_live_claude_

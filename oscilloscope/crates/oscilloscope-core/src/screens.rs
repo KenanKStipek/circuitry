@@ -680,7 +680,6 @@ pub(crate) fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_focused_step(
     row: &Row,
-    rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
@@ -776,7 +775,7 @@ pub(crate) fn build_focused_step(
     } else if row.kind == RowKind::If {
         FocusDetail::Decision(Box::new(decision_detail_for(row, flat, plan)))
     } else if row.kind == RowKind::Loop {
-        FocusDetail::Loop(loop_passes_for(row, rows, flat))
+        FocusDetail::Loop(loop_passes_for(row, flat))
     } else {
         FocusDetail::Plain
     };
@@ -901,21 +900,44 @@ fn decision_detail_for(
 /// rows, ...), so a pass folded away entirely (a quick-steps
 /// summary) is simply absent here, the same as everywhere else that
 /// list already drops it.
-fn loop_passes_for(
-    row: &Row,
-    rows: &[Row],
-    flat: &BTreeMap<String, NodeMeta>,
-) -> Vec<LoopPassSummary> {
-    let prefix = format!("{}.", row.path);
-    rows.iter()
-        .filter(|r| r.path.starts_with(&prefix) && crate::rail::is_pass_row_path(&r.path))
-        .map(|r| {
-            let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
+fn loop_passes_for(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> Vec<LoopPassSummary> {
+    let prefix = format!("{}.iter_", row.path);
+    // Reads `flat` directly, never `rows` (whichever list the caller
+    // has -- the Tape's own is folded, so a uniform loop's own
+    // passes are routinely absorbed into one quick-steps summary row
+    // there, with no `Row` of their own left to read): every pass
+    // the state actually has a node for, plus any the loop's own
+    // `loop_progress.total` still counts as ahead.
+    let mut indices: std::collections::BTreeSet<u64> = flat
+        .keys()
+        .filter_map(|k| k.strip_prefix(&prefix))
+        .filter_map(|rest| rest.split('.').next())
+        .filter_map(|idx| idx.parse().ok())
+        .collect();
+    if let Some(total) = row.loop_progress.and_then(|p| p.total) {
+        indices.extend(0..total);
+    }
+    indices
+        .into_iter()
+        .map(|i| {
+            let pass_path = format!("{prefix}{i}");
+            let (sent, received) = crate::model::subtree_tokens(&pass_path, flat);
             let total = sent + received;
+            let started = flat
+                .keys()
+                .any(|k| *k == pass_path || k.starts_with(&format!("{pass_path}.")));
             LoopPassSummary {
-                path: r.path.clone(),
-                label: r.label.clone(),
-                status: r.status.clone(),
+                path: pass_path,
+                label: format!("pass {}", i + 1),
+                status: RowStatus {
+                    kind: if started {
+                        StatusKind::Done
+                    } else {
+                        StatusKind::Pending
+                    },
+                    skip_reason: None,
+                    retrying: false,
+                },
                 tokens: (total > 0).then_some(total),
             }
         })
@@ -2809,7 +2831,6 @@ pub fn build_tape(
         .map(|row| {
             build_focused_step(
                 row,
-                rows,
                 flat,
                 plan,
                 model,
@@ -3916,7 +3937,6 @@ pub fn build_signal(
     let selected = selected_row.map(|row| {
         build_focused_step(
             row,
-            rows,
             flat,
             plan,
             model,
@@ -4333,17 +4353,8 @@ pub fn build_flow(
                     inferred_evidence: None,
                 });
             } else {
-                let mut step = build_focused_step(
-                    row,
-                    rows,
-                    flat,
-                    plan,
-                    model,
-                    state,
-                    now,
-                    run_ended_at,
-                    header,
-                );
+                let mut step =
+                    build_focused_step(row, flat, plan, model, state, now, run_ended_at, header);
                 // A sequential container's own child keeps its own
                 // ten-cell station name on the rail, but the Selected
                 // pane's own title still says which container it's
@@ -5853,7 +5864,6 @@ mod tests {
         // as stale, the same as a stopped run viewed much later.
         let step = build_focused_step(
             &row,
-            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -5911,7 +5921,6 @@ mod tests {
         let model = RunModel::new();
         let step = build_focused_step(
             &row,
-            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -6155,7 +6164,6 @@ mod tests {
         let row = agent_row("prime.agent1");
         let step = build_focused_step(
             &row,
-            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -6200,7 +6208,6 @@ mod tests {
         let row = agent_row("prime.agent1");
         let step = build_focused_step(
             &row,
-            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -6254,7 +6261,6 @@ mod tests {
         };
         let step = build_focused_step(
             &row,
-            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -6327,7 +6333,6 @@ mod tests {
         let row = agent_row("prime.agent1");
         let step = build_focused_step(
             &row,
-            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
