@@ -527,14 +527,14 @@ fn tape_token_bar(
     // or more (cached input tokens push it well past a million), so
     // the count alone can outgrow the 8 cells the bar always had
     // left for it, 1 gap space included -- once it does, the bar
-    // itself gives up cells (never below 1, so there is always
-    // something to fill) rather than let the row's own clipping cut
-    // the count's own trailing `t`, or worse, a trailing digit.
-    let bar_cells = if count_len > 7 {
-        16usize.saturating_sub(1).saturating_sub(count_len).max(1)
-    } else {
-        8
-    };
+    // gives up cells of its own as the count widens, dropped
+    // entirely once even one bar cell would no longer leave room for
+    // both it and the required gap, rather than let the row's own
+    // clipping cut the count's own trailing `t`, or worse, a
+    // trailing digit. The `+1` in `15 - count_len` is exactly that
+    // one required gap cell; `.min(8)` is the ordinary, small-count
+    // case's own full bar.
+    let bar_cells = 15usize.saturating_sub(count_len).min(8);
     // Rounded, not floored: 389 at a 50-token unit reads a full
     // bar (▰×8), not 7 filled and one empty.
     let filled = ((total as f64 / unit.max(1) as f64).round() as usize).min(bar_cells);
@@ -555,8 +555,11 @@ fn tape_token_bar(
     // prompt's own estimate -- needs every one of the column's 16
     // cells just for the digits, with none to spare for a marker on
     // top of them.
-    // No `.max(1)` on the gap itself: `0` is a real, valid gap once
-    // the bar and the count between them already fill all 16 cells.
+    // The design always prints the count in full, with a space
+    // before it (§3.5, §3.8) -- `bar_cells` above already leaves
+    // room for exactly one, so this is always `>= 1` short of an
+    // unrealistically wide count that would overrun the column even
+    // with the bar dropped to nothing.
     let gap = 16usize.saturating_sub(bar_cells).saturating_sub(count_len);
     // The gap before the count reads as the empty bar's own
     // colour (`design/frames/`'s own span grouping) -- or, once the
@@ -627,6 +630,11 @@ mod tape_token_bar_tests {
             assert!(
                 full.ends_with(&expected_count),
                 "the count itself must never be cut: {full:?}"
+            );
+            let before_count = &full[..full.len() - expected_count.len()];
+            assert!(
+                before_count.ends_with(' '),
+                "the design always prints a space before the count: {full:?}"
             );
         }
     }
@@ -3872,24 +3880,27 @@ fn draw_signal_readings(
     let bold = default.add_modifier(Modifier::BOLD);
     let readings = &screen.readings;
     let line_width = (inner.width - 1) as usize;
-    // Sent/Received draw with the `≈` marker and the faint style for
-    // exactly as long as a live part is still in them, the same rule
-    // the Totals row's own headline follows.
+    // Sent/Received draw in the faint style for exactly as long as a
+    // live part is still in them, the same rule the Totals row's own
+    // headline follows; the `≈` marker trails the unit rather than
+    // leading the figure, unlike every other screen's own -- this
+    // one's own figure always starts with a digit, nothing else
+    // ever sitting between the label's own whitespace and it.
     let sent_style = if readings.sent_live { muted } else { default };
     let received_style = if readings.received_live {
         muted
     } else {
         default
     };
-    let sent_marker = if readings.sent_live { "≈" } else { "" };
-    let received_marker = if readings.received_live { "≈" } else { "" };
+    let sent_marker = if readings.sent_live { " ≈" } else { "" };
+    let received_marker = if readings.received_live { " ≈" } else { "" };
     let mut lines = vec![
         pad_line(
             vec![
                 Span::styled("Sent     ", muted),
                 Span::styled(
                     format!(
-                        "{sent_marker}{} t",
+                        "{} t{sent_marker}",
                         oscilloscope_core::format::format_tokens_thousands(readings.sent)
                     ),
                     sent_style,
@@ -3902,7 +3913,7 @@ fn draw_signal_readings(
                 Span::styled("Received ", muted),
                 Span::styled(
                     format!(
-                        "{received_marker}{} t",
+                        "{} t{received_marker}",
                         oscilloscope_core::format::format_tokens_thousands(readings.received)
                     ),
                     received_style,
