@@ -609,29 +609,6 @@ impl App {
             }
             KeyCode::Home | KeyCode::Char('g') => self.jump(rows, state_rows, true),
             KeyCode::End | KeyCode::Char('G') => self.jump(rows, state_rows, false),
-            // Issue #613: ← re-folds a quick-steps group ⏎ had
-            // expanded in place, from any of its steps, not only its
-            // own representative (`expanded_quick_steps`' only key):
-            // scan backward over same-depth rows from the selected
-            // one until the representative's own row is found. The
-            // scan stops at the first row that is neither itself a
-            // quick step (`fold::is_quick_step`'s own test) nor an
-            // unexpanded quick-steps summary row, so an unrelated
-            // sibling between two groups -- or before the selected
-            // row -- never gets scanned past into an earlier group's
-            // expansion. Tried on every screen (quick steps are their
-            // own, separate concept from `collapsed` below).
-            KeyCode::Right
-                if self.pane == Pane::Tree
-                    && self.screen != Screen::Tape
-                    && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow
-                    && self.screen != Screen::Store =>
-            {
-                if let Some(path) = &self.selected_path {
-                    self.collapsed.remove(path);
-                }
-            }
             // Issue #688 (design v1 part 2, §4): ←→ scrub the Signal's
             // own cursor, `+`/`-` zoom its column width, `n` returns
             // the cursor to Now.
@@ -655,45 +632,6 @@ impl App {
                 self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
                 self.flow_manual_scroll = true;
-            }
-            // Not on the Tape's, Signal's, Flow's or Store's own key
-            // bar (§4) -- none of the four has a tree pane of its own
-            // left to collapse or expand; reachable now only through
-            // a screen none of the design's own four have (kept, not
-            // removed, since nothing says a later screen won't reuse
-            // the tree pane this acted on). Issue #613: the same key
-            // re-folds a quick-steps group ⏎ had expanded
-            // in place, from any of its steps, not only its own
-            // representative (`expanded_quick_steps`' own key): scan
-            // backward over same-depth rows from the selected one
-            // until the representative's own row is found. The scan
-            // stops at the first row that is neither itself a quick
-            // step (`fold::is_quick_step`'s own test) nor an
-            // unexpanded quick-steps summary row, so an unrelated
-            // sibling between two groups -- or before the selected
-            // row -- never gets scanned past into an earlier group's
-            // own expansion.
-            KeyCode::Left
-                if self.pane == Pane::Tree
-                    && self.screen != Screen::Tape
-                    && self.screen != Screen::Store =>
-            {
-                if let Some(path) = self.selected_path.clone() {
-                    self.collapsed.insert(path.clone());
-                    if let Some(selected_idx) = rows.iter().position(|r| r.path == path) {
-                        let depth = rows[selected_idx].depth;
-                        for row in rows[..=selected_idx].iter().rev() {
-                            let in_group = oscilloscope_core::fold::is_quick_step(row)
-                                || row.kind == oscilloscope_core::render::RowKind::QuickSteps;
-                            if row.depth != depth || !in_group {
-                                break;
-                            }
-                            if self.expanded_quick_steps.remove(&row.path) {
-                                break;
-                            }
-                        }
-                    }
-                }
             }
             // Issue #691: `+` opens the selected fork's own lanes
             // (three at a time, DESIGN.md §2.3's folded loop), `-`
@@ -751,30 +689,6 @@ impl App {
                     self.state_collapsed.remove(path);
                 }
             }
-            // Issue #678: `Tab` goes from the Tape -- its own pane
-            // focus (list vs detail) has no key of its own to begin
-            // with, and overloading it here only let `↑↓` silently
-            // scroll the detail pane instead of moving the selection.
-            // Still live on the unported screens below.
-            // Gone from the Flow screen (issue #691, §4) and the
-            // Store (issue #695): each screen now has one list with
-            // a cursor, nothing to tab between.
-            KeyCode::Tab
-                if self.screen != Screen::Tape
-                    && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow
-                    && self.screen != Screen::Store =>
-            {
-                // On a small terminal the state pane isn't drawn
-                // at all (`tui::draw` zeroes `state_viewport` the
-                // same frame) — `tab` must not focus a pane with
-                // nothing to show or scroll.
-                self.pane = match self.pane {
-                    Pane::Tree => Pane::Details,
-                    Pane::Details if self.state_viewport > 0 => Pane::State,
-                    _ => Pane::Tree,
-                };
-            }
             // Issue #626, #632, #650: `0`-`3` all switch screens now.
             // Selection, follow, folding, filters and collapsed rows
             // are all outside `App::screen`, so none of them reset
@@ -802,18 +716,6 @@ impl App {
                 self.tape_previews_on = !self.tape_previews_on;
             }
             KeyCode::Char('f') => self.follow = !self.follow,
-            // Issue #613: `z` turns folding off to show the full,
-            // unfolded tree, and back on again -- gone from the Tape,
-            // Signal, Flow and Store (§4 has no fold key on any of
-            // them; the rail's own `+`/`-` is a different thing).
-            KeyCode::Char('z')
-                if self.screen != Screen::Tape
-                    && self.screen != Screen::Signal
-                    && self.screen != Screen::Flow
-                    && self.screen != Screen::Store =>
-            {
-                self.fold_enabled = !self.fold_enabled;
-            }
             // Issue #695: `e`/`/` act on the Tape's own rows alone
             // (§4); gone from the Store, which has no rows of its own
             // to filter or restrict to errors.
