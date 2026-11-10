@@ -3287,16 +3287,29 @@ fn draw_tape_detail(
 const MIN_WIDTH: u16 = 60;
 const MIN_HEIGHT: u16 = 24;
 
+/// Select's own width floor (§5): its narrowest frame is 80x24, with
+/// nothing narrower ever shown -- higher than every other screen's
+/// shared 60-column [`MIN_WIDTH`].
+const SELECT_MIN_WIDTH: u16 = 80;
+
 /// §5's own too-small screen (the design's `tape--toosmall` frame):
 /// the `osi` word, the minimum each dimension needs and whether it's
 /// met, the plain-language line naming both and `osi --log`, and a
 /// bare `q Quit` key bar -- the only state that ever draws below the
 /// shared 60×24 floor, on every screen.
 fn draw_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
+    draw_too_small_with_min_width(frame, area, ctx, MIN_WIDTH);
+}
+
+/// [`draw_too_small`], with its own width floor rather than the
+/// shared [`MIN_WIDTH`] -- Select's own body needs 80 columns, wider
+/// than every other screen's shared 60 (§5), so it alone draws this
+/// notice that much sooner.
+fn draw_too_small_with_min_width(frame: &mut Frame, area: Rect, ctx: &DrawCtx, min_width: u16) {
     let ok_style = Style::default().fg(ctx.theme.status_done);
     let err_style = Style::default().fg(ctx.theme.status_failed);
     let err_bold_style = err_style.add_modifier(Modifier::BOLD);
-    let width_ok = area.width >= MIN_WIDTH;
+    let width_ok = area.width >= min_width;
     let height_ok = area.height >= MIN_HEIGHT;
     let dim_line = |label: &str, have: u16, need: u16, ok: bool| {
         Line::from(vec![
@@ -3334,11 +3347,11 @@ fn draw_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
                 .add_modifier(Modifier::BOLD),
         ),
         Line::from(""),
-        dim_line("Width", area.width, MIN_WIDTH, width_ok),
+        dim_line("Width", area.width, min_width, width_ok),
         dim_line("Height", area.height, MIN_HEIGHT, height_ok),
         Line::from(""),
         Line::styled(
-            format!("      osi needs {MIN_WIDTH} columns and {MIN_HEIGHT} rows · try osi --log"),
+            format!("      osi needs {min_width} columns and {MIN_HEIGHT} rows · try osi --log"),
             Style::default().fg(ctx.theme.fg_muted),
         ),
     ];
@@ -3366,6 +3379,631 @@ fn draw_too_small(frame: &mut Frame, area: Rect, ctx: &DrawCtx) {
             Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
             key_bar_area,
         );
+    }
+}
+
+/// The Select screen's own body (issue #698, §2.5): either the
+/// running list or, with nothing running, the Recent Runs panel --
+/// never both. Drawn by [`draw_select`], which owns the shared
+/// chrome (header, status line, key bar) around whichever of these
+/// is showing.
+pub enum SelectBody<'a> {
+    Running(&'a [oscilloscope_core::select::Row]),
+    Empty(&'a [oscilloscope_core::select::RecentRow]),
+}
+
+/// The Select screen (issue #698): the shared header band and key
+/// bar (§3), with its own centred running list or full-width Recent
+/// Runs panel in between -- below the shared floor (§5), the same
+/// too-small notice every other screen reads, but at its own,
+/// higher width floor ([`SELECT_MIN_WIDTH`]): the 80-column frame is
+/// already this screen's own narrowest, with nothing narrower ever
+/// shown. `cursor` indexes whichever list `body` holds; out of range
+/// (an empty list) draws no selected row at all.
+pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &str, ctx: &DrawCtx) {
+    let area = frame.area();
+    if let Some(bg) = ctx.theme.background {
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg).fg(ctx.theme.text)),
+            area,
+        );
+    }
+    if area.width < SELECT_MIN_WIDTH || area.height < MIN_HEIGHT {
+        draw_too_small_with_min_width(frame, area, ctx, SELECT_MIN_WIDTH);
+        return;
+    }
+    let running = match body {
+        SelectBody::Running(rows) => rows.len().saturating_sub(1),
+        SelectBody::Empty(_) => 0,
+    };
+    draw_select_header_band(
+        frame,
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        },
+        running,
+        now,
+        ctx,
+    );
+    let body_area = Rect {
+        x: area.x,
+        y: area.y + 1,
+        width: area.width,
+        height: area.height.saturating_sub(3),
+    };
+    match body {
+        SelectBody::Running(rows) => draw_select_list(frame, body_area, rows, cursor, ctx),
+        SelectBody::Empty(recent) => draw_select_empty_panel(frame, body_area, recent, cursor, ctx),
+    }
+    let status_area = Rect {
+        x: area.x,
+        y: area.y + area.height - 2,
+        width: area.width,
+        height: 1,
+    };
+    draw_select_status_line(frame, status_area, body, ctx);
+    let key_bar_area = Rect {
+        x: area.x,
+        y: area.y + area.height - 1,
+        width: area.width,
+        height: 1,
+    };
+    draw_key_bar(
+        frame,
+        key_bar_area,
+        &[
+            ("↑↓", "Select"),
+            ("enter", "Open"),
+            ("?", "Help"),
+            ("q", "Quit"),
+        ],
+        ctx,
+    );
+}
+
+/// The Select screen's own `?` overlay (issue #698, §4): exactly its
+/// own key bar's keys, same shape as every other screen's own Help
+/// (`draw_dialog_overlay`'s `Dialog::Help` arms) -- not frame-tested,
+/// since no `select--*` frame shows it open.
+pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 5,
+        width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+        height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+    };
+    frame.render_widget(Clear, popup);
+    let border = ctx.theme.border_focused;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+        popup,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Help · Select", border, ctx))
+        .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    fill_border_rows(frame, inner, border);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    let row = |k: &str, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{k:<14}"), key_style),
+            Span::styled(d.to_string(), desc_style),
+        ])
+    };
+    let lines = vec![
+        row("↑↓ j k", "Select"),
+        row("Home End g G", "Jump to the ends"),
+        row("enter", "Open the selected run"),
+        row("?", "This help"),
+        row("q", "Quit"),
+        row("c", "Inert here (no run attached to cancel)"),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
+        content_area,
+    );
+}
+
+/// The header band (§3.1), Select's own shape: ` osi  Select ·
+/// <status>` on the left, the `SELECT` chip and the clock on the
+/// right -- never animated (issue #698: Select watches no one run's
+/// own process to animate a trace for).
+fn draw_select_header_band(
+    frame: &mut Frame,
+    area: Rect,
+    running_count: usize,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let bg = ctx.theme.statusbar_bg;
+    let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
+    let mut left = vec![
+        Span::styled(
+            " osi  ",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("Select ", Style::default().fg(ctx.theme.text).bg(bg)),
+        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+    ];
+    if running_count > 0 {
+        left.push(Span::styled(
+            "● ",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        left.push(Span::styled(
+            format!("{running_count} Running"),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ));
+    } else {
+        left.push(Span::styled(
+            "◌ Nothing Running",
+            Style::default()
+                .fg(ctx.theme.fg_muted)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let clock_text =
+        oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
+    let chip_text = "  SELECT  ".to_string();
+    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let pad = (area.width as usize).saturating_sub(left_width + right_width);
+    left.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(ctx.theme.text).bg(bg),
+    ));
+    left.push(Span::styled(
+        chip_text,
+        Style::default()
+            .fg(ctx.theme.on_accent)
+            .bg(ctx.theme.accent_secondary),
+    ));
+    left.push(Span::styled(format!("  {clock_text} "), base));
+    frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
+}
+
+/// The running list's own box (§2.5): centred, 60 cells wide at 120
+/// columns and up, 56 below that (`design/frames/select--normal--
+/// 120x30`/`--80x24`) -- `All` first, then one row per run, `cursor`
+/// drawing the selected one with `selection.bg`.
+fn draw_select_list(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[oscilloscope_core::select::Row],
+    cursor: usize,
+    ctx: &DrawCtx,
+) {
+    let run_count = rows.len().saturating_sub(1);
+    let box_width: u16 = if area.width >= 100 {
+        60
+    } else {
+        56.min(area.width.saturating_sub(4))
+    };
+    let box_height = rows.len() as u16 + 2;
+    let box_x = area.x + area.width.saturating_sub(box_width) / 2;
+    let box_y = area.y + area.height.saturating_sub(box_height) / 2;
+    let rect = Rect {
+        x: box_x,
+        y: box_y,
+        width: box_width,
+        height: box_height.min(area.height),
+    };
+    let border = ctx.theme.border_focused;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(
+            &format!("Running Orchestrations · {run_count}"),
+            border,
+            ctx,
+        ))
+        .border_style(Style::default().fg(border));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    // The cursor can sit on a row the box isn't tall enough to show
+    // all of at once (more running rows than the terminal's own
+    // height leaves room for) -- the window scrolls to keep it in
+    // view, the selected row landing at the window's own bottom edge
+    // the moment it would otherwise scroll off, the same rule the
+    // Store table's own cursor already follows.
+    let max_visible = inner.height as usize;
+    let max_start = rows.len().saturating_sub(max_visible);
+    let start = cursor
+        .saturating_sub(max_visible.saturating_sub(1))
+        .min(max_start);
+
+    let config_width = (inner.width as usize).saturating_sub(32);
+    for (i, row) in rows.iter().enumerate().skip(start).take(max_visible) {
+        let line_rect = Rect {
+            x: inner.x,
+            y: inner.y + (i - start) as u16,
+            width: inner.width,
+            height: 1,
+        };
+        let spans = select_row_spans(row, i == cursor, config_width, ctx);
+        frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+    }
+}
+
+/// One [`draw_select_list`] row's own spans -- shared between `All`
+/// and a run row, and between a selected and a plain one, so the
+/// field widths (doc 15, config `config_width`, engine 11) can never
+/// drift apart between the two stylings.
+fn select_row_spans(
+    row: &oscilloscope_core::select::Row,
+    selected: bool,
+    config_width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Span<'static>> {
+    use oscilloscope_core::select::Row as SelectRow;
+    let doc_text = match row {
+        SelectRow::All { .. } => "All".to_string(),
+        SelectRow::Run { document_label, .. } => document_label.clone(),
+    };
+    let tail = match row {
+        SelectRow::All { running } => {
+            // A refresh can leave exactly one run after another ends
+            // while Select stays open with more than one still on
+            // screen (the single-run auto-attach only ever applies
+            // at `run_select`'s own, one-time startup check).
+            let noun = if *running == 1 { "run" } else { "runs" };
+            format!(
+                "{:<w$}",
+                format!("{running} {noun} · tiled"),
+                w = config_width + 11 + 1
+            )
+        }
+        SelectRow::Run {
+            config_label, run, ..
+        } => format!(
+            "{:<cw$}{:>11} ",
+            config_label.clone().unwrap_or_else(|| "—".to_string()),
+            run.engine.as_deref().unwrap_or("—"),
+            cw = config_width
+        ),
+    };
+    let rest = format!("{doc_text:<15}{tail}");
+    if selected {
+        let sel_bg = ctx.theme.selection_bg;
+        vec![
+            Span::styled(
+                " ❯ ".to_string(),
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .bg(sel_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "● ",
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .bg(sel_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(rest, Style::default().fg(ctx.theme.selection_fg).bg(sel_bg)),
+        ]
+    } else {
+        let doc_style = match row {
+            SelectRow::All { .. } => Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+            SelectRow::Run { .. } => Style::default().fg(ctx.theme.text),
+        };
+        vec![
+            Span::styled("   ", Style::default().fg(ctx.theme.text)),
+            Span::styled(
+                "● ",
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("{doc_text:<15}"), doc_style),
+            Span::styled(tail, Style::default().fg(ctx.theme.fg_muted)),
+        ]
+    }
+}
+
+/// The status line (§3.2): what the screen is doing -- the engines'
+/// own counts on the running list, a fixed line with nothing
+/// running.
+fn draw_select_status_line(frame: &mut Frame, area: Rect, body: &SelectBody, ctx: &DrawCtx) {
+    let text = match body {
+        SelectBody::Running(rows) => {
+            let mut cof = 0usize;
+            let mut electricity = 0usize;
+            for row in rows.iter() {
+                if let oscilloscope_core::select::Row::Run { run, .. } = row {
+                    match run.engine.as_deref() {
+                        Some("cof") => cof += 1,
+                        Some("electricity") => electricity += 1,
+                        _ => {}
+                    }
+                }
+            }
+            let mut parts = Vec::new();
+            if cof > 0 {
+                parts.push(format!("{cof} on cof"));
+            }
+            if electricity > 0 {
+                parts.push(format!("{electricity} on electricity"));
+            }
+            parts.push("refreshing every 2s".to_string());
+            format!(" {}", parts.join(" · "))
+        }
+        SelectBody::Empty(_) => " nothing running · refreshing every 2s".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(text, Style::default().fg(ctx.theme.text))),
+        area,
+    );
+}
+
+/// The empty Select screen's own panel (§2.5): a full-width box
+/// naming where discovery looked, the Recent Runs table, and the
+/// three ways to start a run.
+fn draw_select_empty_panel(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[oscilloscope_core::select::RecentRow],
+    cursor: usize,
+    ctx: &DrawCtx,
+) {
+    let border = ctx.theme.border_focused;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("No Running Orchestrations", border, ctx))
+        .border_style(Style::default().fg(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let text_style = Style::default().fg(ctx.theme.text);
+    let muted_style = Style::default().fg(ctx.theme.fg_muted);
+    let title_style = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let header_style = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+
+    let mut y = inner.y;
+    render_line(
+        frame,
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
+        vec![
+            Span::styled(" Looked ", muted_style),
+            Span::styled("registry · process scan · live state in cwd", text_style),
+        ],
+    );
+    y += 1;
+    render_line(
+        frame,
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
+        vec![
+            Span::styled(" Found  ", muted_style),
+            Span::styled("0 running", text_style),
+        ],
+    );
+    y += 2;
+    render_line(
+        frame,
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
+        vec![Span::styled(" Recent Runs · open read-only", title_style)],
+    );
+    y += 1;
+    render_line(
+        frame,
+        Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        },
+        vec![Span::styled(
+            "      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME",
+            header_style,
+        )],
+    );
+    y += 1;
+    // `y` has already drawn 5 rows (`Looked`, `Found`, a blank, the
+    // `Recent Runs` title and this header) and `Start One` below
+    // needs 5 more of its own (a blank, its own title, three
+    // examples) -- the table's own window scrolls to keep the
+    // cursor in view within whatever's left, the same rule
+    // `draw_select_list`'s own running rows already follow, rather
+    // than letting `enter` open a row that scrolled off with no
+    // indication it had.
+    let trailing_rows = 5u16;
+    let max_visible = (inner.height.saturating_sub(trailing_rows) as usize)
+        .saturating_sub((y - inner.y) as usize);
+    let max_start = rows.len().saturating_sub(max_visible);
+    let start = cursor
+        .saturating_sub(max_visible.saturating_sub(1))
+        .min(max_start);
+    for (i, row) in rows.iter().enumerate().skip(start).take(max_visible) {
+        if y >= inner.y + inner.height {
+            break;
+        }
+        let spans = recent_row_spans(row, i == cursor, ctx.zone, ctx);
+        render_line(
+            frame,
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+            spans,
+        );
+        y += 1;
+    }
+    y += 1;
+    if y < inner.y + inner.height {
+        render_line(
+            frame,
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+            vec![Span::styled(" Start One", title_style)],
+        );
+    }
+    y += 1;
+    for line_text in [
+        " osi demo.yml config.json      run a document and attach",
+        " osi watch ./run                attach to a run directory",
+        " osi --engine electricity …     run on the Rust engine",
+    ] {
+        if y >= inner.y + inner.height {
+            break;
+        }
+        render_line(
+            frame,
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+            vec![Span::styled(line_text.to_string(), muted_style)],
+        );
+        y += 1;
+    }
+}
+
+fn render_line(frame: &mut Frame, rect: Rect, spans: Vec<Span<'static>>) {
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
+/// One Recent Runs row's own spans (issue #698): DOC(9) CONFIG(15)
+/// STARTED(10) then TOOK+TOKENS combined (13, `{:<5}{:>5} t `) and
+/// OUTCOME -- field widths measured from `design/frames/select--
+/// empty--80x24`.
+fn recent_row_spans(
+    row: &oscilloscope_core::select::RecentRow,
+    selected: bool,
+    zone: &dyn oscilloscope_core::format::ClockZone,
+    ctx: &DrawCtx,
+) -> Vec<Span<'static>> {
+    let glyph = if row.gone {
+        '—'
+    } else if row.ok {
+        '✓'
+    } else {
+        '✗'
+    };
+    let config_text = row.config_label.clone().unwrap_or_else(|| "—".to_string());
+    let started =
+        oscilloscope_core::format::format_clock_time(&row.started_at, zone).unwrap_or_default();
+    let doc_field = format!("{:<9}", row.document_label);
+    let config_field = format!("{config_text:<15}");
+    let started_field = format!("{started:<10}");
+    let tokens_text = oscilloscope_core::format::format_tokens_thousands(row.tokens);
+    let duration_text = oscilloscope_core::format::format_duration(row.took_s);
+    let took_tokens_field = format!("{duration_text:<5}{tokens_text:>5} t ");
+    if selected {
+        // The frame's own first and last content columns stay
+        // border-coloured even on the selected row (`design/frames/
+        // select--empty--80x24`'s own trailing `{border.focus} │{/}`)
+        // -- `selection.bg` covers only the 76 columns in between, so
+        // the OUTCOME column is padded to 24, not the full remaining
+        // width, and neither this span nor any other reaches column 0
+        // or the very last one.
+        let outcome_field = format!("{:<24}", row.outcome_label);
+        let sel_bg = ctx.theme.selection_bg;
+        let glyph_color = if row.gone {
+            ctx.theme.fg_muted
+        } else if row.ok {
+            ctx.theme.status_done
+        } else {
+            ctx.theme.status_failed
+        };
+        vec![
+            Span::styled(" ".to_string(), Style::default().fg(ctx.theme.text)),
+            Span::styled(
+                " ❯ ".to_string(),
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .bg(sel_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{glyph} "),
+                Style::default().fg(glyph_color).bg(sel_bg),
+            ),
+            Span::styled(
+                format!(
+                    "{doc_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"
+                ),
+                Style::default().fg(ctx.theme.selection_fg).bg(sel_bg),
+            ),
+        ]
+    } else {
+        let (glyph_color, glyph_bold) = if row.gone {
+            (ctx.theme.fg_muted, false)
+        } else if row.ok {
+            (ctx.theme.status_done, false)
+        } else {
+            (ctx.theme.status_failed, true)
+        };
+        let mut glyph_style = Style::default().fg(glyph_color);
+        if glyph_bold {
+            glyph_style = glyph_style.add_modifier(Modifier::BOLD);
+        }
+        vec![
+            Span::styled("    ".to_string(), Style::default().fg(ctx.theme.text)),
+            Span::styled(format!("{glyph} "), glyph_style),
+            Span::styled(doc_field, Style::default().fg(ctx.theme.text)),
+            Span::styled(
+                format!("{config_field}{started_field}"),
+                Style::default().fg(ctx.theme.fg_muted),
+            ),
+            Span::styled(
+                format!("{took_tokens_field}{}", row.outcome_label),
+                Style::default().fg(ctx.theme.text),
+            ),
+        ]
     }
 }
 
@@ -5428,8 +6066,11 @@ const HELP_OVERLAY_HEIGHT: u16 = 18;
 
 /// §4's own Signal keys, plus the globals every screen's key bar
 /// shares -- the only keys Signal's own key bar advertises, so the
-/// only ones its own Help lists.
-fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+/// only ones its own Help lists. `is_watch` (issue #698's own §4:
+/// `q`/`c` behave differently on a watch, which owns no process of
+/// its own to confirm quitting or ever cancel) swaps the two rows
+/// that otherwise describe a run `osi` launched itself.
+fn signal_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         (
             "← →",
@@ -5444,11 +6085,19 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
             "open the step under the cursor",
         ),
         ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
+    ];
+    const QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
         ("esc", "close · back", "q", "quit · confirms if running"),
         ("c", "cancel · confirms", "", ""),
     ];
+    const WATCH_QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
+        ("esc", "close · back", "q", "quit at once"),
+        ("c", "inert · launched only", "", ""),
+    ];
+    let quit_rows: &[(&str, &str, &str, &str)] = if is_watch { WATCH_QUIT_ROWS } else { QUIT_ROWS };
     let mut lines: Vec<Line<'static>> = ROWS
         .iter()
+        .chain(quit_rows.iter())
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
     for _ in 0..7 {
@@ -5472,7 +6121,7 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
 /// §4's own Flow keys and the globals every key bar shares -- never
 /// the movement aliases, `/`, `e`, `T`, `v`, `z`, `s`, `l`, `Tab`
 /// §4 already says are gone from the Flow.
-fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+fn flow_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         ("← →", "select a station", "+ -", "open / fold loop lanes"),
         (
@@ -5483,10 +6132,15 @@ fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
         ),
         ("f", "follow Now", "0 1 2 3", "Tape Signal Flow Store"),
         ("?", "this help", "esc", "close · back"),
-        ("q", "quit · confirms if running", "c", "cancel · confirms"),
     ];
+    let quit_row: (&str, &str, &str, &str) = if is_watch {
+        ("q", "quit at once", "c", "inert · launched only")
+    } else {
+        ("q", "quit · confirms if running", "c", "cancel · confirms")
+    };
     let mut lines: Vec<Line<'static>> = ROWS
         .iter()
+        .chain(std::iter::once(&quit_row))
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
     for _ in 0..7 {
@@ -5510,15 +6164,20 @@ fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
 /// exactly §4's own Store keys (`↑↓`/its aliases, `enter`) and the
 /// globals every key bar shares -- never `i`/`o`/`$` (Cost's own
 /// measures, gone), `Tab`, `s`/`l`/`z`/`v`, `e` or `/`.
-fn store_help_lines(ctx: &DrawCtx, unit: u64) -> Vec<Line<'static>> {
-    let rows: Vec<(&str, &str, &str, &str)> = vec![
+fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool) -> Vec<Line<'static>> {
+    let mut rows: Vec<(&str, &str, &str, &str)> = vec![
         ("↑ ↓", "select a row", "enter", "open the selected store"),
         ("j k", "same as ↑ ↓", "PgUp PgDn", "move a page"),
         ("Home End", "first / last row", "g G", "same as Home/End"),
         ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
-        ("esc", "close · back", "q", "quit · confirms if running"),
-        ("c", "cancel · confirms", "", ""),
     ];
+    if is_watch {
+        rows.push(("esc", "close · back", "q", "quit at once"));
+        rows.push(("c", "inert · launched only", "", ""));
+    } else {
+        rows.push(("esc", "close · back", "q", "quit · confirms if running"));
+        rows.push(("c", "cancel · confirms", "", ""));
+    }
     let mut lines: Vec<Line<'static>> = rows
         .iter()
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
@@ -6728,7 +7387,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(signal_help_lines(ctx))
+            let paragraph = Paragraph::new(signal_help_lines(ctx, app.is_watch))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -6759,7 +7418,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(flow_help_lines(ctx))
+            let paragraph = Paragraph::new(flow_help_lines(ctx, app.is_watch))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -6790,7 +7449,7 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(store_help_lines(ctx, tape_unit))
+            let paragraph = Paragraph::new(store_help_lines(ctx, tape_unit, app.is_watch))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
@@ -13379,6 +14038,213 @@ mod tape_frame_goldens {
         );
     }
 
+    /// `design/fixtures/multi/snap6/manifest.json` turned into
+    /// [`oscilloscope_core::discovery::DiscoveredRun`]s, in the
+    /// manifest's own order -- already launch order (the manifest
+    /// *is* what osi knew at launch, issue #698's own fixture note),
+    /// so no registry or liveness stub is needed to reproduce it.
+    fn snap6_runs() -> Vec<oscilloscope_core::discovery::DiscoveredRun> {
+        let manifest_path = fixtures_dir().join("multi/snap6/manifest.json");
+        let manifest: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|e| panic!("couldn't read {manifest_path:?}: {e}")),
+        )
+        .unwrap();
+        manifest
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| oscilloscope_core::discovery::DiscoveredRun {
+                run_id: Some(entry["key"].as_str().unwrap().to_string()),
+                orchestration: Some(entry["orchestration"].as_str().unwrap().to_string()),
+                config: Some(entry["config"].as_str().unwrap().to_string()),
+                engine: Some(entry["engine"].as_str().unwrap().to_string()),
+                pid: Some(entry["pid"].as_u64().unwrap() as u32),
+                launcher: Some("osi 0.1.0".to_string()),
+                run_dir: Some(std::path::PathBuf::from(entry["run_dir"].as_str().unwrap())),
+                events: None,
+                live_state: None,
+                started_at: Some(format!("2026-11-08T23:51:5{}.000Z", 5 + i)),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn select_normal_120x30_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("select--normal--120x30", &theme);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let runs = snap6_runs();
+        let rows = oscilloscope_core::select::build_rows(&runs);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Running(&rows),
+                    1,
+                    "2026-11-08T23:51:58.588Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        assert_matches_mock(
+            terminal.backend().buffer(),
+            &mock,
+            "select--normal--120x30",
+            &[],
+        );
+    }
+
+    #[test]
+    fn select_normal_80x24_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("select--normal--80x24", &theme);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let runs = snap6_runs();
+        let rows = oscilloscope_core::select::build_rows(&runs);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Running(&rows),
+                    1,
+                    "2026-11-08T23:51:58.588Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        assert_matches_mock(
+            terminal.backend().buffer(),
+            &mock,
+            "select--normal--80x24",
+            &[],
+        );
+    }
+
+    #[test]
+    fn select_empty_80x24_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("select--empty--80x24", &theme);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let plan = demo_plan();
+        let mut records = Vec::new();
+        for (dir, config) in [
+            ("hist/run-h3", "config-h3.json"),
+            ("hist/run-h2", "config-h2.json"),
+            ("hist/run-h1", "config-h1.json"),
+            ("run2", "config.json"),
+            ("run", "config.json"),
+        ] {
+            let state = load_json(&fixtures_dir().join(dir).join("state.live.json"));
+            let mut model = oscilloscope_core::model::RunModel::new();
+            model.observe(
+                &state,
+                &plan,
+                oscilloscope_core::model::ProcessState::exited(false),
+            );
+            let run_dir_path = fixtures_dir().join(dir);
+            let record = oscilloscope_core::history::build_record(
+                "demo.yml",
+                Some(config),
+                Some(&run_dir_path.to_string_lossy()),
+                Some("cof"),
+                &state,
+                &model,
+                &plan,
+            )
+            .unwrap_or_else(|| panic!("{dir}: not a finished, recordable run"));
+            records.push(record);
+        }
+        let run_dir_exists = |dir: &str| std::path::Path::new(dir).is_dir();
+        let rows = oscilloscope_core::select::build_recent_rows(&records, &run_dir_exists);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Empty(&rows),
+                    0,
+                    "2026-11-08T22:14:14.355262+00:00",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        // `hist/run-h1`'s own `wall_s` (`build_record`'s own
+        // `started_at`→`completed_at` span from the state, 5.0565s)
+        // rounds to 5.1s, one tenth past the frame's own `5.0s` --
+        // the frame's TOOK column instead matches the fixture's own
+        // events (`run_start`→`run_end`, 5.049s) for every row. The
+        // fixture's state and events disagree by a few milliseconds,
+        // as parts 1-3 already saw for `gate › reply`; the one
+        // differing cell (the TOOK column's own tenths digit on the
+        // `config-h1.json` row) is allow-listed rather than bending
+        // the rounding rule to match it.
+        assert_matches_mock(
+            terminal.backend().buffer(),
+            &mock,
+            "select--empty--80x24",
+            &[(43, 9)],
+        );
+    }
+
+    /// Issue #698's own §5: Select's narrowest frame is 80x24, so it
+    /// needs that many columns, not every other screen's shared 60
+    /// ([`SELECT_MIN_WIDTH`], not [`MIN_WIDTH`]).
+    #[test]
+    fn select_shows_the_too_small_notice_below_80_columns_not_60() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let draw_at = |cols: u16| {
+            let backend = TestBackend::new(cols, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| draw_select(f, &SelectBody::Empty(&[]), 0, "2026-01-01T00:00:00Z", &ctx))
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        assert!(
+            draw_at(79).contains("Terminal too small"),
+            "79 columns is below Select's own 80-column floor"
+        );
+        assert!(
+            !draw_at(80).contains("Terminal too small"),
+            "80 columns is Select's own narrowest frame"
+        );
+        assert!(
+            draw_at(65).contains("Terminal too small"),
+            "65 columns clears every other screen's shared 60-column floor, \
+             but not Select's own higher one"
+        );
+    }
+
     fn load_events(path: &std::path::Path) -> Vec<serde_json::Value> {
         std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("couldn't read {path:?}: {e}"))
@@ -15125,6 +15991,55 @@ mod tape_frame_goldens {
             !text.contains("errors only"),
             "not the generic list:\n{text}"
         );
+    }
+
+    /// Issue #698: a watch owns no process of its own to confirm
+    /// quitting or ever cancel, so its own Help says so, on every
+    /// screen that would otherwise show the "confirms if running"/
+    /// "cancel · confirms" pair a run `osi` launched itself gets.
+    #[test]
+    fn watch_only_help_text_replaces_confirm_and_cancel_with_quit_and_inert() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let to_text = |lines: Vec<Line<'static>>| {
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for (launched, watch) in [
+            (
+                to_text(signal_help_lines(&ctx, false)),
+                to_text(signal_help_lines(&ctx, true)),
+            ),
+            (
+                to_text(flow_help_lines(&ctx, false)),
+                to_text(flow_help_lines(&ctx, true)),
+            ),
+            (
+                to_text(store_help_lines(&ctx, 50, false)),
+                to_text(store_help_lines(&ctx, 50, true)),
+            ),
+        ] {
+            assert!(launched.contains("confirms if running"), "{launched}");
+            assert!(launched.contains("cancel"), "{launched}");
+            assert!(watch.contains("quit at once"), "{watch}");
+            assert!(watch.contains("inert"), "{watch}");
+            assert!(!watch.contains("confirms if running"), "{watch}");
+            assert!(!watch.contains("cancel"), "{watch}");
+        }
     }
 
     #[test]

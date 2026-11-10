@@ -303,9 +303,18 @@ impl HistoryHandle {
         if !oscilloscope_core::model::run_ended(state) {
             return;
         }
+        // `self.config` as given (`--config`, or whatever the
+        // registry/process-arguments fallback resolved to at attach
+        // time, issue #698's own Settled point 8) -- else the
+        // engine's own `run_start.config` (issue A), known by now
+        // even for a run `attach_discovered_run` first found with
+        // neither (the live-state-in-cwd source): this is the one
+        // point a finished run's history is actually written, well
+        // after its own events have had a chance to name one.
+        let config = self.config.as_deref().or_else(|| model.run_start_config());
         let Some(record) = history::build_record(
             &document,
-            self.config.as_deref(),
+            config,
             self.run_dir.as_deref(),
             engine,
             state,

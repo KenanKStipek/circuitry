@@ -772,7 +772,16 @@ fn read_raw_lines(path: &Path) -> std::io::Result<Vec<String>> {
 /// the same as an empty history.
 pub fn read_records(history_dir: &Path, document_path: &str) -> Vec<HistoryRecord> {
     let file_path = history_file_path(history_dir, document_path);
-    let Ok(mut file) = File::open(&file_path) else {
+    parse_records_file(&file_path)
+}
+
+/// [`read_records`]'s own per-line parse, shared with
+/// [`read_all_records`]: tolerates a corrupt line, an unknown `v`, a
+/// torn last line, and a line over [`MAX_LINE_BYTES`], and a
+/// repeated `run_id` within the one file counts once (the first one
+/// read wins). `[]` for a file that doesn't exist.
+fn parse_records_file(file_path: &Path) -> Vec<HistoryRecord> {
+    let Ok(mut file) = File::open(file_path) else {
         return Vec::new();
     };
     let mut data = Vec::new();
@@ -800,6 +809,57 @@ pub fn read_records(history_dir: &Path, document_path: &str) -> Vec<HistoryRecor
         out.push(record);
     }
     out
+}
+
+/// Every record in every document's own history file under
+/// `history_dir` (the Select screen's own empty-state Recent Runs
+/// table, issue #698: "newest first across every document") -- `[]`
+/// for a missing directory, same as [`read_records`] reads an empty
+/// history. Files are named by a document's own hash
+/// ([`history_file_path`]), never by anything readable on its own,
+/// so this has no way to tell which document a file is for beyond
+/// what [`parse_records_file`] itself reads back out of each line.
+pub fn read_all_records(history_dir: &Path) -> Vec<HistoryRecord> {
+    let Ok(entries) = std::fs::read_dir(history_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            out.extend(parse_records_file(&path));
+        }
+    }
+    out
+}
+
+/// Whether [`read_all_records`]'s own result for `history_dir` might
+/// have changed since a caller's last read (issue #698's own empty
+/// Select, refreshed every two seconds): the latest modification time
+/// across the directory's own `.jsonl` files, listed and `stat`ed but
+/// never read or parsed -- far cheaper than re-reading and re-parsing
+/// every record on every refresh tick just to find out most of them
+/// (every one, usually) didn't change. `None` with no directory, or
+/// none of its own `.jsonl` files -- a caller that already has a
+/// `None` from last time and still gets one now has nothing new
+/// either way.
+pub fn history_dir_signature(history_dir: &Path) -> Option<std::time::SystemTime> {
+    let entries = std::fs::read_dir(history_dir).ok()?;
+    let mut latest: Option<std::time::SystemTime> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        latest = Some(match latest {
+            Some(prev) if prev >= modified => prev,
+            _ => modified,
+        });
+    }
+    latest
 }
 
 /// Issue #649's total-size eviction: "at most 500 documents and 64
@@ -2695,5 +2755,41 @@ mod tests {
             Some(155)
         );
         assert_eq!(stats.whole_run.and_then(|r| r.tokens_p50), Some(1324));
+    }
+
+    #[test]
+    fn history_dir_signature_is_none_with_no_directory_or_no_jsonl_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            history_dir_signature(dir.path().join("missing").as_path()),
+            None
+        );
+        std::fs::write(dir.path().join("notes.txt"), b"hi").unwrap();
+        assert_eq!(history_dir_signature(dir.path()), None);
+    }
+
+    #[test]
+    fn history_dir_signature_changes_once_a_jsonl_file_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.jsonl");
+        std::fs::write(&file, b"{}\n").unwrap();
+        let first = history_dir_signature(dir.path());
+        assert!(first.is_some());
+        // A later mtime than the first write, not merely a different
+        // one: some filesystems only keep whole-second resolution, so
+        // a write right after the first could otherwise read back the
+        // same timestamp and look like no change at all.
+        let later = first.unwrap() + std::time::Duration::from_secs(5);
+        let file2 = dir.path().join("b.jsonl");
+        std::fs::write(&file2, b"{}\n").unwrap();
+        std::fs::File::open(&file2)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let second = history_dir_signature(dir.path());
+        assert!(
+            second > first,
+            "a newer .jsonl file must move the signature forward"
+        );
     }
 }
