@@ -347,6 +347,11 @@ pub struct SignalFinishedLabelGroup {
     pub label: String,
     pub extra: usize,
     pub tokens: u64,
+    /// The group's own 100 ms column (its earliest finisher's own
+    /// bucket) -- the frame sits each label at its own column, the
+    /// same way the chart's own trace does, never flush against the
+    /// tile's own left edge.
+    pub col: usize,
 }
 
 /// The tile's own two most recent [`SignalFinishedLabelGroup`]s,
@@ -404,7 +409,7 @@ pub fn signal_tile_finished_labels(
         .rev()
         .take(2)
         .rev()
-        .map(|(_, members)| {
+        .map(|(col, members)| {
             let tokens: u64 = members
                 .iter()
                 .map(|r| {
@@ -420,6 +425,7 @@ pub fn signal_tile_finished_labels(
                 label: crate::screens::tape_row_label(members[0], flat, plan),
                 extra: members.len() - 1,
                 tokens,
+                col: *col,
             }
         })
         .collect()
@@ -470,28 +476,39 @@ pub fn tile_now_pane_rows(
     let mut ahead = Vec::new();
     for item in items {
         match item {
-            TapeItem::SlotsRule {
-                busy,
-                slots,
-                queued,
-            } => {
-                slots_text = Some(if *queued > 0 {
-                    format!("{busy} of {slots} Slots Busy · {queued} Pass Queued")
-                } else {
-                    format!("{busy} of {slots} Slots Busy")
-                });
+            // Unlike the Tape tile's own slots rule, the Signal
+            // tile's Now pane title never names a queued pass --
+            // the frame reads `3 of 3 Slots Busy` alone even when
+            // one is.
+            TapeItem::SlotsRule { busy, slots, .. } => {
+                slots_text = Some(format!("{busy} of {slots} Slots Busy"));
             }
             TapeItem::Row(row) => match row.status.kind {
-                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
+                // A loop's own container row is never in the Now
+                // pane's running list (the frame lists only the
+                // loop's own running leaves there) -- its own slots
+                // rule carries the loop's own summary instead.
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                    if row.kind.is_leaf() =>
+                {
                     running.push(TileNowRow {
                         label: row.label.clone(),
                         what: row.what.clone(),
                     });
                 }
                 StatusKind::Pending | StatusKind::Skipped => {
+                    // The frame's own ahead `if` row drops its
+                    // condition text (`gate              if`, never
+                    // `if · kind != ""`) -- the same narrowing a
+                    // Tape tile's own ahead `if` row already gets.
+                    let what = if row.kind == RowKind::If {
+                        "if".to_string()
+                    } else {
+                        row.what.clone()
+                    };
                     ahead.push(TileNowRow {
                         label: row.label.clone(),
-                        what: row.what.clone(),
+                        what,
                     });
                 }
                 _ => {}
@@ -536,9 +553,8 @@ pub struct TileRender {
     /// Flow or Store tiles still has this to feed
     /// [`newest_finished_across_runs`].
     pub last_finished: Option<crate::screens::SignalLastFinished>,
-    /// This run's own largest Signal bucket sum (sent, then
-    /// received), for the Signal tiles' shared scale -- `0` for
-    /// every other screen kind, which never reads either field.
+    /// This run's own [`largest_single_effect_tokens`], for the
+    /// Signal tiles' shared scale.
     pub largest_sent: u64,
     pub largest_received: u64,
 }
@@ -681,19 +697,7 @@ pub fn build_tile(
         plan,
         rendered.header.run_start_ts.as_deref(),
     );
-    // The shared scale's own "largest column seen so far" (Settled
-    // point 6) is the trace's own bucket sums -- every token that
-    // lands in the same 100 ms column together, not any one effect
-    // alone -- so several prompts finishing in the same column (a
-    // loop's own concurrent passes) raise it the same way they
-    // raise the bar the chart itself draws there.
-    let (largest_sent, largest_received) = match &screen {
-        TileScreen::Signal(s) => (
-            s.buckets.iter().map(|b| b.sent).max().unwrap_or(0),
-            s.buckets.iter().map(|b| b.received).max().unwrap_or(0),
-        ),
-        _ => largest_single_effect_tokens(&flat),
-    };
+    let (largest_sent, largest_received) = largest_single_effect_tokens(&flat);
     TileRender {
         header: rendered.header,
         screen,
