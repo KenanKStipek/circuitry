@@ -2542,6 +2542,262 @@ fn osi_watch_writes_its_own_registry_entry_and_removes_it_on_detach() {
     assert_no_leftover_process(work.path());
 }
 
+/// A long-running document (a `sleep` tool, allow-listed) so a run
+/// launched from it stays live long enough for a second `osi` to
+/// find it on Select -- shared by the three tests below.
+const SELECT_SLOW_DOC: &str = "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"5\"]\n      allowed_commands: [\"sleep\"]\n";
+
+/// Launches `osi <doc> <config> --out-dir <out> --log` in the
+/// background (issue #698: a plain, non-TTY run needs no pty of its
+/// own, and writes the same registry entry a TUI launch would) --
+/// its own stdout/stderr are discarded, never read, since this test
+/// file's own point is bare `osi`'s own Select screen, not this
+/// launcher's own log lines.
+fn launch_osi_log(
+    home: &TestHome,
+    work: &Path,
+    doc: &Path,
+    config: &Path,
+    out: &Path,
+) -> std::process::Child {
+    let mut cmd = osi_command(home);
+    cmd.current_dir(work)
+        .arg(doc)
+        .arg(config)
+        .arg("--out-dir")
+        .arg(out)
+        .arg("--log")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().expect("spawn osi --log")
+}
+
+/// A SIGTERM, not a SIGKILL -- `osi --log`'s own `SignalWatcher`
+/// forwards a caught SIGTERM to the engine it supervises (`cof`),
+/// which in turn ends the long-running `sleep` tool underneath it;
+/// a SIGKILL on the launcher alone would leave both still running,
+/// unreachable to `osi`'s own signal handling at all. Falls back to
+/// a real kill if the launcher hasn't actually exited by the time
+/// this test is done with it.
+fn terminate_launcher(mut child: std::process::Child) {
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Polls `runs_dir` until it holds at least `want` entries, capped
+/// at `timeout` -- the registry entry is written once `run_start` is
+/// known, not instantly at spawn (same rule every other registry
+/// wait in this file already polls for, never a bare sleep).
+fn wait_for_registry_entries(runs_dir: &Path, want: usize, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let n = std::fs::read_dir(runs_dir)
+            .map(|rd| rd.flatten().count())
+            .unwrap_or(0);
+        if n >= want || Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Issue #698 (design v1 part 5): with two live runs registered,
+/// bare `osi` on a TTY opens the Select screen listing both, and
+/// `enter` on the cursor's own row (the first run, rule 6) attaches
+/// to it; `q` then quits at once, with no confirm.
+#[test]
+fn bare_osi_lists_two_live_runs_on_select_and_enter_attaches() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc_a = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
+    let doc_b = write_doc(work.path(), "b.yml", SELECT_SLOW_DOC);
+    let config_a = write_doc(work.path(), "config-a.json", SCRIPTED_CONFIG);
+    let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
+    let out_a = tempfile::tempdir().unwrap();
+    let out_b = tempfile::tempdir().unwrap();
+    let child_a = launch_osi_log(&home, work.path(), &doc_a, &config_a, out_a.path());
+    let child_b = launch_osi_log(&home, work.path(), &doc_b, &config_b, out_b.path());
+
+    wait_for_step_start(
+        &out_a.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    wait_for_step_start(
+        &out_b.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    assert_eq!(
+        std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.flatten().count())
+            .unwrap_or(0),
+        2,
+        "expected two registry entries while both runs are live, in {runs_dir:?}"
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let select_child = spawn_osi_on_pty(&home, &slave_path, &[]);
+
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("a.yml") && screen.contains("b.yml"),
+        "expected both runs listed on Select:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(20));
+    assert!(
+        screen.contains("a.yml") || screen.contains("b.yml"),
+        "expected enter to attach to the cursor's own run:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(select_child, Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "bare osi should exit 0 after q from an attached run, got {status:?}"
+    );
+
+    terminate_launcher(child_a);
+    terminate_launcher(child_b);
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #698's own Settled point 3: with exactly one live run, bare
+/// `osi` attaches straight away -- no Select screen shown at all.
+#[test]
+fn bare_osi_attaches_directly_with_exactly_one_live_run() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(work.path(), "do.yml", SELECT_SLOW_DOC);
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let out_dir = tempfile::tempdir().unwrap();
+    let launcher = launch_osi_log(&home, work.path(), &doc, &config, out_dir.path());
+
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 1, Duration::from_secs(10));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(&home, &slave_path, &[]);
+
+    let screen = wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(20));
+    assert!(
+        screen.contains("do.yml"),
+        "expected bare osi to attach directly to the one live run:\n{screen}"
+    );
+    assert!(
+        !screen.contains("SELECT"),
+        "bare osi must not show Select with exactly one live run:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "bare osi should exit 0, got {status:?}");
+
+    terminate_launcher(launcher);
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #698's own empty Select (point 20): with no live runs, bare
+/// `osi` shows the Recent Runs table from history, and `enter` opens
+/// the selected one read-only.
+#[test]
+fn bare_osi_shows_recent_runs_with_no_live_runs_and_enter_opens_one_read_only() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n      allowed_commands: [\"echo\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let out_dir = tempfile::tempdir().unwrap();
+    let mut run_to_completion = osi_command(&home);
+    run_to_completion
+        .current_dir(work.path())
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(out_dir.path())
+        .arg("--log");
+    let finished = run_to_completion
+        .output()
+        .expect("run osi --log to completion");
+    assert!(
+        finished.status.success(),
+        "the setup run should finish ok, got {:?}; stderr:\n{}",
+        finished.status,
+        String::from_utf8_lossy(&finished.stderr)
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(&home, &slave_path, &[]);
+
+    let screen = wait_for_screen_text(&captured_buf, "Recent Runs", Duration::from_secs(20));
+    assert!(
+        screen.contains("do.yml"),
+        "expected the finished run listed in Recent Runs:\n{screen}"
+    );
+
+    let before_len = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    wait_for_pattern_since(
+        &captured_buf,
+        before_len,
+        b"\x1b[?1049h",
+        Duration::from_secs(20),
+    );
+    let screen = wait_for_screen_text(&captured_buf, "do.yml", Duration::from_secs(20));
+    assert!(
+        screen.contains("Ended") || screen.contains("TAPE"),
+        "expected enter to open the finished run read-only:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "bare osi should exit 0, got {status:?}");
+    assert_no_leftover_process(work.path());
+}
+
 /// A fake engine standing in for a real `cof`/`electricity`, used
 /// only by the two regression tests below (#494): parses out the one
 /// flag `osi` always passes regardless of engine or capability

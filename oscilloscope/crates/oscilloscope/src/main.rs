@@ -3362,6 +3362,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             &mut registry,
             spawn_event_reader(),
             false,
+            true,
         ) {
             WatchOutcome::Exited(code) => code,
             // `opened_from_select` is false here, so `run_tui_watch`
@@ -3455,6 +3456,7 @@ fn run_tui_watch(
     registry: &mut registry_io::RegistryHandle,
     event_rx: EventReader,
     opened_from_select: bool,
+    manage_terminal: bool,
 ) -> WatchOutcome {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
@@ -3502,10 +3504,33 @@ fn run_tui_watch(
     )> = None;
     let mut theme_banner_until: Option<Instant> = None;
 
-    let guard_and_terminal = TerminalGuard::enter()
-        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
-    let (_guard, mut terminal) = match guard_and_terminal {
-        Ok(pair) => pair,
+    // Issue #698: a run attached from the Select screen shares the
+    // Select loop's own `TerminalGuard` rather than leaving raw mode
+    // and the alternate screen only to re-enter them here -- toggling
+    // either twice in the same process, on a real pty, was observed
+    // to leave the terminal's own write side returning EIO for the
+    // rest of the process (never exercised before this feature: every
+    // earlier caller of `TerminalGuard::enter` only ever did so once).
+    // Only the `Terminal` itself (no raw-mode/alt-screen ioctls, no
+    // fallback path of its own) is ever created fresh here in that
+    // case; `_guard` stays `None`, and this function returns instead
+    // of calling `std::process::exit`, so the caller that owns the
+    // real guard also owns tearing it down.
+    let (_guard, guard_and_terminal) = if manage_terminal {
+        let pair = TerminalGuard::enter()
+            .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
+        match pair {
+            Ok((g, t)) => (Some(g), Ok(t)),
+            Err(err) => (None, Err(err)),
+        }
+    } else {
+        (
+            None,
+            Terminal::new(CrosstermBackend::new(std::io::stdout())),
+        )
+    };
+    let mut terminal = match guard_and_terminal {
+        Ok(t) => t,
         Err(err) => {
             // Finding 14: actually watches via the same stop-
             // condition loop `do_watch` uses, rather than reporting
@@ -3541,6 +3566,10 @@ fn run_tui_watch(
                 history,
             );
             let _ = writeln!(out, "exit {code}");
+            if !manage_terminal {
+                registry.remove();
+                return WatchOutcome::Exited(ExitCode::from(code as u8));
+            }
             // No TUI ever started, Select screen included -- the
             // caller just exits (issue #698: a Select-opened run
             // that can't even open a terminal has nowhere left to
@@ -4177,6 +4206,12 @@ fn run_tui_watch(
     if back_to_select {
         return WatchOutcome::BackToSelect(event_rx);
     }
+    if !manage_terminal {
+        // The Select loop owns the real `TerminalGuard` and the
+        // process's own exit either way (`run_select`'s own tail) --
+        // this attach never owned either.
+        return WatchOutcome::Exited(ExitCode::from(code as u8));
+    }
     std::process::exit(i32::from(code));
 }
 
@@ -4201,11 +4236,23 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             }
         };
     }
+    // One `TerminalGuard` for the whole Select<->Attach lifecycle,
+    // never re-entered: toggling raw mode and the alternate screen
+    // off and back on, on a real terminal, was observed to leave
+    // its own write side returning an I/O error for the rest of the
+    // process (`run_tui_watch`'s own `manage_terminal` doc comment).
+    let guard = match TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return ExitCode::from(1);
+        }
+    };
     let mut event_rx = spawn_event_reader();
-    loop {
+    let code = loop {
         let (action, reader) = run_select_screen(no_history, theme_name, event_rx);
         let outcome = match action {
-            SelectAction::Quit => return ExitCode::from(0),
+            SelectAction::Quit => break ExitCode::from(0),
             SelectAction::AttachRun(run) => {
                 attach_discovered_run(&run, true, no_animation, theme_name, no_history, reader)
             }
@@ -4214,10 +4261,12 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             }
         };
         match outcome {
-            WatchOutcome::Exited(code) => return code,
+            WatchOutcome::Exited(code) => break code,
             WatchOutcome::BackToSelect(reader) => event_rx = reader,
         }
-    }
+    };
+    drop(guard);
+    code
 }
 
 /// The registry plus a process scan plus a `state.live.json` scan of
@@ -4269,10 +4318,12 @@ fn run_select_screen(
     theme_name: theme::ThemeName,
     event_rx: EventReader,
 ) -> (SelectAction, EventReader) {
-    let guard_and_terminal = TerminalGuard::enter()
-        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
-    let (_guard, mut terminal) = match guard_and_terminal {
-        Ok(pair) => pair,
+    // `run_select`'s own `TerminalGuard` is already active for the
+    // whole Select<->Attach lifecycle -- only a fresh `Terminal`
+    // (ratatui's own diffing state, no raw-mode/alt-screen ioctls of
+    // its own) is ever created here.
+    let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+        Ok(t) => t,
         Err(err) => {
             eprintln!("osi: couldn't start the TUI ({err})");
             return (SelectAction::Quit, event_rx);
@@ -4421,7 +4472,6 @@ fn run_select_screen(
     } else {
         drop(terminal);
     }
-    drop(_guard);
     (outcome, event_rx)
 }
 
@@ -4494,6 +4544,11 @@ fn attach_discovered_run(
         &mut registry,
         event_rx,
         opened_from_select,
+        // Bare `osi`'s own single-run case (`opened_from_select`
+        // false) is self-contained, exactly like `osi watch` --
+        // only a Select-opened attach shares the Select loop's own
+        // `TerminalGuard` instead of managing one of its own.
+        !opened_from_select,
     )
 }
 
@@ -4547,6 +4602,9 @@ fn attach_recent_run(
         &mut registry,
         event_rx,
         true,
+        // Only reachable from the Select loop, which owns the real
+        // `TerminalGuard` for the whole session.
+        false,
     )
 }
 
