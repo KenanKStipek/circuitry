@@ -159,3 +159,12 @@ fn prompt_retried_electricity_fixture_totals_match_the_run() {
     assert_totals_match("prompt_retried_electricity");
     assert_the_retry_happened("prompt_retried_electricity");
 }
+
+/// Issue #702: the same sum-equals-totals check, over a fixture with
+/// an agent tool session (`meta.live` gone by the time the run ends,
+/// its own final `tokens_sent`/`tokens_received` set the same way a
+/// prompt's are) rather than a prompt alone.
+#[test]
+fn agent_live_pi_fixture_totals_match_the_run() {
+    assert_totals_match("agent_live_pi");
+}

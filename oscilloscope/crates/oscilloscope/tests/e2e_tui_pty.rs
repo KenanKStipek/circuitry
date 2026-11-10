@@ -3489,3 +3489,106 @@ fn a_slow_streaming_prompt_shows_live_token_figures_then_settles_on_electricity(
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
 }
+
+/// The Totals row's own token figure, parsed out of a replayed
+/// screen -- `" ↑<sent> ↓<received> · <total> t "`
+/// (`tui::draw_totals_row`), read as the figure right after the
+/// row's own `·`, the same one a human reads as the run's tokens so
+/// far. `None` before the Totals row has drawn at all.
+fn totals_tokens(screen: &str) -> Option<u64> {
+    let line = screen.lines().find(|l| l.contains("Totals"))?;
+    let after_dot = line.split('·').nth(1)?;
+    let digits: String = after_dot
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',')
+        .collect();
+    digits.replace(',', "").parse().ok()
+}
+
+/// Issue #702's acceptance item: a PTY test with the fake `pi` used
+/// by the recorded `agent_live_pi` fixture -- the Totals row's own
+/// token figure grows while the agent tool runs (its own two tool
+/// calls, ~5s total), not only once the step finishes.
+#[test]
+fn the_totals_row_grows_while_an_agent_session_runs() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let fake_pi = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/agent_live_fakes/fake_pi.py")
+        .canonicalize()
+        .expect("fake_pi.py must exist");
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: fixer\n    type: tool\n    provider: agent\n    params:\n      engine: pi\n      prompt: \"Fix the bug.\"\n      tools: [read, bash, edit]\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"scripted\",\"default_model\":\"scripted-model\",\"runtime\":{{\"plugins\":{{\"agent\":{{\"pi\":{{\"binary\":{:?}}}}}}}}}}}",
+            fake_pi.to_string_lossy()
+        ),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.fixer",
+        Duration::from_secs(20),
+    );
+    // The agent's first tool call (`bash`) is already running by the
+    // time its own first `meta.live` write lands; give it a moment to
+    // reach the screen, well inside the fake's own first 2.5s sleep.
+    std::thread::sleep(Duration::from_millis(1500));
+    let early = {
+        let whole = captured_buf.lock().unwrap().clone();
+        support::screen_grid(&whole, 200, 60).join("\n")
+    };
+    let early_tokens = totals_tokens(&early)
+        .unwrap_or_else(|| panic!("no Totals token figure on an early screen:\n{early}"));
+    assert!(
+        early_tokens > 0,
+        "the Totals row should already count the running agent's tokens; got {early_tokens} on:\n{early}"
+    );
+
+    // Past the fake's own second tool call too (another 2.5s sleep) --
+    // the agent's own live totals must have grown further since.
+    std::thread::sleep(Duration::from_millis(3000));
+    let later = {
+        let whole = captured_buf.lock().unwrap().clone();
+        support::screen_grid(&whole, 200, 60).join("\n")
+    };
+    let later_tokens = totals_tokens(&later)
+        .unwrap_or_else(|| panic!("no Totals token figure on a later screen:\n{later}"));
+    assert!(
+        later_tokens > early_tokens,
+        "the Totals row should keep growing while the agent runs: {early_tokens} then {later_tokens}"
+    );
+
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
