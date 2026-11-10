@@ -126,6 +126,11 @@ pub fn osi_command(home: &TestHome) -> Command {
     cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
     cmd.env_remove("XDG_STATE_HOME");
     cmd.env_remove("OSI_HISTORY");
+    // Issue #698: same discipline for the run registry -- an
+    // inherited `XDG_RUNTIME_DIR`/`XDG_STATE_HOME` would otherwise
+    // still point it at a real, shared directory.
+    cmd.env("OSI_RUNS_DIR", home.path().join("runs"));
+    cmd.env_remove("XDG_RUNTIME_DIR");
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());

@@ -304,12 +304,15 @@ fn spawn_osi_on_pty_with_env(
     // an inherited `XDG_STATE_HOME` or `OSI_HISTORY_DIR` would still
     // point history at the real directory.
     cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
+    // Issue #698: same discipline for the run registry.
+    cmd.env("OSI_RUNS_DIR", home.path().join("runs"));
     for key in [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "CYBERDINER_TOKEN",
         "CYBERDINER_EXPO_URL",
         "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
         "OSI_HISTORY",
         // `effective_log_mode` (DESIGN.md §6.2) forces the plain
         // stream whenever `CI` is set, which GitHub Actions sets for
@@ -429,6 +432,103 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     // created an `osi-*` directory under the real system temp dir in
     // the first place (`--out-dir` above kept it inside `out_dir`,
     // this test's own, already-cleaned-up tempdir).
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #698's "Settled 1": a run this `osi` launched has a
+/// registry entry while it's live, and that entry is gone once the
+/// run ends -- the 30s hard cap on the final wait stays well above
+/// the sum of this test's own waits (two 20s pattern waits, a 10s
+/// poll, and a fixed 3s past the `sleep 2` effect's own duration).
+#[test]
+fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+
+    let runs_dir = home.path().join("runs");
+    // The entry is written once `run_start` is known, not instantly
+    // at spawn (issue #698) -- polled rather than slept for a fixed
+    // delay, bounded well under this test's own hard cap.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut entries = Vec::new();
+    while Instant::now() < deadline {
+        entries = std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.flatten().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !entries.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one registry entry while the run is live, in {runs_dir:?}"
+    );
+    let entry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
+    assert_eq!(entry["engine"], "cof");
+    assert_eq!(
+        std::fs::canonicalize(entry["run_dir"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(out_dir.path()).unwrap()
+    );
+    assert_eq!(
+        entry["launcher"].as_str().unwrap(),
+        format!("osi {}", env!("CARGO_PKG_VERSION"))
+    );
+
+    // `q` opens a confirm-cancel dialog instead of quitting outright
+    // as long as osi's own `child.try_wait()` hasn't yet observed the
+    // engine exit -- even once the run's own final state already
+    // shows it ended, since that observation lags the state write by
+    // however long until this loop's own next tick. A short, bounded
+    // wait past the `sleep 2` effect's own duration is simpler than
+    // fighting that dialog from a test with no plan to assert on it.
+    std::thread::sleep(Duration::from_secs(3));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let remaining = std::fs::read_dir(&runs_dir)
+        .map(|rd| rd.count())
+        .unwrap_or(0);
+    assert_eq!(
+        remaining, 0,
+        "expected the registry entry to be gone once the run ended"
+    );
+
     assert_no_leftover_process(work.path());
 }
 

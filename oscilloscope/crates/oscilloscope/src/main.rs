@@ -57,13 +57,20 @@ osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
   osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
-  osi watch <dir | state.live.json> [--plan doc.yml]";
+  osi watch <dir | state.live.json> [--plan doc.yml]
+
+With no orchestration: on a TTY this is a usage error, same as always, until the Select screen (design v1 part 5)
+lands. Without a TTY, or with --log, it instead finds the orchestrations already running on this machine (the run
+registry, a process scan, and any state.live.json in the current directory) and prints one line each, then exits 0.";
 
 #[derive(Parser, Debug)]
 #[command(name = "osi", version = VERSION, about = ABOUT)]
 struct RunArgs {
-    /// The orchestration document to run (YAML or JSON).
-    orchestration: String,
+    /// The orchestration document to run (YAML or JSON). With none,
+    /// on a TTY this is a usage error; without a TTY, or with
+    /// `--log`, osi instead lists the orchestrations already running
+    /// on this machine and exits 0 (issue #698).
+    orchestration: Option<String>,
     /// The engine's own config (JSON), passed through unchanged. With
     /// none, the engine resolves its own default (DESIGN.md §4).
     config: Option<String>,
@@ -183,6 +190,27 @@ enum EngineChoice {
 /// means `do_run`/`do_watch` hand off to the TUI instead (§6.3).
 fn effective_log_mode(explicit: bool) -> bool {
     explicit || !std::io::stdout().is_terminal() || std::env::var_os("CI").is_some()
+}
+
+/// Bare `osi` with no orchestration, without a TTY (or with
+/// `--log`): finds the runs on this machine (issue #698's "Settled
+/// 2", the registry plus a process scan plus a `state.live.json`
+/// scan of the current directory) and prints one plain line each,
+/// then exits 0 -- a script's own discovery answer, without reading
+/// the registry itself. Never opens a terminal, never blocks.
+fn print_discovered_runs() -> ExitCode {
+    let runs = oscilloscope_core::discovery::discover_runs(
+        registry_io::resolve_runs_dir().as_deref(),
+        &oscilloscope_core::registry::RealLiveness,
+        &oscilloscope_core::discovery::RealProcessScanner,
+        &oscilloscope_core::discovery::RealProcessCwd,
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::time::SystemTime::now(),
+    );
+    for run in &runs {
+        println!("{}", oscilloscope_core::discovery::format_plain_line(run));
+    }
+    ExitCode::from(0)
 }
 
 /// The real system zone (issue #613: "the binary uses the local
@@ -421,7 +449,6 @@ macro_rules! compile_plan {
 /// this was shared, that fallback just blocked on `child.wait()` with
 /// no signal forwarding at all — a SIGINT/TERM/HUP to osi did nothing
 /// until the engine ended on its own.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn supervise_plain(
     out: &mut impl Write,
@@ -741,6 +768,7 @@ fn watch_document_name(state: Option<&serde_json::Value>, fallback: &str) -> Str
 /// an abort). `--once` skips the loop entirely: one read, one line,
 /// exit 0, for a tmux status line that runs its own command on a
 /// timer instead.
+#[allow(clippy::too_many_arguments)]
 fn watch_glance(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -952,6 +980,22 @@ fn do_run(args: RunArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // Issue #698's "Settled 2": no document at all. On a TTY with no
+    // `--log`, this stays the usage error it always was -- the
+    // Select screen that will replace it is a later part of this
+    // same design. Otherwise, osi finds what's already running
+    // instead.
+    let Some(orchestration_arg) = args.orchestration.clone() else {
+        if effective_log_mode(args.log) {
+            return print_discovered_runs();
+        }
+        eprintln!(
+            "osi: an orchestration document is required: `osi <orchestration> [config.json] ...`; \
+             try --help"
+        );
+        return exit_early(2);
+    };
+
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
     // --help` detection, and compiling the plan, both run a blocking
@@ -964,7 +1008,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // either not yet started, or started and now unsupervised.
     let mut signals = SignalWatcher::new().ok();
 
-    let orchestration = PathBuf::from(&args.orchestration);
+    let orchestration = PathBuf::from(&orchestration_arg);
     let config = args.config.as_ref().map(PathBuf::from);
 
     if args.engine == EngineChoice::Electricity {
@@ -995,7 +1039,11 @@ fn do_run(args: RunArgs) -> ExitCode {
         history_io::resolve_history_dir(args.no_history),
         history_io::resolve_run_document_path(&orchestration),
         args.config.clone(),
-        Some(history_io::absolute_path(&run_dir).to_string_lossy().into_owned()),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
     );
     // Issue #698's "Settled 1": written once this run's own
     // `run_start` is known (`RegistryHandle::ensure_written`, called
@@ -1133,7 +1181,7 @@ fn do_run(args: RunArgs) -> ExitCode {
             spec,
             plan,
             run_dir,
-            args.orchestration.clone(),
+            orchestration_arg.clone(),
             signals,
             args.no_animation,
             &history,
@@ -1153,7 +1201,7 @@ fn do_run(args: RunArgs) -> ExitCode {
             plan,
             run_dir,
             is_default_dir,
-            args.orchestration.clone(),
+            orchestration_arg.clone(),
             engine.name().to_string(),
             signals,
             args.no_animation,
@@ -2801,6 +2849,7 @@ fn run_tui(
     // cleanup and final output, removes any doubt that anything else
     // could ever end up waiting on that thread first.
     let _ = out.flush();
+    registry.remove();
     std::process::exit(i32::from(code));
 }
 
@@ -3067,7 +3116,10 @@ fn supervise_plain_watch(
         {
             last_state = Some(state);
         }
-        registry.ensure_written(model, &watch_document_name(last_state.as_ref(), fallback_document));
+        registry.ensure_written(
+            model,
+            &watch_document_name(last_state.as_ref(), fallback_document),
+        );
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -3184,8 +3236,14 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let history = history_io::HistoryHandle::for_watch(
         history_io::resolve_history_dir(args.no_history),
         args.plan.clone(),
-        args.config.as_ref().map(|c| c.to_string_lossy().into_owned()),
-        Some(history_io::absolute_path(&run_dir).to_string_lossy().into_owned()),
+        args.config
+            .as_ref()
+            .map(|c| c.to_string_lossy().into_owned()),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
     );
     // Issue #698's "Settled 1": `osi watch` writes an entry too
     // (`launcher: "osi <version> watch"`), the same way `osi <doc>`
@@ -3290,6 +3348,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// detach back to the shell the instant `run_ended`/a dead pid is
 /// first noticed, which used to show the finished screen for about
 /// one redraw before leaving on its own.
+#[allow(clippy::too_many_arguments)]
 fn run_tui_watch(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -3977,6 +4036,7 @@ fn run_tui_watch(
     // tail for why this ends the process explicitly rather than just
     // returning.
     let _ = out.flush();
+    registry.remove();
     std::process::exit(i32::from(code));
 }
 
@@ -4971,15 +5031,20 @@ mod tests {
         // then leaves an `osi-*` temp directory behind.
         let parsed = RunArgs::try_parse_from(args(&["-e", "k=v", "--log", "do-thing.yml"]));
         let parsed = parsed.expect("flags before the positional should parse");
-        assert_eq!(parsed.orchestration, "do-thing.yml");
+        assert_eq!(parsed.orchestration, Some("do-thing.yml".to_string()));
         assert_eq!(parsed.set, vec!["k=v".to_string()]);
         assert!(parsed.log);
     }
 
-    #[test]
-    fn no_args_is_a_usage_error() {
-        assert_eq!(run(args(&[])), ExitCode::from(2));
-    }
+    // `no_args_is_a_usage_error` is gone (issue #698's "Settled 2"):
+    // no orchestration, without a TTY, now lists what's running
+    // instead of erroring -- `print_discovered_runs` reads the real
+    // process environment (`OSI_RUNS_DIR` and friends) through
+    // `registry_io::resolve_runs_dir`, which this crate's own unit
+    // tests never override (no test here sets a process-wide env
+    // var, since `cargo test` runs many of them concurrently); the
+    // e2e suite covers the exit code with an isolated `OSI_RUNS_DIR`
+    // instead (`tests/e2e_cof.rs`'s `bare_osi_without_a_tty_lists_...`).
 
     #[test]
     fn a_signal_already_pending_before_the_spawn_gives_its_exit_code_with_no_spawn() {

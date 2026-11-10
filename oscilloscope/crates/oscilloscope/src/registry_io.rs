@@ -141,13 +141,23 @@ impl RegistryHandle {
             self.written_run_id = Some(run_id.to_string());
         }
     }
+
+    /// Removes this run's own entry, if one was ever written --
+    /// idempotent, so a caller that calls it explicitly (every exit
+    /// path that ends with `std::process::exit` rather than a plain
+    /// return, which skips every other value's own `Drop` on the
+    /// stack) and then still gets dropped the ordinary way afterwards
+    /// removes nothing twice.
+    pub fn remove(&mut self) {
+        if let (Some(dir), Some(run_id)) = (&self.dir, self.written_run_id.take()) {
+            let _ = registry::remove_entry(dir, &run_id);
+        }
+    }
 }
 
 impl Drop for RegistryHandle {
     fn drop(&mut self) {
-        if let (Some(dir), Some(run_id)) = (&self.dir, &self.written_run_id) {
-            let _ = registry::remove_entry(dir, run_id);
-        }
+        self.remove();
     }
 }
 

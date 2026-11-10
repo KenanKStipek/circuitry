@@ -1846,8 +1846,16 @@ mod tests {
             &PlanTree::empty(),
             crate::model::ProcessState::exited(false),
         );
-        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &PlanTree::empty())
-            .expect("a completed, hashed, non-dry run is recorded");
+        let record = build_record(
+            "/doc.yml",
+            None,
+            None,
+            Some("cof"),
+            &state,
+            &model,
+            &PlanTree::empty(),
+        )
+        .expect("a completed, hashed, non-dry run is recorded");
         let serialized = serde_json::to_string(&record).unwrap();
         assert!(
             !serialized.contains(MARKER),
@@ -1932,8 +1940,16 @@ mod tests {
                 "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:02:00Z", "error": null,
             }},
         });
-        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &PlanTree::empty())
-            .expect("a completed, hashed, non-dry run is recorded");
+        let record = build_record(
+            "/doc.yml",
+            None,
+            None,
+            Some("cof"),
+            &state,
+            &model,
+            &PlanTree::empty(),
+        )
+        .expect("a completed, hashed, non-dry run is recorded");
         let other = record
             .steps
             .get(OTHER_STEP)

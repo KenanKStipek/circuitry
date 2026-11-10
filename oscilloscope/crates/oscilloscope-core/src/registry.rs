@@ -349,7 +349,10 @@ mod tests {
         let liveness = FixedLiveness([1, 2].into_iter().collect());
         let entries = read_entries(&dir, &liveness);
         assert_eq!(
-            entries.iter().map(|e| e.run_id.as_str()).collect::<Vec<_>>(),
+            entries
+                .iter()
+                .map(|e| e.run_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["earlier", "later"]
         );
     }
@@ -405,7 +408,11 @@ mod tests {
     #[test]
     fn resolve_attached_config_follows_the_fallback_order() {
         assert_eq!(
-            resolve_attached_config(Some("registry.json"), Some("run-start.json"), Some("argv.json")),
+            resolve_attached_config(
+                Some("registry.json"),
+                Some("run-start.json"),
+                Some("argv.json")
+            ),
             Some("registry.json")
         );
         assert_eq!(

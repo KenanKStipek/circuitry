@@ -140,7 +140,11 @@ fn resolve_maybe_relative(path: &str, cwd: Option<&Path>) -> PathBuf {
 /// builders) are the only two shapes this ever needs to parse: a
 /// plain `split_whitespace` is enough for both, since neither engine
 /// is ever invoked by osi with a path argument containing a space.
-pub fn match_scanned_process(pid: u32, args_line: &str, cwd: Option<&Path>) -> Option<DiscoveredRun> {
+pub fn match_scanned_process(
+    pid: u32,
+    args_line: &str,
+    cwd: Option<&Path>,
+) -> Option<DiscoveredRun> {
     let tokens: Vec<&str> = args_line.split_whitespace().collect();
     let bin = Path::new(tokens.first()?)
         .file_name()
@@ -202,7 +206,10 @@ pub fn match_scanned_process(pid: u32, args_line: &str, cwd: Option<&Path>) -> O
     }
 
     let (orchestration, config) = if engine == "cof" {
-        (positionals.first().map(|s| s.to_string()), config_flag.map(str::to_string))
+        (
+            positionals.first().map(|s| s.to_string()),
+            config_flag.map(str::to_string),
+        )
     } else {
         // `electricity <config> <doc> ...`: the first positional is
         // the config, the second the document.
@@ -276,6 +283,26 @@ pub fn scan_live_state_in_cwd(cwd: &Path, now: SystemTime) -> Vec<DiscoveredRun>
     found
 }
 
+/// One plain line per running run (issue #698's "Settled 2": bare
+/// `osi` without a TTY, or with `--log`, prints one of these per
+/// [`discover_runs`] result and exits 0) -- document, config,
+/// engine, pid, run directory, `"—"` for anything not known.
+pub fn format_plain_line(run: &DiscoveredRun) -> String {
+    let document = run.orchestration.as_deref().unwrap_or("—");
+    let config = run.config.as_deref().unwrap_or("—");
+    let engine = run.engine.as_deref().unwrap_or("—");
+    let pid = run
+        .pid
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    let run_dir = run
+        .run_dir
+        .as_deref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "—".to_string());
+    format!("{document}  {config}  {engine}  pid {pid}  {run_dir}")
+}
+
 /// Merges the registry, a process scan and a `state.live.json` scan
 /// of the current directory into one deduplicated list (issue #698's
 /// "Settled 2" and "Settled 3"'s launch-time ordering): a run found
@@ -294,14 +321,19 @@ pub fn discover_runs(
 ) -> Vec<DiscoveredRun> {
     let mut runs: Vec<DiscoveredRun> = Vec::new();
     if let Some(dir) = registry_dir {
-        runs.extend(read_entries(dir, liveness).into_iter().map(DiscoveredRun::from));
+        runs.extend(
+            read_entries(dir, liveness)
+                .into_iter()
+                .map(DiscoveredRun::from),
+        );
     }
 
     for (pid, args_line) in scanner.scan() {
         if runs.iter().any(|r| r.pid == Some(pid)) {
             continue;
         }
-        let Some(discovered) = match_scanned_process(pid, &args_line, process_cwd.cwd_of(pid).as_deref())
+        let Some(discovered) =
+            match_scanned_process(pid, &args_line, process_cwd.cwd_of(pid).as_deref())
         else {
             continue;
         };
@@ -371,6 +403,32 @@ mod tests {
     }
 
     #[test]
+    fn format_plain_line_shows_an_em_dash_for_anything_unknown() {
+        let run = DiscoveredRun {
+            pid: Some(42),
+            run_dir: Some(PathBuf::from("/work/run-dir")),
+            ..Default::default()
+        };
+        assert_eq!(format_plain_line(&run), "—  —  —  pid 42  /work/run-dir");
+    }
+
+    #[test]
+    fn format_plain_line_shows_every_known_field() {
+        let run = DiscoveredRun {
+            orchestration: Some("/work/doc.yml".to_string()),
+            config: Some("/work/cfg.json".to_string()),
+            engine: Some("cof".to_string()),
+            pid: Some(42),
+            run_dir: Some(PathBuf::from("/work/run-dir")),
+            ..Default::default()
+        };
+        assert_eq!(
+            format_plain_line(&run),
+            "/work/doc.yml  /work/cfg.json  cof  pid 42  /work/run-dir"
+        );
+    }
+
+    #[test]
     fn parse_ps_scan_reads_pid_and_args() {
         let sample = "  123 cof run doc.yml --live-state /tmp/a/state.live.json\n\
                         456  electricity /tmp/cfg.json doc.yml --out /tmp/b/state.json\n";
@@ -378,7 +436,10 @@ mod tests {
         assert_eq!(
             parsed,
             vec![
-                (123, "cof run doc.yml --live-state /tmp/a/state.live.json".to_string()),
+                (
+                    123,
+                    "cof run doc.yml --live-state /tmp/a/state.live.json".to_string()
+                ),
                 (
                     456,
                     "electricity /tmp/cfg.json doc.yml --out /tmp/b/state.json".to_string()
