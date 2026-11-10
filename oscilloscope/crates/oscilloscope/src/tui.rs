@@ -4869,6 +4869,32 @@ fn focused_step_full_lines(
             spans.push(Span::styled(format!("  {pct}% of this run so far"), muted));
         }
         lines.push(tape_detail_line(spans, width));
+        // Issue #704 rule 4's own Tokens section, "totals across
+        // attempts": only shown once there actually were more than
+        // one -- the figure above is already the winning attempt's
+        // own (`node_tokens`' own final-state rule), never repeated
+        // here.
+        if step.attempts.len() > 1 {
+            let attempts_total: u64 = step
+                .attempts
+                .iter()
+                .map(|a| a.tokens_sent.unwrap_or(0) + a.tokens_received.unwrap_or(0))
+                .sum();
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("        ", muted),
+                    Span::styled(
+                        oscilloscope_core::format::format_tokens_t(attempts_total),
+                        default,
+                    ),
+                    Span::styled(
+                        format!(" total across {} attempts", step.attempts.len()),
+                        muted,
+                    ),
+                ],
+                width,
+            ));
+        }
         if let Some((usual, count)) = step.usual_tokens {
             let dev = step
                 .tokens
@@ -10361,6 +10387,84 @@ mod golden_tests {
                 && text.contains("succeeded"),
             "{text}"
         );
+    }
+
+    /// Issue #704 rule 4's own Tokens section, "totals across
+    /// attempts": the shared full-screen renderer sums every
+    /// recorded attempt's own tokens, shown only once there was
+    /// more than one -- no recorded fixture's own `meta.fallback_
+    /// attempts` keeps more than its own final pass's one surviving
+    /// entry (`docs/orchestration-reference.md`'s own "only the
+    /// final pass's chain survives"), so this builds its own step
+    /// directly rather than reading one from a run.
+    #[test]
+    fn fullscreen_tokens_shows_the_total_across_attempts() {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{AttemptDetail, FocusDetail, FocusedStep};
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let step = FocusedStep {
+            path: "prime.ask".to_string(),
+            breadcrumb: "ask".to_string(),
+            kind_label: "prompt",
+            provider_or_model: None,
+            since_ts: None,
+            finished_ts: None,
+            elapsed_s: None,
+            detail: FocusDetail::Prompt {
+                tokens: Some(33),
+                estimated: false,
+                snippet: None,
+            },
+            status: RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: Some(33),
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: vec![
+                AttemptDetail {
+                    adapter: Some("ollama".to_string()),
+                    model: Some("m1".to_string()),
+                    status: Some("failed".to_string()),
+                    tokens_sent: Some(100),
+                    tokens_received: Some(0),
+                    error: Some("timed out".to_string()),
+                },
+                AttemptDetail {
+                    adapter: Some("scripted".to_string()),
+                    model: Some("scripted-model".to_string()),
+                    status: Some("succeeded".to_string()),
+                    tokens_sent: Some(11),
+                    tokens_received: Some(22),
+                    error: None,
+                },
+            ],
+            retries_used: Some(1),
+            meta_extra: Vec::new(),
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        };
+        let text = agent_block_lines_text(&focused_step_full_lines(
+            &step, None, "now", false, 80, &ctx,
+        ));
+        assert!(text.contains("total across 2 attempts"), "{text}");
+        assert!(text.contains("133 t"), "{text}");
     }
 
     /// Issue #704 rule 4's own Error section, against the recorded
