@@ -26,6 +26,7 @@ pub mod rail;
 pub mod registry;
 pub mod render;
 pub mod screens;
+pub mod select;
 pub mod store;
 pub mod supervise;
 pub mod transcript;

@@ -1716,7 +1716,15 @@ fn stdin_hung_up() -> bool {
 /// (`std::process::exit`, after its own normal cleanup) the moment
 /// its own main loop decides to leave, taking the stuck thread down
 /// with it without needing any cooperation from it at all.
-fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
+/// The channel [`spawn_event_reader`] hands back -- named so a
+/// function that takes one as a parameter (rather than spawning its
+/// own) doesn't have to spell out the full `Receiver<...>` type
+/// itself (issue #698: the Select screen and an attached run share
+/// exactly one of these for the whole process, passed by ownership
+/// between the two, never two reader threads at once).
+type EventReader = std::sync::mpsc::Receiver<std::io::Result<CEvent>>;
+
+fn spawn_event_reader() -> EventReader {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         loop {
@@ -2649,7 +2657,13 @@ fn run_tui(
                                     Some(Instant::now() + std::time::Duration::from_secs(2));
                             }
                             keys::Action::Quit => break 'tui,
-                            keys::Action::None => {}
+                            // `App::opened_from_select` is never set
+                            // true on this loop's own `app` (only
+                            // `run_tui_watch`'s does, for a run
+                            // attached from the Select screen), so
+                            // `handle_key` never actually returns
+                            // this here.
+                            keys::Action::BackToSelect | keys::Action::None => {}
                         }
                         needs_rebuild = true;
                         needs_draw = true;
@@ -3335,7 +3349,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // this one just detaches (§6.3), since watch owns no engine of
     // its own to ever cancel.
     if !effective_log_mode(args.log) {
-        return run_tui_watch(
+        return match run_tui_watch(
             run_dir,
             live_state_path,
             plan,
@@ -3344,7 +3358,16 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             theme_name,
             &history,
             &mut registry,
-        );
+            spawn_event_reader(),
+            false,
+        ) {
+            WatchOutcome::Exited(code) => code,
+            // `opened_from_select` is false here, so `run_tui_watch`
+            // never actually returns this for a plain `osi watch`.
+            WatchOutcome::BackToSelect(_) => unreachable!(
+                "a plain `osi watch` never opens from the Select screen"
+            ),
+        };
     }
 
     let mut clock = Clock::new();
@@ -3406,6 +3429,18 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// detach back to the shell the instant `run_ended`/a dead pid is
 /// first noticed, which used to show the finished screen for about
 /// one redraw before leaving on its own.
+/// What [`run_tui_watch`] leaves its caller to do once its own loop
+/// ends -- `Exited` for a plain `osi watch`'s own detach/abort
+/// (`do_watch`'s only path), `BackToSelect` for a Select-opened
+/// run's own `esc` (issue #698, §2.5), carrying the one event-reader
+/// thread (`EventReader`) back so the Select loop can reuse it
+/// rather than spawning a second one (`spawn_event_reader`'s own
+/// doc comment: never more than one, for the whole process).
+enum WatchOutcome {
+    Exited(ExitCode),
+    BackToSelect(EventReader),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_tui_watch(
     run_dir: PathBuf,
@@ -3416,7 +3451,9 @@ fn run_tui_watch(
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
     registry: &mut registry_io::RegistryHandle,
-) -> ExitCode {
+    event_rx: EventReader,
+    opened_from_select: bool,
+) -> WatchOutcome {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
     let mut differ = Differ::new();
@@ -3435,9 +3472,13 @@ fn run_tui_watch(
     // Finding 15: `q` on a still-live run is a voluntary detach, not
     // an abort.
     let mut detached_while_live = false;
+    // Issue #698: set once `esc` leaves this loop for the Select
+    // screen rather than for the process to exit.
+    let mut back_to_select = false;
     let start = Instant::now();
 
     let mut app = App::new(true);
+    app.opened_from_select = opened_from_select;
 
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
@@ -3498,15 +3539,17 @@ fn run_tui_watch(
                 history,
             );
             let _ = writeln!(out, "exit {code}");
-            return ExitCode::from(code as u8);
+            // No TUI ever started, Select screen included -- the
+            // caller just exits (issue #698: a Select-opened run
+            // that can't even open a terminal has nowhere left to
+            // show Select on either).
+            return WatchOutcome::Exited(ExitCode::from(code as u8));
         }
     };
 
-    // Design: crossterm's own blocking
-    // `event::read()` runs on its own thread from here on, never
-    // this one -- see `spawn_event_reader`'s own doc comment.
-    let event_rx = spawn_event_reader();
-
+    // Design: crossterm's own blocking `event::read()` runs on its
+    // own thread -- `event_rx` is the caller's own, never a second
+    // one spawned here (issue #698's own `EventReader` doc comment).
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
     // Finding 1: see `run_tui`'s own comment above.
@@ -3935,6 +3978,18 @@ fn run_tui_watch(
                                 local_signal = Some(ForwardSignal::Int);
                                 break 'tui;
                             }
+                            // Issue #698 (§2.5): `esc` on a run
+                            // attached from the Select screen
+                            // returns there -- the same voluntary
+                            // detach `q` already is, just leaving
+                            // this loop for the Select loop to pick
+                            // back up instead of for the process to
+                            // exit.
+                            keys::Action::BackToSelect => {
+                                detached_while_live = !ended;
+                                back_to_select = true;
+                                break 'tui;
+                            }
                             keys::Action::CycleTheme => {
                                 // Finding 19: see `run_tui`'s own
                                 // comment above.
@@ -4109,11 +4164,17 @@ fn run_tui_watch(
         history,
     );
     let _ = writeln!(out, "exit {code}");
-    // Design -- see `run_tui`'s own matching
-    // tail for why this ends the process explicitly rather than just
-    // returning.
     let _ = out.flush();
     registry.remove();
+    // Issue #698: a run attached from the Select screen hands the
+    // event-reader thread back rather than ending the process, so
+    // the Select loop can pick it back up -- a plain `osi watch`
+    // (`opened_from_select` false, `back_to_select` therefore never
+    // set) still ends the process explicitly here, same as `run_tui`'s
+    // own matching tail.
+    if back_to_select {
+        return WatchOutcome::BackToSelect(event_rx);
+    }
     std::process::exit(i32::from(code));
 }
 

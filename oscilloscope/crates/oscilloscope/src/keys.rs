@@ -60,6 +60,12 @@ pub enum Action {
     CtrlC,
     /// `t` (issue #535): cycle to the next colour theme, wrapping.
     CycleTheme,
+    /// `esc` on a run opened from the Select screen (issue #698,
+    /// §2.5: "`esc` from the run comes back here") -- never fires
+    /// unless `App::opened_from_select` is set, so a plain `osi
+    /// <doc>`/`osi watch` run's own `esc` (already unbound at this
+    /// level) is unaffected.
+    BackToSelect,
 }
 
 /// The TUI's whole navigation/dialog state (DESIGN.md §6.3). `running`
@@ -87,6 +93,11 @@ pub struct App {
     /// confirm there, since watch owns no engine of its own to cancel
     /// — it only ever detaches.
     pub is_watch: bool,
+    /// Set when this run was attached from the Select screen (issue
+    /// #698): `esc` then returns there (`Action::BackToSelect`)
+    /// instead of doing nothing, the one difference from a plain
+    /// `osi watch`'s own key handling.
+    pub opened_from_select: bool,
     /// Set when `q` was confirmed while the engine was still running
     /// (§6.3): the main loop sends the same cancelling signal `c`
     /// would, same as always, but also remembers to leave on its own
@@ -269,6 +280,7 @@ impl App {
             filter: None,
             dialog: Dialog::None,
             is_watch,
+            opened_from_select: false,
             quit_when_finished: false,
             tree_scroll: 0,
             state_scroll: 0,
@@ -855,6 +867,16 @@ impl App {
         // through to the match below unchanged.
         if self.screen == Screen::Store && self.handle_store_key(key, store_rows) {
             return Action::None;
+        }
+        // Issue #698 (§2.5): `esc` on a run opened from the Select
+        // screen returns there, before any of this screen's own
+        // bindings below -- checked here rather than added as a
+        // `KeyCode::Esc` arm further down, since every screen's own
+        // Store/Flow/Signal guards above a plain match arm would
+        // otherwise need to repeat the same `opened_from_select`
+        // check themselves.
+        if key.code == KeyCode::Esc && self.opened_from_select {
+            return Action::BackToSelect;
         }
         match key.code {
             // DESIGN.md §6.3/issue #527: every one of these moves (or
@@ -2005,6 +2027,25 @@ mod tests {
         let action = app.handle_key(key(KeyCode::Char('c')), &visible, &[], false, false, &[]);
         assert_eq!(action, Action::None);
         assert_eq!(app.dialog, Dialog::FilterInput("c".to_string()));
+    }
+
+    #[test]
+    fn esc_returns_to_select_only_when_opened_from_select() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(true);
+        app.opened_from_select = true;
+        let action = app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
+        assert_eq!(action, Action::BackToSelect);
+    }
+
+    #[test]
+    fn esc_does_nothing_when_not_opened_from_select() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(true);
+        let action = app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
+        assert_eq!(action, Action::None);
     }
 
     #[test]

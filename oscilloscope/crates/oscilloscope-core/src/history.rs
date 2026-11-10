@@ -772,7 +772,16 @@ fn read_raw_lines(path: &Path) -> std::io::Result<Vec<String>> {
 /// the same as an empty history.
 pub fn read_records(history_dir: &Path, document_path: &str) -> Vec<HistoryRecord> {
     let file_path = history_file_path(history_dir, document_path);
-    let Ok(mut file) = File::open(&file_path) else {
+    parse_records_file(&file_path)
+}
+
+/// [`read_records`]'s own per-line parse, shared with
+/// [`read_all_records`]: tolerates a corrupt line, an unknown `v`, a
+/// torn last line, and a line over [`MAX_LINE_BYTES`], and a
+/// repeated `run_id` within the one file counts once (the first one
+/// read wins). `[]` for a file that doesn't exist.
+fn parse_records_file(file_path: &Path) -> Vec<HistoryRecord> {
+    let Ok(mut file) = File::open(file_path) else {
         return Vec::new();
     };
     let mut data = Vec::new();
@@ -798,6 +807,28 @@ pub fn read_records(history_dir: &Path, document_path: &str) -> Vec<HistoryRecor
             continue;
         }
         out.push(record);
+    }
+    out
+}
+
+/// Every record in every document's own history file under
+/// `history_dir` (the Select screen's own empty-state Recent Runs
+/// table, issue #698: "newest first across every document") -- `[]`
+/// for a missing directory, same as [`read_records`] reads an empty
+/// history. Files are named by a document's own hash
+/// ([`history_file_path`]), never by anything readable on its own,
+/// so this has no way to tell which document a file is for beyond
+/// what [`parse_records_file`] itself reads back out of each line.
+pub fn read_all_records(history_dir: &Path) -> Vec<HistoryRecord> {
+    let Ok(entries) = std::fs::read_dir(history_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            out.extend(parse_records_file(&path));
+        }
     }
     out
 }
