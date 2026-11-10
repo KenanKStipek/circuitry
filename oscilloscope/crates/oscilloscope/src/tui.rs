@@ -6369,7 +6369,7 @@ fn flow_selected_step_lines(
 
     let asked = match &step.detail {
         FocusDetail::Prompt { snippet, .. } => snippet.clone(),
-        FocusDetail::Tool { command } => command.clone(),
+        FocusDetail::Tool { command, .. } => command.clone(),
         _ => None,
     };
     if let Some(asked) = asked {
@@ -9044,6 +9044,8 @@ mod golden_tests {
             received: None,
             tokens: None,
             cost_usd: None,
+            attempts: Vec::new(),
+            meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
         }

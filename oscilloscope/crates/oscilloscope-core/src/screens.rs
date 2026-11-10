@@ -405,7 +405,23 @@ pub enum FocusDetail {
     },
     Tool {
         command: Option<String>,
+        /// Issue #704's own Tool section: the process exit code,
+        /// full stdout and stderr -- each `None` for anything the
+        /// run didn't record (a non-shell tool, or an attempt that
+        /// never reached the point of running one at all).
+        exit_code: Option<i64>,
+        stdout: Option<String>,
+        stderr: Option<String>,
     },
+    /// Issue #704's own Decision section, for an `if` row's own
+    /// `FocusedStep` -- the same data `FlowScreen::selected_decision`
+    /// already builds for a named decision, now reachable from every
+    /// screen a decision can be selected from, not only the Flow's
+    /// own Selected pane.
+    Decision(Box<SelectedDecision>),
+    /// Issue #704's own Loop section, for a loop row's own
+    /// `FocusedStep`: one summary per pass, in plan order.
+    Loop(Vec<LoopPassSummary>),
     /// A `tool` step whose own `provider` is `"agent"` (DESIGN.md's
     /// token-bar rule). `live` carries `meta.live` (issue #637) for as
     /// long as the agent tool is tracking the session -- running, or
@@ -569,6 +585,42 @@ pub struct FocusedStep {
     /// [`Self::usual_busy_p50_s`]'s own p90 -- `None` below the
     /// 5-run threshold even with a p50 in hand.
     pub usual_busy_p90_s: Option<f64>,
+    /// Issue #704's own Attempts section: `meta.fallback_attempts`,
+    /// oldest first -- a prompt's own earlier, replaced attempts,
+    /// each with whatever the run recorded of its provider/model,
+    /// status, tokens and error. Empty for a step the run never
+    /// retried at all.
+    pub attempts: Vec<AttemptDetail>,
+    /// Issue #704's own Meta section: every other key the run
+    /// recorded for this step beyond every other section above --
+    /// folded by default, `m` unfolds. Already formatted the same
+    /// way [`crate::render::Details::meta_summary`] is.
+    pub meta_extra: Vec<(String, String)>,
+}
+
+/// One line of [`FocusDetail::Loop`] (issue #704's own Loop section):
+/// one loop pass, its own status and tokens so far -- `enter` on one
+/// opens it, the same full-screen step every other row does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopPassSummary {
+    pub path: String,
+    pub label: String,
+    pub status: RowStatus,
+    pub tokens: Option<u64>,
+}
+
+/// One line of [`FocusedStep::attempts`] (issue #704's own Attempts
+/// section): one earlier, replaced attempt from `meta.fallback_
+/// attempts`, each field `None` for whatever that one attempt's own
+/// entry didn't record.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AttemptDetail {
+    pub adapter: Option<String>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub error: Option<String>,
 }
 
 fn node_for<'a>(row: &Row, flat: &'a BTreeMap<String, NodeMeta>) -> Option<&'a NodeMeta> {
@@ -603,8 +655,10 @@ pub(crate) fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &
 /// running to remove it (`docs/plugins/agent.md`: "a watcher shows
 /// it as stopped"). `None` once every agent either finished normally
 /// or never started at all.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_focused_step(
     row: &Row,
+    rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
@@ -676,6 +730,19 @@ pub(crate) fn build_focused_step(
                 .iter()
                 .find(|(k, _)| k == "command")
                 .map(|(_, v)| v.clone()),
+            exit_code: node
+                .and_then(|n| n.meta.get("exit_code"))
+                .and_then(Value::as_i64),
+            stdout: node
+                .and_then(|n| n.meta.get("stdout"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            stderr: node
+                .and_then(|n| n.meta.get("stderr"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
         }
     } else if row.kind == RowKind::Prompt || row.kind == RowKind::Reflector {
         FocusDetail::Prompt {
@@ -683,6 +750,10 @@ pub(crate) fn build_focused_step(
             estimated: details.sent.as_ref().is_some_and(|b| b.estimated),
             snippet: details.sent.as_ref().and_then(|b| b.snippet.clone()),
         }
+    } else if row.kind == RowKind::If {
+        FocusDetail::Decision(Box::new(decision_detail_for(row, flat, plan)))
+    } else if row.kind == RowKind::Loop {
+        FocusDetail::Loop(loop_passes_for(row, rows, flat))
     } else {
         FocusDetail::Plain
     };
@@ -705,6 +776,8 @@ pub(crate) fn build_focused_step(
     let cost_usd = node
         .and_then(|n| n.meta.get("cost_usd"))
         .and_then(Value::as_f64);
+    let attempts = node.map(|n| attempts_for(&n.meta)).unwrap_or_default();
+    let meta_extra = node.map(|n| meta_extra_for(&n.meta)).unwrap_or_default();
     FocusedStep {
         path: row.path.clone(),
         breadcrumb: row.label.clone(),
@@ -719,9 +792,139 @@ pub(crate) fn build_focused_step(
         received: details.received.clone(),
         tokens,
         cost_usd,
+        attempts,
+        meta_extra,
         usual_busy_p50_s: None,
         usual_busy_p90_s: None,
     }
+}
+
+/// Issue #704's own Decision section for a named `if` row: the same
+/// data `build_flow`'s own inline construction already builds for
+/// `FlowScreen::selected_decision`, now shared so every screen's own
+/// full-screen step shows it for a decision, not only the Flow's.
+fn decision_detail_for(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> SelectedDecision {
+    let node = flat.get(&row.path);
+    let branch = node.and_then(|n| n.branch.clone());
+    let answer = node.and_then(|n| n.meta.get("answer")).map(|v| match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    });
+    let condition = plan.match_path(&row.path).and_then(|m| {
+        m.entries.iter().find_map(|e| match &e.kind {
+            PlanEntryKind::If {
+                condition: Some(c), ..
+            } => Some(c.clone()),
+            _ => None,
+        })
+    });
+    SelectedDecision {
+        label: row.label.clone(),
+        condition,
+        branch,
+        inferred: false,
+        nothing_ran: false,
+        answer,
+        inferred_evidence: None,
+    }
+}
+
+/// Issue #704's own Loop section: one summary per pass directly
+/// under `row`'s own path, in plan order -- `rows` is whichever list
+/// the caller already has (the Tape's own, the Flow's unfolded
+/// rows, ...), so a pass folded away entirely (a quick-steps
+/// summary) is simply absent here, the same as everywhere else that
+/// list already drops it.
+fn loop_passes_for(
+    row: &Row,
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+) -> Vec<LoopPassSummary> {
+    let prefix = format!("{}.", row.path);
+    rows.iter()
+        .filter(|r| r.path.starts_with(&prefix) && crate::rail::is_pass_row_path(&r.path))
+        .map(|r| {
+            let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
+            let total = sent + received;
+            LoopPassSummary {
+                path: r.path.clone(),
+                label: r.label.clone(),
+                status: r.status.clone(),
+                tokens: (total > 0).then_some(total),
+            }
+        })
+        .collect()
+}
+
+/// Issue #704's own Attempts section: `meta.fallback_attempts`,
+/// oldest first, read permissively -- a wrong-typed or missing field
+/// in any one entry just leaves that one field `None`, never a panic
+/// or a dropped entry.
+fn attempts_for(meta: &Value) -> Vec<AttemptDetail> {
+    meta.get("fallback_attempts")
+        .and_then(Value::as_array)
+        .map(|attempts| {
+            attempts
+                .iter()
+                .map(|a| AttemptDetail {
+                    adapter: a.get("adapter").and_then(Value::as_str).map(str::to_string),
+                    model: a.get("model").and_then(Value::as_str).map(str::to_string),
+                    status: a.get("status").and_then(Value::as_str).map(str::to_string),
+                    tokens_sent: a.get("tokens_sent").and_then(Value::as_u64),
+                    tokens_received: a.get("tokens_received").and_then(Value::as_u64),
+                    error: a.get("error").and_then(Value::as_str).map(str::to_string),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every key [`FocusDetail`]/[`FocusedStep`]'s own named sections
+/// above already read (directly, or through [`details_for`]'s own
+/// `meta_summary`) -- issue #704's own Meta section is everything
+/// else `meta` still has.
+const META_EXTRA_EXCLUDE: &[&str] = &[
+    "created_at",
+    "completed_at",
+    "provider",
+    "model",
+    "model_reason",
+    "adapter",
+    "exit_code",
+    "stdout",
+    "stderr",
+    "params_rendered",
+    "fallback_attempts",
+    "attempts",
+    "live",
+    "raw",
+    "branch",
+    "answer",
+    "tokens_sent",
+    "tokens_received",
+    "tokens_sent_total",
+    "tokens_received_total",
+    "cost_usd",
+    "retries_used",
+    "waiting_for",
+];
+
+/// Issue #704's own Meta section: every other key the run recorded
+/// for this step, in `meta`'s own (alphabetical) key order --
+/// `display_value` the same way [`details_for`]'s own `meta_summary`
+/// already renders one.
+fn meta_extra_for(meta: &Value) -> Vec<(String, String)> {
+    let Some(obj) = meta.as_object() else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter(|(k, v)| !META_EXTRA_EXCLUDE.contains(&k.as_str()) && !v.is_null())
+        .map(|(k, v)| (k.clone(), crate::render::display_value(v)))
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -2538,6 +2741,7 @@ pub fn build_tape(
         .map(|row| {
             build_focused_step(
                 row,
+                rows,
                 flat,
                 plan,
                 model,
@@ -3643,6 +3847,7 @@ pub fn build_signal(
     let selected = selected_row.map(|row| {
         build_focused_step(
             row,
+            rows,
             flat,
             plan,
             model,
@@ -4058,7 +4263,8 @@ pub fn build_flow(
                     inferred_evidence: None,
                 });
             } else {
-                let mut step = build_focused_step(row, flat, plan, model, state, now, run_ended_at);
+                let mut step =
+                    build_focused_step(row, rows, flat, plan, model, state, now, run_ended_at);
                 // A sequential container's own child keeps its own
                 // ten-cell station name on the rail, but the Selected
                 // pane's own title still says which container it's
@@ -5568,6 +5774,7 @@ mod tests {
         // as stale, the same as a stopped run viewed much later.
         let step = build_focused_step(
             &row,
+            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -5624,6 +5831,7 @@ mod tests {
         let model = RunModel::new();
         let step = build_focused_step(
             &row,
+            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -5866,6 +6074,7 @@ mod tests {
         let row = agent_row("prime.agent1");
         let step = build_focused_step(
             &row,
+            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -5909,6 +6118,7 @@ mod tests {
         let row = agent_row("prime.agent1");
         let step = build_focused_step(
             &row,
+            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -5961,6 +6171,7 @@ mod tests {
         };
         let step = build_focused_step(
             &row,
+            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
@@ -6032,6 +6243,7 @@ mod tests {
         let row = agent_row("prime.agent1");
         let step = build_focused_step(
             &row,
+            std::slice::from_ref(&row),
             &flat,
             &plan,
             &model,
