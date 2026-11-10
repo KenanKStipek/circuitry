@@ -571,6 +571,23 @@ pub struct FocusedStep {
     /// A prompt's own reply block (`Details::received`) -- `None`
     /// for a non-prompt step, or a prompt that hasn't replied yet.
     pub received: Option<TokenBlock>,
+    /// Issue #704's own Produced section: the node's own value in
+    /// full, never cut to `DETAILS_PREVIEW_CHARS` the way [`Self::
+    /// value`] is -- `None` for anything but a finished leaf with a
+    /// real value of its own.
+    pub value_full: Option<String>,
+    /// Issue #704's own Asked section for a prompt or reflector:
+    /// `meta.prompt_sent` in full -- `None` for every other kind, or
+    /// a prompt the engine never recorded the rendered text for.
+    pub prompt_sent_full: Option<String>,
+    /// Issue #704's own Tokens section: history's own median for
+    /// this exact step and the run count behind it (§3.5's "usually"
+    /// -- the Tape's own `selected_usual`, now shared) -- `None`
+    /// below the 3-run threshold.
+    pub usual_tokens: Option<(u64, usize)>,
+    /// This step's own share of the run's tokens so far, a whole
+    /// percent (the Tape's own `selected_share_pct`, now shared).
+    pub share_pct: Option<u64>,
     /// `node_tokens`'s own sent-plus-received total, the same rule
     /// [`crate::flow::FlowRow::tokens`] uses.
     pub tokens: Option<u64>,
@@ -665,6 +682,7 @@ pub(crate) fn build_focused_step(
     state: Option<&Value>,
     now: &str,
     run_ended_at: Option<&str>,
+    header: &Header,
 ) -> FocusedStep {
     let node = node_for(row, flat);
     // Issue #631: a step known only from `--events` (a tree-loop
@@ -778,6 +796,37 @@ pub(crate) fn build_focused_step(
         .and_then(Value::as_f64);
     let attempts = node.map(|n| attempts_for(&n.meta)).unwrap_or_default();
     let meta_extra = node.map(|n| meta_extra_for(&n.meta)).unwrap_or_default();
+    let value_full = node
+        .map(|n| crate::render::display_value(&n.value))
+        .filter(|v| !v.is_empty());
+    let prompt_sent_full = (row.kind == RowKind::Prompt || row.kind == RowKind::Reflector)
+        .then(|| {
+            node.and_then(|n| n.meta.get("prompt_sent"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .flatten();
+    let usual_tokens = crate::history::display_key(&row.path, plan)
+        .and_then(|key| header.history_step_usual.get(&key))
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+    let share_pct = {
+        let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
+            let (sent, received) = node
+                .map(|n| crate::model::node_tokens(&n.meta))
+                .unwrap_or((0, 0));
+            let total = sent + received;
+            (total > 0).then_some(total)
+        } else {
+            crate::model::step_tokens_so_far(node, &row.path, model, now).total()
+        };
+        let run_total = header.tokens_sent
+            + header.tokens_received
+            + header.tokens_sent_live_estimate
+            + header.tokens_received_live_estimate;
+        total
+            .filter(|_| run_total > 0)
+            .map(|total| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
+    };
     FocusedStep {
         path: row.path.clone(),
         breadcrumb: row.label.clone(),
@@ -790,6 +839,10 @@ pub(crate) fn build_focused_step(
         error: details.error.clone(),
         value: details.value.clone(),
         received: details.received.clone(),
+        value_full,
+        prompt_sent_full,
+        usual_tokens,
+        share_pct,
         tokens,
         cost_usd,
         attempts,
@@ -2748,6 +2801,7 @@ pub fn build_tape(
                 state,
                 now,
                 header.run_end_ts.as_deref(),
+                header,
             )
         });
 
@@ -3854,6 +3908,7 @@ pub fn build_signal(
             state,
             now,
             header.run_end_ts.as_deref(),
+            header,
         )
     });
 
@@ -4263,8 +4318,17 @@ pub fn build_flow(
                     inferred_evidence: None,
                 });
             } else {
-                let mut step =
-                    build_focused_step(row, rows, flat, plan, model, state, now, run_ended_at);
+                let mut step = build_focused_step(
+                    row,
+                    rows,
+                    flat,
+                    plan,
+                    model,
+                    state,
+                    now,
+                    run_ended_at,
+                    header,
+                );
                 // A sequential container's own child keeps its own
                 // ten-cell station name on the rail, but the Selected
                 // pane's own title still says which container it's
@@ -5781,6 +5845,7 @@ mod tests {
             None,
             "2026-01-01T12:00:00Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -5838,6 +5903,7 @@ mod tests {
             None,
             "2026-01-01T11:52:54Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -6081,6 +6147,7 @@ mod tests {
             None,
             "2026-10-08T11:52:55Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -6125,6 +6192,7 @@ mod tests {
             None,
             "2026-10-08T11:52:55Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -6178,6 +6246,7 @@ mod tests {
             None,
             "2026-10-08T11:52:56Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -6250,6 +6319,7 @@ mod tests {
             None,
             "2026-10-08T11:52:55Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {

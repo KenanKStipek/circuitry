@@ -1140,6 +1140,7 @@ pub fn build_store(
                 state,
                 now,
                 header.run_end_ts.as_deref(),
+                header,
             )
         });
     let usual_so_far_tokens = {
