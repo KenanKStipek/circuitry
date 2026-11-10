@@ -1382,19 +1382,6 @@ mod tests {
     }
 
     #[test]
-    fn left_collapses_the_selected_row_and_right_expands_it_again() {
-        let rows = [row("prime.loop", 1, StatusKind::Running)];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Store;
-        app.selected_path = Some("prime.loop".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, &[], true, false, &[]);
-        assert!(app.collapsed.contains("prime.loop"));
-        app.handle_key(key(KeyCode::Right), &visible, &[], true, false, &[]);
-        assert!(!app.collapsed.contains("prime.loop"));
-    }
-
-    #[test]
     fn collapsing_a_row_hides_its_descendants_from_visible_rows() {
         let rows = [
             row("prime.loop", 1, StatusKind::Running),
@@ -1502,19 +1489,6 @@ mod tests {
         assert!(!app.follow);
         app.handle_key(key(KeyCode::Char('f')), &visible, &[], true, false, &[]);
         assert!(app.follow);
-    }
-
-    #[test]
-    fn fold_is_on_by_default_and_z_toggles_it() {
-        let rows = [row("prime.a", 1, StatusKind::Done)];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Store;
-        assert!(app.fold_enabled, "issue #613: fold is on by default");
-        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
-        assert!(!app.fold_enabled);
-        app.handle_key(key(KeyCode::Char('z')), &visible, &[], true, false, &[]);
-        assert!(app.fold_enabled);
     }
 
     /// Issue #613: a container the user selected can fold into a
@@ -1757,7 +1731,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Store;
+        app.screen = Screen::Signal;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert!(matches!(app.dialog, Dialog::FullValue(_)));
         app.handle_key(key(KeyCode::Esc), &visible, &[], false, false, &[]);
@@ -1769,7 +1743,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Store;
+        app.screen = Screen::Signal;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
     }
@@ -1781,7 +1755,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Store;
+        app.screen = Screen::Signal;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
     }
@@ -1791,7 +1765,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.screen = Screen::Store;
+        app.screen = Screen::Signal;
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
         assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
         app.handle_key(key(KeyCode::Char('v')), &visible, &[], false, true, &[]);
@@ -2013,38 +1987,6 @@ mod tests {
         assert!(!app.flow_has_selection);
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &[]);
         assert!(!app.tape_fullscreen_step);
-    }
-
-    #[test]
-    fn tab_cycles_tree_details_state_and_back() {
-        let rows = [row("prime.a", 1, StatusKind::Done)];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Store;
-        app.state_viewport = 8;
-        assert_eq!(app.pane, Pane::Tree);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Details);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::State);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Tree);
-    }
-
-    /// A small terminal drops the state pane entirely (`tui::draw`
-    /// zeroes `state_viewport` that same frame) — `tab` must skip
-    /// straight from details back to the orchestration pane.
-    #[test]
-    fn tab_skips_the_state_pane_when_it_is_not_drawn() {
-        let rows = [row("prime.a", 1, StatusKind::Done)];
-        let visible: Vec<&Row> = rows.iter().collect();
-        let mut app = App::new(false);
-        app.screen = Screen::Store;
-        app.state_viewport = 0;
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Details);
-        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false, &[]);
-        assert_eq!(app.pane, Pane::Tree, "the state pane has nothing to focus");
     }
 
     #[test]

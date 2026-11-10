@@ -9768,9 +9768,28 @@ mod highlight_tests {
             zone: &test_zone(),
             no_animation: false,
         };
+        // Screen::Tape, the only screen that still draws its own
+        // content below 80 columns -- Signal, Flow and Store (issue
+        // #695) all bounce to it instead at that width, which would
+        // leave this test's own narrowest case drawing nothing at
+        // all for one real frame.
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let flat = std::collections::BTreeMap::new();
+        let model = oscilloscope_core::model::RunModel::new();
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            true,
+            "2026-01-01T00:00:00Z",
+        );
         let first_cell_is_blank = |width: u16| -> bool {
             let mut app = App::new(false);
-            app.screen = oscilloscope_core::screens::Screen::Store;
+            app.screen = oscilloscope_core::screens::Screen::Tape;
             let backend = TestBackend::new(width, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
@@ -9785,7 +9804,7 @@ mod highlight_tests {
                         &ctx,
                         0,
                         "2026-01-01T00:00:00Z",
-                        None,
+                        Some(&tape_screen),
                         None,
                         None,
                         None,
