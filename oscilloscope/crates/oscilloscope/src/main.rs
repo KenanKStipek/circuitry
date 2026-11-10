@@ -29,7 +29,7 @@ mod terminal;
 mod theme;
 mod tui;
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{
@@ -193,11 +193,11 @@ fn effective_log_mode(explicit: bool) -> bool {
 }
 
 /// Bare `osi` with no orchestration, without a TTY (or with
-/// `--log`): finds the runs on this machine (issue #698's "Settled
-/// 2", the registry plus a process scan plus a `state.live.json`
-/// scan of the current directory) and prints one plain line each,
-/// then exits 0 -- a script's own discovery answer, without reading
-/// the registry itself. Never opens a terminal, never blocks.
+/// `--log`): finds the runs on this machine (the registry plus a
+/// process scan plus a `state.live.json` scan of the current
+/// directory) and prints one plain line each, then exits 0 -- a
+/// script's own discovery answer, without reading the registry
+/// itself. Never opens a terminal, never blocks.
 fn print_discovered_runs() -> ExitCode {
     let runs = oscilloscope_core::discovery::discover_runs(
         registry_io::resolve_runs_dir().as_deref(),
@@ -962,7 +962,7 @@ fn watch_glance(
     ExitCode::from(watch_exit_code(local_signal, &model, &last_state))
 }
 
-fn do_run(args: RunArgs) -> ExitCode {
+fn do_run(args: RunArgs, raw_args: &[String]) -> ExitCode {
     // Issue #535: resolved before anything else runs, same spirit as
     // the signal watcher just below -- a bad `OSI_THEME` is a usage
     // error and should exit 2 before this function does anything
@@ -980,20 +980,15 @@ fn do_run(args: RunArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Issue #698's "Settled 2": no document at all. On a TTY with no
-    // `--log`, this stays the usage error it always was -- the
-    // Select screen that will replace it is a later part of this
-    // same design. Otherwise, osi finds what's already running
-    // instead.
+    // No document at all. On a TTY with no `--log`, this stays the
+    // usage error it always was -- the Select screen that will
+    // replace it is a later part of this same design. Otherwise, osi
+    // finds what's already running instead.
     let Some(orchestration_arg) = args.orchestration.clone() else {
         if effective_log_mode(args.log) {
             return print_discovered_runs();
         }
-        eprintln!(
-            "osi: an orchestration document is required: `osi <orchestration> [config.json] ...`; \
-             try --help"
-        );
-        return exit_early(2);
+        return report_clap_error(missing_orchestration_error(raw_args));
     };
 
     // Registered before *anything* else in this function, not just
@@ -1031,10 +1026,10 @@ fn do_run(args: RunArgs) -> ExitCode {
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
     };
-    // Issue #698's "Settled 4": `config` recorded in history exactly
-    // as given on the command line, never resolved further; `run_dir`
-    // made absolute so "Recent Runs" can still open it later
-    // regardless of osi's own cwd at that later time.
+    // `config` recorded in history exactly as given on the command
+    // line, never resolved further; `run_dir` made absolute so
+    // "Recent Runs" can still open it later regardless of osi's own
+    // cwd at that later time.
     let history = history_io::HistoryHandle::for_run(
         history_io::resolve_history_dir(args.no_history),
         history_io::resolve_run_document_path(&orchestration),
@@ -1045,11 +1040,12 @@ fn do_run(args: RunArgs) -> ExitCode {
                 .into_owned(),
         ),
     );
-    // Issue #698's "Settled 1": written once this run's own
-    // `run_start` is known (`RegistryHandle::ensure_written`, called
-    // on every rebuild below), removed again when `registry` itself
-    // is dropped at the end of this function -- covering the run's
-    // own end and every signal path the same way.
+    // Written once this run's own `run_start` is known
+    // (`RegistryHandle::ensure_written`, called on every rebuild
+    // below), removed again when `registry` itself is dropped at
+    // the end of this function, or earlier once the engine's exit is
+    // actually observed -- covering the run's own end and every
+    // signal path the same way.
     let mut registry = registry_io::RegistryHandle::new(
         registry_io::resolve_runs_dir(),
         spec.config.as_deref(),
@@ -1061,6 +1057,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         &run_dir,
         &spec.events_path(),
         &spec.live_state_path(),
+        false,
     );
 
     let engine = build_engine(args.engine, &mut signals);
@@ -2748,6 +2745,12 @@ fn run_tui(
             if let Ok(Some(status)) = child.try_wait() {
                 exit_status = Some(status);
                 exit_status_ts = Some(now_rfc3339());
+                // The entry is removed the moment the engine's own
+                // exit is seen, not only once this loop itself ends
+                // (`registry`'s own `Drop`) -- otherwise it would
+                // still name a live run for as long as the finished
+                // screen stays open.
+                registry.remove();
                 // #494: the engine already exited, but its last
                 // events and its final live-state write (DESIGN.md
                 // §1.1) can still land after the poll above that just
@@ -3245,9 +3248,11 @@ fn do_watch(args: WatchArgs) -> ExitCode {
                 .into_owned(),
         ),
     );
-    // Issue #698's "Settled 1": `osi watch` writes an entry too
-    // (`launcher: "osi <version> watch"`), the same way `osi <doc>`
-    // does.
+    // `osi watch` writes an entry too (`launcher: "osi <version>
+    // watch"`), the same way `osi <doc>` does -- unless a launcher's
+    // own entry for this same run already exists and is live, in
+    // which case this handle writes (and so removes) nothing, so a
+    // watch of a run another `osi` launched never overwrites it.
     let mut registry = registry_io::RegistryHandle::new(
         registry_io::resolve_runs_dir(),
         args.config.as_deref(),
@@ -3256,6 +3261,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &run_dir,
         &run_dir.join("events.jsonl"),
         &live_state_path,
+        true,
     );
 
     // Issue #626: `--glance` wins over both the TUI and `--log`,
@@ -3612,6 +3618,12 @@ fn run_tui_watch(
                 }
             }
             if ended {
+                // The entry is removed the moment the watched run's
+                // own end is seen this way, not only once this loop
+                // itself ends (`registry`'s own `Drop`) -- otherwise
+                // it would still name a live run for as long as the
+                // finished screen stays open.
+                registry.remove();
                 // #494: the same shared final drain every path that
                 // reaches a run's end takes, regardless of which of
                 // the three stop conditions above just tripped --
@@ -4196,6 +4208,29 @@ fn report_clap_error(err: clap::Error) -> ExitCode {
     ExitCode::from(err.exit_code() as u8)
 }
 
+/// The same usage error clap produced on its own when `orchestration`
+/// was a required positional, before a bare `osi` without a TTY (or
+/// with `--log`) gained a second meaning (discovery) that needed it
+/// optional instead: re-parses `raw_args` against a copy of
+/// [`RunArgs`]'s own command with that one argument marked required
+/// again, so the message, usage line and exit code are clap's own,
+/// not a hand-written imitation of them -- a TTY caller with no
+/// document still sees exactly what it always did.
+fn missing_orchestration_error(raw_args: &[String]) -> clap::Error {
+    // `mut_arg` re-inserts the argument at the end of the command's
+    // own internal list, which would otherwise hand it a *later*
+    // positional index than `config`'s own -- both positions are
+    // pinned back explicitly so `config` still comes after
+    // `orchestration`, exactly as the two derived fields are
+    // ordered.
+    let command = RunArgs::command()
+        .mut_arg("orchestration", |a| a.required(true).index(1))
+        .mut_arg("config", |a| a.index(2));
+    command
+        .try_get_matches_from(raw_args.to_vec())
+        .expect_err("orchestration is missing, so this must fail")
+}
+
 fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
     if args.get(1).map(String::as_str) == Some("watch") {
@@ -4205,8 +4240,8 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
             Err(err) => report_clap_error(err),
         }
     } else {
-        match RunArgs::try_parse_from(args) {
-            Ok(args) => do_run(args),
+        match RunArgs::try_parse_from(args.clone()) {
+            Ok(parsed) => do_run(parsed, &args),
             Err(err) => report_clap_error(err),
         }
     }
@@ -4918,6 +4953,15 @@ mod tests {
     }
 
     #[test]
+    fn missing_orchestration_error_is_claps_own_missing_required_argument() {
+        let err = missing_orchestration_error(&args(&[]));
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert_eq!(err.exit_code(), 2);
+        let rendered = err.to_string();
+        assert!(rendered.contains("ORCHESTRATION"));
+    }
+
+    #[test]
     fn run_args_help_describes_every_argument() {
         // Issue #433: `osi <doc>`'s own arguments had no --help
         // descriptions at all, unlike `osi watch`'s.
@@ -5036,15 +5080,16 @@ mod tests {
         assert!(parsed.log);
     }
 
-    // `no_args_is_a_usage_error` is gone (issue #698's "Settled 2"):
-    // no orchestration, without a TTY, now lists what's running
-    // instead of erroring -- `print_discovered_runs` reads the real
-    // process environment (`OSI_RUNS_DIR` and friends) through
+    // `no_args_is_a_usage_error` is gone: no orchestration, without
+    // a TTY, now lists what's running instead of erroring --
+    // `print_discovered_runs` reads the real process environment
+    // (`OSI_RUNS_DIR` and friends) through
     // `registry_io::resolve_runs_dir`, which this crate's own unit
     // tests never override (no test here sets a process-wide env
     // var, since `cargo test` runs many of them concurrently); the
     // e2e suite covers the exit code with an isolated `OSI_RUNS_DIR`
-    // instead (`tests/e2e_cof.rs`'s `bare_osi_without_a_tty_lists_...`).
+    // instead (`tests/cli_streams.rs`'s own TTY/non-TTY tests, and
+    // `tests/e2e_tui_pty.rs`'s registry tests).
 
     #[test]
     fn a_signal_already_pending_before_the_spawn_gives_its_exit_code_with_no_spawn() {
