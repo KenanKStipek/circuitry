@@ -1844,7 +1844,12 @@ fn build_flow_screen_if_active(
     // root's own step pane or whatever leaf follow happens to be on.
     let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
     let flow_selected_path = if app.follow || selected_path.as_deref() == root_path {
-        None
+        // Issue #703's rule 5: following lands on whichever step is
+        // actually running, not only on the default pass -- `None`
+        // (the default-pass fallback below) only when the running
+        // step is itself inside a loop pass, or nothing is running.
+        oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
+            .map(str::to_string)
     } else {
         selected_path
     };
@@ -1893,10 +1898,11 @@ fn build_signal_screen_if_active(
     ))
 }
 
-/// Issue #637 (extended by #688 to screen 1, #678 to screen 0): the
-/// transcript path for whichever step is actually on screen right now
-/// -- the Tape's own selected step on screen 0, Flow's and Signal's
-/// own selected step on screens 2 and 1 -- `None` on every other
+/// Issue #637 (extended by #688 to screen 1, #678 to screen 0, #703
+/// to screen 3): the transcript path for whichever step is actually
+/// on screen right now -- the Tape's own selected step on screen 0,
+/// Flow's and Signal's own selected step on screens 2 and 1, the
+/// Store's own selected step on screen 3 -- `None` on every other
 /// screen. Tails a finished agent's own `meta.raw.transcript` too,
 /// not just a running one's `meta.live.transcript`.
 fn focused_agent_transcript_path(
@@ -1904,13 +1910,14 @@ fn focused_agent_transcript_path(
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
     signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
+    store_screen: Option<&oscilloscope_core::store::StoreScreen>,
 ) -> Option<String> {
     use oscilloscope_core::screens::{FocusDetail, Screen};
     let step = match app.screen {
         Screen::Tape => tape_screen.and_then(|t| t.selected.as_ref()),
         Screen::Flow => flow_screen.and_then(|f| f.selected_step.as_ref()),
         Screen::Signal => signal_screen.and_then(|t| t.selected.as_ref()),
-        _ => None,
+        Screen::Store => store_screen.and_then(|t| t.selected.as_ref()),
     }?;
     match &step.detail {
         FocusDetail::Agent {
@@ -1957,9 +1964,11 @@ fn tail_focused_transcript(
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
     signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
+    store_screen: Option<&oscilloscope_core::store::StoreScreen>,
     cache: &mut TranscriptTailCache,
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
-    let path = focused_agent_transcript_path(app, tape_screen, flow_screen, signal_screen)?;
+    let path =
+        focused_agent_transcript_path(app, tape_screen, flow_screen, signal_screen, store_screen)?;
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
     if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
         return cache.view.clone();
@@ -2232,6 +2241,7 @@ fn run_tui(
         tape_screen.as_ref(),
         flow_screen.as_ref(),
         signal_screen.as_ref(),
+        store_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
@@ -2456,6 +2466,7 @@ fn run_tui(
                 tape_screen.as_ref(),
                 flow_screen.as_ref(),
                 signal_screen.as_ref(),
+                store_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
@@ -2646,6 +2657,7 @@ fn run_tui(
                             tape_screen.as_ref(),
                             flow_screen.as_ref(),
                             signal_screen.as_ref(),
+                            store_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -3531,6 +3543,7 @@ fn run_tui_watch(
         tape_screen.as_ref(),
         flow_screen.as_ref(),
         signal_screen.as_ref(),
+        store_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
@@ -3794,6 +3807,7 @@ fn run_tui_watch(
                 tape_screen.as_ref(),
                 flow_screen.as_ref(),
                 signal_screen.as_ref(),
+                store_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
@@ -3944,6 +3958,7 @@ fn run_tui_watch(
                             tape_screen.as_ref(),
                             flow_screen.as_ref(),
                             signal_screen.as_ref(),
+                            store_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -4268,12 +4283,11 @@ mod tests {
         }})
     }
 
-    /// Issue #637 (extended by #688 to screen 1): transcript tailing
-    /// only ever happens for the one step actually on screen -- the
-    /// overview's own focused step on screen 0, Flow's selected step
-    /// on screen 2, Signal's selected step on screen 1, and nothing
-    /// at all on screen 3, even though the very same agent step
-    /// exists in state either way.
+    /// Issue #637 (extended by #688 to screen 1, #703 to screen 3):
+    /// transcript tailing only ever happens for the one step
+    /// actually on screen -- the overview's own focused step on
+    /// screen 0, Flow's selected step on screen 2, Signal's selected
+    /// step on screen 1, the Store's own selected step on screen 3.
     #[test]
     fn focused_agent_transcript_path_is_none_off_the_overview_flow_and_signal_screens() {
         let plan = PlanTree::empty();
@@ -4329,6 +4343,24 @@ mod tests {
             None,
             "2026-01-01T00:00:01Z",
         );
+        let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+            rendered
+                .unfolded_rows
+                .iter()
+                .map(|r| (r.path.clone(), r.kind))
+                .collect();
+        let store_screen = oscilloscope_core::store::build_store(
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            "2026-01-01T00:00:01Z",
+            Some("prime.fix"),
+        );
 
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Tape;
@@ -4337,7 +4369,8 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&signal_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
@@ -4348,7 +4381,8 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&signal_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
@@ -4359,7 +4393,8 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&signal_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
@@ -4370,10 +4405,11 @@ mod tests {
                 &app,
                 Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&signal_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
-            None,
-            "no screen but tape/flow/signal ever names a transcript to tail"
+            Some("/tmp/agent-live-path-test.jsonl".to_string()),
+            "the Store's own full-screen step gets the same transcript tail"
         );
     }
 
@@ -4416,7 +4452,7 @@ mod tests {
         let mut app = App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Tape;
         assert_eq!(
-            focused_agent_transcript_path(&app, Some(&tape_screen), None, None),
+            focused_agent_transcript_path(&app, Some(&tape_screen), None, None, None),
             None
         );
     }

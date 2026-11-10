@@ -2201,6 +2201,73 @@ before, the bare elapsed time, never a crash. None of the nine
 `tape--*` frame goldens changes: the design's own fixture run has no
 running prompt with a `meta.live` of its own to begin with.
 
+**A running or finished agent's own activity** (issue #703, on top of
+#637's `meta.live`/`meta.raw`). A running agent's own Tape row
+(`screens::tape_running_agent_what`) reads the elapsed time, the
+turn (`repair` in its own place during the repair turn, an `attempt
+N` segment added on a retry), the current tool with its own elapsed,
+and context usage (`/200k` once `context_window` is known) -- in
+that order, so the row's own cut-from-the-right rule (`tui::
+tape_agent_what_text`) drops exactly this list's own tail first,
+a whole ` · `-separated piece at a time, never half of one (`·
+ct⋯`) the way a prompt row's own reply preview still cuts by
+character -- only once a single remaining piece still doesn't fit
+on its own does this fall back to cutting it by character too.
+Before the agent tool's very first `meta.live` write, the elapsed
+time alone; a stale leftover (`AgentLive::is_recent` false, #637's
+interrupted-run case, including one an interrupted run itself left
+behind) reads `stopped` in place of the tool and context figures.
+A finished agent's own row (`screens::tape_finished_agent_what`)
+reads its turns, tool calls and files/lines changed from
+`meta.raw`, same cut-from-the-right rule; a failed session keeps
+the existing error text, never this summary.
+
+One Agent block (`tui::agent_block_lines`) is shared by every pane
+that shows a running or finished agent step: the Tape's own detail
+pane (`tape_normal_detail_lines`, right after its own Tokens/Usual/
+Share lines, which still read an agent step's totals the same as any
+other tool), the full-screen step shared by the Signal and the Store
+(`draw_focused_step_detail`), and the Flow screen's own Selected pane
+(`flow_selected_step_lines`) -- replacing that pane's own former
+`agent_live_lines`, which only ever covered a running session.
+`main.rs`'s own `tail_focused_transcript` tails whichever of the
+four screens is actually on display, the Store included. Each field
+(Asked, Turn, Tool, Tools, Context, Files, Tests, Said -- the
+transcript's own `last_reply` -- and Cost) reads from `meta.live`
+while running, the matching `meta.raw` field once finished, and is
+left out entirely when the engine never reported it, never shown as
+a bogus zero. Below the fields, the transcript tail
+(`observe::tail_transcript_lines` plus `transcript::
+build_transcript_view`) lists calls oldest first, a running one with
+its own elapsed, an ended one with `✓`/`✗` and its own duration --
+kept to as many of the newest calls as the caller's own row budget
+allows (the pane's own height, minus the fields above it), with a
+leading `…` once either the read window or that budget cut the list
+short.
+
+The Flow rail's own stations (`rail::prompt_headline_detail`/
+`tool_headline_detail`) grow the same live figures: a running
+prompt's headline is its received figure (`Headline::Received`,
+`↓≈212 t`), its detail the rate (`Detail::Rate`), `waiting`
+(`Detail::Waiting`) before the first delta, or the attempt number on
+a retry (`Detail::Attempt`) -- a state-backed, non-streaming adapter
+never gets a first token at all, so its own station reads elapsed
+time and attempt only, the same shape the Tape's own row already
+reads for one; a running agent's headline is its turn
+and current tool (`Headline::AgentTurn`, `turn 4 · bash`), its detail
+context usage or files/lines changed, whichever it has
+(`Detail::AgentActivity`); a finished agent's station reads exactly
+like a finished prompt's, tokens and the bar. While following
+(`screens::default_follow_path`), the Selected pane lands on
+whichever station is actually running, not only on the default pass
+-- the default pass still stands in when that running step is itself
+inside a loop pass, or when nothing is running and nothing is
+selected either.
+
+None of the frame goldens (Tape, Signal, Flow, Store) changes: the
+design's own fixture run has no agent step at all, and electricity
+has no agent tool to begin with.
+
 **A running agent's own tokens count the same way everywhere**
 (issue #702, on top of #637's `meta.live` heartbeat and #675's
 prompt figures above). `model::step_tokens_so_far` is the one shared

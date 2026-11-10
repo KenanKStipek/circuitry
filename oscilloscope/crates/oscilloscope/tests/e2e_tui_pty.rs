@@ -259,6 +259,28 @@ fn wait_for_screen_text(
     }
 }
 
+/// [`wait_for_screen_text`], but waiting for `needle` to disappear
+/// instead -- the Tape's own full-screen step view (`enter`) draws
+/// over the whole body with no list pane at all, so the list's own
+/// title ("Tape · ") vanishing is the proof that it actually opened,
+/// not just that the detail pane it already shared the screen with
+/// drew something.
+fn wait_for_screen_text_gone(
+    captured_buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    needle: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        if !screen.contains(needle) || std::time::Instant::now() >= deadline {
+            return screen;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn send_bytes(master: &mut File, bytes: &[u8]) {
     master.write_all(bytes).expect("write to pty master");
     master.flush().expect("flush pty master");
@@ -3490,6 +3512,139 @@ fn a_slow_streaming_prompt_shows_live_token_figures_then_settles_on_electricity(
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #703's own PTY acceptance item: a running agent session
+/// (the reference `fake_pi.py`, issue #637) shows its turn and
+/// current tool right on the Tape's own row while it runs, and
+/// `enter` opens the one shared Agent block with the transcript tail
+/// growing as further tool calls start. Every wait below is its own
+/// named step with its own cap, never a bare sleep.
+#[test]
+fn a_running_agent_shows_its_turn_and_tool_live_and_the_block_grows_on_enter() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let fake_pi = std::fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/agent_live_fakes/fake_pi.py"),
+    )
+    .expect("fake_pi.py exists");
+    // An absolute transcript path -- the agent tool writes it
+    // relative to its own `cwd`, which this test's own `cof`
+    // process never sets to `work.path()` itself, so a relative name
+    // here would otherwise land wherever the test binary's own
+    // process happened to start from.
+    let transcript_path = work.path().join("agent_transcript.jsonl");
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        &format!(
+            "effects:\n  - name: fixer\n    type: tool\n    provider: agent\n    params:\n      engine: pi\n      prompt: \"Fix the bug.\"\n      tools: [read, bash, edit]\n      transcript: {}\n",
+            transcript_path.display()
+        ),
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &serde_json::json!({
+            "default_adapter": "scripted",
+            "default_model": "scripted-model",
+            "runtime": {
+                "adapters": {"scripted": {}},
+                "plugins": {"agent": {"pi": {"binary": fake_pi.to_string_lossy()}}},
+            },
+        })
+        .to_string(),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.fixer",
+        Duration::from_secs(20),
+    );
+
+    // The fake's own first tool call (`bash`) starts right after its
+    // first turn's `message_end`, well before that call's own 2.5s
+    // sleep ends -- the Tape row must show the turn and that running
+    // tool while it's still in flight, not just the session's own
+    // elapsed time.
+    let screen = wait_for_screen_text(&captured_buf, "turn 1", Duration::from_secs(15));
+    assert!(
+        screen.contains("turn 1"),
+        "expected the running turn on the Tape row; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("bash"),
+        "expected the running tool on the Tape row; screen:\n{screen}"
+    );
+
+    // At this width (120 columns) the Tape's own list and its
+    // detail pane already share the screen while following, so the
+    // list's own title ("Tape \u{b7} ") is the one thing `enter`'s own
+    // full-screen step view removes -- its own detail pane already
+    // drew Asked/Turn beside the list, so checking for those alone
+    // after `enter` would prove nothing `enter` itself did.
+    assert!(
+        screen.contains("Tape \u{b7} "),
+        "expected the Tape's own list before \u{23ce}; screen:\n{screen}"
+    );
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Tape \u{b7} "),
+        "expected \u{23ce} to open the full-screen step, dropping the list's own title; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("Asked"),
+        "expected the Agent block's own Asked field after \u{23ce}; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("Turn"),
+        "expected the Agent block's own Turn field after \u{23ce}; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{203a} bash"),
+        "expected the first tool call in the transcript tail; screen:\n{screen}"
+    );
+
+    // The transcript tail grows: the second tool call (`edit`)
+    // appears once its own turn starts, well after the first screen
+    // above was captured -- the tail's own `\u{203a}`-prefixed line,
+    // never the Tools field's own `edit \u{d7}1`, which would already
+    // match without the tail growing at all.
+    let screen = wait_for_screen_text(&captured_buf, "\u{203a} edit", Duration::from_secs(15));
+    assert!(
+        screen.contains("\u{203a} edit"),
+        "expected the transcript tail to grow with the second tool call; screen:\n{screen}"
+    );
+
+    // The run ends on its own (the fake needs no signal); `q` leaves
+    // the now-finished screen the same way every other test here
+    // does.
+    wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(30));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
 /// The Totals row's own token figure, parsed out of a replayed
 /// screen -- `" ↑<sent> ↓<received> · <total> t "`
 /// (`tui::draw_totals_row`), read as the figure right after the

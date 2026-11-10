@@ -118,6 +118,20 @@ pub fn format_tokens_t(n: u64) -> String {
     format!("{} t", format_tokens_thousands(n))
 }
 
+/// `41k`, `200k`, `900` -- the agent block's own compact context
+/// figure (issue #703: `ctx 41k`, `/200k`), rounded to the nearest
+/// thousand once `n` reaches one; below that, the plain number with
+/// no suffix at all, since a context window never runs that small
+/// in practice but a count of zero or a few tokens must still read
+/// as itself, not as `0k`.
+pub fn format_tokens_k(n: u64) -> String {
+    if n >= 1000 {
+        format!("{}k", (n as f64 / 1000.0).round() as u64)
+    } else {
+        n.to_string()
+    }
+}
+
 /// A store's own share of a total, as a percentage (issue #641):
 /// `{share:.0}%` alone reads a share under 0.5% back as a plain
 /// `0%`, indistinguishable from one that is actually zero -- any

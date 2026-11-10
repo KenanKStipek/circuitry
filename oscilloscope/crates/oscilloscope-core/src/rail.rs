@@ -96,6 +96,18 @@ pub enum Headline {
     UsualTokens(Option<u64>),
     /// The untaken branch's own ghost station, second line.
     NotTaken,
+    /// A running prompt's own received figure so far (issue #703's
+    /// rule 4), exact once the provider has reported one, `≈` while
+    /// it's still an estimate -- `↓≈212 t`.
+    Received {
+        tokens: u64,
+        estimated: bool,
+    },
+    /// A running agent's own headline: its current turn (`repair` in
+    /// its own place during the repair turn) and current tool,
+    /// whichever of the two it actually has -- `turn 4 · bash`,
+    /// `turn 4`, or `bash` alone.
+    AgentTurn(String),
     Blank,
 }
 
@@ -116,6 +128,18 @@ pub enum Detail {
     Tokens(u64),
     UsualTokens(Option<u64>),
     Queued,
+    /// A running, streaming prompt's own rate so far, once there's
+    /// been enough of a second delta to measure one (issue #703's
+    /// rule 4): `41 t/s`.
+    Rate(f64),
+    /// A running, streaming prompt before its own first delta.
+    Waiting,
+    /// A running prompt's own retry, the attempt number (1-indexed).
+    Attempt(u64),
+    /// A running agent's own context usage or files/lines changed,
+    /// whichever it actually has (issue #703's rule 4): `ctx 41k`,
+    /// `+12 −12`.
+    AgentActivity(String),
     Blank,
 }
 
@@ -196,6 +220,13 @@ struct Ctx<'a> {
     unfolded_rows: &'a [Row],
     header: &'a Header,
     state: Option<&'a Value>,
+    /// A running prompt's or agent's own live figures (issue #703's
+    /// rule 4) need the same `RunModel::progress_at` fallback the
+    /// Tape's own running-prompt row already reads through
+    /// `model::prompt_live_figures` -- an events-only attach has no
+    /// state node to read `meta.live` off at all.
+    model: &'a crate::model::RunModel,
+    now: &'a str,
 }
 
 fn row_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> Option<u64> {
@@ -326,10 +357,49 @@ fn prompt_headline_detail(row: &Row, ctx: &Ctx<'_>) -> (Headline, Detail) {
                 },
             )
         }
-        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => (
-            Headline::Duration(row.duration_s.unwrap_or(0.0)),
-            Detail::Blank,
-        ),
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
+            // Issue #703's rule 4: a running prompt's own station
+            // reads its live received figure and rate the same way
+            // the Tape's own row already does (`tape_running_prompt_
+            // what`), never only the elapsed time -- a non-streaming
+            // adapter, or one with no live record at all yet, has
+            // none of that to show.
+            let node = ctx.flat.get(&row.path);
+            match crate::model::prompt_live_figures(node, &row.path, ctx.model, ctx.now) {
+                Some(live) if !live.streaming => {
+                    // A state-backed, non-streaming adapter never
+                    // gets a first token at all (`waiting_for_first_
+                    // token` would read `true` forever): read like
+                    // the Tape's own row, elapsed and attempt only.
+                    let detail = if live.attempt.is_some_and(|a| a > 0) {
+                        Detail::Attempt(live.attempt.unwrap() + 1)
+                    } else {
+                        Detail::Blank
+                    };
+                    (Headline::Duration(row.duration_s.unwrap_or(0.0)), detail)
+                }
+                Some(live) => {
+                    let headline = match live.tokens_received_or_estimate() {
+                        Some((tokens, estimated)) => Headline::Received { tokens, estimated },
+                        None => Headline::Duration(row.duration_s.unwrap_or(0.0)),
+                    };
+                    let detail = if live.attempt.is_some_and(|a| a > 0) {
+                        Detail::Attempt(live.attempt.unwrap() + 1)
+                    } else if live.waiting_for_first_token {
+                        Detail::Waiting
+                    } else if let Some(rate) = live.tokens_per_second {
+                        Detail::Rate(rate)
+                    } else {
+                        Detail::Blank
+                    };
+                    (headline, detail)
+                }
+                None => (
+                    Headline::Duration(row.duration_s.unwrap_or(0.0)),
+                    Detail::Blank,
+                ),
+            }
+        }
         _ => (
             Headline::UsualTokens(usual_tokens(&row.path, ctx)),
             Detail::Blank,
@@ -337,7 +407,80 @@ fn prompt_headline_detail(row: &Row, ctx: &Ctx<'_>) -> (Headline, Detail) {
     }
 }
 
+/// A running or finished agent tool's own station (issue #703's rule
+/// 4) -- a finished one reads exactly like a finished prompt's own
+/// (`prompt_headline_detail`'s `Done` branch), tokens and the bar,
+/// since both are just a tool step's own totals by then; a running
+/// one reads its current turn and tool, and whichever of context
+/// usage or files/lines changed it actually has.
+fn agent_headline_detail(row: &Row, ctx: &Ctx<'_>) -> (Headline, Detail) {
+    match row.status.kind {
+        StatusKind::Done => {
+            let total = row_tokens(&row.path, ctx.flat).unwrap_or(0);
+            let usual = usual_tokens(&row.path, ctx);
+            (
+                Headline::Tokens { total, usual },
+                Detail::Bar {
+                    total,
+                    unit: rail_unit(ctx),
+                },
+            )
+        }
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
+            let live = ctx.flat.get(&row.path).and_then(|n| n.live.as_ref());
+            let Some(live) = live else {
+                return (
+                    Headline::Duration(row.duration_s.unwrap_or(0.0)),
+                    Detail::Blank,
+                );
+            };
+            let turn = if live.phase.as_deref() == Some("repair") {
+                Some("repair".to_string())
+            } else {
+                live.turns.map(|t| format!("turn {t}"))
+            };
+            let tool = live.current_tool.as_ref().map(|t| t.name.clone());
+            let headline_text = match (turn, tool) {
+                (Some(turn), Some(tool)) => format!("{turn} · {tool}"),
+                (Some(turn), None) => turn,
+                (None, Some(tool)) => tool,
+                (None, None) => String::new(),
+            };
+            let headline = if headline_text.is_empty() {
+                Headline::Duration(row.duration_s.unwrap_or(0.0))
+            } else {
+                Headline::AgentTurn(headline_text)
+            };
+            let detail = if live.files_changed.is_some()
+                || live.lines_added.is_some()
+                || live.lines_removed.is_some()
+            {
+                Detail::AgentActivity(format!(
+                    "+{} −{}",
+                    live.lines_added.unwrap_or(0),
+                    live.lines_removed.unwrap_or(0)
+                ))
+            } else if let Some(context_tokens) = live.context_tokens {
+                Detail::AgentActivity(format!(
+                    "ctx {}",
+                    crate::format::format_tokens_k(context_tokens)
+                ))
+            } else {
+                Detail::Blank
+            };
+            (headline, detail)
+        }
+        _ => (
+            Headline::ToolAhead(command_text(&row.path, ctx)),
+            Detail::UsualTokens(usual_tokens(&row.path, ctx)),
+        ),
+    }
+}
+
 fn tool_headline_detail(row: &Row, ctx: &Ctx<'_>) -> (Headline, Detail) {
+    if crate::screens::is_agent_row(row, ctx.flat, ctx.plan) {
+        return agent_headline_detail(row, ctx);
+    }
     let command = command_text(&row.path, ctx);
     match row.status.kind {
         StatusKind::Done => (
@@ -1431,6 +1574,7 @@ fn end_station(header: &Header) -> Station {
 /// would make [`build_loop_fork`] below find no passes at all);
 /// callers pass [`crate::render::RenderState::unfolded_rows`], never
 /// `rows`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_rail(
     rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
@@ -1438,6 +1582,8 @@ pub fn build_rail(
     header: &Header,
     state: Option<&Value>,
     zone: &dyn crate::format::ClockZone,
+    model: &crate::model::RunModel,
+    now: &str,
 ) -> Rail {
     let ctx = Ctx {
         flat,
@@ -1445,6 +1591,8 @@ pub fn build_rail(
         unfolded_rows: rows,
         header,
         state,
+        model,
+        now,
     };
     let mut items = vec![RailItem::Station(start_station(header, zone))];
     if let Some(root) = rows.first() {
@@ -1734,6 +1882,300 @@ mod tests {
         );
     }
 
+    fn flat_from(json: serde_json::Value) -> BTreeMap<String, NodeMeta> {
+        crate::model::flatten_state(&json)
+    }
+
+    fn minimal_header() -> crate::render::Header {
+        let plan = PlanTree::empty();
+        let mut model = crate::model::RunModel::new();
+        crate::render::build(
+            "do.yml",
+            "test",
+            &plan,
+            &mut model,
+            None,
+            crate::model::ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+        )
+        .header
+    }
+
+    fn running_row(path: &str) -> Row {
+        Row {
+            path: path.to_string(),
+            depth: 1,
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind: RowKind::Prompt,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: Some(3.0),
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
+    /// Issue #703's rule 4: a running, streaming prompt before its
+    /// own first delta reads `waiting`, not a bogus elapsed-only
+    /// headline.
+    #[test]
+    fn prompt_headline_detail_before_the_first_token_reads_waiting() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                        "started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:01Z",
+                        "streaming": true, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": 0,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (headline, detail) = prompt_headline_detail(&running_row("prime.ask"), &ctx);
+        assert!(matches!(headline, Headline::Duration(_)), "{headline:?}");
+        assert!(matches!(detail, Detail::Waiting), "{detail:?}");
+    }
+
+    /// A state-backed, non-streaming adapter's own station reads
+    /// elapsed time only, never stuck on `waiting` for its whole
+    /// call -- it never gets a first token at all.
+    #[test]
+    fn prompt_headline_detail_non_streaming_reads_duration_not_waiting() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "adapter": "openai", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "openai", "model": "m",
+                        "started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:01Z",
+                        "streaming": false, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": 0,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (headline, detail) = prompt_headline_detail(&running_row("prime.ask"), &ctx);
+        assert!(matches!(headline, Headline::Duration(_)), "{headline:?}");
+        assert_eq!(detail, Detail::Blank);
+    }
+
+    /// A running, streaming prompt's own headline is its received
+    /// figure, with the rate in the detail slot once there's been
+    /// enough of a second delta to measure one.
+    #[test]
+    fn prompt_headline_detail_mid_stream_reads_received_and_rate() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                        "started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:01Z",
+                        "streaming": true, "first_token_at": "2026-01-01T00:00:00.5Z",
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": 212, "chars_received": 800,
+                        "tokens_per_second": 41.0}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (headline, detail) = prompt_headline_detail(&running_row("prime.ask"), &ctx);
+        assert_eq!(
+            headline,
+            Headline::Received {
+                tokens: 212,
+                estimated: true
+            }
+        );
+        assert_eq!(detail, Detail::Rate(41.0));
+    }
+
+    /// A retry's own attempt number takes the detail slot.
+    #[test]
+    fn prompt_headline_detail_on_a_retry_reads_the_attempt_number() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "adapter": "ollama", "model": "m", "prompt_chars": 40,
+                    "live": {"v": 1, "attempt": 1, "adapter": "ollama", "model": "m",
+                        "started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:01Z",
+                        "streaming": true, "first_token_at": null,
+                        "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                        "tokens_received_estimate": null, "chars_received": 0,
+                        "tokens_per_second": null}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (_headline, detail) = prompt_headline_detail(&running_row("prime.ask"), &ctx);
+        assert_eq!(detail, Detail::Attempt(2));
+    }
+
+    fn agent_row(path: &str) -> Row {
+        Row {
+            path: path.to_string(),
+            depth: 1,
+            label: path.rsplit('.').next().unwrap_or(path).to_string(),
+            kind: RowKind::Tool,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: Some(72.0),
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
+    /// A running agent's own headline is its turn and current tool;
+    /// its detail is its context usage, once it has one.
+    #[test]
+    fn agent_headline_detail_running_with_a_current_tool_and_context() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "turns": 4, "updated_at": "2026-01-01T00:00:01Z",
+                        "current_tool": {"name": "bash", "started_at": "2026-01-01T00:00:00Z"},
+                        "context_tokens": 41000}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (headline, detail) = tool_headline_detail(&agent_row("prime.fixer"), &ctx);
+        assert_eq!(headline, Headline::AgentTurn("turn 4 · bash".to_string()));
+        assert_eq!(detail, Detail::AgentActivity("ctx 41k".to_string()));
+    }
+
+    /// Once files have changed, that takes the detail slot over
+    /// context usage.
+    #[test]
+    fn agent_headline_detail_running_reads_files_changed_over_context() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "turns": 4, "updated_at": "2026-01-01T00:00:01Z",
+                        "context_tokens": 41000, "lines_added": 12, "lines_removed": 3}}}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:00:01Z",
+        };
+        let (headline, detail) = tool_headline_detail(&agent_row("prime.fixer"), &ctx);
+        assert_eq!(headline, Headline::AgentTurn("turn 4".to_string()));
+        assert_eq!(detail, Detail::AgentActivity("+12 −3".to_string()));
+    }
+
+    /// A finished agent's own station reads exactly like a finished
+    /// prompt's: tokens for the headline, the bar for the detail.
+    #[test]
+    fn agent_headline_detail_finished_reads_tokens_and_the_bar() {
+        let flat = flat_from(
+            serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z", "provider": "agent",
+                    "tokens_sent": 300, "tokens_received": 100}}}
+            }),
+        );
+        let plan = PlanTree::empty();
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &[],
+            header: &header,
+            state: None,
+            model: &model,
+            now: "2026-01-01T00:01:00Z",
+        };
+        let mut row = agent_row("prime.fixer");
+        row.status.kind = StatusKind::Done;
+        let (headline, detail) = tool_headline_detail(&row, &ctx);
+        assert_eq!(
+            headline,
+            Headline::Tokens {
+                total: 400,
+                usual: None
+            }
+        );
+        assert!(
+            matches!(detail, Detail::Bar { total: 400, .. }),
+            "{detail:?}"
+        );
+    }
+
     fn compile_doc(yaml: &str) -> PlanTree {
         let dir = tempfile::tempdir().unwrap();
         let doc = dir.path().join("do.yml");
@@ -1765,6 +2207,8 @@ mod tests {
             &rendered.header,
             Some(state),
             &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
         )
     }
 
@@ -1961,6 +2405,8 @@ mod tests {
             &rendered.header,
             Some(&lookup_state),
             &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
         );
         let fork = find_fork_after(&rail.items, "fan").expect("a fork after fan");
         assert_eq!(fork.lanes.len(), 2, "{fork:?}");
@@ -2217,6 +2663,8 @@ mod tests {
             unfolded_rows: &rendered.unfolded_rows,
             header: &rendered.header,
             state: Some(&state),
+            model: &model,
+            now: "2026-01-01T00:00:00Z",
         };
         let items = loop_body_template("prime.outer.iter_0.inner", &ctx);
         assert!(
