@@ -10,12 +10,17 @@
 //! Only a plan-known path's own name, its pass count, timing, tokens
 //! and cost are ever recorded.  No values, prompts, rendered params
 //! or commands, tool targets, error text, stdout/stderr, report
-//! messages or data, model replies, transcript content, the
-//! environment, or the config -- [`build_record`] reads nothing but
-//! `runtime.last_run`/`runtime.last_run.totals` and each node's own
+//! messages or data, model replies, transcript content, or the
+//! environment -- [`build_record`] reads nothing but `runtime.
+//! last_run`/`runtime.last_run.totals` and each node's own
 //! `created_at`/`completed_at`/`tokens_sent`/`tokens_received`/
 //! `cost_usd`, and [`RunModel::step_intervals`] carries the same
-//! handful of fields.
+//! handful of fields. [`HistoryRecord::config`] and
+//! [`HistoryRecord::run_dir`] (issue #698's "Settled 4") are the one
+//! exception, and even there only the *path* is ever recorded --
+//! never a config's own contents, and never anything read from
+//! inside the run directory beyond this module's own existing
+//! fields.
 //!
 //! Callers never touch the file format directly: [`append_record`]
 //! and [`read_records`] are the only entry points that open a file,
@@ -109,6 +114,20 @@ pub struct HistoryRecord {
     /// never read back out of `runtime.last_run.orchestration_path`
     /// itself, which neither engine guarantees is absolute.
     pub document: String,
+    /// The config path as given to this run (issue #698's "Settled
+    /// 4"), never resolved further -- `None` for a run with no
+    /// config at all, and for every record written before this
+    /// field existed (`#[serde(default)]`, format `v` 1). Only the
+    /// path is ever recorded, never the config's own contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
+    /// This run's own run directory (issue #698's "Settled 4"):
+    /// lets "Recent Runs" open a finished run read-only
+    /// (`osi watch <run_dir>`) without the registry, which is gone
+    /// by the time a later `osi` looks for it. `None` the same way
+    /// `config` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -416,9 +435,15 @@ fn add_optional_f64(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 /// (`runtime.last_run.completed_at` unset), a dry run, a validate-
 /// only run, or a run with no `document_hash`.  `document_path` is
 /// the caller's own, already-resolved document path -- see
-/// [`HistoryRecord::document`]'s own doc comment.
+/// [`HistoryRecord::document`]'s own doc comment. `config`/`run_dir`
+/// (issue #698's "Settled 4") are the caller's own, recorded exactly
+/// as given -- `config` as given on the command line, never
+/// resolved further; `run_dir` is already absolute (every caller
+/// builds it from its own, already-resolved run directory).
 pub fn build_record(
     document_path: &str,
+    config: Option<&str>,
+    run_dir: Option<&str>,
     engine: Option<&str>,
     state: &Value,
     model: &RunModel,
@@ -486,6 +511,8 @@ pub fn build_record(
         v: FORMAT_VERSION,
         run_id,
         document: document_path.to_string(),
+        config: config.map(str::to_string),
+        run_dir: run_dir.map(str::to_string),
         document_hash: Some(document_hash),
         engine: engine.map(str::to_string),
         started_at,
@@ -1268,6 +1295,8 @@ mod tests {
             v: FORMAT_VERSION,
             run_id: run_id.to_string(),
             document: "/doc.yml".to_string(),
+            config: None,
+            run_dir: None,
             document_hash: Some(hash.to_string()),
             engine: Some("cof".to_string()),
             started_at: started_at.to_string(),
@@ -1817,7 +1846,7 @@ mod tests {
             &PlanTree::empty(),
             crate::model::ProcessState::exited(false),
         );
-        let record = build_record("/doc.yml", Some("cof"), &state, &model, &PlanTree::empty())
+        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &PlanTree::empty())
             .expect("a completed, hashed, non-dry run is recorded");
         let serialized = serde_json::to_string(&record).unwrap();
         assert!(
@@ -1903,7 +1932,7 @@ mod tests {
                 "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:02:00Z", "error": null,
             }},
         });
-        let record = build_record("/doc.yml", Some("cof"), &state, &model, &PlanTree::empty())
+        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &PlanTree::empty())
             .expect("a completed, hashed, non-dry run is recorded");
         let other = record
             .steps
@@ -2041,7 +2070,7 @@ mod tests {
         });
         let mut model = RunModel::new();
         model.observe(&state, &plan, crate::model::ProcessState::exited(false));
-        let record = build_record("/doc.yml", Some("cof"), &state, &model, &plan)
+        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &plan)
             .expect("a completed, hashed, non-dry run is recorded");
 
         let step1 = record
@@ -2198,7 +2227,7 @@ mod tests {
         });
         let mut model = RunModel::new();
         model.observe(&state, &plan, crate::model::ProcessState::exited(false));
-        let record = build_record("/doc.yml", Some("cof"), &state, &model, &plan)
+        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &plan)
             .expect("a completed, hashed, non-dry run is recorded");
 
         let literal_count = record
@@ -2366,7 +2395,7 @@ mod tests {
                 "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:30Z", "error": null},
             },
         });
-        let record = build_record("/doc.yml", Some("cof"), &state, &model, &plan)
+        let record = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &plan)
             .expect("a completed, hashed, non-dry run is recorded");
 
         let nap = record
@@ -2566,7 +2595,7 @@ mod tests {
                 serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
             let mut model = RunModel::new();
             model.observe(&state, &plan, crate::model::ProcessState::exited(false));
-            let record = build_record(run, Some("cof"), &state, &model, &plan)
+            let record = build_record(run, None, None, Some("cof"), &state, &model, &plan)
                 .expect("a finished, non-dry, non-validate-only run with a document hash");
             records.push(record);
         }

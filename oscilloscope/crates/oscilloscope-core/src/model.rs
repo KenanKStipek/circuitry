@@ -938,6 +938,9 @@ pub struct RunModel {
     /// when `--events` carried one -- both engines always write it,
     /// but a stream from an older build might not.
     run_start_engine: Option<String>,
+    /// `run_start`'s own `config` field (issue #697), when the engine
+    /// writes one -- neither engine does yet.
+    run_start_config: Option<String>,
     /// `Event::Start`'s own `ts`, by `id` -- `started_at` alone keeps
     /// only the latest start *per path*, which can't tell two
     /// concurrently open ids at the same (unnamed-loop) path apart.
@@ -1087,6 +1090,7 @@ impl RunModel {
             reports_by_path: BTreeMap::new(),
             report_event_paths: BTreeSet::new(),
             run_start_engine: None,
+            run_start_config: None,
             start_ts_by_id: BTreeMap::new(),
             paths_with_id_events: BTreeSet::new(),
             step_intervals: Vec::new(),
@@ -1196,10 +1200,12 @@ impl RunModel {
                 run_id,
                 pid,
                 engine,
+                config,
             } => {
                 self.run_start = Some((run_id.clone(), *pid));
                 self.run_start_ts = Some(ts.clone());
                 self.run_start_engine = engine.clone();
+                self.run_start_config = config.clone();
             }
             Event::Start { ts, id, path } => {
                 self.started_at.insert(path.clone(), ts.clone());
@@ -1705,6 +1711,14 @@ impl RunModel {
     /// (`"2026-10-08T11:52"`).
     pub fn overflowed_minute_counts(&self) -> &BTreeMap<String, u32> {
         &self.overflowed_minute_counts
+    }
+
+    /// `run_start`'s own `config` field (issue #697), when the engine
+    /// writes one -- part of the config fallback for an attached run
+    /// (the registry entry's own `config`, else this, else the
+    /// process arguments, else `None`; see `registry::resolve_attached_config`).
+    pub fn run_start_config(&self) -> Option<&str> {
+        self.run_start_config.as_deref()
     }
 
     /// `run_start`'s own `engine` field (issue #649), when `--events`
@@ -3490,6 +3504,7 @@ mod tests {
             run_id: "abc".to_string(),
             pid: Some(4242),
             engine: None,
+            config: None,
         });
         assert_eq!(model.run_start_pid(), Some(4242));
         assert_eq!(model.run_start_id(), Some("abc"));

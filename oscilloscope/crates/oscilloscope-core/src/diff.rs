@@ -1274,6 +1274,7 @@ mod tests {
             run_id: "abc123".to_string(),
             pid: Some(1),
             engine: None,
+            config: None,
         };
         let model = RunModel::new();
         let lines = differ.diff_event(&event, &PlanTree::empty(), &model);

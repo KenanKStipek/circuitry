@@ -24,6 +24,7 @@ mod highlight;
 mod history_io;
 mod icon;
 mod keys;
+mod registry_io;
 mod terminal;
 mod theme;
 mod tui;
@@ -421,6 +422,7 @@ macro_rules! compile_plan {
 /// no signal forwarding at all — a SIGINT/TERM/HUP to osi did nothing
 /// until the engine ended on its own.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn supervise_plain(
     out: &mut impl Write,
     clock: &mut Clock,
@@ -432,6 +434,8 @@ fn supervise_plain(
     model: &mut RunModel,
     plan: &PlanTree,
     signals: &mut Option<SignalWatcher>,
+    registry: &mut registry_io::RegistryHandle,
+    orchestration: &str,
 ) -> std::process::ExitStatus {
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
@@ -464,6 +468,7 @@ fn supervise_plain(
             print_line(out, clock, None, &format!("engine: {line}"));
         }
         drain_observations(out, clock, live_poller, events_tailer, differ, model, plan);
+        registry.ensure_written(model, orchestration);
 
         if let Ok(Some(status)) = child.try_wait() {
             return status;
@@ -587,6 +592,7 @@ fn run_glance(
     no_animation: bool,
     history: &history_io::HistoryHandle,
     engine_name: &str,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -629,6 +635,7 @@ fn run_glance(
             &mut model,
             &plan,
         );
+        registry.ensure_written(&model, &document);
         if let Some(state) = state {
             current_state = Some(state);
         }
@@ -742,6 +749,7 @@ fn watch_glance(
     no_animation: bool,
     once: bool,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -824,6 +832,10 @@ fn watch_glance(
         if state.is_some() {
             last_state = state;
         }
+        registry.ensure_written(
+            &model,
+            &watch_document_name(last_state.as_ref(), &fallback_document),
+        );
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -954,10 +966,6 @@ fn do_run(args: RunArgs) -> ExitCode {
 
     let orchestration = PathBuf::from(&args.orchestration);
     let config = args.config.as_ref().map(PathBuf::from);
-    let history = history_io::HistoryHandle::for_run(
-        history_io::resolve_history_dir(args.no_history),
-        history_io::resolve_run_document_path(&orchestration),
-    );
 
     if args.engine == EngineChoice::Electricity {
         if let Some(cfg) = &config {
@@ -979,6 +987,33 @@ fn do_run(args: RunArgs) -> ExitCode {
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
     };
+    // Issue #698's "Settled 4": `config` recorded in history exactly
+    // as given on the command line, never resolved further; `run_dir`
+    // made absolute so "Recent Runs" can still open it later
+    // regardless of osi's own cwd at that later time.
+    let history = history_io::HistoryHandle::for_run(
+        history_io::resolve_history_dir(args.no_history),
+        history_io::resolve_run_document_path(&orchestration),
+        args.config.clone(),
+        Some(history_io::absolute_path(&run_dir).to_string_lossy().into_owned()),
+    );
+    // Issue #698's "Settled 1": written once this run's own
+    // `run_start` is known (`RegistryHandle::ensure_written`, called
+    // on every rebuild below), removed again when `registry` itself
+    // is dropped at the end of this function -- covering the run's
+    // own end and every signal path the same way.
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        spec.config.as_deref(),
+        Some(match args.engine {
+            EngineChoice::Cof => "cof",
+            EngineChoice::Electricity => "electricity",
+        }),
+        format!("osi {}", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &spec.events_path(),
+        &spec.live_state_path(),
+    );
 
     let engine = build_engine(args.engine, &mut signals);
     // Review finding 2 on #458: a Ctrl-C landing during the probe
@@ -1103,6 +1138,7 @@ fn do_run(args: RunArgs) -> ExitCode {
             args.no_animation,
             &history,
             engine.name(),
+            &mut registry,
         );
     }
 
@@ -1123,6 +1159,7 @@ fn do_run(args: RunArgs) -> ExitCode {
             args.no_animation,
             theme_name,
             &history,
+            &mut registry,
         );
     }
 
@@ -1146,6 +1183,8 @@ fn do_run(args: RunArgs) -> ExitCode {
         &mut model,
         &plan,
         &mut signals,
+        &mut registry,
+        &orchestration.to_string_lossy(),
     );
 
     // Join the tee threads before draining anything further (F6): the
@@ -1962,6 +2001,7 @@ fn run_tui(
     no_animation: bool,
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
@@ -2040,6 +2080,8 @@ fn run_tui(
                 &mut model,
                 &plan,
                 &mut signals,
+                registry,
+                &document,
             );
             let code = finish_run(
                 &mut out,
@@ -2229,6 +2271,7 @@ fn run_tui(
                 &mut model,
                 &plan,
             );
+            registry.ensure_written(&model, &document);
             needs_rebuild |= !lines.is_empty();
             needs_draw |= !lines.is_empty();
             for line in &lines {
@@ -3005,6 +3048,8 @@ fn supervise_plain_watch(
     plan: &PlanTree,
     run_dir: &Path,
     signals: &mut Option<SignalWatcher>,
+    registry: &mut registry_io::RegistryHandle,
+    fallback_document: &str,
 ) -> (Option<serde_json::Value>, Option<ForwardSignal>) {
     let mut last_state: Option<serde_json::Value> = None;
     let mut warned_no_events = false;
@@ -3022,6 +3067,7 @@ fn supervise_plain_watch(
         {
             last_state = Some(state);
         }
+        registry.ensure_written(model, &watch_document_name(last_state.as_ref(), fallback_document));
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -3138,6 +3184,20 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let history = history_io::HistoryHandle::for_watch(
         history_io::resolve_history_dir(args.no_history),
         args.plan.clone(),
+        args.config.as_ref().map(|c| c.to_string_lossy().into_owned()),
+        Some(history_io::absolute_path(&run_dir).to_string_lossy().into_owned()),
+    );
+    // Issue #698's "Settled 1": `osi watch` writes an entry too
+    // (`launcher: "osi <version> watch"`), the same way `osi <doc>`
+    // does.
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        args.config.as_deref(),
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
     );
 
     // Issue #626: `--glance` wins over both the TUI and `--log`,
@@ -3151,6 +3211,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.no_animation,
             args.once,
             &history,
+            &mut registry,
         );
     }
 
@@ -3166,6 +3227,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.no_animation,
             theme_name,
             &history,
+            &mut registry,
         );
     }
 
@@ -3194,6 +3256,8 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &plan,
         &run_dir,
         &mut signals,
+        &mut registry,
+        &args.target,
     );
 
     let code = finish_watch(
@@ -3234,6 +3298,7 @@ fn run_tui_watch(
     no_animation: bool,
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
@@ -3299,6 +3364,8 @@ fn run_tui_watch(
                 &plan,
                 &run_dir,
                 &mut signals,
+                registry,
+                &fallback_document,
             );
             let code = finish_watch(
                 &mut out,
@@ -3444,6 +3511,10 @@ fn run_tui_watch(
                 needs_rebuild = true;
                 needs_draw = true;
             }
+            registry.ensure_written(
+                &model,
+                &watch_document_name(last_state.as_ref(), &fallback_document),
+            );
 
             if last_state
                 .as_ref()
@@ -5086,7 +5157,7 @@ mod tests {
             &mut last_state,
             None,
             true,
-            &history_io::HistoryHandle::for_watch(None, None),
+            &history_io::HistoryHandle::for_watch(None, None, None, None),
         );
         assert_eq!(code, 0);
         let text = String::from_utf8(buf).unwrap();
