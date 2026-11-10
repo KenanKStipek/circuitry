@@ -1134,6 +1134,33 @@ fn tape_running_prompt_tokens(live: &crate::model::PromptLiveFigures) -> TapeTok
     }
 }
 
+/// A `tool`/`use`/`yield`/`dynamic`/`try`-`finally` row's own token
+/// column (issue #702's rule 3): `step_tokens_so_far`'s own figures,
+/// or `TapeTokens::default()` (no column at all) for the ordinary
+/// case of a step with nothing to show -- `step_tokens_so_far` itself
+/// can't tell "never spent any tokens" apart from "spent exactly
+/// zero" (both read `Some(0)`/`Some(0)` once finished, `node_tokens`'s
+/// own missing-field default), so this is the one place that treats
+/// a `0` total the same as having nothing at all, the same rule
+/// `store::build_leaf` already follows for a leaf tile.
+fn tape_row_tool_tokens(
+    node: Option<&NodeMeta>,
+    path: &str,
+    model: &RunModel,
+    now: &str,
+) -> TapeTokens {
+    let figures = crate::model::step_tokens_so_far(node, path, model, now);
+    match figures.total() {
+        None | Some(0) => TapeTokens::default(),
+        Some(_) => TapeTokens {
+            sent: figures.tokens_sent,
+            received: figures.tokens_received,
+            live: figures.live,
+            ..Default::default()
+        },
+    }
+}
+
 /// §3.4's "first words": the reply's own text, cut at the first
 /// sentence end or a fixed character budget, whichever comes first
 /// -- `Bug.`, `Thanks for the ⋯` (never the whole reply, which the
@@ -1437,6 +1464,13 @@ fn tape_row_content(
             }
         }
         RowKind::Tool | RowKind::Use | RowKind::Yield | RowKind::Dynamic | RowKind::TryFinally => {
+            // Issue #702's rule 3: any step that has used tokens so
+            // far gets the same token column a prompt row already
+            // does, an agent session included -- almost always
+            // `TapeTokens::default()` for an ordinary tool (its own
+            // `tokens_sent`/`tokens_received` are never set at all),
+            // computed once here rather than in every branch below.
+            let tokens = tape_row_tool_tokens(node, &row.path, model, now);
             if pending {
                 // §2.1's Starting state: a tool ahead reads its own
                 // static command, when every part of it is a plain
@@ -1459,7 +1493,7 @@ fn tape_row_content(
                 )
             } else if row.status.kind == StatusKind::Failed {
                 let error = node.and_then(|n| n.error.clone()).unwrap_or_default();
-                (format!("✗ {error}"), None, TapeTokens::default())
+                (format!("✗ {error}"), None, tokens)
             } else if row.status.kind == StatusKind::FailedHandled {
                 let error = node.and_then(|n| n.error.clone()).unwrap_or_default();
                 let exit = tape_exit_code(&error)
@@ -1471,13 +1505,9 @@ fn tape_row_content(
                 } else {
                     format!(" · on_error: {mode}")
                 };
-                (
-                    format!("{exit}handled{mode_text}"),
-                    None,
-                    TapeTokens::default(),
-                )
+                (format!("{exit}handled{mode_text}"), None, tokens)
             } else {
-                (tape_tool_what(row, node), None, TapeTokens::default())
+                (tape_tool_what(row, node), None, tokens)
             }
         }
         RowKind::Root
@@ -1569,13 +1599,20 @@ fn build_tape_selected_detail(
     let node = flat.get(&row.path);
     let finished_ts = node.and_then(|n| n.completed_at.clone());
     if !matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
-        let (sent, received) = node
-            .map(|n| crate::model::node_tokens(&n.meta))
-            .unwrap_or((0, 0));
+        // Issue #702: a running agent session's own `meta.live`
+        // tokens show here the same way a finished step's exact
+        // pair already does, fixing the detail pane's own "Share 0%
+        // of this run so far" while the step is still running.
+        let figures = crate::model::step_tokens_so_far(node, &row.path, model, now);
+        let has_tokens = figures.total().is_some_and(|t| t > 0);
+        // A figure neither live source has ever reported (Claude
+        // Code's own `tokens_received: null` mid-turn) stays `None`
+        // here too, drawn as `—` rather than a false `0` -- only the
+        // whole line hides when nothing at all is known yet.
         return TapeSelectedDetail {
             finished_ts,
-            tokens_sent: (sent + received > 0).then_some(sent),
-            tokens_received: (sent + received > 0).then_some(received),
+            tokens_sent: has_tokens.then_some(figures.tokens_sent).flatten(),
+            tokens_received: has_tokens.then_some(figures.tokens_received).flatten(),
             ..Default::default()
         };
     }
@@ -2306,12 +2343,35 @@ pub fn build_tape(
         .and_then(|key| header.history_step_usual.get(&key))
         .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
 
+    // Issue #702's rule 4 ("a share never exceeds 100%"): a running
+    // agent's own live tokens (unlike a running prompt's, always
+    // `null` until it finishes) are a real, nonzero figure, so this
+    // now reads it the same `step_tokens_so_far` way every other
+    // screen's shares do -- the denominator counts every running
+    // step's own live estimate too, or that nonzero figure could
+    // outrun it, the exact `19000%` this issue's own bug report
+    // found. A running prompt keeps its own exact prior rule
+    // (`node_tokens`, always `0`/`0` while running, so never shows a
+    // share until it finishes) -- its own Live block covers it
+    // instead, same as before this issue.
     let selected_share_pct = selected_path.and_then(|p| {
-        let node = flat.get(p)?;
-        let (sent, received) = crate::model::node_tokens(&node.meta);
-        let total = sent + received;
-        let run_total = header.tokens_sent + header.tokens_received;
-        (run_total > 0).then(|| ((total as f64 * 100.0) / run_total as f64).round() as u64)
+        let row = rows.iter().find(|r| r.path == p)?;
+        let node = flat.get(p);
+        let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
+            let (sent, received) = node
+                .map(|n| crate::model::node_tokens(&n.meta))
+                .unwrap_or((0, 0));
+            let total = sent + received;
+            (total > 0).then_some(total)?
+        } else {
+            crate::model::step_tokens_so_far(node, p, model, now).total()?
+        };
+        let run_total = header.tokens_sent
+            + header.tokens_received
+            + header.tokens_sent_live_estimate
+            + header.tokens_received_live_estimate;
+        (run_total > 0)
+            .then(|| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
     });
     let selected_row = selected_path.and_then(|p| rows.iter().find(|r| r.path == p));
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
@@ -2394,6 +2454,9 @@ pub struct SignalBucket {
     /// How many distinct prompts contributed to this column (the Now
     /// pane's own "3 prompts in one step").
     pub prompt_count: u64,
+    /// How many distinct agent sessions contributed to this column --
+    /// an agent's tokens arrive as sightings, not as a prompt's end.
+    pub agent_count: u64,
     /// The latest timestamp among this column's own contributors --
     /// Peak's own clock and "time since the last burst" both read
     /// this directly, rather than re-deriving a clock from the
@@ -2493,6 +2556,13 @@ pub struct SignalNowPane {
 pub struct SignalReadings {
     pub sent: u64,
     pub received: u64,
+    /// Whether `sent`/`received` (respectively) still carry a
+    /// running part of their own (`header`'s own live estimate) --
+    /// drawn with the `≈` marker and the faint style for exactly as
+    /// long as this holds, the same rule the Totals row's own
+    /// headline follows.
+    pub sent_live: bool,
+    pub received_live: bool,
     /// Sent to received, to one decimal (§2.2: `11.5 : 1`) -- `None`
     /// with nothing received yet.
     pub ratio: Option<f64>,
@@ -2819,6 +2889,35 @@ pub fn build_signal(
             }
             _ => {}
         }
+    }
+
+    // Issue #702's rule 4: an agent's own live totals, each increase
+    // RunModel::observe already turned into a sighting at its own
+    // observation time (DESIGN.md: never both a running total and a
+    // sighting of it in the same column, same as a prompt's live
+    // estimate and its own finished figure never overlap) -- unlike
+    // a prompt's single Now-column estimate, these are historical and
+    // exact, so every sighting lands at its own column, never only
+    // at `now_col`, and never marked `live` (an agent's own tokens
+    // are the provider's exact count, never a character-count guess).
+    let mut agents_by_col: BTreeMap<usize, std::collections::BTreeSet<&str>> = BTreeMap::new();
+    for sighting in model.agent_live_sightings() {
+        let Some(offset) = elapsed_offset(&sighting.ts) else {
+            continue;
+        };
+        let col = col_of(offset);
+        ensure_len(&mut buckets, col + 1);
+        let b = &mut buckets[col];
+        b.sent += sighting.tokens_sent;
+        b.received += sighting.tokens_received;
+        b.last_ts = Some(sighting.ts.clone());
+        let agents = agents_by_col.entry(col).or_default();
+        if agents.insert(sighting.path.as_str()) {
+            b.agent_count = agents.len() as u64;
+        }
+        let fixed = fixed_cols.entry(col_of_100(offset)).or_default();
+        fixed.0 += sighting.tokens_sent;
+        fixed.1 += sighting.tokens_received;
     }
 
     let largest_col_sent = fixed_cols.values().map(|(s, _)| *s).max().unwrap_or(0);
@@ -3149,13 +3248,23 @@ pub fn build_signal(
         let b = &buckets[i];
         let ts = b.last_ts.as_deref()?;
         let age = duration_seconds(ts, now)?;
+        let plural = |n: u64, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+        // An agent's tokens arrive as sightings rather than a prompt's
+        // end, so a burst names what it was made of.
+        let what = match (b.prompt_count, b.agent_count) {
+            (_, 0) => plural(b.prompt_count, "prompt"),
+            (0, agents) => plural(agents, "agent"),
+            (prompts, agents) => format!(
+                "{} and {}",
+                plural(prompts, "prompt"),
+                plural(agents, "agent")
+            ),
+        };
         Some(format!(
-            "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {} prompt{} in one step",
+            "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {what} in one step",
             crate::format::format_duration(age),
             crate::format::format_tokens_thousands(b.sent),
             crate::format::format_tokens_thousands(b.received),
-            b.prompt_count,
-            if b.prompt_count == 1 { "" } else { "s" },
         ))
     });
     // An undispatched pass's own leaf (an `extra_rows` entry)
@@ -3195,22 +3304,40 @@ pub fn build_signal(
         )
     });
 
-    // Readings: Peak, Largest and Quiet all read only up to the
-    // cursor's own column (Now's, when not scrubbed), the same
-    // moment the trace itself stops drawing at.
+    // Readings: Peak, Largest and Quiet read only up to the cursor's
+    // own column (Now's, when not scrubbed), the same moment the
+    // trace itself stops drawing at. Sent and Received instead always
+    // read the Totals row's own figure (`header.tokens_sent`/`_
+    // received` plus their own live estimate), never cut at the
+    // scrub cursor and never only the trace's own columns summed, so
+    // they never under-count a step whose tokens never earned a
+    // column of their own -- a model-mode `if`'s own tokens, an
+    // unnamed loop's earlier passes, a `use` child's effects, or a
+    // finished agent session osi never saw running. `sent_live`/
+    // `received_live` mark whether either side still has a live part
+    // in it, the same way the Totals row's own headline does, so a
+    // front end can draw the `≈` marker and the faint style for
+    // exactly as long as that holds.
     let cursor_buckets = &buckets[..cursor.map(|c| (c + 1).min(buckets.len())).unwrap_or(0)];
-    let ratio = (header.tokens_received > 0)
-        .then(|| (header.tokens_sent as f64 / header.tokens_received as f64 * 10.0).round() / 10.0);
+    let sent_sum = header.tokens_sent + header.tokens_sent_live_estimate;
+    let received_sum = header.tokens_received + header.tokens_received_live_estimate;
+    let sent_live = header.tokens_sent_live_estimate > 0;
+    let received_live = header.tokens_received_live_estimate > 0;
+    let ratio =
+        (received_sum > 0).then(|| (sent_sum as f64 / received_sum as f64 * 10.0).round() / 10.0);
     let peak = cursor_buckets
         .iter()
         .filter(|b| b.sent > 0)
         .max_by_key(|b| b.sent)
         .and_then(|b| Some((b.sent, b.last_ts.clone()?)));
+    // Issue #702: a finished agent session (`RowKind::Tool`) counts
+    // toward Largest the same way a finished prompt already does --
+    // an ordinary tool row never has any tokens of its own, so this
+    // wider filter costs nothing for a run with no agent at all (the
+    // `total == 0` guard below skips it just the same).
     let mut largest: Option<(String, u64)> = None;
-    for row in rows
-        .iter()
-        .filter(|r| matches!(r.kind, RowKind::Prompt | RowKind::Reflector))
-    {
+    let largest_kinds = [RowKind::Prompt, RowKind::Reflector, RowKind::Tool];
+    for row in rows.iter().filter(|r| largest_kinds.contains(&r.kind)) {
         let Some(node) = flat.get(&row.path) else {
             continue;
         };
@@ -3296,8 +3423,10 @@ pub fn build_signal(
             next_signal,
         },
         readings: SignalReadings {
-            sent: header.tokens_sent,
-            received: header.tokens_received,
+            sent: sent_sum,
+            received: received_sum,
+            sent_live,
+            received_live,
             ratio,
             peak,
             largest,
@@ -5500,6 +5629,145 @@ mod tests {
         assert!(bucket.received_live);
     }
 
+    /// Issue #702's rule 4: an agent session's own live totals plot
+    /// one column per sighting (never only at the Now column, unlike
+    /// a prompt's running estimate), and the sum of its own columns
+    /// equals its final tokens exactly once it finishes.
+    #[test]
+    fn build_signal_an_agents_live_totals_plot_one_column_per_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_at = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z", "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &running_at(2100, 40, "2026-01-01T00:00:00.350Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        model.observe(
+            &running_at(4450, 90, "2026-01-01T00:00:01.350Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:02.050Z", "provider": "agent",
+                "tokens_sent_total": 11550, "tokens_received_total": 130
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let flat = crate::model::flatten_state(&finished);
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let now = "2026-01-01T00:00:02.100Z";
+        let signal = build_signal(&[], &header, &flat, &plan, &model, None, 100, None, now);
+        // The two live sightings land at their own observation
+        // columns (350ms and 1350ms since the run started, at 100ms
+        // per column); the remainder lands at the agent's own end
+        // (2050ms).
+        assert_eq!(signal.buckets[3].sent, 2100);
+        assert_eq!(signal.buckets[3].received, 40);
+        assert!(
+            !signal.buckets[3].sent_live,
+            "an agent's own tokens are exact, never live"
+        );
+        assert_eq!(signal.buckets[13].sent, 2350);
+        assert_eq!(signal.buckets[13].received, 50);
+        assert_eq!(signal.buckets[20].sent, 11550 - 4450);
+        assert_eq!(signal.buckets[20].received, 130 - 90);
+        let (total_sent, total_received) = signal
+            .buckets
+            .iter()
+            .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
+        assert_eq!(total_sent, 11550);
+        assert_eq!(total_received, 130);
+        assert_eq!(signal.buckets[20].agent_count, 1);
+        assert_eq!(signal.buckets[20].prompt_count, 0);
+        // The burst names what it was made of: an agent, not "0 prompts".
+        let burst = signal.now_pane.last_burst.as_deref().unwrap_or("");
+        assert!(
+            burst.ends_with("1 agent in one step"),
+            "the last burst came from the agent alone: {burst:?}"
+        );
+    }
+
+    /// The agent's own sightings and a real prompt row's own
+    /// finished-column contribution must both land in the trace with
+    /// no overlap: `rows` carries a real `Prompt` row this time (the
+    /// earlier sighting test above passes none at all, so it alone
+    /// could never catch a prompt row's own column being counted
+    /// twice, or an agent's own sighting being dropped because a row
+    /// now exists for a different path).
+    #[test]
+    fn build_signal_an_agents_sightings_and_a_prompt_rows_own_column_both_count_with_no_overlap() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_at = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "ask": {"value": "ok", "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z",
+                    "completed_at": "2026-01-01T00:00:00.500Z",
+                    "adapter": "scripted", "model": "scripted-model",
+                    "tokens_sent": 100, "tokens_received": 10
+                }},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z", "completed_at": null,
+                    "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &running_at(2100, 40, "2026-01-01T00:00:00.350Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:00.500Z",
+                "adapter": "scripted", "model": "scripted-model",
+                "tokens_sent": 100, "tokens_received": 10
+            }},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:01.000Z", "provider": "agent",
+                "tokens_sent_total": 2100, "tokens_received_total": 40
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let flat = crate::model::flatten_state(&finished);
+        let rows = vec![
+            tape_row("prime.ask", 1, "ask", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.fixer", 1, "fixer", RowKind::Tool, StatusKind::Done),
+        ];
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let now = "2026-01-01T00:00:01.100Z";
+        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let (total_sent, total_received) = signal
+            .buckets
+            .iter()
+            .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
+        // The prompt's own 100/10 (its own finished column) plus the
+        // agent's own 2100/40 (its sightings): 2200/50 total, neither
+        // counted twice nor dropped now that a row exists for both.
+        assert_eq!(total_sent, 2200);
+        assert_eq!(total_received, 50);
+        assert_eq!(signal.buckets[5].sent, 100, "the prompt's own column");
+        assert_eq!(signal.buckets[5].received, 10);
+    }
+
     /// Readings' own ratio (to one decimal) and peak (the largest
     /// column's own sent figure and clock) -- §2.2's `11.5 : 1` and
     /// `584 t at 12:50:50`.
@@ -5549,6 +5817,67 @@ mod tests {
         let (peak_tokens, peak_ts) = signal.readings.peak.expect("a peak column");
         assert_eq!(peak_tokens, 584);
         assert_eq!(peak_ts, "2026-01-01T00:00:03.000Z");
+    }
+
+    /// Readings' own Sent/Received, following Now, read the Totals
+    /// row's own figure, never the trace's own columns summed -- a
+    /// model-mode `if` writes its own tokens straight onto its own
+    /// node (`core`'s own conditional handling), with no column of
+    /// its own in the trace (only a decision mark), so summing
+    /// columns alone would under-count it.
+    #[test]
+    fn build_signal_readings_sent_and_received_match_the_totals_row_not_the_trace() {
+        let rows = vec![
+            tape_row("prime.gate", 1, "gate", RowKind::If, StatusKind::Done),
+            tape_row(
+                "prime.gate.reply",
+                2,
+                "reply",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+        ];
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": "2026-01-01T00:00:01Z"},
+                "gate": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                    "branch": "then", "tokens_sent_total": 20, "tokens_received_total": 4
+                },
+                    "reply": {"value": "y", "meta": {
+                        "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                        "tokens_sent": 100, "tokens_received": 30
+                    }}
+                }
+            }}),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.tokens_sent = 120;
+        header.tokens_received = 34;
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            "2026-01-01T00:00:01.100Z",
+        );
+        let (bucket_sent, bucket_received) = signal
+            .buckets
+            .iter()
+            .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
+        assert_eq!(
+            (bucket_sent, bucket_received),
+            (100, 30),
+            "the trace's own columns never carry the if's own tokens"
+        );
+        assert_eq!(signal.readings.sent, 120);
+        assert_eq!(signal.readings.received, 34);
     }
 
     /// The Now pane's own lines: a running leaf with its slot, the

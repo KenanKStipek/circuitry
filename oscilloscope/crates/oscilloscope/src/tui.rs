@@ -506,7 +506,8 @@ fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
 }
 
 /// §3.5's token bar: `▰▰▰▰▱▱▱▱   215 t`, eight cells at `unit`
-/// tokens each.
+/// tokens each -- fewer once the count itself needs more than seven
+/// of the column's 16 cells.
 fn tape_token_bar(
     total: u64,
     unit: u64,
@@ -514,10 +515,30 @@ fn tape_token_bar(
     live: bool,
     ctx: &DrawCtx,
 ) -> Vec<Span<'static>> {
+    let count_text = oscilloscope_core::format::format_tokens_t(total);
+    let count_len = count_text.chars().count();
+    // The gap before the count shrinks as the count itself widens (the
+    // same column-sizing `tape_token_column` already does for a loop's
+    // own sparkline+`t/p` suffix) -- the live estimate's own leading
+    // `≈` would otherwise push a count of 1,000 tokens or more past the
+    // 16-cell column and get cut by the pane's own clipping, silently
+    // turning it into a smaller, wrong number.
+    // Issue #702: an agent's own total routinely reaches six digits
+    // or more (cached input tokens push it well past a million), so
+    // the count alone can outgrow the 8 cells the bar always had
+    // left for it, 1 gap space included -- once it does, the bar
+    // gives up cells of its own as the count widens, dropped
+    // entirely once even one bar cell would no longer leave room for
+    // both it and the required gap, rather than let the row's own
+    // clipping cut the count's own trailing `t`, or worse, a
+    // trailing digit. The `+1` in `15 - count_len` is exactly that
+    // one required gap cell; `.min(8)` is the ordinary, small-count
+    // case's own full bar.
+    let bar_cells = 15usize.saturating_sub(count_len).min(8);
     // Rounded, not floored: 389 at a 50-token unit reads a full
     // bar (▰×8), not 7 filled and one empty.
-    let filled = ((total as f64 / unit.max(1) as f64).round() as usize).min(8);
-    let empty = 8 - filled;
+    let filled = ((total as f64 / unit.max(1) as f64).round() as usize).min(bar_cells);
+    let empty = bar_cells - filled;
     // A running prompt's own estimate (issue #675) draws the filled
     // cells in the faint style, never the accent colour a finished
     // row's exact total earns -- the bar settles to the normal
@@ -534,17 +555,12 @@ fn tape_token_bar(
     // prompt's own estimate -- needs every one of the column's 16
     // cells just for the digits, with none to spare for a marker on
     // top of them.
-    let count_text = oscilloscope_core::format::format_tokens_t(total);
-    // The gap before the count shrinks as the count itself widens (the
-    // same column-sizing `tape_token_column` already does for a loop's
-    // own sparkline+`t/p` suffix) -- the live estimate's own leading
-    // `≈` would otherwise push a count of 1,000 tokens or more past the
-    // 16-cell column and get cut by the pane's own clipping, silently
-    // turning it into a smaller, wrong number.
-    let gap = 16usize
-        .saturating_sub(8)
-        .saturating_sub(count_text.chars().count())
-        .max(1);
+    // The design always prints the count in full, with a space
+    // before it (§3.5, §3.8) -- `bar_cells` above already leaves
+    // room for exactly one, so this is always `>= 1` short of an
+    // unrealistically wide count that would overrun the column even
+    // with the bar dropped to nothing.
+    let gap = 16usize.saturating_sub(bar_cells).saturating_sub(count_len);
     // The gap before the count reads as the empty bar's own
     // colour (`design/frames/`'s own span grouping) -- or, once the
     // bar is full and has no empty cells of its own to lend it one,
@@ -588,7 +604,11 @@ mod tape_token_bar_tests {
     /// estimate -- still prints within the column's own 16-cell
     /// budget: the leading marker the faint style's own count carries
     /// must shrink the gap before it, not push the whole thing past
-    /// the column and get cut by the pane (issue #675).
+    /// the column and get cut by the pane (issue #675). An agent
+    /// session's own total reaches six or seven digits once cached
+    /// input tokens are counted (issue #702): the bar itself must
+    /// give up cells rather than let the count's own trailing `t`,
+    /// or a trailing digit, be cut instead.
     #[test]
     fn a_live_estimate_in_the_thousands_still_fits_the_column() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
@@ -598,7 +618,7 @@ mod tape_token_bar_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        for total in [41u64, 391, 1902, 9999] {
+        for total in [41u64, 391, 1902, 9999, 11_680, 123_456, 1_234_567] {
             let spans = tape_token_bar(total, 50, false, true, &ctx);
             let width = printed_width(&spans);
             assert!(
@@ -611,7 +631,74 @@ mod tape_token_bar_tests {
                 full.ends_with(&expected_count),
                 "the count itself must never be cut: {full:?}"
             );
+            let before_count = &full[..full.len() - expected_count.len()];
+            assert!(
+                before_count.ends_with(' '),
+                "the design always prints a space before the count: {full:?}"
+            );
         }
+    }
+
+    /// Issue #702: Claude Code never reports `tokens_received` live
+    /// (`docs/plugins/agent.md`) -- the Tape detail pane's own
+    /// Tokens line must draw `—` for it, never a false `0`, while
+    /// the agent is still running.
+    #[test]
+    fn a_running_claude_code_agents_null_received_draws_as_a_dash() {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "claude_code", "updated_at": "2026-10-08T11:46:50Z",
+                    "tokens_sent": 1600, "tokens_received": null}}}
+        }});
+        let rendered = oscilloscope_core::render::build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:51Z",
+            &[],
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let tape = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            Some("prime.fixer"),
+            true,
+            "2026-10-08T11:46:51Z",
+        );
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: false,
+        };
+        let lines = tape_normal_detail_lines(&tape, 60, &ctx);
+        let text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("↑1,600"), "{text}");
+        assert!(
+            text.contains("↓—"),
+            "a never-reported received figure must draw as a dash: {text}"
+        );
     }
 }
 
@@ -2060,19 +2147,23 @@ fn tape_normal_detail_lines(
         }
     }
 
-    if let (Some(sent), Some(received)) = (detail.tokens_sent, detail.tokens_received) {
-        let total = sent + received;
+    if detail.tokens_sent.is_some() || detail.tokens_received.is_some() {
+        // An agent session's own figures can be partial (Claude
+        // Code never reports `tokens_received` live) -- the one that
+        // is still unknown reads `—`, never a false `0`.
+        let sent_text = detail
+            .tokens_sent
+            .map(oscilloscope_core::format::format_tokens_thousands)
+            .unwrap_or_else(|| "—".to_string());
+        let received_text = detail
+            .tokens_received
+            .map(oscilloscope_core::format::format_tokens_thousands)
+            .unwrap_or_else(|| "—".to_string());
+        let total = detail.tokens_sent.unwrap_or(0) + detail.tokens_received.unwrap_or(0);
         lines.push(tape_detail_line(
             vec![
                 Span::styled("Tokens  ", muted),
-                Span::styled(
-                    format!(
-                        "↑{} ↓{} ",
-                        oscilloscope_core::format::format_tokens_thousands(sent),
-                        oscilloscope_core::format::format_tokens_thousands(received)
-                    ),
-                    default,
-                ),
+                Span::styled(format!("↑{sent_text} ↓{received_text} "), default),
                 Span::styled("· ", muted),
                 Span::styled(
                     oscilloscope_core::format::format_tokens_t(total),
@@ -3851,16 +3942,28 @@ fn draw_signal_readings(
     let bold = default.add_modifier(Modifier::BOLD);
     let readings = &screen.readings;
     let line_width = (inner.width - 1) as usize;
+    // Sent/Received draw in the faint style, and lead with `≈`, for
+    // exactly as long as a live part is still in them -- the same
+    // marker the Totals row and a streaming row put before an
+    // estimated figure.
+    let sent_style = if readings.sent_live { muted } else { default };
+    let received_style = if readings.received_live {
+        muted
+    } else {
+        default
+    };
+    let sent_marker = if readings.sent_live { "≈" } else { "" };
+    let received_marker = if readings.received_live { "≈" } else { "" };
     let mut lines = vec![
         pad_line(
             vec![
                 Span::styled("Sent     ", muted),
                 Span::styled(
                     format!(
-                        "{} t",
+                        "{sent_marker}{} t",
                         oscilloscope_core::format::format_tokens_thousands(readings.sent)
                     ),
-                    default,
+                    sent_style,
                 ),
             ],
             line_width,
@@ -3870,10 +3973,10 @@ fn draw_signal_readings(
                 Span::styled("Received ", muted),
                 Span::styled(
                     format!(
-                        "{} t",
+                        "{received_marker}{} t",
                         oscilloscope_core::format::format_tokens_thousands(readings.received)
                     ),
-                    default,
+                    received_style,
                 ),
             ],
             line_width,
@@ -4757,14 +4860,20 @@ fn store_leaf_lines(
             width,
         ));
     }
+    let sent_text = if leaf.tokens_sent_unknown {
+        "\u{2014}".to_string()
+    } else {
+        oscilloscope_core::format::format_tokens_thousands(leaf.tokens_sent)
+    };
+    let received_text = if leaf.tokens_received_unknown {
+        "\u{2014}".to_string()
+    } else {
+        oscilloscope_core::format::format_tokens_thousands(leaf.tokens_received)
+    };
     lines.push(pad_line(
         store_cut_spans(
             vec![Span::styled(
-                format!(
-                    " \u{2191}{} \u{2193}{}",
-                    oscilloscope_core::format::format_tokens_thousands(leaf.tokens_sent),
-                    oscilloscope_core::format::format_tokens_thousands(leaf.tokens_received)
-                ),
+                format!(" \u{2191}{sent_text} \u{2193}{received_text}"),
                 muted_style,
             )],
             width,
@@ -12953,6 +13062,8 @@ mod tape_frame_goldens {
             label: "iter_0 \u{203a} draft".to_string(),
             tokens_sent: 118,
             tokens_received: 12,
+            tokens_sent_unknown: false,
+            tokens_received_unknown: false,
             deviation_pct: Some(-16.0),
             live: false,
         };
