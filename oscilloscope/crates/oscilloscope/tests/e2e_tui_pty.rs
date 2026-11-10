@@ -437,9 +437,9 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
 
 /// Issue #698's "Settled 1": a run this `osi` launched has a
 /// registry entry while it's live, and that entry is gone once the
-/// run ends -- the 30s hard cap on the final wait stays well above
-/// the sum of this test's own waits (two 20s pattern waits, a 10s
-/// poll, and a fixed 3s past the `sleep 2` effect's own duration).
+/// run ends -- every wait here (two 20s pattern waits, a 10s poll, a
+/// 10s wait for `Ended`, a 30s exit wait) is its own named step with
+/// its own cap, none of them a bare sleep.
 #[test]
 fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits() {
     if !e2e_enabled() {
@@ -510,12 +510,11 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
 
     // `q` opens a confirm-cancel dialog instead of quitting outright
     // as long as osi's own `child.try_wait()` hasn't yet observed the
-    // engine exit -- even once the run's own final state already
-    // shows it ended, since that observation lags the state write by
-    // however long until this loop's own next tick. A short, bounded
-    // wait past the `sleep 2` effect's own duration is simpler than
-    // fighting that dialog from a test with no plan to assert on it.
-    std::thread::sleep(Duration::from_secs(3));
+    // engine exit -- waited out here on the header's own `Ended`
+    // (the same fix #694 already gave the slow-streaming tests
+    // above), rather than fighting that dialog from a test with no
+    // plan to assert on it.
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(10));
     send_bytes(&mut master, b"q");
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
