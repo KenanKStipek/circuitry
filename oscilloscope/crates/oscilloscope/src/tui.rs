@@ -9094,6 +9094,7 @@ mod golden_tests {
             run_id: "run-abc123".to_string(),
             pid: Some(1),
             engine: None,
+            config: None,
         });
         model.observe_event(&Event::Report {
             ts: "2026-01-01T11:04:58Z".to_string(),
@@ -10267,6 +10268,7 @@ mod tape_live_tests {
             run_id: "r1".to_string(),
             pid: None,
             engine: Some("cof".to_string()),
+            config: None,
         });
         model.observe_event(&oscilloscope_core::observe::Event::Start {
             ts: "2026-10-08T11:46:43Z".to_string(),
@@ -10646,6 +10648,8 @@ mod tape_frame_goldens {
             );
             let record = oscilloscope_core::history::build_record(
                 "demo.yml",
+                None,
+                None,
                 Some("cof"),
                 &state,
                 &model,
@@ -10657,6 +10661,8 @@ mod tape_frame_goldens {
         let handle = crate::history_io::HistoryHandle::for_run(
             Some(dir.path().to_path_buf()),
             "demo.yml".to_string(),
+            None,
+            None,
         );
         (dir, handle)
     }
@@ -11637,6 +11643,8 @@ mod tape_frame_goldens {
         let history = crate::history_io::HistoryHandle::for_run(
             Some(empty_history_dir.path().to_path_buf()),
             "demo.yml".to_string(),
+            None,
+            None,
         );
         let now = RUN2_FROZEN_NOW;
         let (state, events) = run2_frozen_at_3_62s();

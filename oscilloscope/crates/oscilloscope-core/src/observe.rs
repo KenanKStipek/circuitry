@@ -267,6 +267,11 @@ pub enum Event {
         /// (issue #649) records `null` rather than guessing when it's
         /// absent.
         engine: Option<String>,
+        /// The run's own config path (issue #697), when the engine
+        /// writes one -- neither engine does yet, so this is always
+        /// `None` today; read as optional so osi already picks it up
+        /// the moment either one starts to.
+        config: Option<String>,
     },
     /// Sent once by a tree loop or tree dynamic before its branches
     /// start. `branches` is the true total (an `each` loop's item
@@ -361,6 +366,10 @@ pub fn parse_event(value: &Value) -> Option<Event> {
             pid: value.get("pid").and_then(Value::as_i64).map(|p| p as i32),
             engine: value
                 .get("engine")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            config: value
+                .get("config")
                 .and_then(Value::as_str)
                 .map(str::to_string),
         }),

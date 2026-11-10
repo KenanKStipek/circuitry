@@ -11,6 +11,7 @@
 pub mod changes;
 pub mod config_discovery;
 pub mod diff;
+pub mod discovery;
 pub mod engine;
 pub mod flow;
 pub mod fold;
@@ -22,6 +23,7 @@ pub mod model;
 pub mod observe;
 pub mod plan;
 pub mod rail;
+pub mod registry;
 pub mod render;
 pub mod screens;
 pub mod store;

@@ -87,7 +87,21 @@ fn two_runs_of_one_document_leave_two_records_with_the_same_document_hash() {
     for record in &records {
         assert_eq!(record.outcome, history::Outcome::Ok);
         assert_eq!(record.engine.as_deref(), Some("cof"));
+        assert_eq!(record.config.as_deref(), config.to_str());
     }
+    // `run_dir` is made absolute, not symlink-resolved: it's read
+    // back before the directory it names necessarily still exists,
+    // so this must match the path as given (`work`'s own, already
+    // absolute), never a `canonicalize`d one (macOS's own `/tmp` ->
+    // `/private/tmp` symlink would otherwise make this flaky).
+    assert_eq!(
+        records[0].run_dir.as_deref(),
+        work.path().join("run1").to_str()
+    );
+    assert_eq!(
+        records[1].run_dir.as_deref(),
+        work.path().join("run2").to_str()
+    );
 }
 
 #[test]

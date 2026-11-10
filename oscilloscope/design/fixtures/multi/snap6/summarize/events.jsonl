@@ -1,0 +1,9 @@
+{"v":1,"seq":0,"ts":"2026-11-08T23:51:55.804Z","ev":"run_start","run_id":"67df40e6-301e-42e0-b4a2-8d9642918a4b","orchestration":"summarize.yml","engine":"electricity 0.1.0","pid":1028}
+{"v":1,"seq":1,"ts":"2026-11-08T23:51:55.804Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-08T23:51:55.804Z","ev":"start","id":1,"path":"prime.outline"}
+{"v":1,"seq":3,"ts":"2026-11-08T23:51:55.804Z","ev":"end","id":1,"path":"prime.outline","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-11-08T23:51:55.804Z","ev":"start","id":2,"path":"prime.read"}
+{"v":1,"seq":5,"ts":"2026-11-08T23:51:57.811Z","ev":"end","id":2,"path":"prime.read","ok":true,"ms":2006}
+{"v":1,"seq":6,"ts":"2026-11-08T23:51:57.811Z","ev":"start","id":3,"path":"prime.summary"}
+{"v":1,"seq":7,"ts":"2026-11-08T23:51:57.811Z","ev":"end","id":3,"path":"prime.summary","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-11-08T23:51:57.811Z","ev":"start","id":4,"path":"prime.check"}

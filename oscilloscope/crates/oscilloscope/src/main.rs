@@ -24,11 +24,12 @@ mod highlight;
 mod history_io;
 mod icon;
 mod keys;
+mod registry_io;
 mod terminal;
 mod theme;
 mod tui;
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{
@@ -56,13 +57,20 @@ osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
   osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
-  osi watch <dir | state.live.json> [--plan doc.yml]";
+  osi watch <dir | state.live.json> [--plan doc.yml]
+
+With no orchestration: on a TTY this is a usage error, same as always, until the Select screen (design v1 part 5)
+lands. Without a TTY, or with --log, it instead finds the orchestrations already running on this machine (the run
+registry, a process scan, and any state.live.json in the current directory) and prints one line each, then exits 0.";
 
 #[derive(Parser, Debug)]
 #[command(name = "osi", version = VERSION, about = ABOUT)]
 struct RunArgs {
-    /// The orchestration document to run (YAML or JSON).
-    orchestration: String,
+    /// The orchestration document to run (YAML or JSON). With none,
+    /// on a TTY this is a usage error; without a TTY, or with
+    /// `--log`, osi instead lists the orchestrations already running
+    /// on this machine and exits 0 (issue #698).
+    orchestration: Option<String>,
     /// The engine's own config (JSON), passed through unchanged. With
     /// none, the engine resolves its own default (DESIGN.md §4).
     config: Option<String>,
@@ -182,6 +190,27 @@ enum EngineChoice {
 /// means `do_run`/`do_watch` hand off to the TUI instead (§6.3).
 fn effective_log_mode(explicit: bool) -> bool {
     explicit || !std::io::stdout().is_terminal() || std::env::var_os("CI").is_some()
+}
+
+/// Bare `osi` with no orchestration, without a TTY (or with
+/// `--log`): finds the runs on this machine (the registry plus a
+/// process scan plus a `state.live.json` scan of the current
+/// directory) and prints one plain line each, then exits 0 -- a
+/// script's own discovery answer, without reading the registry
+/// itself. Never opens a terminal, never blocks.
+fn print_discovered_runs() -> ExitCode {
+    let runs = oscilloscope_core::discovery::discover_runs(
+        registry_io::resolve_runs_dir().as_deref(),
+        &oscilloscope_core::registry::RealLiveness,
+        &oscilloscope_core::discovery::RealProcessScanner,
+        &oscilloscope_core::discovery::RealProcessCwd,
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::time::SystemTime::now(),
+    );
+    for run in &runs {
+        println!("{}", oscilloscope_core::discovery::format_plain_line(run));
+    }
+    ExitCode::from(0)
 }
 
 /// The real system zone (issue #613: "the binary uses the local
@@ -432,6 +461,8 @@ fn supervise_plain(
     model: &mut RunModel,
     plan: &PlanTree,
     signals: &mut Option<SignalWatcher>,
+    registry: &mut registry_io::RegistryHandle,
+    orchestration: &str,
 ) -> std::process::ExitStatus {
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
@@ -464,6 +495,7 @@ fn supervise_plain(
             print_line(out, clock, None, &format!("engine: {line}"));
         }
         drain_observations(out, clock, live_poller, events_tailer, differ, model, plan);
+        registry.ensure_written(model, orchestration);
 
         if let Ok(Some(status)) = child.try_wait() {
             return status;
@@ -587,6 +619,7 @@ fn run_glance(
     no_animation: bool,
     history: &history_io::HistoryHandle,
     engine_name: &str,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -629,6 +662,7 @@ fn run_glance(
             &mut model,
             &plan,
         );
+        registry.ensure_written(&model, &document);
         if let Some(state) = state {
             current_state = Some(state);
         }
@@ -734,6 +768,7 @@ fn watch_document_name(state: Option<&serde_json::Value>, fallback: &str) -> Str
 /// an abort). `--once` skips the loop entirely: one read, one line,
 /// exit 0, for a tmux status line that runs its own command on a
 /// timer instead.
+#[allow(clippy::too_many_arguments)]
 fn watch_glance(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -742,6 +777,7 @@ fn watch_glance(
     no_animation: bool,
     once: bool,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -824,6 +860,10 @@ fn watch_glance(
         if state.is_some() {
             last_state = state;
         }
+        registry.ensure_written(
+            &model,
+            &watch_document_name(last_state.as_ref(), &fallback_document),
+        );
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -922,7 +962,7 @@ fn watch_glance(
     ExitCode::from(watch_exit_code(local_signal, &model, &last_state))
 }
 
-fn do_run(args: RunArgs) -> ExitCode {
+fn do_run(args: RunArgs, raw_args: &[String]) -> ExitCode {
     // Issue #535: resolved before anything else runs, same spirit as
     // the signal watcher just below -- a bad `OSI_THEME` is a usage
     // error and should exit 2 before this function does anything
@@ -940,6 +980,17 @@ fn do_run(args: RunArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // No document at all. On a TTY with no `--log`, this stays the
+    // usage error it always was -- the Select screen that will
+    // replace it is a later part of this same design. Otherwise, osi
+    // finds what's already running instead.
+    let Some(orchestration_arg) = args.orchestration.clone() else {
+        if effective_log_mode(args.log) {
+            return print_discovered_runs();
+        }
+        return report_clap_error(missing_orchestration_error(raw_args));
+    };
+
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
     // --help` detection, and compiling the plan, both run a blocking
@@ -952,12 +1003,8 @@ fn do_run(args: RunArgs) -> ExitCode {
     // either not yet started, or started and now unsupervised.
     let mut signals = SignalWatcher::new().ok();
 
-    let orchestration = PathBuf::from(&args.orchestration);
+    let orchestration = PathBuf::from(&orchestration_arg);
     let config = args.config.as_ref().map(PathBuf::from);
-    let history = history_io::HistoryHandle::for_run(
-        history_io::resolve_history_dir(args.no_history),
-        history_io::resolve_run_document_path(&orchestration),
-    );
 
     if args.engine == EngineChoice::Electricity {
         if let Some(cfg) = &config {
@@ -979,6 +1026,39 @@ fn do_run(args: RunArgs) -> ExitCode {
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
     };
+    // `config` recorded in history exactly as given on the command
+    // line, never resolved further; `run_dir` made absolute so
+    // "Recent Runs" can still open it later regardless of osi's own
+    // cwd at that later time.
+    let history = history_io::HistoryHandle::for_run(
+        history_io::resolve_history_dir(args.no_history),
+        history_io::resolve_run_document_path(&orchestration),
+        args.config.clone(),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    // Written once this run's own `run_start` is known
+    // (`RegistryHandle::ensure_written`, called on every rebuild
+    // below), removed again when `registry` itself is dropped at
+    // the end of this function, or earlier once the engine's exit is
+    // actually observed -- covering the run's own end and every
+    // signal path the same way.
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        spec.config.as_deref(),
+        Some(match args.engine {
+            EngineChoice::Cof => "cof",
+            EngineChoice::Electricity => "electricity",
+        }),
+        format!("osi {}", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &spec.events_path(),
+        &spec.live_state_path(),
+        false,
+    );
 
     let engine = build_engine(args.engine, &mut signals);
     // Review finding 2 on #458: a Ctrl-C landing during the probe
@@ -1098,11 +1178,12 @@ fn do_run(args: RunArgs) -> ExitCode {
             spec,
             plan,
             run_dir,
-            args.orchestration.clone(),
+            orchestration_arg.clone(),
             signals,
             args.no_animation,
             &history,
             engine.name(),
+            &mut registry,
         );
     }
 
@@ -1117,12 +1198,13 @@ fn do_run(args: RunArgs) -> ExitCode {
             plan,
             run_dir,
             is_default_dir,
-            args.orchestration.clone(),
+            orchestration_arg.clone(),
             engine.name().to_string(),
             signals,
             args.no_animation,
             theme_name,
             &history,
+            &mut registry,
         );
     }
 
@@ -1146,6 +1228,8 @@ fn do_run(args: RunArgs) -> ExitCode {
         &mut model,
         &plan,
         &mut signals,
+        &mut registry,
+        &orchestration.to_string_lossy(),
     );
 
     // Join the tee threads before draining anything further (F6): the
@@ -1955,6 +2039,7 @@ fn run_tui(
     no_animation: bool,
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
@@ -2032,6 +2117,8 @@ fn run_tui(
                 &mut model,
                 &plan,
                 &mut signals,
+                registry,
+                &document,
             );
             let code = finish_run(
                 &mut out,
@@ -2222,6 +2309,7 @@ fn run_tui(
                 &mut model,
                 &plan,
             );
+            registry.ensure_written(&model, &document);
             needs_rebuild |= !lines.is_empty();
             needs_draw |= !lines.is_empty();
             for line in &lines {
@@ -2652,6 +2740,12 @@ fn run_tui(
             if let Ok(Some(status)) = child.try_wait() {
                 exit_status = Some(status);
                 exit_status_ts = Some(now_rfc3339());
+                // The entry is removed the moment the engine's own
+                // exit is seen, not only once this loop itself ends
+                // (`registry`'s own `Drop`) -- otherwise it would
+                // still name a live run for as long as the finished
+                // screen stays open.
+                registry.remove();
                 // #494: the engine already exited, but its last
                 // events and its final live-state write (DESIGN.md
                 // §1.1) can still land after the poll above that just
@@ -2753,6 +2847,7 @@ fn run_tui(
     // cleanup and final output, removes any doubt that anything else
     // could ever end up waiting on that thread first.
     let _ = out.flush();
+    registry.remove();
     std::process::exit(i32::from(code));
 }
 
@@ -3000,6 +3095,8 @@ fn supervise_plain_watch(
     plan: &PlanTree,
     run_dir: &Path,
     signals: &mut Option<SignalWatcher>,
+    registry: &mut registry_io::RegistryHandle,
+    fallback_document: &str,
 ) -> (Option<serde_json::Value>, Option<ForwardSignal>) {
     let mut last_state: Option<serde_json::Value> = None;
     let mut warned_no_events = false;
@@ -3017,6 +3114,10 @@ fn supervise_plain_watch(
         {
             last_state = Some(state);
         }
+        registry.ensure_written(
+            model,
+            &watch_document_name(last_state.as_ref(), fallback_document),
+        );
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -3133,6 +3234,29 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let history = history_io::HistoryHandle::for_watch(
         history_io::resolve_history_dir(args.no_history),
         args.plan.clone(),
+        args.config
+            .as_ref()
+            .map(|c| c.to_string_lossy().into_owned()),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    // `osi watch` writes an entry too (`launcher: "osi <version>
+    // watch"`), the same way `osi <doc>` does -- unless a launcher's
+    // own entry for this same run already exists and is live, in
+    // which case this handle writes (and so removes) nothing, so a
+    // watch of a run another `osi` launched never overwrites it.
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        args.config.as_deref(),
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
+        true,
     );
 
     // Issue #626: `--glance` wins over both the TUI and `--log`,
@@ -3146,6 +3270,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.no_animation,
             args.once,
             &history,
+            &mut registry,
         );
     }
 
@@ -3161,6 +3286,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.no_animation,
             theme_name,
             &history,
+            &mut registry,
         );
     }
 
@@ -3189,6 +3315,8 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &plan,
         &run_dir,
         &mut signals,
+        &mut registry,
+        &args.target,
     );
 
     let code = finish_watch(
@@ -3221,6 +3349,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// detach back to the shell the instant `run_ended`/a dead pid is
 /// first noticed, which used to show the finished screen for about
 /// one redraw before leaving on its own.
+#[allow(clippy::too_many_arguments)]
 fn run_tui_watch(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -3229,6 +3358,7 @@ fn run_tui_watch(
     no_animation: bool,
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
@@ -3293,6 +3423,8 @@ fn run_tui_watch(
                 &plan,
                 &run_dir,
                 &mut signals,
+                registry,
+                &fallback_document,
             );
             let code = finish_watch(
                 &mut out,
@@ -3444,6 +3576,10 @@ fn run_tui_watch(
                 needs_rebuild = true;
                 needs_draw = true;
             }
+            registry.ensure_written(
+                &model,
+                &watch_document_name(last_state.as_ref(), &fallback_document),
+            );
 
             if last_state
                 .as_ref()
@@ -3482,6 +3618,12 @@ fn run_tui_watch(
                 }
             }
             if ended {
+                // The entry is removed the moment the watched run's
+                // own end is seen this way, not only once this loop
+                // itself ends (`registry`'s own `Drop`) -- otherwise
+                // it would still name a live run for as long as the
+                // finished screen stays open.
+                registry.remove();
                 // #494: the same shared final drain every path that
                 // reaches a run's end takes, regardless of which of
                 // the three stop conditions above just tripped --
@@ -3907,6 +4049,7 @@ fn run_tui_watch(
     // tail for why this ends the process explicitly rather than just
     // returning.
     let _ = out.flush();
+    registry.remove();
     std::process::exit(i32::from(code));
 }
 
@@ -4066,6 +4209,29 @@ fn report_clap_error(err: clap::Error) -> ExitCode {
     ExitCode::from(err.exit_code() as u8)
 }
 
+/// The same usage error clap produced on its own when `orchestration`
+/// was a required positional, before a bare `osi` without a TTY (or
+/// with `--log`) gained a second meaning (discovery) that needed it
+/// optional instead: re-parses `raw_args` against a copy of
+/// [`RunArgs`]'s own command with that one argument marked required
+/// again, so the message, usage line and exit code are clap's own,
+/// not a hand-written imitation of them -- a TTY caller with no
+/// document still sees exactly what it always did.
+fn missing_orchestration_error(raw_args: &[String]) -> clap::Error {
+    // `mut_arg` re-inserts the argument at the end of the command's
+    // own internal list, which would otherwise hand it a *later*
+    // positional index than `config`'s own -- both positions are
+    // pinned back explicitly so `config` still comes after
+    // `orchestration`, exactly as the two derived fields are
+    // ordered.
+    let command = RunArgs::command()
+        .mut_arg("orchestration", |a| a.required(true).index(1))
+        .mut_arg("config", |a| a.index(2));
+    command
+        .try_get_matches_from(raw_args.to_vec())
+        .expect_err("orchestration is missing, so this must fail")
+}
+
 fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
     if args.get(1).map(String::as_str) == Some("watch") {
@@ -4075,8 +4241,8 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
             Err(err) => report_clap_error(err),
         }
     } else {
-        match RunArgs::try_parse_from(args) {
-            Ok(args) => do_run(args),
+        match RunArgs::try_parse_from(args.clone()) {
+            Ok(parsed) => do_run(parsed, &args),
             Err(err) => report_clap_error(err),
         }
     }
@@ -4788,6 +4954,15 @@ mod tests {
     }
 
     #[test]
+    fn missing_orchestration_error_is_claps_own_missing_required_argument() {
+        let err = missing_orchestration_error(&args(&[]));
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert_eq!(err.exit_code(), 2);
+        let rendered = err.to_string();
+        assert!(rendered.contains("ORCHESTRATION"));
+    }
+
+    #[test]
     fn run_args_help_describes_every_argument() {
         // Issue #433: `osi <doc>`'s own arguments had no --help
         // descriptions at all, unlike `osi watch`'s.
@@ -4901,15 +5076,21 @@ mod tests {
         // then leaves an `osi-*` temp directory behind.
         let parsed = RunArgs::try_parse_from(args(&["-e", "k=v", "--log", "do-thing.yml"]));
         let parsed = parsed.expect("flags before the positional should parse");
-        assert_eq!(parsed.orchestration, "do-thing.yml");
+        assert_eq!(parsed.orchestration, Some("do-thing.yml".to_string()));
         assert_eq!(parsed.set, vec!["k=v".to_string()]);
         assert!(parsed.log);
     }
 
-    #[test]
-    fn no_args_is_a_usage_error() {
-        assert_eq!(run(args(&[])), ExitCode::from(2));
-    }
+    // `no_args_is_a_usage_error` is gone: no orchestration, without
+    // a TTY, now lists what's running instead of erroring --
+    // `print_discovered_runs` reads the real process environment
+    // (`OSI_RUNS_DIR` and friends) through
+    // `registry_io::resolve_runs_dir`, which this crate's own unit
+    // tests never override (no test here sets a process-wide env
+    // var, since `cargo test` runs many of them concurrently); the
+    // e2e suite covers the exit code with an isolated `OSI_RUNS_DIR`
+    // instead (`tests/cli_streams.rs`'s own TTY/non-TTY tests, and
+    // `tests/e2e_tui_pty.rs`'s registry tests).
 
     #[test]
     fn a_signal_already_pending_before_the_spawn_gives_its_exit_code_with_no_spawn() {
@@ -5087,7 +5268,7 @@ mod tests {
             &mut last_state,
             None,
             true,
-            &history_io::HistoryHandle::for_watch(None, None),
+            &history_io::HistoryHandle::for_watch(None, None, None, None),
         );
         assert_eq!(code, 0);
         let text = String::from_utf8(buf).unwrap();
