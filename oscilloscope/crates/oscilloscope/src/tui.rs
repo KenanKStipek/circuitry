@@ -2856,7 +2856,7 @@ fn draw_signal(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_signal_detail(frame, body, screen, ctx);
+        draw_focused_step_detail(frame, body, screen.selected.as_ref(), ctx);
         return;
     }
     // §5: the full layout (chart beside/above the Now pane and
@@ -3969,18 +3969,20 @@ fn draw_signal_readings(
 }
 
 /// `enter`'s own full-screen step view (§4: "opens the step under
-/// the cursor"), reusing the same [`FocusedStep`] the Tape's own
-/// detail pane builds theirs from -- a simpler block than the
-/// Tape's own (no history/share lines, since Signal's own model
-/// carries none of that per row), good enough to read a step's
-/// prompt and reply in full without leaving the screen.
-fn draw_signal_detail(
+/// the cursor"), reusing the same [`oscilloscope_core::screens::
+/// FocusedStep`] the Tape's own detail pane builds theirs from -- a
+/// simpler block than the Tape's own (no history/share lines, since
+/// neither the Signal's nor the Store's own model carries that per
+/// row), good enough to read a step's prompt and reply in full
+/// without leaving the screen. Shared by the Signal and the Store,
+/// whose own full-screen step views are otherwise identical.
+fn draw_focused_step_detail(
     frame: &mut Frame,
     area: Rect,
-    screen: &oscilloscope_core::screens::SignalScreen,
+    selected: Option<&oscilloscope_core::screens::FocusedStep>,
     ctx: &DrawCtx,
 ) {
-    let Some(step) = &screen.selected else {
+    let Some(step) = selected else {
         return;
     };
     let border_color = ctx.theme.border_focused;
@@ -4975,12 +4977,23 @@ fn draw_store_chart(
 }
 
 /// The Largest Stores table's own column widths (issue #695's rule
-/// 8) -- `label`/`bar`(8 cells + 2 trailing)/`tokens` are fixed;
-/// `wide` is the same boolean that decides whether Readings sits
-/// beside the table ("from the frames": the label column reads 27
-/// cells there, 23 once the table takes the whole pane alone).
-fn store_table_columns(wide: bool) -> (usize, usize, usize) {
-    (if wide { 27 } else { 23 }, 10, 8)
+/// 8) -- `bar`(8 cells + 2 trailing)/`tokens` are fixed; `wide` is
+/// the same boolean that decides whether Readings sits beside the
+/// table. The label column grows with `content_width` rather than
+/// sitting fixed, so a path isn't cut on a wider terminal than
+/// either frame shows, but never below the frames' own 27 cells
+/// (`wide`) or 23 (not), reserving the same share/deviation width
+/// the two frames pin (24/34 cells) for anything beyond that.
+fn store_table_columns(wide: bool, content_width: usize) -> (usize, usize, usize) {
+    let (min_label, bar_w, tokens_w, reserved_combined) = if wide {
+        (27usize, 10usize, 8usize, 24usize)
+    } else {
+        (23usize, 10usize, 8usize, 34usize)
+    };
+    let label_w = content_width
+        .saturating_sub(bar_w + tokens_w + reserved_combined)
+        .max(min_label);
+    (label_w, bar_w, tokens_w)
 }
 
 /// The table's own share/deviation split ("from the frames", issue
@@ -5030,7 +5043,7 @@ fn draw_store_table(
     }
     fill_border_rows(frame, inner, border_color);
     let content_width = (inner.width - 3) as usize;
-    let (label_w, bar_w, tokens_w) = store_table_columns(wide);
+    let (label_w, bar_w, tokens_w) = store_table_columns(wide, content_width);
     let combined = content_width.saturating_sub(label_w + bar_w + tokens_w);
     let theme = ctx.theme;
     // "From the frames": the header's own `TOKENS` lands one column
@@ -5256,63 +5269,6 @@ fn draw_store_readings(
     );
 }
 
-/// `enter`'s own full-screen step view (issue #695's rule 4), the
-/// same shared toggle and the same [`FocusedStep`] the Tape's,
-/// Signal's and Flow's own already build theirs from.
-fn draw_store_detail(
-    frame: &mut Frame,
-    area: Rect,
-    screen: &oscilloscope_core::store::StoreScreen,
-    ctx: &DrawCtx,
-) {
-    let Some(step) = &screen.selected else {
-        return;
-    };
-    let border_color = ctx.theme.border_focused;
-    let title = format!("{} \u{b7} Selected", step.breadcrumb);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_set(ratatui::symbols::border::ROUNDED)
-        .title(tape_block_title(&title, border_color, ctx))
-        .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    fill_border_rows(frame, inner, border_color);
-    let muted = Style::default().fg(ctx.theme.fg_muted);
-    let default = Style::default().fg(ctx.theme.text);
-    let mut lines = vec![Line::from(vec![
-        Span::styled(" Status  ", muted),
-        Span::styled(
-            format!(
-                "{} ",
-                oscilloscope_core::format::format_duration(step.elapsed_s.unwrap_or(0.0))
-            ),
-            default,
-        ),
-    ])];
-    if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(" Reply", muted));
-        if let Some(snippet) = snippet {
-            for line in snippet.lines() {
-                lines.push(Line::styled(format!(" {line}"), default));
-            }
-        }
-    }
-    frame.render_widget(
-        Paragraph::new(lines),
-        Rect {
-            x: inner.x + 1,
-            y: inner.y,
-            width: inner.width.saturating_sub(1),
-            height: inner.height,
-        },
-    );
-}
-
 /// The table's own pane height for `rows` data rows: a header row
 /// plus `rows`, inside a border (issue #695's §2.4 frames: 7 at
 /// 120x30's 4 rows, 6 at 80x24's 3).
@@ -5366,7 +5322,7 @@ fn draw_store(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_store_detail(frame, body, screen, ctx);
+        draw_focused_step_detail(frame, body, screen.selected.as_ref(), ctx);
         return;
     }
     let title_full = full_area.width >= 120;
@@ -5439,8 +5395,8 @@ pub fn draw(
 ) {
     let area = frame.area();
     if let Some(bg) = ctx.theme.background {
-        // Finding 7: a named theme's own base fill must set both
-        // roles, not just `bg` -- with only `bg` painted, a dark-
+        // A named theme's own base fill must set both roles, not
+        // just `bg` -- with only `bg` painted, a dark-
         // background theme on a *light* terminal (solarized-light,
         // gruvbox-light, catppuccin-latte) drew that terminal's own
         // default foreground over it, which can be as light as the
@@ -12971,6 +12927,20 @@ mod tape_frame_goldens {
     }
 
     /// Issue #695's rule 4: a leaf whose own `name · N t` doesn't fit
+    /// The label column grows past the frames' own 27/23 cells on a
+    /// pane wider than either frame shows, rather than sitting fixed
+    /// and cutting a path that would otherwise fit; at or below the
+    /// frames' own content width it never shrinks under them either.
+    #[test]
+    fn store_table_label_column_grows_with_a_wider_pane_never_below_the_frames() {
+        assert_eq!(store_table_columns(true, 69).0, 27);
+        assert_eq!(store_table_columns(false, 75).0, 23);
+        assert_eq!(store_table_columns(true, 69 + 20).0, 27 + 20);
+        assert_eq!(store_table_columns(false, 75 + 20).0, 23 + 20);
+        assert_eq!(store_table_columns(true, 10).0, 27);
+        assert_eq!(store_table_columns(false, 10).0, 23);
+    }
+
     /// one line wraps the name and tokens onto their own lines
     /// instead, dropping the arrows line first when the tile's own
     /// height runs out too.
