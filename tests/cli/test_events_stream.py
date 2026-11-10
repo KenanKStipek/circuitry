@@ -151,6 +151,59 @@ effects:
     assert len(start_ids) == len(set(start_ids))
 
 
+def _trivial_orch(tmp_path: Path) -> Path:
+    orch = tmp_path / "trivial.yml"
+    orch.write_text(
+        """
+effects:
+  - type: tool
+    name: noop
+    provider: shell
+    params:
+      command: bash
+      args: ["-c", "exit 0"]
+      allowed_commands: ["bash"]
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+    return orch
+
+
+def test_run_start_names_the_config_file_given_on_the_command_line(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({}), encoding="utf-8")
+    orch = _trivial_orch(tmp_path)
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(
+        orch,
+        out_path=out_path,
+        events_path=events_path,
+        extra_args=["--config", str(config_path)],
+    )
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    run_start = _events(events_path)[0]
+    assert run_start["ev"] == "run_start"
+    assert run_start["config"] == "config.json"
+
+
+def test_run_start_names_no_config_file_as_null(tmp_path: Path) -> None:
+    orch = _trivial_orch(tmp_path)
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(orch, out_path=out_path, events_path=events_path)
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    run_start = _events(events_path)[0]
+    assert run_start["ev"] == "run_start"
+    assert run_start["config"] is None
+
+
 def test_tree_dynamic_max_concurrency_dispatch_carries_both_numbers(
     tmp_path: Path,
 ) -> None:

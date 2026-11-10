@@ -19,7 +19,7 @@ def _lines(path: Path) -> list[dict[str, Any]]:
 
 def test_run_start_is_first_line(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="do-thing.yml")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config=None)
     log.close()
 
     lines = _lines(tmp_path / "events.jsonl")
@@ -28,9 +28,21 @@ def test_run_start_is_first_line(tmp_path: Path) -> None:
     assert lines[0]["v"] == 1
     assert lines[0]["run_id"] == "r1"
     assert lines[0]["orchestration"] == "do-thing.yml"
+    assert lines[0]["config"] is None
     assert lines[0]["engine"].startswith("cof ")
     assert isinstance(lines[0]["pid"], int)
+    assert list(lines[0].keys()).index("config") == list(lines[0].keys()).index(
+        "orchestration"
+    ) + 1
     assert lines[0]["ts"].endswith("Z")
+
+
+def test_run_start_names_the_config_file(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config="config.json")
+    log.close()
+
+    assert _lines(tmp_path / "events.jsonl")[0]["config"] == "config.json"
 
 
 def test_dispatch_payload_carries_branches_and_concurrency(tmp_path: Path) -> None:
@@ -50,7 +62,7 @@ def test_dispatch_payload_carries_branches_and_concurrency(tmp_path: Path) -> No
 
 def test_seq_strictly_increasing_across_event_kinds(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     log.on_dispatch("prime.each", 2, 3)
     log.on_start("prime.each.iter_0.t", {})
     log.on_complete("prime.each.iter_0.t", {"meta": {"error": None}})
@@ -164,7 +176,7 @@ def test_complete_without_a_matching_start_gets_a_null_id_and_no_crash(
     stream keeps going."""
     log = EventLog(tmp_path / "events.jsonl")
     log.on_complete("prime.step", {"meta": {"error": None}})
-    log.run_start(run_id="r1", orchestration="o.yml")  # still writing
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)  # still writing
     log.close()
 
     events = _lines(tmp_path / "events.jsonl")
@@ -220,7 +232,7 @@ def test_file_is_created_or_truncated_at_construction(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text("stale leftover line\n", encoding="utf-8")
     log = EventLog(path)
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     log.close()
 
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -231,7 +243,7 @@ def test_file_is_created_or_truncated_at_construction(tmp_path: Path) -> None:
 def test_creates_missing_parent_directories(tmp_path: Path) -> None:
     path = tmp_path / "deep" / "nested" / "events.jsonl"
     log = EventLog(path)
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     assert log.close() is False
     assert path.exists()
 
@@ -243,7 +255,7 @@ def test_unwritable_path_disables_writes_without_raising(tmp_path: Path) -> None
 
     # Every call is a no-op, never an exception -- writing this stream must
     # never fail the run.
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     log.on_start("prime.step", {})
     log.on_complete("prime.step", {"meta": {"error": None}})
     log.run_end(ok=True, error=None, signal=None)
@@ -254,7 +266,7 @@ def test_a_write_failure_mid_run_disables_further_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
 
     real_write = log._file.write
     calls = {"n": 0}
@@ -277,7 +289,7 @@ def test_a_write_failure_mid_run_disables_further_writes(
 
 def test_close_returns_false_when_nothing_ever_failed(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     assert log.close() is False
 
 
@@ -288,7 +300,7 @@ def test_an_unexpected_non_oserror_also_disables_further_writes(
     anywhere in a method's body must not escape and must not re-fail on
     every subsequent call (#419 review)."""
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
 
     def boom(data: str) -> int:
         raise RuntimeError("not an OSError")

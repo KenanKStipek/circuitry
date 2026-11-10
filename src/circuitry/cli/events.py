@@ -155,7 +155,9 @@ class EventLog:
         )
         self._file.flush()
 
-    def run_start(self, *, run_id: str, orchestration: str) -> None:
+    def run_start(
+        self, *, run_id: str, orchestration: str, config: str | None
+    ) -> None:
         if self._disabled:
             return
         try:
@@ -170,6 +172,7 @@ class EventLog:
                         "ev": "run_start",
                         "run_id": run_id,
                         "orchestration": orchestration,
+                        "config": config,
                         "engine": _engine_label(),
                         "pid": os.getpid(),
                     }

@@ -2382,7 +2382,7 @@ coincide with a coalesced write. `--events` reports every one of them the
 instant it starts, from whichever worker thread runs it:
 
 ```json
-{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
+{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","config":"config.json","engine":"cof 0.2.0","pid":4242}
 {"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
@@ -2396,6 +2396,7 @@ instant it starts, from whichever worker thread runs it:
 | `seq` | Strictly increasing in file order. |
 | `ts` | Wall-clock UTC, millisecond precision. |
 | `ev` | `run_start`, `dispatch`, `start`, `end`, `progress`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report`/`progress` existed still reads the rest of the stream fine. |
+| `config` | `run_start` only, between `orchestration` and `engine`: the `--config` path exactly as given on the command line, never resolved or made absolute, the same rule `orchestration` already follows. `null` when the run was given no `--config` (config discovery can merge more than one file, so there is no single path to name). Always present. |
 | `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
 | `path` | The absolute state path, as in `--live-state`. |
 | `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is the true branch count: the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces — every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. Its `path` is always the absolute path its own `start`/`end` events would use — for a named loop, its own child path (`prime.outer.iter_0.inner` for a tree loop `inner` nested inside a tree loop `outer`'s pass `iter_0`); for an **unnamed** tree loop, which has no name of its own to carry a path, the absolute path of whichever container directly encloses its passes instead (the document root `prime`, a named ancestor, or a named loop's own pass node `prime.outer.iter_0`). Two unnamed tree loops dispatching one after another, at the same nesting depth, report that same path. A tree loop inside a `use` child's own document composes the same way: its `path` nests under the `use` effect's own absolute path exactly like its `start`/`end` events do (`prime.sub.fan` for a loop `fan` at the top of a child run as `sub`), never the child's own unnamespaced `prime.fan`. |

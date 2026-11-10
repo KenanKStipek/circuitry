@@ -133,6 +133,12 @@ class RunRequest:
     # cli.app's run commands, the only built-in caller that passes True.
     show_loop_progress: bool = False
     config: CircuitryConfig | None = None
+    # The ``--config`` path exactly as given on the command line (``None``
+    # when the caller passed none and config was discovered instead) --
+    # distinct from ``config`` above, which is the already-resolved
+    # ``CircuitryConfig``. Named in ``--events``' own ``run_start`` line,
+    # the same way ``orchestration_path`` is.
+    config_path: Path | None = None
     live_state_path: Path | None = None
     # ``--events``: a JSONL stream of effect starts and ends, written by
     # ``cli.events.EventLog`` next to the ``--live-state`` mirror (#419).
@@ -971,7 +977,11 @@ def run(req: RunRequest) -> RunResult:
             callbacks.append(live_mirror)
         if req.events_path is not None:
             event_log = EventLog(req.events_path)
-            event_log.run_start(run_id=run_id, orchestration=req.orchestration_path.name)
+            event_log.run_start(
+                run_id=run_id,
+                orchestration=req.orchestration_path.name,
+                config=req.config_path.name if req.config_path is not None else None,
+            )
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
