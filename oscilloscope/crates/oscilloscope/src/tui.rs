@@ -491,6 +491,20 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, items: &[(&str, &str)], ctx: &Dra
     );
 }
 
+/// Issue #704 rule 5: the full-screen step key bar, shared by every
+/// screen -- the only keys that actually work while it is open (the
+/// key handler checked first intercepts everything else).
+fn fullscreen_step_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![("[ ]", "Step"), ("↑↓", "Scroll"), ("m", "Meta")];
+    if wide {
+        items.push(("0-3", "Screens"));
+    }
+    items.push(("?", "Help"));
+    items.push(("esc", "Close"));
+    items.push(("q", "Quit"));
+    items
+}
+
 fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     let mut items = vec![("↑↓", "Select"), ("enter", "Open")];
     if wide {
@@ -3267,12 +3281,12 @@ fn draw_tape(
         ctx,
         now,
     );
-    draw_key_bar(
-        frame,
-        sections[3],
-        &tape_key_bar_items(full_area.width >= 80),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        tape_key_bar_items(full_area.width >= 80)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
@@ -3362,12 +3376,12 @@ fn draw_signal(
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "SIGNAL", now, icon_frame, ctx);
     draw_signal_status_line(frame, sections[2], screen, header, ctx, now);
-    draw_key_bar(
-        frame,
-        sections[3],
-        &signal_key_bar_items(full_area.width >= 80),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        signal_key_bar_items(full_area.width >= 80)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
@@ -6086,12 +6100,12 @@ fn draw_store(
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "STORE", now, icon_frame, ctx);
     draw_store_status_line(frame, sections[2], screen, header, ctx, now);
-    draw_key_bar(
-        frame,
-        sections[3],
-        &store_key_bar_items(full_area.width >= 80),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        store_key_bar_items(full_area.width >= 80)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
@@ -9250,12 +9264,12 @@ fn draw_flow(
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "FLOW", now, icon_frame, ctx);
     draw_flow_status_line(frame, sections[2], screen, header, ctx, now);
-    draw_key_bar(
-        frame,
-        sections[3],
-        &flow_key_bar_items(full_area.width),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        flow_key_bar_items(full_area.width)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     // §5: the Story pane needs 100 columns and 30 rows both -- the
@@ -14236,6 +14250,69 @@ mod tape_frame_goldens {
         assert!(
             !text.contains("full value overlay"),
             "not the generic list:\n{text}"
+        );
+    }
+
+    /// Issue #704 rule 5: the full-screen step's own key bar, shared
+    /// by every screen, lists `[ ]`/scroll/`m`/`esc` -- never a
+    /// screen's own ordinary key bar, whose keys (the Store's own
+    /// table navigation here) do not fire while it is open.
+    #[test]
+    fn the_fullscreen_step_key_bar_lists_its_own_keys_not_the_screens() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.tape_fullscreen_step = true;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Step"), "{text}");
+        assert!(text.contains("Scroll"), "{text}");
+        assert!(text.contains("Meta"), "{text}");
+        assert!(text.contains("Close"), "{text}");
+        assert!(
+            !text.contains("Open"),
+            "not the Store's own ordinary key bar:\n{text}"
         );
     }
 
