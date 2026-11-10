@@ -30,7 +30,7 @@ mod theme;
 mod tui;
 
 use clap::{Parser, ValueEnum};
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{
     CofEngine, ElectricityEngine, Engine, EngineCaps, EngineError, RunSpec,
@@ -3365,7 +3365,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             false,
             true,
         ) {
-            WatchOutcome::Exited(code) => code,
+            WatchOutcome::Exited(code, _) => code,
             // `opened_from_select` is false here, so `run_tui_watch`
             // never actually returns this for a plain `osi watch`.
             WatchOutcome::BackToSelect(_) => {
@@ -3440,8 +3440,16 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// thread (`EventReader`) back so the Select loop can reuse it
 /// rather than spawning a second one (`spawn_event_reader`'s own
 /// doc comment: never more than one, for the whole process).
+/// `Exited`'s own second field is `finish_watch`'s plain-text output,
+/// buffered rather than written straight to stdout whenever
+/// `manage_terminal` is false (issue #698): the Select loop's own
+/// alternate screen is still up at that point, so `run_select`
+/// prints this only once its `TerminalGuard` has actually dropped --
+/// empty for `do_watch`'s own path, which writes it directly instead
+/// (nothing left to defer to, since it calls `std::process::exit`
+/// before this type is ever constructed on that path).
 enum WatchOutcome {
-    Exited(ExitCode),
+    Exited(ExitCode, Vec<u8>),
     BackToSelect(EventReader),
 }
 
@@ -3567,17 +3575,26 @@ fn run_tui_watch(
                 history,
             );
             let _ = writeln!(out, "exit {code}");
-            if !manage_terminal {
-                registry.remove();
-                return WatchOutcome::Exited(ExitCode::from(code as u8));
-            }
-            // No TUI ever started, Select screen included -- the
-            // caller just exits (issue #698: a Select-opened run
-            // that can't even open a terminal has nowhere left to
-            // show Select on either).
-            return WatchOutcome::Exited(ExitCode::from(code as u8));
+            // No TUI ever started here, Select screen included
+            // (issue #698: a Select-opened run that can't even open
+            // a terminal has nowhere left to show Select on either) --
+            // `registry`'s own `Drop` removes its entry once whichever
+            // caller owns it returns (`do_watch` when `manage_terminal`,
+            // `attach_discovered_run`/`attach_recent_run` otherwise),
+            // since this branch, unlike the tail below, never calls
+            // `std::process::exit` on any path.
+            return WatchOutcome::Exited(ExitCode::from(code as u8), Vec::new());
         }
     };
+    if !manage_terminal {
+        // This `Terminal` is fresh (built on the Select loop's own,
+        // already-active `TerminalGuard` above), but the real screen
+        // underneath it may still carry whatever Select itself last
+        // drew there -- cleared for the same reason `run_select_
+        // screen`'s own fresh `Terminal` is, so the first frame drawn
+        // below doesn't leave that behind under the new content.
+        let _ = terminal.clear();
+    }
 
     // Design: crossterm's own blocking `event::read()` runs on its
     // own thread -- `event_rx` is the caller's own, never a second
@@ -4179,24 +4196,55 @@ fn run_tui_watch(
     drop(_guard);
     flush_history_notices(history);
 
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    let code = finish_watch(
-        &mut out,
-        &mut clock,
-        &mut live_poller,
-        &mut events_tailer,
-        &mut differ,
-        &mut model,
-        &plan,
-        &run_dir,
-        &mut last_state,
-        local_signal,
-        detached_while_live,
-        history,
-    );
-    let _ = writeln!(out, "exit {code}");
-    let _ = out.flush();
+    // Issue #698: `manage_terminal` false means the Select loop's own
+    // alternate screen is still up at this point (its `TerminalGuard`
+    // is `run_select`'s own, not this function's) -- `finish_watch`'s
+    // own summary and `exit {code}` line are buffered here instead of
+    // written straight to stdout, so they never land, broken across
+    // lines by raw mode's own disabled carriage return, over whatever
+    // Select or the next attach draws. A `back_to_select` return
+    // discards the buffer (Select redraws the whole screen anyway);
+    // `run_select`'s own tail prints it, once its `TerminalGuard` has
+    // actually dropped, only on the final `Exited` return below.
+    let (code, pending_output): (u8, Vec<u8>) = if manage_terminal {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let code = finish_watch(
+            &mut out,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+            &run_dir,
+            &mut last_state,
+            local_signal,
+            detached_while_live,
+            history,
+        );
+        let _ = writeln!(out, "exit {code}");
+        let _ = out.flush();
+        (code, Vec::new())
+    } else {
+        let mut buf = Vec::new();
+        let code = finish_watch(
+            &mut buf,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+            &run_dir,
+            &mut last_state,
+            local_signal,
+            detached_while_live,
+            history,
+        );
+        let _ = writeln!(buf, "exit {code}");
+        (code, buf)
+    };
     registry.remove();
     // Issue #698: a run attached from the Select screen hands the
     // event-reader thread back rather than ending the process, so
@@ -4211,7 +4259,7 @@ fn run_tui_watch(
         // The Select loop owns the real `TerminalGuard` and the
         // process's own exit either way (`run_select`'s own tail) --
         // this attach never owned either.
-        return WatchOutcome::Exited(ExitCode::from(code as u8));
+        return WatchOutcome::Exited(ExitCode::from(code), pending_output);
     }
     std::process::exit(i32::from(code));
 }
@@ -4222,7 +4270,9 @@ fn run_tui_watch(
 /// several running, or none at all.
 fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool) -> ExitCode {
     let runs = discover_running();
-    if runs.len() == 1 {
+    if oscilloscope_core::select::shape_for_run_count(runs.len())
+        == oscilloscope_core::select::Shape::AttachSingle
+    {
         return match attach_discovered_run(
             &runs[0],
             false,
@@ -4231,7 +4281,7 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             no_history,
             spawn_event_reader(),
         ) {
-            WatchOutcome::Exited(code) => code,
+            WatchOutcome::Exited(code, _) => code,
             WatchOutcome::BackToSelect(_) => {
                 unreachable!("bare osi's own single-run attach never opens from Select")
             }
@@ -4250,10 +4300,21 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
         }
     };
     let mut event_rx = spawn_event_reader();
-    let code = loop {
-        let (action, reader) = run_select_screen(no_history, theme_name, event_rx);
+    // Issue #698's Settled point 3: the cursor starts on the first
+    // run, not `All` -- `run_select_screen` itself still decides that
+    // default (it alone knows, at the moment it first draws, whether
+    // the running list or the empty Recent Runs table is showing);
+    // `None` only for this very first call. Every leg after that
+    // carries the cursor `run_select_screen` last ended on
+    // (`Some`), so `esc` back from a run doesn't lose whichever row
+    // was under it.
+    let mut cursor: Option<usize> = None;
+    let (code, pending_output) = loop {
+        let (action, reader, last_cursor) =
+            run_select_screen(no_history, theme_name, event_rx, cursor);
+        cursor = Some(last_cursor);
         let outcome = match action {
-            SelectAction::Quit => break ExitCode::from(0),
+            SelectAction::Quit(code) => break (code, Vec::new()),
             SelectAction::AttachRun(run) => {
                 attach_discovered_run(&run, true, no_animation, theme_name, no_history, reader)
             }
@@ -4262,12 +4323,45 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             }
         };
         match outcome {
-            WatchOutcome::Exited(code) => break code,
+            WatchOutcome::Exited(code, output) => break (code, output),
             WatchOutcome::BackToSelect(reader) => event_rx = reader,
         }
     };
     drop(guard);
+    // `run_tui_watch`'s own tail buffers `finish_watch`'s output
+    // rather than writing it onto the alternate screen this loop's
+    // own `TerminalGuard` still has open at that point (issue #698) --
+    // printed here, onto the real terminal, only once that guard has
+    // actually dropped.
+    if !pending_output.is_empty() {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = out.write_all(&pending_output);
+        let _ = out.flush();
+    }
     code
+}
+
+/// A locally received signal's own exit code (DESIGN.md §4.1): the
+/// standard 128+signal convention, shared with `watch_exit_code`'s
+/// own local-signal case so the two can never drift apart.
+fn forward_signal_exit_code(signal: ForwardSignal) -> u8 {
+    match signal {
+        ForwardSignal::Int => 130,
+        ForwardSignal::Term => 143,
+        ForwardSignal::Hup => 129,
+    }
+}
+
+/// A cheap check for whether the empty Select's own Recent Runs
+/// table might be stale, without re-reading and re-parsing every
+/// history record on every refresh tick (issue #698) -- `None` with
+/// history off (`--no-history`/`OSI_HISTORY=off`) or nothing recorded
+/// yet.
+fn history_signature(no_history: bool) -> Option<std::time::SystemTime> {
+    history_io::resolve_history_dir(no_history)
+        .as_deref()
+        .and_then(oscilloscope_core::history::history_dir_signature)
 }
 
 /// The registry plus a process scan plus a `state.live.json` scan of
@@ -4301,7 +4395,7 @@ fn read_recent_runs(no_history: bool) -> Vec<oscilloscope_core::select::RecentRo
 /// the chosen row by value since the loop's own borrow of `runs`/
 /// `recent` ends with it.
 enum SelectAction {
-    Quit,
+    Quit(ExitCode),
     AttachRun(oscilloscope_core::discovery::DiscoveredRun),
     AttachRecent(oscilloscope_core::select::RecentRow),
 }
@@ -4314,22 +4408,40 @@ const SELECT_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 /// attached run's (`run_select`'s own loop re-enters this every time
 /// an attached run's own `esc` comes back) -- `event_rx` is handed
 /// back either way, never a second reader thread spawned for it.
+/// `initial_cursor` is `run_select`'s own, carried across every leg
+/// of the round trip; the cursor this call ends on is handed back
+/// the same way, for the next leg to start from. `None` only for the
+/// very first call of the whole process: the cursor's own default
+/// (the first run, or row 0 of the empty Recent Runs table) depends
+/// on which of the two this call itself discovers, so there is no
+/// one fixed default `run_select` could pre-compute on its own.
 fn run_select_screen(
     no_history: bool,
     theme_name: theme::ThemeName,
     event_rx: EventReader,
-) -> (SelectAction, EventReader) {
+    initial_cursor: Option<usize>,
+) -> (SelectAction, EventReader, usize) {
     // `run_select`'s own `TerminalGuard` is already active for the
     // whole Select<->Attach lifecycle -- only a fresh `Terminal`
     // (ratatui's own diffing state, no raw-mode/alt-screen ioctls of
-    // its own) is ever created here.
+    // its own) is ever created here. Cleared right away: its own
+    // buffers start blank, but the real screen underneath may still
+    // carry whatever an attached run last drew there (issue #698) --
+    // without this, the first draw below would only send the cells
+    // that differ from blank, leaving that old content on screen
+    // underneath the new one.
     let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
         Ok(t) => t,
         Err(err) => {
             eprintln!("osi: couldn't start the TUI ({err})");
-            return (SelectAction::Quit, event_rx);
+            return (
+                SelectAction::Quit(ExitCode::from(1)),
+                event_rx,
+                initial_cursor.unwrap_or(0),
+            );
         }
     };
+    let _ = terminal.clear();
     let color_mode = theme::ColorMode::from_env();
     let resolved_theme = theme::resolve(theme_name, color_mode);
     let theme = resolved_theme.theme;
@@ -4340,9 +4452,26 @@ fn run_select_screen(
     } else {
         Vec::new()
     };
-    // Rule 6: the cursor starts on the first run, not `All`.
-    let mut cursor: usize = if runs.is_empty() { 0 } else { 1 };
-    let mut help_open = false;
+    let mut recent_signature = if runs.is_empty() {
+        history_signature(no_history)
+    } else {
+        None
+    };
+    let initial_max_index = if runs.is_empty() {
+        recent.len().saturating_sub(1)
+    } else {
+        runs.len()
+    };
+    // Issue #698's Settled point 3: the cursor starts on the first
+    // run, not `All` -- row 1, since row 0 is `All`; the empty
+    // Recent Runs table has no such row, so its own first entry is
+    // row 0.
+    let default_cursor = if runs.is_empty() { 0 } else { 1 };
+    let mut select_state = keys::SelectState::new(
+        initial_cursor
+            .unwrap_or(default_cursor)
+            .min(initial_max_index),
+    );
     let mut last_refresh = Instant::now();
     let mut signals = SignalWatcher::new().ok();
     let mut needs_draw = true;
@@ -4351,23 +4480,28 @@ fn run_select_screen(
 
     let outcome = 'select: loop {
         if let Some(watcher) = signals.as_mut() {
-            if watcher.pending().into_iter().next().is_some() {
-                break 'select SelectAction::Quit;
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                break 'select SelectAction::Quit(ExitCode::from(forward_signal_exit_code(sig)));
             }
         }
         if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
             runs = discover_running();
-            recent = if runs.is_empty() {
-                read_recent_runs(no_history)
+            if runs.is_empty() {
+                let signature = history_signature(no_history);
+                if signature != recent_signature || recent.is_empty() {
+                    recent = read_recent_runs(no_history);
+                }
+                recent_signature = signature;
             } else {
-                Vec::new()
-            };
+                recent = Vec::new();
+                recent_signature = None;
+            }
             let max_index = if runs.is_empty() {
                 recent.len().saturating_sub(1)
             } else {
                 runs.len()
             };
-            cursor = cursor.min(max_index);
+            select_state.cursor = select_state.cursor.min(max_index);
             last_refresh = Instant::now();
             needs_draw = true;
         }
@@ -4380,52 +4514,36 @@ fn run_select_screen(
                 Ok(Err(_)) => terminal_gone = true,
                 Ok(Ok(ev)) => match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                        if help_open {
-                            help_open = false;
+                        let max_index = if runs.is_empty() {
+                            recent.len().saturating_sub(1)
                         } else {
-                            let max_index = if runs.is_empty() {
-                                recent.len().saturating_sub(1)
-                            } else {
-                                runs.len()
-                            };
-                            match key.code {
-                                KeyCode::Char('q') => break 'select SelectAction::Quit,
-                                KeyCode::Char('?') => help_open = true,
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    cursor = cursor.saturating_sub(1);
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    cursor = (cursor + 1).min(max_index);
-                                }
-                                KeyCode::Home | KeyCode::Char('g') => cursor = 0,
-                                KeyCode::End | KeyCode::Char('G') => cursor = max_index,
-                                KeyCode::Enter => {
-                                    if runs.is_empty() {
-                                        if let Some(row) = recent.get(cursor) {
-                                            if !row.gone {
-                                                break 'select SelectAction::AttachRecent(
-                                                    row.clone(),
-                                                );
-                                            }
-                                        }
-                                    } else if cursor > 0 {
-                                        // Row 0 is `All`, out of scope
-                                        // here (issue #698's own
-                                        // acceptance): `enter` on it
-                                        // is inert, same as `esc`
-                                        // everywhere on this screen.
-                                        if let Some(run) = runs.get(cursor - 1) {
-                                            break 'select SelectAction::AttachRun(run.clone());
-                                        }
-                                    }
-                                }
-                                // `0`-`3` and `c` do nothing here (§5:
-                                // no run attached to switch a screen
-                                // or cancel); `esc` likewise has
-                                // nowhere on this screen to go back
-                                // to.
-                                _ => {}
+                            runs.len()
+                        };
+                        let cursor_recent_openable = runs.is_empty()
+                            && recent
+                                .get(select_state.cursor)
+                                .is_some_and(|row| row.openable);
+                        match select_state.handle_key(
+                            key.code,
+                            key.modifiers,
+                            runs.is_empty(),
+                            max_index,
+                            cursor_recent_openable,
+                        ) {
+                            keys::SelectKeyOutcome::Quit(code) => {
+                                break 'select SelectAction::Quit(ExitCode::from(code));
                             }
+                            keys::SelectKeyOutcome::AttachRun(idx) => {
+                                if let Some(run) = runs.get(idx) {
+                                    break 'select SelectAction::AttachRun(run.clone());
+                                }
+                            }
+                            keys::SelectKeyOutcome::AttachRecent(idx) => {
+                                if let Some(row) = recent.get(idx) {
+                                    break 'select SelectAction::AttachRecent(row.clone());
+                                }
+                            }
+                            keys::SelectKeyOutcome::None => {}
                         }
                         needs_draw = true;
                     }
@@ -4436,7 +4554,7 @@ fn run_select_screen(
         }
         if terminal_gone {
             lost_terminal = true;
-            break 'select SelectAction::Quit;
+            break 'select SelectAction::Quit(ExitCode::from(0));
         }
 
         if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
@@ -4454,8 +4572,8 @@ fn run_select_screen(
                 } else {
                     tui::SelectBody::Running(&rows)
                 };
-                tui::draw_select(f, &body, cursor, &now_str, &ctx);
-                if help_open {
+                tui::draw_select(f, &body, select_state.cursor, &now_str, &ctx);
+                if select_state.help_open {
                     tui::draw_select_help(f, &ctx);
                 }
             });
@@ -4463,7 +4581,7 @@ fn run_select_screen(
             needs_draw = false;
             if drew.is_err() {
                 lost_terminal = true;
-                break 'select SelectAction::Quit;
+                break 'select SelectAction::Quit(ExitCode::from(0));
             }
         }
     };
@@ -4473,7 +4591,7 @@ fn run_select_screen(
     } else {
         drop(terminal);
     }
-    (outcome, event_rx)
+    (outcome, event_rx, select_state.cursor)
 }
 
 /// Attaches to a [`oscilloscope_core::discovery::DiscoveredRun`] the
@@ -4494,7 +4612,7 @@ fn attach_discovered_run(
         // Nothing `discover_runs` itself ever returns reaches this --
         // every source it reads always knows a run directory -- but
         // there is nowhere left to watch without one.
-        return WatchOutcome::Exited(ExitCode::from(1));
+        return WatchOutcome::Exited(ExitCode::from(1), Vec::new());
     };
     let live_state_path = run
         .live_state
@@ -4569,7 +4687,7 @@ fn attach_recent_run(
         // `build_recent_rows` already marks this `gone`, and
         // `run_select_screen` never lets `enter` reach here for one
         // -- nothing left to open either way.
-        return WatchOutcome::Exited(ExitCode::from(1));
+        return WatchOutcome::Exited(ExitCode::from(1), Vec::new());
     };
     let live_state_path = run_dir.join("state.live.json");
     let history = history_io::HistoryHandle::for_watch(
@@ -4726,11 +4844,7 @@ fn watch_exit_code(
     last_state: &Option<serde_json::Value>,
 ) -> u8 {
     if let Some(sig) = local_signal {
-        match sig {
-            ForwardSignal::Int => 130,
-            ForwardSignal::Term => 143,
-            ForwardSignal::Hup => 129,
-        }
+        forward_signal_exit_code(sig)
     } else if let Some(signal) = model.run_end_signal() {
         exit_code_for_signal_name(signal).unwrap_or(1) as u8
     } else {
