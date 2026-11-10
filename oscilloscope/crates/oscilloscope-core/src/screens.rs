@@ -608,6 +608,11 @@ pub struct FocusedStep {
     /// status, tokens and error. Empty for a step the run never
     /// retried at all.
     pub attempts: Vec<AttemptDetail>,
+    /// `meta.retries_used`: set only once an actual retry happened
+    /// (absent, never `0`, when the first attempt was also the
+    /// last) -- the one further signal left once a retry pass's own
+    /// earlier attempt is overwritten out of `attempts` itself.
+    pub retries_used: Option<u64>,
     /// Issue #704's own Meta section: every other key the run
     /// recorded for this step beyond every other section above --
     /// folded by default, `m` unfolds. Already formatted the same
@@ -795,6 +800,9 @@ pub(crate) fn build_focused_step(
         .and_then(|n| n.meta.get("cost_usd"))
         .and_then(Value::as_f64);
     let attempts = node.map(|n| attempts_for(&n.meta)).unwrap_or_default();
+    let retries_used = node
+        .and_then(|n| n.meta.get("retries_used"))
+        .and_then(Value::as_u64);
     let meta_extra = node.map(|n| meta_extra_for(&n.meta)).unwrap_or_default();
     let value_full = node
         .map(|n| crate::render::display_value(&n.value))
@@ -846,6 +854,7 @@ pub(crate) fn build_focused_step(
         tokens,
         cost_usd,
         attempts,
+        retries_used,
         meta_extra,
         usual_busy_p50_s: None,
         usual_busy_p90_s: None,
@@ -951,7 +960,13 @@ const META_EXTRA_EXCLUDE: &[&str] = &[
     "stdout",
     "stderr",
     "params_rendered",
+    "prompt_sent",
+    "prompt_chars",
+    "prompt_sent_sha256",
+    "prompt_type",
+    "dry_run",
     "fallback_attempts",
+    "fallback_recovered",
     "attempts",
     "live",
     "raw",

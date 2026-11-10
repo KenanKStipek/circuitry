@@ -206,6 +206,10 @@ pub struct App {
     pub tape_tokens_view: bool,
     /// ⏎ on the Tape (§4): the selected row's own step, full-screen.
     pub tape_fullscreen_step: bool,
+    /// `m` (issue #704 rule 4): the selected step's own Meta section
+    /// unfolds -- folded by default, on every screen, not per-screen
+    /// state (there is only one selection to unfold Meta for).
+    pub step_meta_unfolded: bool,
     /// Issue #704 rule 1: set once, the instant the run ends --
     /// guards [`Self::tape_select_run_end_once`] so the jump to the
     /// run's own default row only ever happens that one time, never
@@ -263,6 +267,7 @@ impl App {
             tape_fullscreen_step: false,
             tape_run_end_fired: false,
             tape_run_end_mode: false,
+            step_meta_unfolded: false,
         }
     }
 
@@ -784,6 +789,10 @@ impl App {
             KeyCode::Char('p') if self.screen == Screen::Tape => {
                 self.tape_previews_on = !self.tape_previews_on;
             }
+            // Issue #704 rule 4: `m` unfolds the selected step's own
+            // Meta section -- the same key on every screen, since
+            // there is only one selection to unfold it for.
+            KeyCode::Char('m') => self.step_meta_unfolded = !self.step_meta_unfolded,
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #695: `e`/`/` act on the Tape's own rows alone
             // (§4); gone from the Store, which has no rows of its own

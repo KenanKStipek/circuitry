@@ -683,7 +683,8 @@ mod tape_token_bar_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        let lines = tape_normal_detail_lines(&tape, 60, 40, None, "2026-10-08T11:46:51Z", &ctx);
+        let lines =
+            tape_normal_detail_lines(&tape, 60, 40, None, "2026-10-08T11:46:51Z", false, &ctx);
         let text: String = lines
             .iter()
             .map(|l| {
@@ -2034,6 +2035,279 @@ fn tape_status_glyph_word_style(kind: StatusKind, theme: &Theme) -> (char, &'sta
     }
 }
 
+/// Issue #704 rule 4's own Attempts section, shared by every screen:
+/// one line per `meta.fallback_attempts` entry, oldest first --
+/// empty for a step the run never retried at all.
+fn focused_attempts_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    // A node's own `fallback_attempts` always carries at least the
+    // one pass that decided the outcome, even with no retry at all
+    // -- never shown as an "Attempts" section on its own merits
+    // unless it actually names more than one attempt, or
+    // `retries_used` says an earlier, now-overwritten pass happened.
+    if step.attempts.len() <= 1 && step.retries_used.is_none() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let title = match step.retries_used {
+        Some(n) => format!("Attempts · {n} retried"),
+        None => "Attempts".to_string(),
+    };
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled(title, title_bold)], width),
+    ];
+    for (i, attempt) in step.attempts.iter().enumerate() {
+        let mut text = format!("{}. ", i + 1);
+        let mut parts = Vec::new();
+        if let Some(adapter) = &attempt.adapter {
+            parts.push(adapter.clone());
+        }
+        if let Some(model) = &attempt.model {
+            parts.push(model.clone());
+        }
+        if let Some(status) = &attempt.status {
+            parts.push(status.clone());
+        }
+        if attempt.tokens_sent.is_some() || attempt.tokens_received.is_some() {
+            parts.push(format!(
+                "↑{} ↓{}",
+                attempt
+                    .tokens_sent
+                    .map(oscilloscope_core::format::format_tokens_thousands)
+                    .unwrap_or_else(|| "—".to_string()),
+                attempt
+                    .tokens_received
+                    .map(oscilloscope_core::format::format_tokens_thousands)
+                    .unwrap_or_else(|| "—".to_string())
+            ));
+        }
+        text.push_str(&parts.join(" · "));
+        lines.push(tape_detail_line(vec![Span::styled(text, default)], width));
+        if let Some(error) = &attempt.error {
+            for line in tape_word_wrap(error, width.saturating_sub(3)) {
+                lines.push(tape_detail_line(
+                    vec![Span::styled(format!("   {line}"), muted)],
+                    width,
+                ));
+            }
+        }
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Tool section, shared by every screen: the
+/// exit code and full stdout/stderr -- the command line itself is
+/// each screen's own Asked section already, never repeated here.
+fn focused_tool_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Tool {
+        exit_code,
+        stdout,
+        stderr,
+        ..
+    } = &step.detail
+    else {
+        return Vec::new();
+    };
+    if exit_code.is_none() && stdout.is_none() && stderr.is_none() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Tool", title_bold)], width),
+    ];
+    if let Some(code) = exit_code {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("exit ", muted),
+                Span::styled(code.to_string(), default),
+            ],
+            width,
+        ));
+    }
+    if let Some(stdout) = stdout {
+        lines.push(tape_detail_line(vec![Span::styled("stdout", muted)], width));
+        for line in tape_word_wrap(stdout, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+    if let Some(stderr) = stderr {
+        lines.push(tape_detail_line(vec![Span::styled("stderr", muted)], width));
+        for line in tape_word_wrap(stderr, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Decision section, shared by every screen
+/// but the Flow (whose own `decision_detail_lines` already covers a
+/// decision's own Selected pane): condition, branch, the model's own
+/// answer, and an inferred decision's own evidence.
+fn focused_decision_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Decision(decision) = &step.detail else {
+        return Vec::new();
+    };
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Decision", title_bold)], width),
+    ];
+    if let Some(condition) = &decision.condition {
+        for line in tape_word_wrap(&condition.text, width.saturating_sub("condition ".len())) {
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("condition ", muted),
+                    Span::styled(line, default),
+                ],
+                width,
+            ));
+        }
+    }
+    let branch_text = match &decision.branch {
+        Some(branch) => branch.clone(),
+        None if decision.nothing_ran => "none".to_string(),
+        None => "pending".to_string(),
+    };
+    lines.push(tape_detail_line(
+        vec![
+            Span::styled("branch ", muted),
+            Span::styled(branch_text, default),
+        ],
+        width,
+    ));
+    if let Some(answer) = &decision.answer {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("answer ", muted),
+                Span::styled(answer.clone(), default),
+            ],
+            width,
+        ));
+    }
+    if let Some(evidence) = &decision.inferred_evidence {
+        lines.push(tape_detail_line(
+            vec![Span::styled(evidence.clone(), muted)],
+            width,
+        ));
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Loop section, shared by every screen: one
+/// line per pass, its own status and tokens so far.
+fn focused_loop_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Loop(passes) = &step.detail else {
+        return Vec::new();
+    };
+    if passes.is_empty() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Loop", title_bold)], width),
+    ];
+    for pass in passes {
+        let (glyph, word, glyph_style) = tape_status_glyph_word_style(pass.status.kind, ctx.theme);
+        let tokens_text = pass
+            .tokens
+            .map(oscilloscope_core::format::format_tokens_t)
+            .unwrap_or_else(|| "—".to_string());
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled(format!("{glyph} {word}  "), glyph_style),
+                Span::styled(format!("{:<16}", pass.label), default),
+                Span::styled(tokens_text, muted),
+            ],
+            width,
+        ));
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Meta section, shared by every screen:
+/// every other key the run recorded, folded by default (`m`
+/// unfolds).
+fn focused_meta_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+    unfolded: bool,
+) -> Vec<Line<'static>> {
+    if step.meta_extra.is_empty() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let title = if unfolded {
+        "Meta".to_string()
+    } else {
+        format!("Meta · {} keys · m to unfold", step.meta_extra.len())
+    };
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled(title, title_bold)], width),
+    ];
+    if unfolded {
+        for (key, value) in &step.meta_extra {
+            for (i, line) in tape_word_wrap(value, width.saturating_sub(key.len() + 2))
+                .into_iter()
+                .enumerate()
+            {
+                let spans = if i == 0 {
+                    vec![
+                        Span::styled(format!("{key}: "), muted),
+                        Span::styled(line, default),
+                    ]
+                } else {
+                    vec![Span::styled(line, default)]
+                };
+                lines.push(tape_detail_line(spans, width));
+            }
+        }
+    }
+    lines
+}
+
 /// The Normal/Usual states' own detail pane (§2.1): the selected
 /// row's Status, Type, Tokens, Usual, Share, then the prompt sent and
 /// the reply in full, each headed with its own token count.
@@ -2043,6 +2317,7 @@ fn tape_normal_detail_lines(
     height: usize,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
+    meta_unfolded: bool,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
@@ -2318,6 +2593,44 @@ fn tape_normal_detail_lines(
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
     }
+
+    // Issue #704 rule 4: the sections every screen's own selection
+    // now shares, each only when the node has data for it -- a
+    // prompt's own Produced is already the Reply block above, never
+    // repeated here.
+    if !matches!(
+        step.detail,
+        oscilloscope_core::screens::FocusDetail::Prompt { .. }
+    ) {
+        if let Some(value) = &step.value_full {
+            lines.push(Line::from(""));
+            lines.push(tape_detail_line(
+                vec![Span::styled("Produced", title_bold)],
+                width,
+            ));
+            for line in tape_word_wrap(value, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    }
+    if let Some(error) = &step.error {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Error", title_bold)],
+            width,
+        ));
+        for line in tape_word_wrap(error, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(
+                vec![Span::styled(line, Style::default().fg(ctx.theme.error))],
+                width,
+            ));
+        }
+    }
+    lines.extend(focused_attempts_lines(step, width, ctx));
+    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(focused_decision_lines(step, width, ctx));
+    lines.extend(focused_loop_lines(step, width, ctx));
+    lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
 
     lines
 }
@@ -2804,6 +3117,7 @@ fn draw_tape_detail(
             content_area.height as usize,
             transcript_view,
             now,
+            app.step_meta_unfolded,
             ctx,
         ),
         TapeHead::Failed { .. } => screen
@@ -3053,6 +3367,7 @@ fn draw_signal(
             screen.selected.as_ref(),
             transcript_view,
             now,
+            app,
             ctx,
         );
         return;
@@ -4192,6 +4507,7 @@ fn draw_focused_step_detail(
     selected: Option<&oscilloscope_core::screens::FocusedStep>,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
+    app: &mut App,
     ctx: &DrawCtx,
 ) {
     let Some(step) = selected else {
@@ -4210,52 +4526,23 @@ fn draw_focused_step_detail(
         return;
     }
     fill_border_rows(frame, inner, border_color);
-    let muted = Style::default().fg(ctx.theme.fg_muted);
-    let default = Style::default().fg(ctx.theme.text);
-    let mut lines = vec![Line::from(vec![
-        Span::styled(" Status  ", muted),
-        Span::styled(
-            format!(
-                "{} ",
-                oscilloscope_core::format::format_duration(step.elapsed_s.unwrap_or(0.0))
-            ),
-            default,
-        ),
-    ])];
-    if let oscilloscope_core::screens::FocusDetail::Agent {
-        stale, live, note, ..
-    } = &step.detail
-    {
-        if *stale {
-            lines.push(Line::styled(" stopped", muted));
-        }
-        let running = matches!(
-            step.status.kind,
-            oscilloscope_core::model::StatusKind::Running
-                | oscilloscope_core::model::StatusKind::LikelyRunning
-                | oscilloscope_core::model::StatusKind::RunningOrQueued
-        );
-        let note_reserved = usize::from(live.is_none() && running);
-        let max_lines = (inner.height as usize).saturating_sub(lines.len() + note_reserved);
-        for line in agent_block_lines(step, transcript_view, ctx, now, Some(max_lines)) {
-            let mut spans = vec![Span::raw(" ")];
-            spans.extend(line.spans);
-            lines.push(Line::from(spans));
-        }
-        if live.is_none() && running {
-            lines.push(Line::styled(format!(" {}", *note), muted));
-        }
-    } else if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(" Reply", muted));
-        if let Some(snippet) = snippet {
-            for line in snippet.lines() {
-                lines.push(Line::styled(format!(" {line}"), default));
-            }
-        }
-    }
+    let width = (inner.width as usize).saturating_sub(1);
+    let lines = focused_step_full_lines(
+        step,
+        transcript_view,
+        now,
+        app.step_meta_unfolded,
+        width,
+        ctx,
+    );
+    let viewport = inner.height as usize;
+    app.details_viewport = viewport;
+    let total = lines.len();
+    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    let start = app.details_scroll.min(total);
+    let visible: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
     frame.render_widget(
-        Paragraph::new(lines),
+        Paragraph::new(visible),
         Rect {
             x: inner.x + 1,
             y: inner.y,
@@ -4263,6 +4550,187 @@ fn draw_focused_step_detail(
             height: inner.height,
         },
     );
+}
+
+/// Issue #704 rule 4: the full-screen step view's own content, shared
+/// by the Signal's and the Store's own full-screen step (the Tape's
+/// own `tape_normal_detail_lines` and the Flow's own `flow_selected_
+/// step_lines` each keep their own existing Status/Asked/Produced/
+/// Agent rendering, append-only, to keep their own frame goldens
+/// cell-exact) -- Status, Asked, Produced, Error, Tokens, the Agent
+/// block, then every section `focused_*_lines` already shares.
+fn focused_step_full_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    now: &str,
+    meta_unfolded: bool,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::model::StatusKind;
+    use oscilloscope_core::screens::FocusDetail;
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let (glyph, word, glyph_style) = tape_status_glyph_word_style(step.status.kind, ctx.theme);
+    let mut status_value = String::new();
+    if let Some(secs) = step.elapsed_s {
+        status_value.push_str(&oscilloscope_core::format::format_duration(secs));
+    }
+    let mut lines = vec![tape_detail_line(
+        vec![
+            Span::styled("Status  ", muted),
+            Span::styled(format!("{glyph} {word}  "), glyph_style),
+            Span::styled(status_value, default),
+        ],
+        width,
+    )];
+
+    let asked = match &step.detail {
+        FocusDetail::Prompt { .. } => step.prompt_sent_full.clone(),
+        FocusDetail::Tool { command, .. } => command.clone(),
+        _ => None,
+    };
+    if let Some(asked) = asked {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Asked", title_bold)],
+            width,
+        ));
+        for line in tape_word_wrap(&asked, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+
+    if !matches!(step.detail, FocusDetail::Prompt { .. }) {
+        if let Some(value) = &step.value_full {
+            lines.push(Line::from(""));
+            lines.push(tape_detail_line(
+                vec![Span::styled("Produced", title_bold)],
+                width,
+            ));
+            for line in tape_word_wrap(value, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    } else if let Some(received) = &step.received {
+        if let Some(value) = &step.value_full {
+            lines.push(Line::from(""));
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("Produced ", title_bold),
+                    Span::styled(
+                        received
+                            .tokens
+                            .map(|t| {
+                                format!(
+                                    "· {} t",
+                                    oscilloscope_core::format::format_tokens_thousands(t)
+                                )
+                            })
+                            .unwrap_or_default(),
+                        muted,
+                    ),
+                ],
+                width,
+            ));
+            for line in tape_word_wrap(value, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    }
+
+    if let Some(error) = &step.error {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Error", title_bold)],
+            width,
+        ));
+        for line in tape_word_wrap(error, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(
+                vec![Span::styled(line, Style::default().fg(ctx.theme.error))],
+                width,
+            ));
+        }
+    }
+
+    if step.tokens.is_some() || step.usual_tokens.is_some() {
+        lines.push(Line::from(""));
+        let mut spans = vec![Span::styled("Tokens  ", muted)];
+        if let Some(total) = step.tokens {
+            spans.push(Span::styled(
+                oscilloscope_core::format::format_tokens_t(total),
+                default.add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(pct) = step.share_pct {
+            spans.push(Span::styled(format!("  {pct}% of this run so far"), muted));
+        }
+        lines.push(tape_detail_line(spans, width));
+        if let Some((usual, count)) = step.usual_tokens {
+            let dev = step
+                .tokens
+                .filter(|_| usual > 0)
+                .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
+            let mut spans = vec![
+                Span::styled("Usual   ", muted),
+                Span::styled(
+                    format!(
+                        "{} t  ",
+                        oscilloscope_core::format::format_tokens_thousands(usual)
+                    ),
+                    default,
+                ),
+            ];
+            if let Some(d) = dev {
+                spans.push(Span::styled(
+                    format!("{d:+.0}% "),
+                    tape_deviation_style(d, ctx.theme).add_modifier(Modifier::BOLD),
+                ));
+            }
+            spans.push(Span::styled(format!("· median of {count} runs"), muted));
+            lines.push(tape_detail_line(spans, width));
+        }
+    }
+
+    if let FocusDetail::Agent {
+        stale, live, note, ..
+    } = &step.detail
+    {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Agent", title_bold)],
+            width,
+        ));
+        if *stale {
+            lines.push(tape_detail_line(
+                vec![Span::styled("stopped", muted)],
+                width,
+            ));
+        }
+        let running = matches!(
+            step.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        );
+        let note_reserved = usize::from(live.is_none() && running);
+        let max_lines = Some(30usize.saturating_sub(lines.len() + note_reserved));
+        for line in agent_block_lines(step, transcript_view, ctx, now, max_lines) {
+            lines.push(tape_detail_line(line.spans, width));
+        }
+        if live.is_none() && running {
+            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        }
+    }
+
+    lines.extend(focused_attempts_lines(step, width, ctx));
+    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(focused_decision_lines(step, width, ctx));
+    lines.extend(focused_loop_lines(step, width, ctx));
+    lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
+
+    lines
 }
 
 /// One Agent block field line (issue #703's rule 3): an eight-cell
@@ -5623,6 +6091,7 @@ fn draw_store(
             screen.selected.as_ref(),
             transcript_view,
             now,
+            app,
             ctx,
         );
         return;
@@ -6128,12 +6597,21 @@ fn draw_flow_selected_pane(
         "Selected".to_string()
     };
     let viewport = area.height.saturating_sub(2) as usize;
+    let content_width = (area.width as usize).saturating_sub(3);
     let lines = if let Some(pass) = &screen.selected_pass {
         selected_pass_lines(pass, wide, ctx)
     } else if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected_step {
-        flow_selected_step_lines(step, transcript_view, ctx, now, Some(viewport))
+        flow_selected_step_lines(
+            step,
+            transcript_view,
+            ctx,
+            now,
+            Some(viewport),
+            content_width,
+            app.step_meta_unfolded,
+        )
     } else {
         vec![Line::from("nothing selected")]
     };
@@ -6304,12 +6782,15 @@ fn tape_status_kind_word(kind: StatusKind) -> &'static str {
 /// through `Details::sent`/`received` (never `meta.prompt_sent` or
 /// `meta.answer` directly), so a later fix to either flows through
 /// here unchanged.
+#[allow(clippy::too_many_arguments)]
 fn flow_selected_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     now: &str,
     max_lines: Option<usize>,
+    content_width: usize,
+    meta_unfolded: bool,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
     use oscilloscope_core::screens::FocusDetail;
@@ -6449,6 +6930,16 @@ fn flow_selected_step_lines(
         lines.push(Line::styled("produced:", dim));
         lines.extend(produced);
     }
+
+    // Issue #704 rule 4: the sections every screen's own selection
+    // now shares -- `asked:`/`produced:` above already cover a
+    // tool's own command and value, so only the data they don't
+    // reach is new here.
+    lines.extend(focused_attempts_lines(step, content_width, ctx));
+    lines.extend(focused_tool_lines(step, content_width, ctx));
+    lines.extend(focused_decision_lines(step, content_width, ctx));
+    lines.extend(focused_loop_lines(step, content_width, ctx));
+    lines.extend(focused_meta_lines(step, content_width, ctx, meta_unfolded));
 
     lines
 }
@@ -9049,6 +9540,7 @@ mod golden_tests {
             usual_tokens: None,
             share_pct: None,
             attempts: Vec::new(),
+            retries_used: None,
             meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
