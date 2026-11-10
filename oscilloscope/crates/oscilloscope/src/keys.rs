@@ -182,9 +182,18 @@ pub struct App {
     /// per column, 100 the frame's own default).
     pub signal_column_ms: u64,
     /// The latest redraw's own Now column, cached the same way
-    /// `tree_viewport` is, so `signal_scrub`'s own first press off
-    /// Now has something to clamp and seed against.
+    /// `tree_viewport` is, so `signal_scrub`'s own clamp (never past
+    /// Now) has something to read.
     pub signal_now_col: Option<usize>,
+    /// The latest redraw's own resolved cursor column (`SignalScreen::
+    /// cursor_col`, issue #704 rule 2: `signal_cursor_col.or(selection_
+    /// col).or(now_col)`) -- wherever the trace actually drew its own
+    /// cursor, whether from a live scrub, the shared selection's own
+    /// column, or Now with neither. `signal_scrub`'s own first press
+    /// seeds from this, never from `signal_now_col` directly, or it
+    /// would jump the cursor to Now instead of moving it one column
+    /// from wherever it is already drawn.
+    pub signal_drawn_col: Option<usize>,
     /// Whether the latest redraw's own Signal screen has a step
     /// under its cursor at all, cached the same way `signal_now_col`
     /// is -- `enter` on Signal only opens one when this is true, so
@@ -261,6 +270,7 @@ impl App {
             flow_lane_stations: Vec::new(),
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
+            signal_drawn_col: None,
             signal_column_ms: 100,
             signal_now_col: None,
             signal_has_step: false,
@@ -328,13 +338,18 @@ impl App {
     }
 
     /// `←→` (§4): moves the scrub cursor one column at a time, turning
-    /// follow off -- the first press off Now seeds from
-    /// `signal_now_col` (`main.rs`'s own cache of the latest frame's
-    /// Now column, the same way `tree_viewport` already caches a
-    /// redraw's own height for the next key to clamp against).
+    /// follow off -- the first press off Now seeds from `signal_
+    /// drawn_col` (wherever the trace actually drew its own cursor
+    /// last, the shared selection's own column included, issue #704
+    /// rule 2), never from Now directly, or the first press would
+    /// jump the cursor there instead of moving it one column from
+    /// wherever it already is.
     pub fn signal_scrub(&mut self, delta: i64) {
         let now = self.signal_now_col.unwrap_or(0);
-        let current = self.signal_cursor_col.unwrap_or(now) as i64;
+        let current = self
+            .signal_cursor_col
+            .or(self.signal_drawn_col)
+            .unwrap_or(now) as i64;
         self.signal_cursor_col = Some(current.saturating_add(delta).clamp(0, now as i64) as usize);
     }
 
@@ -544,6 +559,25 @@ impl App {
             self.selected_path = path;
             self.details_scroll = 0;
             self.details_source = Pane::Tree;
+            // Issue #704 rule 2: the selection moved by some route
+            // other than the Signal's own scrub (which writes the
+            // selection back through `select_tree_path_from_scrub`
+            // below, never this one) -- a stale scrub column must
+            // not keep overriding it on the next redraw, so this is
+            // the one place every other mover shares to drop it.
+            self.signal_cursor_col = None;
+        }
+    }
+
+    /// The Signal's own scrub (`tui::draw_signal`) writing the shared
+    /// selection back to whatever step the cursor actually landed on
+    /// -- like `select_tree_path`, but it must never clear `signal_
+    /// cursor_col` itself, the very thing that is driving this call.
+    pub(crate) fn select_tree_path_from_scrub(&mut self, path: Option<String>) {
+        if self.selected_path != path {
+            self.selected_path = path;
+            self.details_scroll = 0;
+            self.details_source = Pane::Tree;
         }
     }
 
@@ -559,6 +593,11 @@ impl App {
             if self.details_source == Pane::Tree {
                 self.details_scroll = 0;
             }
+            // Same reasoning as `select_tree_path`'s own: follow's
+            // own target update (`main.rs`) and `tape_select_run_
+            // end_once` both move the selection through here, and a
+            // stale scrub column must give way to either.
+            self.signal_cursor_col = None;
         }
     }
 
@@ -567,9 +606,9 @@ impl App {
     /// `visible_rows` below) — navigation and collapse/expand act on
     /// exactly what the user can see, in the order they see it.
     /// `has_prompt_sent` is whether the currently selected row's own
-    /// details carry a `prompt_sent` (review finding 5): `v` opens
-    /// that first when there is one, since it's usually the more
-    /// useful of the two to read in full, and the value otherwise.
+    /// details carry a `prompt_sent`: `v` opens that first when
+    /// there is one, since it's usually the more useful of the two
+    /// to read in full, and the value otherwise.
     /// `store_rows` is the Store screen's own Largest Stores table,
     /// in its own rank order (issue #695) -- empty for every caller
     /// that doesn't care about it (every screen but Store never
@@ -2645,6 +2684,32 @@ mod tests {
             app.signal_cursor_col,
             Some(1),
             "← on another screen never touches the Signal's own cursor"
+        );
+    }
+
+    /// Issue #704 rule 2: a scrub's own column must give way to a
+    /// selection made through any other screen -- moving the Tape's
+    /// own selection (which, unlike the no-op above, actually goes
+    /// through `select_tree_path`) drops the stale scrub, so
+    /// switching back to the Signal reads the new selection's own
+    /// column instead of wherever the cursor was left.
+    #[test]
+    fn a_selection_made_elsewhere_drops_the_signals_own_stale_scrub() {
+        let rows = [
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Done),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(5);
+        app.signal_scrub(-2);
+        assert_eq!(app.signal_cursor_col, Some(3));
+        app.screen = Screen::Tape;
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(
+            app.signal_cursor_col, None,
+            "a real selection elsewhere drops the stale scrub"
         );
     }
 

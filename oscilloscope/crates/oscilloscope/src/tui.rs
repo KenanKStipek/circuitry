@@ -3357,16 +3357,20 @@ fn draw_signal(
         return;
     }
     app.signal_now_col = screen.now_col;
+    app.signal_drawn_col = screen.cursor_col;
     app.signal_has_step = screen.selected.is_some();
     // Issue #704 rule 2: free scrubbing (`app.signal_cursor_col`
     // itself `Some`) moves the shared selection to follow whatever
     // step the cursor actually lands on, the same way the Tape's
     // own `↑↓` already does -- not scrubbing, the selection already
     // drove the cursor's own column (`screens::build_signal`'s
-    // `selection_col`), so this is a no-op then.
+    // `selection_col`), so this is a no-op then. Writes back through
+    // `select_tree_path_from_scrub`, never `select_tree_path`, which
+    // would otherwise clear `signal_cursor_col` on the very call
+    // that is driven by it.
     if app.signal_cursor_col.is_some() {
         if let Some(step) = &screen.selected {
-            app.select_tree_path(Some(step.path.clone()));
+            app.select_tree_path_from_scrub(Some(step.path.clone()));
         }
     }
     let sections = Layout::default()
