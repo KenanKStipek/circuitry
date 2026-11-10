@@ -264,6 +264,16 @@ pub struct App {
     /// detail isn't a loop's at all. One frame stale at worst, the
     /// same lifecycle `flow_lane_stations` already has.
     pub loop_pass_line_paths: Vec<(usize, String)>,
+    /// Issue #710's window rule: the list's own top, in the signed
+    /// coordinate `tui::tape_list_window_start` returns (negative or
+    /// past the content's own end is exactly the window's own blank
+    /// padding). `None` until the Tape has drawn its list at least
+    /// once -- with follow off and nothing to resume from yet, the
+    /// window still centres the Now area, the same as follow on.
+    /// `tui::draw_tape_list` is the only thing that ever sets this,
+    /// right after computing it, the same lifecycle `flow_scroll`
+    /// already has.
+    pub tape_list_start: Option<isize>,
 }
 
 impl App {
@@ -312,6 +322,7 @@ impl App {
             tape_run_end_target: None,
             loop_pass_line_paths: Vec::new(),
             step_meta_unfolded: false,
+            tape_list_start: None,
         }
     }
 

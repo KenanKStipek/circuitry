@@ -1325,6 +1325,246 @@ fn tape_agent_what_text(what: &str, what_width: usize) -> String {
     format!("{truncated}⋯")
 }
 
+/// A list line's own role in issue #710's window rule: every line
+/// is `Normal` except a prompt's own preview line, which never
+/// draws on its own once the window's own top lands exactly on it
+/// with its row scrolled out above -- `tape_list_window_start`'s own
+/// caller reads this back after slicing the window, to blank that
+/// one line rather than let it float with nothing above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TapeListLineKind {
+    Normal,
+    Preview,
+}
+
+/// Issue #710's window rule, kept pure of everything the list itself
+/// draws: which lines are a preview continuation (`kinds`), where the
+/// Now area sits (`now_area`, `None` outside `TapeHead::Starting`/
+/// `Normal` -- Ended/Failed keep the list's own original tail-biased
+/// rule, scrolling up only as far as it must to keep the anchor in
+/// view), how tall the list itself is (`content_rows`), whether the
+/// Tape is following Now, the current selection, and the window's
+/// own previous top (threaded through `App::tape_list_start` across
+/// draws, since a manual scroll with follow off moves no further
+/// than the selection needs).
+///
+/// The result is a signed top into `kinds`: a negative value, or one
+/// that leaves `kinds.len()` short of `start + content_rows`, is
+/// exactly the window's own blank padding above or below the real
+/// lines -- the caller clamps it to `0..kinds.len()` to find the
+/// real lines to draw, and draws blank for whatever of the window's
+/// own `content_rows` that clamp leaves uncovered.
+fn tape_list_window_start(
+    kinds: &[TapeListLineKind],
+    now_area: Option<std::ops::Range<usize>>,
+    content_rows: usize,
+    follow: bool,
+    selected: Option<usize>,
+    previous_start: Option<isize>,
+) -> isize {
+    let total = kinds.len();
+    let content_rows_i = content_rows as isize;
+    let Some(now_area) = now_area else {
+        // Ended/Failed: the list's own original rule, unchanged --
+        // biased toward the tail, scrolling up only as far as it
+        // must so the anchor (the selection, or the last line while
+        // following) never scrolls out of view above the top.
+        let anchor = if follow {
+            total.saturating_sub(1)
+        } else {
+            selected.unwrap_or(0)
+        };
+        return if total <= content_rows {
+            0
+        } else {
+            anchor.min(total - content_rows) as isize
+        };
+    };
+    let h = (now_area.end - now_area.start) as isize;
+    if h >= content_rows_i {
+        // Taller than the list itself (many running rows) -- shown
+        // from its own first row, nothing above it at all.
+        return now_area.start as isize;
+    }
+    if follow || previous_start.is_none() {
+        // Centred: the Now area's own middle row sits on the list's
+        // middle row, rounding down when the split is uneven. This
+        // same arithmetic is also where a window with follow off
+        // starts from the very first time it has nothing of its own
+        // to resume from yet (`previous_start` is `None` only before
+        // the Tape has ever drawn its list).
+        let above = (content_rows_i - h) / 2;
+        now_area.start as isize - above
+    } else {
+        // Follow off: keep the selected row in view, scrolling no
+        // further than the previous window already needs to.
+        let mut start = previous_start.unwrap_or(0);
+        if let Some(selected) = selected {
+            let selected = selected as isize;
+            if selected < start {
+                start = selected;
+            } else if selected >= start + content_rows_i {
+                start = selected - content_rows_i + 1;
+            }
+        }
+        start
+    }
+}
+
+/// `tape_list_window_start`'s own output, resolved against the real
+/// content: the real line indices to draw (clamped to `0..kinds.
+/// len()`) and whether the first of them is a preview line whose own
+/// row scrolled off above the window, which must draw blank instead
+/// of floating on its own (issue #710) -- the only place this can
+/// happen is right at the window's own top edge, since a row and its
+/// own preview are always adjacent.
+fn tape_list_window_range(
+    kinds: &[TapeListLineKind],
+    start: isize,
+    content_rows: usize,
+) -> (std::ops::Range<usize>, bool) {
+    let total = kinds.len() as isize;
+    let content_rows_i = content_rows as isize;
+    let real_start = start.max(0) as usize;
+    let real_end = (start + content_rows_i).clamp(0, total).max(start.max(0)) as usize;
+    let blank_first = start >= 0 && kinds.get(real_start) == Some(&TapeListLineKind::Preview);
+    (real_start..real_end, blank_first)
+}
+
+#[cfg(test)]
+mod tape_list_window_tests {
+    use super::*;
+
+    /// `n` plain rows, the kind every ordinary row and blank padding
+    /// slot has.
+    fn normal(n: usize) -> Vec<TapeListLineKind> {
+        vec![TapeListLineKind::Normal; n]
+    }
+
+    #[test]
+    fn centres_the_now_area_with_a_long_past_and_a_long_plan() {
+        // 8 past + 4-row band + 8 ahead = 20 lines, an 11-row list:
+        // both sides have more than enough, so the window just picks
+        // the arithmetic middle with no padding either side.
+        let kinds = normal(20);
+        let start = tape_list_window_start(&kinds, Some(8..12), 11, true, None, None);
+        // (11 - 4) / 2 = 3 rows above the band.
+        assert_eq!(start, 5);
+        let (range, blank_first) = tape_list_window_range(&kinds, start, 11);
+        assert_eq!(range, 5..16);
+        assert!(!blank_first);
+    }
+
+    #[test]
+    fn pads_above_when_the_past_is_short() {
+        // No past at all (the Starting rule is the list's own first
+        // line) -- the desired 5 rows above the band exist nowhere,
+        // so the window starts negative (blank padding) instead of
+        // clamping to the real content's own start.
+        let kinds = normal(9);
+        let start = tape_list_window_start(&kinds, Some(0..1), 11, true, None, None);
+        assert_eq!(start, -5);
+        let (range, blank_first) = tape_list_window_range(&kinds, start, 11);
+        assert_eq!(range, 0..6);
+        assert!(!blank_first);
+    }
+
+    #[test]
+    fn pads_below_when_the_plan_is_short() {
+        // A band near the very end: plenty of past, nothing ahead.
+        let kinds = normal(10);
+        let start = tape_list_window_start(&kinds, Some(6..10), 11, true, None, None);
+        // (11 - 4) / 2 = 3 rows above; the window runs to 3 + 11 = 14,
+        // four past the real content's own end (10).
+        assert_eq!(start, 3);
+        let (range, _) = tape_list_window_range(&kinds, start, 11);
+        assert_eq!(range, 3..10);
+    }
+
+    #[test]
+    fn a_now_area_taller_than_the_list_shows_from_its_own_first_row() {
+        let kinds = normal(20);
+        let start = tape_list_window_start(&kinds, Some(5..17), 10, true, None, None);
+        assert_eq!(start, 5);
+        let (range, _) = tape_list_window_range(&kinds, start, 10);
+        assert_eq!(range, 5..15);
+    }
+
+    #[test]
+    fn an_orphaned_preview_line_draws_blank_not_floating() {
+        // The window's own arithmetic start (8 - 3 = 5) lands
+        // exactly on a preview line (index 5) with its own row
+        // (index 4) scrolled off above -- it must draw blank, not
+        // show the preview on its own.
+        let mut kinds = normal(20);
+        kinds[4] = TapeListLineKind::Normal;
+        kinds[5] = TapeListLineKind::Preview;
+        let start = tape_list_window_start(&kinds, Some(8..12), 11, true, None, None);
+        assert_eq!(start, 5);
+        let (range, blank_first) = tape_list_window_range(&kinds, start, 11);
+        assert_eq!(range, 5..16);
+        assert!(blank_first);
+    }
+
+    #[test]
+    fn follow_off_scrolls_no_further_than_the_selection_above_needs() {
+        let kinds = normal(30);
+        // Previously centred on a band at 14..18 inside a 11-row
+        // list: starts at 14 - 3 = 11.
+        let previous = tape_list_window_start(&kinds, Some(14..18), 11, true, None, None);
+        assert_eq!(previous, 11);
+        // The selection moves to row 2, above the current window --
+        // the window follows it up exactly as far as it must, not
+        // all the way back to a freshly centred position.
+        let start =
+            tape_list_window_start(&kinds, Some(14..18), 11, false, Some(2), Some(previous));
+        assert_eq!(start, 2);
+    }
+
+    #[test]
+    fn follow_off_scrolls_no_further_than_the_selection_below_needs() {
+        let kinds = normal(30);
+        let previous = tape_list_window_start(&kinds, Some(14..18), 11, true, None, None);
+        assert_eq!(previous, 11);
+        // The selection moves to row 25, below the current window
+        // (11..22) -- the window follows it down just enough to put
+        // it on the window's own last row.
+        let start =
+            tape_list_window_start(&kinds, Some(14..18), 11, false, Some(25), Some(previous));
+        assert_eq!(start, 15);
+    }
+
+    #[test]
+    fn follow_off_with_the_selection_already_in_view_does_not_move() {
+        let kinds = normal(30);
+        let previous = tape_list_window_start(&kinds, Some(14..18), 11, true, None, None);
+        let start =
+            tape_list_window_start(&kinds, Some(14..18), 11, false, Some(15), Some(previous));
+        assert_eq!(start, previous);
+    }
+
+    #[test]
+    fn follow_off_with_no_previous_window_centres_like_follow_on() {
+        // Follow off from the very first draw (no previous window
+        // recorded yet) centres exactly as follow on would.
+        let kinds = normal(20);
+        let on = tape_list_window_start(&kinds, Some(8..12), 11, true, None, None);
+        let off = tape_list_window_start(&kinds, Some(8..12), 11, false, Some(0), None);
+        assert_eq!(off, on);
+    }
+
+    #[test]
+    fn ended_keeps_the_tail_biased_rule_unaffected_by_the_window() {
+        // `now_area: None` (Ended/Failed): the original rule, biased
+        // toward the tail, is untouched by any of this.
+        let kinds = normal(30);
+        let start = tape_list_window_start(&kinds, None, 11, true, None, None);
+        assert_eq!(start, 19);
+        let start = tape_list_window_start(&kinds, None, 11, false, Some(5), None);
+        assert_eq!(start, 5);
+    }
+}
+
 /// The Tape's own list pane (§2.1): Run Started, finished rows in
 /// finish order with their own preview lines, the Now band, the
 /// running rows, the slots rule while a loop runs, the rows ahead,
@@ -1335,7 +1575,7 @@ fn draw_tape_list(
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
     header: &oscilloscope_core::render::Header,
-    app: &App,
+    app: &mut App,
     narrow: bool,
     wide_detail: bool,
     ctx: &DrawCtx,
@@ -1424,7 +1664,15 @@ fn draw_tape_list(
     };
 
     let mut lines: Vec<(Option<String>, Line<'static>)> = Vec::new();
-    let mut now_band_idx: Option<usize> = None;
+    let mut kinds: Vec<TapeListLineKind> = Vec::new();
+    // Issue #710's window rule: the Now area's own extent in
+    // `lines` -- `None` outside `TapeHead::Starting`/`Normal`, set
+    // once `now_area_start` is known and again once the band itself
+    // ends (the first ahead row after it, or `Run End` with no ahead
+    // rows at all).
+    let mut now_area_start: Option<usize> = None;
+    let mut now_area_end: Option<usize> = None;
+    let mut in_now_area = false;
     for item in &screen.items {
         match item {
             TapeItem::RunStarted {
@@ -1462,8 +1710,19 @@ fn draw_tape_list(
                     ));
                 }
                 lines.push((None, Line::from(spans)));
+                kinds.push(TapeListLineKind::Normal);
             }
             TapeItem::Row(row) => {
+                // The first ahead row after the band (`in_now_area`
+                // set by `NowBand`, below): a running row's own
+                // `bold` is the only thing that tells bucket2 (still
+                // part of the band) apart from bucket3 (ahead, which
+                // ends it) -- both read `bold: false` otherwise, the
+                // same as every finished row above the band.
+                if in_now_area && !row.bold {
+                    now_area_end = Some(lines.len());
+                    in_now_area = false;
+                }
                 let selected = app.selected_path.as_deref() == Some(row.path.as_str());
                 lines.push((
                     Some(row.path.clone()),
@@ -1481,6 +1740,7 @@ fn draw_tape_list(
                         ctx,
                     ),
                 ));
+                kinds.push(TapeListLineKind::Normal);
                 // Epic #677's settled point 4: previews are on at
                 // 120 columns and up, off below -- `narrow` (60-79)
                 // already has no room for a second line at all, but
@@ -1527,11 +1787,13 @@ fn draw_tape_list(
                             }
                         }
                         lines.push((Some(row.path.clone()), Line::from(spans)));
+                        kinds.push(TapeListLineKind::Preview);
                     }
                 }
             }
             TapeItem::NowBand { ts, elapsed_s } => {
-                now_band_idx = Some(lines.len());
+                now_area_start = Some(lines.len());
+                in_now_area = true;
                 let ts_text = ts
                     .as_deref()
                     .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
@@ -1550,6 +1812,7 @@ fn draw_tape_list(
                         inner.width as usize,
                     ),
                 ));
+                kinds.push(TapeListLineKind::Normal);
             }
             TapeItem::SlotsRule {
                 busy,
@@ -1567,8 +1830,16 @@ fn draw_tape_list(
                         inner.width as usize,
                     ),
                 ));
+                kinds.push(TapeListLineKind::Normal);
             }
             TapeItem::HeadRule => {
+                // The Starting state's own Now area is this rule
+                // alone (issue #710) -- it is always `lines[0]`
+                // (core's own `build_tape` pushes it first, with no
+                // `Run Started` row before it yet).
+                if matches!(screen.head, oscilloscope_core::screens::TapeHead::Starting) {
+                    now_area_start = Some(lines.len());
+                }
                 let (outer, inner_color, bold, label) = match &screen.head {
                     oscilloscope_core::screens::TapeHead::Starting => (
                         ctx.theme.border,
@@ -1619,12 +1890,22 @@ fn draw_tape_list(
                     None,
                     tape_rule_line(&label, outer, inner_color, bold, inner.width as usize),
                 ));
+                kinds.push(TapeListLineKind::Normal);
+                if matches!(screen.head, oscilloscope_core::screens::TapeHead::Starting) {
+                    now_area_end = Some(lines.len());
+                }
             }
             TapeItem::RunEnd {
                 usual_total_tokens,
                 usual_wall_s,
                 eta_ts,
             } => {
+                // No ahead rows at all between the band and `Run
+                // End` -- the band runs right up to it.
+                if in_now_area {
+                    now_area_end = Some(lines.len());
+                    in_now_area = false;
+                }
                 let mut text = "Run End            ".to_string();
                 // §5: 60-79 columns drops the usual total, the
                 // duration and the ETA here -- the Totals row below
@@ -1688,6 +1969,7 @@ fn draw_tape_list(
                         Span::styled(text, Style::default().fg(ctx.theme.dim)),
                     ]),
                 ));
+                kinds.push(TapeListLineKind::Normal);
             }
         }
     }
@@ -1708,40 +1990,42 @@ fn draw_tape_list(
     } else {
         viewport.saturating_sub(1)
     };
-    let total = lines.len();
     let selected_idx = app.selected_path.as_deref().and_then(|p| {
         lines
             .iter()
             .position(|(path, _)| path.as_deref() == Some(p))
     });
-    let anchor = if app.follow {
-        now_band_idx.unwrap_or(total.saturating_sub(1))
-    } else {
-        selected_idx.unwrap_or(0)
-    };
-    // Biased toward the tail, not centred on the anchor: by default
-    // this reads like `tail -f`, the run's own most recent and
-    // upcoming rows always in view when everything can't fit at
-    // once, scrolling up only as far as it has to so the anchor
-    // itself (the selection, or the Now band while following)
-    // never scrolls out of view above the top.
-    let start = if total <= content_rows {
-        0
-    } else {
-        let tail = total - content_rows;
-        anchor.min(tail)
-    };
-    let visible: Vec<Line> = lines
+    let now_area = now_area_start.zip(now_area_end).map(|(s, e)| s..e);
+    let start = tape_list_window_start(
+        &kinds,
+        now_area,
+        content_rows,
+        app.follow,
+        selected_idx,
+        app.tape_list_start,
+    );
+    app.tape_list_start = Some(start);
+    let (real_range, blank_first) = tape_list_window_range(&kinds, start, content_rows);
+    let mut visible: Vec<Line> = lines
         .into_iter()
-        .skip(start)
-        .take(content_rows)
+        .skip(real_range.start)
+        .take(real_range.len())
         .map(|(_, l)| l)
         .collect();
+    if blank_first {
+        if let Some(first) = visible.first_mut() {
+            *first = Line::styled(
+                " ".repeat(inner.width as usize),
+                Style::default().fg(border_color),
+            );
+        }
+    }
+    let pad_before = real_range.start as isize - start;
     let list_area = Rect {
         x: inner.x,
-        y: inner.y,
+        y: inner.y + pad_before as u16,
         width: inner.width,
-        height: viewport as u16,
+        height: visible.len() as u16,
     };
     frame.render_widget(Paragraph::new(visible), list_area);
 
@@ -13369,10 +13653,11 @@ mod tape_frame_goldens {
     /// The Normal/Usual goldens' own status-line row (y=28 at
     /// 120x30): `gate.reply` finishes 2 ms before two loop passes
     /// do, but §3.2 reads the newest finished step regardless, same
-    /// as the frame -- `(51, 24)` is the unrelated Run End rounding
-    /// cell both goldens already carry.
+    /// as the frame -- `(51, 21)` is the unrelated Run End rounding
+    /// cell both goldens already carry, at its own centred window's
+    /// row (issue #710).
     const STATUS_LINE_READS_AN_EARLIER_STEP_120X30: [(u16, u16); 43] = [
-        (51, 24),
+        (51, 21),
         (3, 28),
         (4, 28),
         (5, 28),
