@@ -559,12 +559,12 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
     let replies = write_doc(
         work.path(),
         "replies.yaml",
-        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\nprime.again:\n  - text: \"hi again\"\n    tokens_sent: 2\n    tokens_received: 4\n",
     );
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: again\n    type: prompt\n    template: \"hi again\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
     );
     let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
 
@@ -604,20 +604,45 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
             "expected the Largest Stores table after pressing 3; screen:\n{screen}"
         );
         assert!(
-            screen.contains("ask"),
-            "expected the finished prompt's own tile or row to show on the Store screen; screen:\n{screen}"
+            screen.contains("ask · 8 t"),
+            "expected the finished prompt's own tile or row, with its own tokens, to show on the Store screen; screen:\n{screen}"
         );
     }
 
+    // Two token-bearing stores (`ask` and `again`), so `↓`/`↑` has
+    // somewhere to actually move the cursor to -- a single-row table
+    // would let the cursor stay put and still pass a check that only
+    // looks for *some* redraw, which the ticking clock alone already
+    // guarantees.
     let before_down = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\x1b[B");
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_pattern_since(&captured_buf, before_down, b"again", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        let cursor_on_again = screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("again"));
+        assert!(
+            cursor_on_again,
+            "expected ↓ to move the table's own cursor onto `again`; screen:\n{screen}"
+        );
+    }
+
+    let before_up = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\x1b[A");
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(
-        captured_buf.lock().unwrap().len() > before_down,
-        "pressing ↓ then ↑ drew nothing at all"
-    );
+    wait_for_pattern_since(&captured_buf, before_up, b"ask", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        let cursor_on_ask = screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again"));
+        assert!(
+            cursor_on_ask,
+            "expected ↑ to move the table's own cursor back onto `ask`; screen:\n{screen}"
+        );
+    }
 
     let before_enter = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\r");
@@ -654,8 +679,9 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
 
 /// 100 columns and up at 30 rows and up shows the Largest Stores
 /// table beside Readings; below 30 rows (still 100 columns and up)
-/// Readings drops and the table keeps three rows -- picked up on
-/// the TUI's own next redraw, with no key needed.
+/// Readings drops and the table keeps three rows; so does dropping
+/// below 100 columns on width alone, with 30 rows to spare -- all
+/// three picked up on the TUI's own next redraw, with no key needed.
 #[test]
 fn resizing_the_store_screen_drops_readings_below_30_rows() {
     if !e2e_enabled() {
@@ -727,6 +753,29 @@ fn resizing_the_store_screen_drops_readings_below_30_rows() {
         );
     }
 
+    // 80-99 columns drops Readings too, on width alone -- back to 30
+    // rows (plenty), but narrow enough that the chart/table pane no
+    // longer has room for a second pane beside it.
+    let before_narrow = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 90, 30);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_narrow,
+            "resizing to 90x30 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            !screen.contains("Readings"),
+            "expected the Readings pane gone below 100 columns; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("Largest Stores"),
+            "expected the table still shown below 100 columns; screen:\n{screen}"
+        );
+    }
+
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
     send_bytes(&mut master, b"y");
@@ -762,15 +811,15 @@ fn resizing_below_80_columns_bounces_store_back_to_the_tape() {
     resize_pty(&slave_path, 60, 24);
     wait_for_pattern_since(&captured_buf, before_60, b"Tape", Duration::from_secs(10));
     {
-        let after = captured_buf.lock().unwrap()[before_60..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            rendered.contains("Tape"),
-            "expected the Tape's own panel title once the terminal is too narrow for Store; got:\n{rendered:?}"
+            screen.contains("Tape"),
+            "expected the Tape's own panel title once the terminal is too narrow for Store; screen:\n{screen}"
         );
         assert!(
-            !rendered.contains("STORE"),
-            "the Store must not still be offered below 80 columns; got:\n{rendered:?}"
+            !screen.contains("STORE"),
+            "the Store must not still be offered below 80 columns; screen:\n{screen}"
         );
     }
 
@@ -2108,8 +2157,8 @@ fn pressing_3_during_osi_watch_of_a_live_run_opens_the_store_screen() {
             "expected the Largest Stores table after pressing 3 under osi watch; screen:\n{screen}"
         );
         assert!(
-            screen.contains("ask"),
-            "expected the finished prompt's own store to show on the Store screen; screen:\n{screen}"
+            screen.contains("ask · 8 t"),
+            "expected the finished prompt's own store, with its own tokens, to show on the Store screen; screen:\n{screen}"
         );
     }
 
